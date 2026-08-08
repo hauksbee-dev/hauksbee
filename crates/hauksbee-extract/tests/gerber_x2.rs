@@ -100,7 +100,10 @@ fn x2_job_binds_pins_nets_and_vias_from_the_film() {
     let c7 = by_ref["C7"];
     // Film pin numbers, not claim order (R1's pads were flashed 2 then 1).
     assert_eq!(
-        r1.pins.iter().map(|p| p.number.as_str()).collect::<Vec<_>>(),
+        r1.pins
+            .iter()
+            .map(|p| p.number.as_str())
+            .collect::<Vec<_>>(),
         vec!["1", "2"]
     );
     // The via inside C7's window is NOT a third pad: the film called it a via.
@@ -114,7 +117,14 @@ fn x2_job_binds_pins_nets_and_vias_from_the_film() {
         .map(|n| (n.id, n.name.as_str()))
         .collect();
     let pin_net = |c: &hauksbee_extract::Component, num: &str| {
-        net_name[&c.pins.iter().find(|p| p.number == num).unwrap().net.unwrap()].to_string()
+        net_name[&c
+            .pins
+            .iter()
+            .find(|p| p.number == num)
+            .unwrap()
+            .net
+            .unwrap()]
+            .to_string()
     };
     assert_eq!(pin_net(r1, "1"), "VCC");
     assert_eq!(pin_net(r1, "2"), "SIG");
@@ -285,5 +295,8 @@ fn zswatch_x2_export_agrees_with_its_own_netlist_oracle() {
             }
         }
     }
-    assert_eq!(disagree, 0, "net partition must agree over all matched pads");
+    assert_eq!(
+        disagree, 0,
+        "net partition must agree over all matched pads"
+    );
 }

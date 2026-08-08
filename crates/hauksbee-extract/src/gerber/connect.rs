@@ -1442,7 +1442,10 @@ mod tests {
         assert_eq!(board.components.len(), 1);
         let pins = &board.components[0].pins;
         assert_eq!(pins.len(), 2);
-        assert_eq!(pins[0].number, "1", "the film's pin number, not claim order");
+        assert_eq!(
+            pins[0].number, "1",
+            "the film's pin number, not claim order"
+        );
         assert_eq!(pins[1].number, "2");
         let net_name = |id: Option<i64>| {
             board
@@ -1565,7 +1568,14 @@ mod tests {
         };
         let on_axis_45 = 42.4; // (42.4, 42.4) is ~60 mm along the 45° row
         let layer = vec![
-            cap(on_axis_45, on_axis_45, on_axis_45, on_axis_45, 0.3, PrimKind::Flash),
+            cap(
+                on_axis_45,
+                on_axis_45,
+                on_axis_45,
+                on_axis_45,
+                0.3,
+                PrimKind::Flash,
+            ),
             cap(60.0, 0.0, 60.0, 0.0, 0.3, PrimKind::Flash),
         ];
         let (board, stats) = reconstruct("t", vec![layer.clone()], vec![], vec![header(45.0)]);
@@ -1574,7 +1584,10 @@ mod tests {
             "only the pad on the rotated pin row belongs to the header"
         );
         let pos = board.components[0].pins[0].position.unwrap();
-        assert!((pos.0 - on_axis_45).abs() < 1e-6, "the claimed pad is the on-axis one");
+        assert!(
+            (pos.0 - on_axis_45).abs() < 1e-6,
+            "the claimed pad is the on-axis one"
+        );
 
         // At rotation 0 the same header claims the (60, 0) pad instead.
         let (_b, stats) = reconstruct("t", vec![layer], vec![], vec![header(0.0)]);

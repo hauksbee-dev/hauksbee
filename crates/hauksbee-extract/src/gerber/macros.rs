@@ -566,7 +566,10 @@ mod tests {
             MacroContent::Circle(CirclePrimitive {
                 exposure: MacroBoolean::Value(false),
                 diameter: MacroDecimal::Value(2.0),
-                center: (MacroDecimal::Value(hole_at.0), MacroDecimal::Value(hole_at.1)),
+                center: (
+                    MacroDecimal::Value(hole_at.0),
+                    MacroDecimal::Value(hole_at.1),
+                ),
                 angle: None,
             }),
         ];
