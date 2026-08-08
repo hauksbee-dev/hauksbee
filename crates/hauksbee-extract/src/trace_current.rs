@@ -35,7 +35,16 @@
 //!    bottleneck of a series trace is its narrowest segment, which is what this
 //!    reports.
 //!
-//! 4. **Copper weight.** Weight and layer side come from the board's declared
+//! 4. **One current per net, not per branch.** A cited current is attributed to a
+//!    NET, and the rating is compared against that whole current at the net's
+//!    weakest point. Real nets branch: a sense spur off a motor rail carries
+//!    almost none of the rail's current, but it is part of the same net and its
+//!    thin copper can be the weakest point. Splitting current across branches
+//!    needs source/sink topology this module does not have, so a branched net's
+//!    verdict is an upper bound on stress at its thinnest copper, not a claim
+//!    about the current actually flowing there.
+//!
+//! 5. **Copper weight.** Weight and layer side come from the board's declared
 //!    stackup, per copper layer, because inner copper is both thinner and
 //!    derated (`k` 0.024 against 0.048) and rating it as 1 oz outer over-states
 //!    its capacity by roughly 3x. A board that declares no stackup keeps the
@@ -844,13 +853,15 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
         .any(|r| r.copper_source == CopperSource::AssumedLayerMissing);
     if no_stackup {
         out.push_str(
-            "copper weight ASSUMED 1 oz external: the layout declares no stackup, so upload a \
-             stackup declaration or fab drawing to rate the real copper.\n",
+            "copper WEIGHT ASSUMED 1 oz (the layout declares no stackup); each row's layer side \
+             is inferred from its layer name, shown per row as ext/int. Upload a stackup \
+             declaration or fab drawing to rate the real copper.\n",
         );
     } else if layer_missing {
         out.push_str(
             "copper weight read from the board stackup, EXCEPT the rows marked (assumed), whose \
-             layer the stackup does not give a thickness for: those fall back to 1 oz external.\n",
+             layer the stackup gives no thickness for: those fall back to 1 oz at the layer side \
+             their name implies, shown per row as ext/int.\n",
         );
     } else {
         out.push_str("copper weight and layer side read from the board stackup.\n");
