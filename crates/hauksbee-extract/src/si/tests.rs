@@ -658,7 +658,7 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
     );
     assert!(
         f.message
-            .contains("depends on the assumed trace capacitance"),
+            .contains("depends on the ASSUMED trace capacitance"),
         "must disclose what the verdict rests on: {}",
         f.message
     );
@@ -707,6 +707,54 @@ fn i2c_short_routing_leaves_the_same_bus_silent() {
         r.finding_count(),
         0,
         "a short-routed bus of the same devices stays in spec"
+    );
+}
+
+#[test]
+fn a_declared_stackup_computes_the_trace_capacitance_instead_of_assuming_it() {
+    // The honest answer to "your low bound is not a bound" is to stop guessing
+    // where the board says enough to compute. With a stackup and a track width,
+    // C' = sqrt(Er_eff)/(c0*Z0) collapses the range to one number, and the note
+    // says it was computed rather than assumed.
+    let body = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "2.2k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
+        (property "Reference" "U1") (property "Value" "SENSOR")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
+      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
+    "#;
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
+    assert!(
+        f.message.contains("computed from the board stackup"),
+        "a declared stackup must be used, not assumed around: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("ASSUMED"),
+        "and must not also claim to have assumed: {}",
+        f.message
+    );
+    // A single computed figure, so the reported range collapses to one number:
+    // a 0.25 mm trace on 1.51 mm FR4 works out at 0.044 pF/mm, near the low end
+    // of the assumed range, which is exactly the sort of thing worth not guessing.
+    assert!(
+        f.message.contains("0.044 pF/mm"),
+        "the computed figure must be reported: {}",
+        f.message
     );
 }
 
@@ -1298,7 +1346,7 @@ fn bus_capacitance_dedups_a_double_listed_pad() {
     // pin capacitance (2 devices instead of 1), inflating the I2C rise time enough
     // to fire a spurious fast-mode finding. Dedup by (ref, pad number).
     let board = double_listed_board("U1", "SENSOR", 2);
-    let c = super::bus_capacitance_pf(&board, 1, None);
+    let c = super::bus_capacitance_pf(&board, 1, None, None);
     assert_eq!(
         c.devices, 1,
         "a doubly-listed pad must count as one device, not two"
