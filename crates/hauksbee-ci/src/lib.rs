@@ -287,10 +287,17 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                     seeds: members.saturating_sub(1),
                     components,
                 },
-                tolerance::Mode::Corners => report::EnsembleCoverage::Corners {
-                    corners: members,
-                    components,
-                },
+                // The interior probes ran alongside the corners but are not
+                // corners: counting them in would inflate the "2^n corners"
+                // arithmetic a reader checks against the component count.
+                tolerance::Mode::Corners => {
+                    let interior = outcomes.iter().filter(|o| o.interior).count() as u32;
+                    report::EnsembleCoverage::Corners {
+                        corners: members.saturating_sub(interior),
+                        interior,
+                        components,
+                    }
+                }
             })
         }
     } else {

@@ -102,6 +102,20 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
                     println!("model '{}': ERROR: {err}", entry.id);
                 }
             }
+            // Parameter-name vocabulary (warning tier, no exit-code effect). The
+            // params bag is free-form on purpose, so a misspelled key is not an
+            // error, it is a key nothing reads: the entry validates and then
+            // silently runs on the default. This is the only place that key is
+            // ever mentioned, so it says so and names the nearest real one.
+            // Unknown names can also be genuine extensions, which is why it
+            // cannot gate.
+            for u in hauksbee_models::param_names::unknown_params(entry) {
+                println!(
+                    "model '{}' [models.params]: warning: {}",
+                    entry.id,
+                    u.message()
+                );
+            }
             if !entry.logic.is_empty() {
                 match crate::logic::LogicComponent::compile(&entry.id, &entry.logic) {
                     Ok(compiled) => {
