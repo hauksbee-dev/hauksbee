@@ -494,4 +494,89 @@ mod tests {
         );
         assert_eq!(parse_xp_word("no hex here"), None);
     }
+
+    // ── measured_run_window against a scripted event stream ─────────────────
+    //
+    // The live qemu_clock_truth gate exercises the clean-stream happy path
+    // only; these pin the failure mode the ordered-pair rule exists for,
+    // deterministically, with a local socket standing in for QEMU.
+
+    /// A `Qmp` wired to a local socket that has `events` already in flight,
+    /// with no greeting or capabilities handshake (the tests drive the event
+    /// drain, not the command path). The write end is returned so a test can
+    /// feed more, and must be kept alive or the reader sees EOF.
+    fn qmp_with_pending(events: &str) -> (Qmp, std::net::TcpStream) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .ok();
+        let (server, _) = listener.accept().unwrap();
+        use std::io::Write as _;
+        (&server).write_all(events.as_bytes()).unwrap();
+        let qmp = Qmp {
+            stream: client,
+            carry: Vec::new(),
+            timeout: Duration::from_secs(1),
+            event_resume: None,
+            event_stop: None,
+        };
+        (qmp, server)
+    }
+
+    fn event(name: &str, seconds: u64, micros: u64) -> String {
+        format!(
+            "{{\"timestamp\": {{\"seconds\": {seconds}, \"microseconds\": {micros}}}, \
+             \"event\": \"{name}\"}}\n"
+        )
+    }
+
+    /// The happy path: RESUME then STOP, span measured from the event
+    /// timestamps, not from anything the host slept.
+    #[test]
+    fn measured_window_reads_the_event_pair() {
+        let stream = format!("{}{}", event("RESUME", 100, 0), event("STOP", 100, 250_000));
+        let (mut qmp, _server) = qmp_with_pending(&stream);
+        let got = qmp.measured_run_window(Duration::from_millis(500));
+        assert_eq!(got, Some(Duration::from_millis(250)));
+    }
+
+    /// THE load-bearing case: a stale STOP from the previous chunk is still
+    /// in flight when the new window's events arrive. A drain that settles on
+    /// "both slots filled" pairs the new RESUME with the STALE stop and
+    /// reports nothing (span negative), silently restoring the uncredited
+    /// bias; the ordered-pair rule must instead wait out the stream and
+    /// return the TRUE span.
+    #[test]
+    fn a_stale_stop_cannot_satisfy_the_window() {
+        let stream = format!(
+            "{}{}{}",
+            event("STOP", 90, 0),        // stale, from the previous chunk
+            event("RESUME", 100, 0),     // this chunk's resume
+            event("STOP", 100, 300_000), // this chunk's stop
+        );
+        let (mut qmp, _server) = qmp_with_pending(&stream);
+        let got = qmp.measured_run_window(Duration::from_millis(500));
+        assert_eq!(got, Some(Duration::from_millis(300)));
+    }
+
+    /// When the real STOP never arrives, the unordered stale pair must
+    /// produce `None` (fall back to the slept window), never a negative or
+    /// stale span, and the drain must respect the grace bound instead of
+    /// hanging on the socket's own read timeout.
+    #[test]
+    fn an_unordered_pair_yields_none_within_the_grace() {
+        let stream = format!("{}{}", event("STOP", 90, 0), event("RESUME", 100, 0));
+        let (mut qmp, _server) = qmp_with_pending(&stream);
+        let started = Instant::now();
+        let got = qmp.measured_run_window(Duration::from_millis(100));
+        assert_eq!(got, None, "an unordered pair is unmeasured, not a window");
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "the drain must give up around the 100 ms grace, not block on the \
+             socket's standing 200 ms timeout per read; took {:?}",
+            started.elapsed()
+        );
+    }
 }
