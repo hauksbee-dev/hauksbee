@@ -1787,11 +1787,16 @@ fn custom_pad_shapes(
         )
     };
     for prim in prims.lists() {
-        // A zero `width` on a stroked primitive stamps its centerline as
-        // zero-width copper: the conservative minimum (KiCad's editor rejects
-        // zero-width strokes, so this only arises in hand-edited files, and
-        // inventing a default stroke width would over-claim copper).
-        let width = prim.find_f64("width").unwrap_or(0.0);
+        // Width comes from the classic bare `(width w)` or the newer
+        // `(stroke (width w))` form KiCad uses on board graphics. A zero
+        // width stamps the centerline as zero-width copper: the conservative
+        // minimum (KiCad's editor rejects zero-width strokes, so this only
+        // arises in hand-edited files, and inventing a default stroke width
+        // would over-claim copper).
+        let width = prim
+            .find_f64("width")
+            .or_else(|| prim.find("stroke").and_then(|s| s.find_f64("width")))
+            .unwrap_or(0.0);
         let r = width / 2.0;
         match prim.name() {
             Some("gr_poly") | Some("poly") => {
@@ -3878,6 +3883,15 @@ pub mod eagle_drc {
         // of the two classes' own clearances governs, which is exactly the
         // max-of-two-classes fallback in `effective_clearance`, so only
         // explicit non-zero matrix cells are registered as pair overrides.
+        //
+        // "The design rules" here is this path's single clearance: the
+        // TIGHTEST copper-gating md* value (resolved above). The Eagle engine
+        // deliberately models one clearance rather than the per-item-kind md*
+        // matrix (mdWireWire vs mdPadPad, ...), the documented
+        // no-manufactured-noise choice this DRC has always made; a class or
+        // pair value is therefore floored at that single rule, not at the
+        // item-kind-specific one. Modelling the full md* matrix would be a
+        // separate feature touching every finding, not a net-class concern.
         let mut rules = ClearanceRules::new(clearance);
         let class_key = |n: i64| format!("class-{n}");
         for (number, class) in &parsed.classes {
