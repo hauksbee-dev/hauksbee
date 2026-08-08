@@ -1539,6 +1539,15 @@ disable = [
 # MCP3008 entry takes. It is NOT modelled as a buffer, and its SO pin is not
 # driven by anything in the analogue solve.
 #
+# WHAT THIS COSTS, stated rather than hidden: a pad-map-only entry still binds
+# through the generic digital path and so counts as a RESOLVED part in the bind
+# report's coverage fraction, despite modelling no electrical behaviour. That is
+# a pre-existing property of the binder shared with six other logic-less entries
+# (ch340g, cp2102, ltc6803_4, bq76952, lm5107, lm5109), not something this entry
+# introduces, but it does mean a `model_coverage` assertion counts this part as
+# covered. The fix is a binder-level distinction between "bound" and
+# "electrically modelled", which is a change to BindOutcome and not to this file.
+#
 # WHY THE MATCH IS NARROW. Restricted to the Microchip 25AA/25LC part numbers,
 # whose 8-pin pinout below is verified. Atmel/Microchip AT25 SPI EEPROM and most
 # 25-series SPI NOR flash share this pinout in practice, but "in practice" is not
@@ -1550,13 +1559,17 @@ id = "eeprom_25xx_spi"
 kind = "digital"
 description = "25AA/25LC SPI serial EEPROM, 8-pin PDIP/SOIC/TSSOP/MSOP (pad map only)"
 
+# `mpn_re` ONLY, for the reason spelled out on the MCP3008 entry in db/dac_adc.toml:
+# the matcher ANDs its rules and the engine's query falls `mpn` back to Value, so
+# one mpn rule covers both the Value-carries-the-part-number and the
+# MPN-carries-it cases, while adding `value_re` would AND them and lose the second.
+#
+# Left UNANCHORED at the end on purpose: a real MPN carries the temperature and
+# package suffix ("25LC256-I/SN", "25AA010A-I/OT"), so a `$` here would match the
+# bare part number in a test and nothing on an actual board. The {3,4}-digit bound
+# is what keeps the rule from swallowing neighbours.
 [models.match]
-# Left UNANCHORED at the end on purpose: a real Value/MPN field carries the
-# temperature and package suffix ("25LC256-I/SN", "25AA010A-I/OT"), so a `$` here
-# would match the bare part number in a test and nothing on an actual board. The
-# {3,4}-digit bound is what keeps the rule from swallowing neighbours.
-value_re = "(?i)^25(AA|LC)[0-9]{3,4}"
-mpn_re   = "(?i)^25(AA|LC)[0-9]{3,4}"
+mpn_re = "(?i)^25(AA|LC)[0-9]{3,4}"
 
 # Pad->role map, Microchip 25LC256 datasheet DS22065 Section 2.0 (Pin
 # Descriptions) and Figure 2-1; identical across the 25AA/25LC 8-pin packages:
