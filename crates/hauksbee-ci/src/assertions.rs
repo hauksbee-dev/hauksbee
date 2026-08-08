@@ -551,12 +551,17 @@ fn all_green_detail(
                      worst case only where the response is monotonic in each value)"
                 )
             } else {
+                // `last_detail` is ONE member's measurement (whichever passed
+                // last), not the ensemble's extremes, and with the probes running
+                // that member is usually an interior probe rather than a corner.
+                // Say so, or the numbers read as the span the corners established.
                 format!(
-                    "{last_detail} (held on all {corners} min/max tolerance corners and on \
-                     {interior} interior Latin-hypercube probe(s): no interior point sampled \
-                     broke this assertion, which is evidence for the monotonicity the corner \
-                     bound needs, not proof of it, and a probe inside the window is not \
-                     compared against the corners' own margin)"
+                    "{last_detail} <- one member's reading, not the ensemble span (held on all \
+                     {corners} min/max tolerance corners and on {interior} interior \
+                     Latin-hypercube probe(s): no interior point sampled broke this assertion, \
+                     which is evidence for the monotonicity the corner bound needs, not proof \
+                     of it, and a probe inside the window is not compared against the corners' \
+                     own margin)"
                 )
             }
         }

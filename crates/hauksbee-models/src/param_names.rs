@@ -37,9 +37,13 @@
 //!    model that computes `v_vplus / tie_ohms` has *defined* `tie_ohms` for
 //!    itself. This is what keeps the lint sound on expression-driven models
 //!    instead of second-guessing them.
-//! 3. `<stem>_from_ref`, when `<stem>` is known: the binder rewrites that whole
-//!    family into `<stem> = ohms(Rxx)` at bind time, so the suffix form is the
-//!    same parameter reached from the board.
+//! 3. `<stem>_from_ref`, when `<stem>` is known AND the entry has a behavioral
+//!    block: the binder rewrites that family into `<stem> = ohms(Rxx)` at bind
+//!    time, so the suffix form is the same parameter reached from the board. The
+//!    behavioral condition is not decoration, it is where the rewrite lives:
+//!    `resolve_from_ref_params` sits past an early `continue` for an entry with
+//!    no behavioral block, so `vout_from_ref` on a plain stamp-path vreg is read
+//!    by nobody and has to warn.
 //!
 //! ## Where it lives / further reading
 //!
@@ -220,17 +224,33 @@ pub fn unknown_params(entry: &ModelEntry) -> Vec<UnknownParam> {
         vocab.contains(&name) || UNIVERSAL.contains(&name) || referenced.contains(name)
     };
 
+    // `<stem>_from_ref` is the board-programmable form of `<stem>`, but ONLY on
+    // the behavioral path: `resolve_from_ref_params` runs in the binder after an
+    // early `continue` for an entry with an empty behavioral block, so a
+    // `vout_from_ref` on a plain stamp-path vreg is never rewritten and never
+    // read. Exempting it there would hide exactly the silently-ignored param this
+    // lint is for, so the suffix only counts when the entry has a behavioral
+    // block to be rewritten for.
+    let from_ref_is_resolved = !entry.behavioral.is_empty();
+
     entry
         .params
         .0
         .keys()
-        // `<stem>_from_ref` is the board-programmable form of `<stem>`, so it is
-        // judged, and corrected, on the stem.
-        .map(|name| (name, name.strip_suffix("_from_ref").unwrap_or(name)))
+        .map(|name| {
+            let stem = if from_ref_is_resolved {
+                name.strip_suffix("_from_ref").unwrap_or(name)
+            } else {
+                name.as_str()
+            };
+            (name, stem)
+        })
         .filter(|(_, stem)| !known(stem))
         .map(|(name, stem)| UnknownParam {
             name: name.clone(),
-            suggestion: nearest(stem, vocab),
+            // Correct on the stem: `voutt_from_ref` should point at `vout`, not
+            // be compared whole against a vocabulary that has no suffixed names.
+            suggestion: nearest(stem.strip_suffix("_from_ref").unwrap_or(stem), vocab),
         })
         .collect()
 }
@@ -445,17 +465,49 @@ mod tests {
         );
     }
 
-    /// `<stem>_from_ref` is the board-programmable form of `<stem>`, rewritten
-    /// at bind time, so it inherits the stem's known-ness both ways.
+    /// `<stem>_from_ref` is the board-programmable form of `<stem>`, but only on
+    /// the behavioral path, which is the only place the binder rewrites it. On a
+    /// behavioral entry it inherits the stem's known-ness both ways.
     #[test]
-    fn the_from_ref_suffix_follows_its_stem() {
-        assert!(unknown_params(&entry("vreg", "vout_from_ref = \"R1\"")).is_empty());
-        let found = unknown_params(&entry("vreg", "voutt_from_ref = \"R1\""));
+    fn the_from_ref_suffix_follows_its_stem_on_a_behavioral_entry() {
+        let mk = |params: &str| -> ModelEntry {
+            let src = format!(
+                "[[models]]\nid = \"t\"\nkind = \"vreg\"\ndescription = \"t\"\n\
+                 [models.params]\n{params}\n\
+                 [[models.behavioral.laws]]\nname = \"l\"\nkind = \"current\"\n\
+                 a = \"out\"\nb = \"gnd\"\nexpr = \"0.0\"\n"
+            );
+            let db: crate::schema::DbFile = toml::from_str(&src).expect("fixture parses");
+            db.models.into_iter().next().unwrap()
+        };
+        assert!(unknown_params(&mk("vout_from_ref = \"R1\"")).is_empty());
+        let found = unknown_params(&mk("voutt_from_ref = \"R1\""));
         assert_eq!(found.len(), 1, "an unknown stem still warns: {found:?}");
         assert_eq!(
             found[0].name, "voutt_from_ref",
             "reports the name as written"
         );
+        assert_eq!(
+            found[0].suggestion.as_deref(),
+            Some("vout"),
+            "corrects on the stem: {found:?}"
+        );
+    }
+
+    /// The other side of that rule, and the reason it exists: the binder's
+    /// `_from_ref` rewrite sits past an early return for an entry with no
+    /// behavioral block, so on a plain stamp-path vreg the suffixed param is read
+    /// by nobody. Exempting it there would hide the exact defect this lint is for.
+    #[test]
+    fn from_ref_on_a_stamp_path_entry_is_not_exempt() {
+        let found = unknown_params(&entry("vreg", "vout_from_ref = \"R1\""));
+        assert_eq!(
+            found.len(),
+            1,
+            "no behavioral block means no rewrite, so nothing reads it: {found:?}"
+        );
+        assert_eq!(found[0].name, "vout_from_ref");
+        assert_eq!(found[0].suggestion.as_deref(), Some("vout"), "{found:?}");
     }
 
     /// Every parameter name hauksbee ships must be in the vocabulary, or the
