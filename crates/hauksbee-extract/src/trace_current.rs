@@ -5,8 +5,9 @@
 //! question: **can the copper actually carry the current the design pushes
 //! through it?** For each net it finds the *narrowest* routed track segment
 //! (the bottleneck of a series conductor) and converts that width into a
-//! current rating with the IPC-2221 external-layer formula, so a net carrying a
-//! cited load current beyond its rating can be flagged.
+//! current rating with the IPC-2221 formula, at the copper weight and layer side
+//! that segment is actually built in, so a net carrying a cited load current
+//! beyond its rating can be flagged.
 //!
 //! ## The honest reach of this check (read before trusting a result)
 //!
@@ -33,6 +34,13 @@
 //!    weight, not length (length affects voltage drop, a separate concern). The
 //!    bottleneck of a series trace is its narrowest segment, which is what this
 //!    reports.
+//!
+//! 4. **Copper weight.** Weight and layer side come from the board's declared
+//!    stackup, per copper layer, because inner copper is both thinner and
+//!    derated (`k` 0.024 against 0.048) and rating it as 1 oz outer over-states
+//!    its capacity by roughly 3x. A board that declares no stackup keeps the
+//!    1 oz external default, and every message built on that default is marked
+//!    ASSUMED and names the upload that would replace it.
 //!
 //! The result is a check that *discriminates*: it fires on a genuinely
 //! under-width discrete trace carrying a cited current, and it stays silent
@@ -864,6 +872,9 @@ mod tests {
             zone_count: 0,
             capacity_10c_a: f64::NAN,
             capacity_20c_a: f64::NAN,
+            oz: OZ_1,
+            external: true,
+            copper_source: CopperSource::Assumed,
         };
         let out = render_trace_capacity_report(&[row]);
         assert!(
@@ -876,6 +887,132 @@ mod tests {
         let text = format!("(kicad_pcb (net 0 \"\") {body})");
         let doc = forge_sexpr::parse(&text).unwrap();
         net_copper_from_root(doc.root().unwrap())
+    }
+
+    /// A 4-layer stackup: 1 oz outer copper (0.035 mm), 0.5 oz inner (0.0175 mm).
+    /// The common commercial build, and the one that makes the blanket-1 oz
+    /// assumption wrong by ~3x on inner copper.
+    const STACKUP_4L: &str = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+        (layer "In1.Cu" (type "copper") (thickness 0.0175))
+        (layer "dielectric 2" (type "core") (thickness 1.2) (epsilon_r 4.5))
+        (layer "In2.Cu" (type "copper") (thickness 0.0175))
+        (layer "dielectric 3" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+    "#;
+
+    /// Copper geometry plus a stackup-derived audit from the SAME text, so the
+    /// per-layer weights and the segments cannot drift apart.
+    fn pcb_audited(body: &str) -> (Vec<NetCopper>, TraceAudit) {
+        let text = format!("(kicad_pcb (net 0 \"\") {body})");
+        let doc = forge_sexpr::parse(&text).unwrap();
+        let root = doc.root().unwrap();
+        (net_copper_from_root(root), TraceAudit::from_root(root))
+    }
+
+    /// One 0.5 mm trace on `layer` carrying a cited 1.0 A.
+    fn one_amp_on(layer: &str) -> (Vec<NetCopper>, TraceAudit, HashMap<String, (f64, String)>) {
+        let body = format!(
+            r#"{STACKUP_4L}
+               (net 1 "VMOT")
+               (segment (start 0 0) (end 10 0) (width 0.5) (layer "{layer}") (net 1))"#
+        );
+        let (copper, audit) = pcb_audited(&body);
+        let mut cited = HashMap::new();
+        cited.insert("VMOT".to_string(), (1.0, "driver 1.0 A".to_string()));
+        (copper, audit, cited)
+    }
+
+    #[test]
+    fn stackup_copper_weights_split_outer_from_inner() {
+        let (_, audit) = pcb_audited(STACKUP_4L);
+        assert!(!audit.copper.is_empty(), "stackup must be read");
+        let (oz_f, ext_f) = audit.copper.get("F.Cu").expect("F.Cu declared");
+        assert!((oz_f - 1.0).abs() < 0.01, "F.Cu is 1 oz, got {oz_f}");
+        assert!(ext_f, "F.Cu is an external layer");
+        let (oz_in, ext_in) = audit.copper.get("In1.Cu").expect("In1.Cu declared");
+        assert!((oz_in - 0.5).abs() < 0.01, "In1.Cu is 0.5 oz, got {oz_in}");
+        assert!(!ext_in, "In1.Cu is an internal layer");
+        let (_, ext_b) = audit.copper.get("B.Cu").expect("B.Cu declared");
+        assert!(ext_b, "B.Cu is the other external layer");
+    }
+
+    #[test]
+    fn inner_layer_trace_fires_under_the_internal_chart() {
+        // 0.5 mm of 0.5 oz internal copper rates ~0.44 A: a cited 1.0 A is over.
+        let (copper, audit, cited) = one_amp_on("In1.Cu");
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1, "an inner 0.5 oz trace at 1.0 A must fire");
+        let fd = &f[0];
+        assert!(!fd.external, "In1.Cu must be rated as internal copper");
+        assert!((fd.oz - 0.5).abs() < 0.01, "0.5 oz inner, got {}", fd.oz);
+        assert_eq!(fd.copper_source, CopperSource::Stackup);
+        assert!(
+            fd.ampacity_a < 0.6,
+            "internal chart must derate hard: {}",
+            fd.ampacity_a
+        );
+        let d = fd.describe_copper();
+        assert!(
+            d.contains("0.50 oz") && d.contains("internal") && !d.contains("ASSUMED"),
+            "a declared stackup must not be marked ASSUMED: {d}"
+        );
+    }
+
+    #[test]
+    fn same_trace_on_an_outer_layer_passes() {
+        // The identical width and current on 1 oz external copper rates ~1.45 A:
+        // in spec. Per-layer rating must discriminate, not just flag everything.
+        let (copper, audit, cited) = one_amp_on("F.Cu");
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert!(
+            f.is_empty(),
+            "the same trace as 1 oz external copper is in spec: {f:?}"
+        );
+    }
+
+    #[test]
+    fn stackupless_board_keeps_1oz_but_says_assumed() {
+        // No stackup declared: the 1 oz external default stands (the verdict is
+        // unchanged), but the message must mark it ASSUMED and name the upload
+        // that would settle it, rather than printing "1 oz" as a board fact.
+        let body = r#"
+          (net 1 "MOTOR")
+          (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
+        "#;
+        let (copper, audit) = pcb_audited(body);
+        assert!(audit.copper.is_empty(), "no stackup to read");
+        let mut cited = HashMap::new();
+        cited.insert("MOTOR".to_string(), (2.0, "coil".to_string()));
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1, "the undersized trace still fires");
+        let fd = &f[0];
+        assert!((fd.oz - 1.0).abs() < 1e-9, "default is still 1 oz");
+        assert!(fd.external, "default is still external");
+        assert_eq!(fd.copper_source, CopperSource::Assumed);
+        let d = fd.describe_copper();
+        assert!(d.contains("ASSUMED"), "must be marked ASSUMED: {d}");
+        assert!(
+            d.contains("stackup declaration") && d.contains("fab drawing"),
+            "must name the unlocking upload: {d}"
+        );
+    }
+
+    #[test]
+    fn bottleneck_layer_is_the_narrowest_segments_layer() {
+        // A net routed across layers: the rating must follow the choke's layer,
+        // not the first or widest segment's.
+        let body = r#"
+          (net 1 "VMOT")
+          (segment (start 0 0) (end 10 0) (width 2.0) (layer "F.Cu") (net 1))
+          (segment (start 10 0) (end 11 0) (width 0.3) (layer "In1.Cu") (net 1))
+        "#;
+        let (copper, _) = pcb_audited(body);
+        let m = copper.iter().find(|n| n.net_id == 1).unwrap();
+        assert_eq!(m.min_trace_layer.as_deref(), Some("In1.Cu"));
     }
 
     #[test]
