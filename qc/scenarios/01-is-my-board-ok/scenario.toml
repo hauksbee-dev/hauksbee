@@ -83,7 +83,10 @@ max_seconds = 30
 # The honesty vocabulary, on the board that has the condition. This board (the
 # engine's own plain-check fixture) exists to hold one unbound active IC, so
 # the INCONCLUSIVE surface stays under test now that the watchy sample earned
-# a full bind.
+# a full bind. One composition this fixture cannot produce: INCONCLUSIVE with
+# SI heads-up notes underneath ("Plus N things worth a look"), because the
+# board is too bare to generate a heads-up. That never-bury rule is pinned at
+# the unit layer instead: plain.rs, inconclusive_verdict_keeps_the_heads_up_pointer.
 contains = [
   # The honesty banner: an active IC has no model, and the report says so up
   # front rather than reading healthy.
