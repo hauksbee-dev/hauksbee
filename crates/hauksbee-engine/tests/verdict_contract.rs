@@ -58,13 +58,7 @@ fn stderr(out: &Output) -> String {
 #[test]
 fn thermal_partial_coverage_escalates_by_default() {
     let b = fixture("thermal_partial_coverage.kicad_pcb");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--thermal",
-        "--seconds",
-        "0.05",
-    ]);
+    let out = run(&["run", b.to_str().unwrap(), "--thermal", "--seconds", "0.05"]);
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -300,9 +294,9 @@ fn si_json_carries_the_inconclusive_note_and_exit_zero() {
     let empty = Vec::new();
     let notes = v["notes"].as_array().unwrap_or(&empty);
     assert!(
-        !notes
-            .iter()
-            .any(|n| n["message"].as_str().is_some_and(|m| m.starts_with("INCONCLUSIVE"))),
+        !notes.iter().any(|n| n["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("INCONCLUSIVE"))),
         "a bound FET leaves no INCONCLUSIVE note:\n{notes:?}"
     );
 }

@@ -296,9 +296,13 @@ fn verdict_counts(
 fn verdict_line(serious: usize, worth_a_look: usize, blockers: &[String]) -> String {
     if serious == 0 {
         if !blockers.is_empty() {
+            // The shared sentence, minus its leading tag (the line already
+            // says "inconclusive"), so the vocabulary stays single-sourced
+            // without stuttering "inconclusive ... INCONCLUSIVE".
+            let sentence = crate::result::inconclusive_verdict(blockers);
+            let sentence = sentence.strip_prefix("INCONCLUSIVE: ").unwrap_or(&sentence);
             return format!(
-                "VERDICT: inconclusive: 0 serious, {worth_a_look} worth a look. {}",
-                crate::result::inconclusive_verdict(blockers)
+                "VERDICT: inconclusive: 0 serious, {worth_a_look} worth a look; {sentence}"
             );
         }
         format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
