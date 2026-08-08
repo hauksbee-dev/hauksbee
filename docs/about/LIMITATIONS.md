@@ -324,7 +324,13 @@ would manufacture false shorts on every trace the fill legitimately carves
 around. To be precise about what is and is not computed: the fill itself is
 never reconstructed and the isolate distance is never numerically re-verified;
 the settings are parsed, drive the reasoning above, and are disclosed verbatim
-on pour findings. The one construct the settings cannot make safe IS checked: two
+on pour findings. Pour-to-copper pairs are therefore *not checked* (rather than
+checked and found clean), and same-rank pours that approach each other without
+ring overlap are not distance-checked either, since the fill extent near the
+boundary depends on those settings. The argument above says a fill Eagle
+derives from these settings would not violate; a hand-edited file whose fill
+was never re-derived is outside it. The one construct the settings cannot make
+safe under any derivation IS checked: two
 overlapping same-rank pours of different signals have no arbitration (Eagle
 pours both, a physical short, and its own DRC flags the overlap), and the
 Eagle path reports that short with the pour settings disclosed on the finding.

@@ -190,8 +190,12 @@ copper in the same file, while treating the drawn outline as solid copper would
 turn every trace the fill legitimately carves around into a false short. The
 fill itself is never reconstructed and the isolate distance never numerically
 re-verified; the settings are parsed, drive this reasoning, and are disclosed
-verbatim on pour findings. The one
-construct the settings cannot make safe **is** checked: two overlapping
+verbatim on pour findings. Pour-to-copper pairs are therefore *not checked*
+(rather than checked and found clean), and same-rank pours that approach
+without ring overlap are not distance-checked either, since the fill extent
+near the boundary depends on those settings. The one
+construct the settings cannot make safe under any derivation **is** checked:
+two overlapping
 same-rank pours of different signals have no arbitration (Eagle pours both, a
 physical short on the fabricated board, and Eagle's own DRC flags the overlap),
 and that short is reported with the pour settings disclosed on the finding.
@@ -385,12 +389,13 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
   the corner radius. Custom pads stamp their anchor shape and every drawn
   primitive (all polygons, lines, arcs, circles and rectangles); trapezoid
   pads honor `rect_delta`.
-- **Eagle signal pours.** The computed fill is not in the `.brd` but is
-  provably violation-free against same-file copper (see the fidelity caveat
-  above), so pour-to-copper pairs are not checked; overlapping same-rank
-  pours of different signals ARE reported as shorts. Wires, vias and pads
-  against each other are fully covered. KiCad pours, which do carry the
-  computed fill, are covered.
+- **Eagle signal pours.** The computed fill is not in the `.brd`, so
+  pour-to-copper pairs are not checked (the fidelity caveat above explains
+  why a fill Eagle derives from the stored settings would not violate, and
+  why the outline must not stand in for it); overlapping same-rank pours of
+  different signals ARE reported as shorts. Wires, vias and pads against
+  each other are fully covered. KiCad pours, which do carry the computed
+  fill, are covered.
 - **Eagle multilayer.** The Eagle reader spans through-hole pads and vias
   over a two-layer (`1`/`16`) copper stack, which matches the entire
   famous-board corpus. A genuinely multilayer Eagle `.brd` with inner-layer
