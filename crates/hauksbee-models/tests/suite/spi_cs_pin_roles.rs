@@ -178,6 +178,55 @@ fn a_six_pin_sot23_eeprom_does_not_bind_the_eight_pin_map() {
     }
 }
 
+/// The package gate has to admit the several ways real libraries spell one 8-pin
+/// package, or it trades a wrong map for a silently missing one. Both halves are
+/// asserted here: the 8-pin spellings resolve, and the packages whose pinout this
+/// map is NOT (SOT-23-6, and the 14/16-pin members of the same families) do not.
+#[test]
+fn the_package_gate_admits_eight_pin_spellings_and_nothing_else() {
+    let lib = ModelLibrary::builtin();
+    let resolves = |footprint: &str| {
+        let q = ComponentQuery {
+            value: Some("25LC256".into()),
+            mpn: Some("25LC256".into()),
+            footprint: Some(footprint.into()),
+            ..Default::default()
+        };
+        lib.resolve(&q).model.map(|m| m.id.clone()) == Some("eeprom_25xx_spi".to_string())
+    };
+
+    for footprint in [
+        "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", // KiCad
+        "Package_DIP:DIP-8_W7.62mm",
+        "Package_SO:TSSOP-8_3x3mm_P0.65mm",
+        "Package_SO:MSOP-8_3x3mm_P0.65mm",
+        "Package_DFN_QFN:WDFN-8-1EP_6x5mm_P1.27mm",
+        "SO08", // Eagle / Altium
+        "SOP8",
+        "DIP08",
+        "SOIC127P600X175-8N", // IPC generated
+    ] {
+        assert!(
+            resolves(footprint),
+            "{footprint} is an 8-pin package this map is correct for and must resolve;              a gate that misses it loses the part silently"
+        );
+    }
+
+    for footprint in [
+        "Package_TO_SOT_SMD:SOT-23-6", // 6-pin: a DIFFERENT pinout
+        "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm",
+        "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm",
+        "TSSOP-28",
+        "SSOP-28",
+        "", // no footprint: the package is unknown, so the map is unproven
+    ] {
+        assert!(
+            !resolves(footprint),
+            "{footprint:?} is not the package this pad map describes and must not bind it"
+        );
+    }
+}
+
 /// A real board often carries a generic Value ("ADC", "EEPROM") with the actual
 /// part number only in an MPN property. The matcher ANDs its rules, so an entry
 /// declaring both `value_re` and `mpn_re` would silently lose that case; these
