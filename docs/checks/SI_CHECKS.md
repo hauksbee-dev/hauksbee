@@ -159,10 +159,19 @@ The trace figures are derived, not picked: for a transmission line
 50 ohm, 0.077 pF/mm at 75 ohm and 0.057 pF/mm at 100 ohm; the widest,
 closest-coupled realistic case (`Er_eff 3.2`, `Z0 40 ohm`) gives 0.149 pF/mm.
 
-Hauksbee does not know a given route's impedance, so it does not pretend to. It
-carries the whole range, and **which end is used where** follows this module's
-standing rule that a check fires only when even the most lenient assumption is
-violated:
+**When the board declares a stackup, this is computed rather than assumed.**
+`trace_capacitance_pf_per_mm` takes the net's narrowest track width and the
+declared stackup, gets `Z0` from the same microstrip model check 5 uses, and
+returns `C' = sqrt(Er_eff) / (c0 * Z0)` with `Er_eff` from the standard Hammerstad
+approximation. A 0.25 mm trace on 1.51 mm FR4 works out at 0.044 pF/mm, and the
+note says it was computed from the board stackup and the net's track width. There
+is no range left to bracket, and the remedy for an assumed run is therefore a real
+one: declaring the stackup changes the answer.
+
+Without a stackup the impedance is unknown, so hauksbee does not pretend to know
+it. It carries the whole range, and **which end is used where** follows this
+module's standing rule that a check fires only when even the most lenient
+assumption is violated:
 
 | Figure | Value | Used for |
 |--------|-------|----------|

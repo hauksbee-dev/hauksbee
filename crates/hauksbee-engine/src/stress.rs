@@ -297,8 +297,20 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     // KiCad's dual form ("R_0201_0603Metric") carries a separate imperial token
     // and is deliberately left to the imperial pass below, which is what keeps
     // the 0201-is-metric-0603 collision correct.
-    if let Some(w) = metric_only_chip_rating(&f) {
-        return chip(w);
+    match classify_metric_only(&f) {
+        // A metric-only name whose code we know.
+        MetricCode::Rated(w) => return chip(w),
+        // A metric-only name whose code we do NOT know must abstain here, not fall
+        // through: "R_2010Metric" is a 2.0 x 1.0 mm body, and letting the imperial
+        // pass match its "2010" substring rates it as a 3/4 W imperial 2010, an
+        // order of magnitude out, and suppresses real overpower findings.
+        MetricCode::Unrecognised => {
+            return ResistorPower {
+                watts: None,
+                basis: ResistorPowerBasis::Unknown,
+            };
+        }
+        MetricCode::Absent => {}
     }
     // Match the imperial size token anywhere in the footprint string
     // (e.g. "Resistor_SMD:R_0402_1005Metric"). The imperial code is paired with
@@ -365,7 +377,17 @@ const IMPERIAL_CHIP_CODES: &[&str] = &[
 /// well-known collisions safe: an imperial 0201 is metric 0603 and an imperial
 /// 01005 is metric 0402, so a metric code must never be consulted while an
 /// imperial token is still available.
-fn metric_only_chip_rating(f: &str) -> Option<f64> {
+enum MetricCode {
+    /// A metric-only name with a code in the table.
+    Rated(f64),
+    /// A metric-only name whose code is not in the table.
+    Unrecognised,
+    /// No usable metric-only code: either no METRIC suffix at all, or KiCad's
+    /// dual form whose imperial token is authoritative.
+    Absent,
+}
+
+fn classify_metric_only(f: &str) -> MetricCode {
     // (metric code, imperial equivalent, rating W)
     const TABLE: &[(&str, f64)] = &[
         ("0402", 1.0 / 32.0), // imperial 01005
@@ -381,7 +403,9 @@ fn metric_only_chip_rating(f: &str) -> Option<f64> {
         ("5750", 1.0),        // imperial 2220
     ];
     // The metric code is the digit run immediately before "METRIC".
-    let idx = f.find("METRIC")?;
+    let Some(idx) = f.find("METRIC") else {
+        return MetricCode::Absent;
+    };
     let metric: String = {
         let head: Vec<char> = f[..idx].chars().collect();
         let mut digits: Vec<char> = head
@@ -394,7 +418,7 @@ fn metric_only_chip_rating(f: &str) -> Option<f64> {
         digits.into_iter().collect()
     };
     if metric.is_empty() {
-        return None;
+        return MetricCode::Absent;
     }
     // Dual-code detection has to be STRUCTURAL, not "does any other number
     // appear". Real KiCad names carry pad dimensions
@@ -416,13 +440,13 @@ fn metric_only_chip_rating(f: &str) -> Option<f64> {
             .collect();
         if !prev_token.is_empty() && IMPERIAL_CHIP_CODES.contains(&prev_token.as_str()) {
             // The imperial token is authoritative; leave it to the imperial pass.
-            return None;
+            return MetricCode::Absent;
         }
     }
-    TABLE
-        .iter()
-        .find(|(code, _)| *code == metric.as_str())
-        .map(|(_, w)| *w)
+    match TABLE.iter().find(|(code, _)| *code == metric.as_str()) {
+        Some((_, w)) => MetricCode::Rated(*w),
+        None => MetricCode::Unrecognised,
+    }
 }
 
 /// The rating of a recognised DIN axial resistor body, from its DIN code.
@@ -1593,6 +1617,21 @@ mod monitor_temp_tests {
                 "{f} must rate {want} W from its imperial token, got {:?}",
                 r.watts
             );
+        }
+    }
+
+    #[test]
+    fn an_unsupported_metric_code_abstains_instead_of_matching_an_imperial_substring() {
+        // "R_2010Metric" is a 2.0 x 1.0 mm body. Falling through to the imperial
+        // pass matches its "2010" and rates it as a 3/4 W imperial 2010, an order
+        // of magnitude out, which suppresses real overpower findings.
+        for f in [
+            "Resistor_SMD:R_2010Metric",
+            "Resistor_SMD:R_1020Metric_Pad0.5x0.5mm",
+        ] {
+            let r = resistor_power_from_footprint(f);
+            assert_eq!(r.basis, ResistorPowerBasis::Unknown, "{f}");
+            assert!(r.watts.is_none(), "{f} got {:?}", r.watts);
         }
     }
 

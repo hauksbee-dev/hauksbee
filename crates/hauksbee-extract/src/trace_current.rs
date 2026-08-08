@@ -1305,24 +1305,41 @@ mod tests {
 
     #[test]
     fn a_stackup_naming_no_outer_layers_falls_back_to_position() {
-        // A non-KiCad producer that names copper something else has only position
-        // to go on, and using it is better than rating everything internal.
+        // A producer that does not use KiCad's F.Cu / B.Cu names has only position
+        // to go on, and using it beats rating everything internal.
+        //
+        // The layer names still end in `.Cu`, deliberately: copper extraction only
+        // collects segments on a `*.Cu` layer, so a stackup naming its copper
+        // "TOP"/"BOT" could never have a rated trace to apply this to. Testing it
+        // with names that cannot carry copper would assert a path no board reaches.
         let odd = r#"
           (setup (stackup
-            (layer "TOP" (type "copper") (thickness 0.035))
+            (layer "L1.Cu" (type "copper") (thickness 0.035))
             (layer "d1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
-            (layer "MID" (type "copper") (thickness 0.0175))
+            (layer "L2.Cu" (type "copper") (thickness 0.0175))
             (layer "d2" (type "core") (thickness 1.2) (epsilon_r 4.5))
-            (layer "BOT" (type "copper") (thickness 0.035))
+            (layer "L3.Cu" (type "copper") (thickness 0.035))
           ))
+          (net 1 "VMOT")
+          (segment (start 0 0) (end 10 0) (width 0.5) (layer "L2.Cu") (net 1))
         "#;
-        let (_, audit) = pcb_audited(odd);
-        assert!(audit.copper.get("TOP").expect("TOP").1, "first is external");
-        assert!(audit.copper.get("BOT").expect("BOT").1, "last is external");
+        let (copper, audit) = pcb_audited(odd);
         assert!(
-            !audit.copper.get("MID").expect("MID").1,
+            audit.copper.get("L1.Cu").expect("L1").1,
+            "first is external"
+        );
+        assert!(audit.copper.get("L3.Cu").expect("L3").1, "last is external");
+        assert!(
+            !audit.copper.get("L2.Cu").expect("L2").1,
             "middle is internal"
         );
+        // And the positional reading really reaches a rating: the inner segment is
+        // rated as 0.5 oz internal copper, not as an outer layer.
+        let nc = copper.iter().find(|n| n.net_id == 1).unwrap();
+        let b = audit.bottleneck(nc).expect("a rated bottleneck");
+        assert_eq!(b.copper_source, CopperSource::Stackup);
+        assert!(!b.external, "L2.Cu is internal by position");
+        assert!((b.ampacity_a - 0.438).abs() < 0.01, "{}", b.ampacity_a);
     }
 
     #[test]

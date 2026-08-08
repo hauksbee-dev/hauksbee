@@ -859,7 +859,34 @@ fn range_0dp(low: f64, high: f64) -> String {
     }
 }
 
-/// The bus-capacitance estimate: a range, because trace impedance is unknown.
+/// Trace capacitance per mm computed from the board's own geometry, when the
+/// layout declares enough to do it: `C' = sqrt(Er_eff) / (c0 * Z0)`, with `Z0`
+/// from the same microstrip model the controlled-impedance check uses and
+/// `Er_eff` from the standard Hammerstad approximation.
+///
+/// This is what turns the capacitance from an assumed range into a measurement,
+/// so a declared stackup plus a routed track width settles the question rather
+/// than merely narrowing it. `None` when the board declares no stackup or the net
+/// has no discrete track to measure, which is when the range is still all there is.
+fn trace_capacitance_pf_per_mm(w_mm: f64, stack: &impedance::Stackup) -> Option<f64> {
+    if w_mm <= 0.0 || stack.source != impedance::StackupSource::Board {
+        return None;
+    }
+    let (h, t, er) = (stack.h_microstrip_mm, stack.t_cu_mm, stack.er);
+    let z0 = impedance::microstrip_z0(w_mm, h, t, er)?;
+    if z0 <= 0.0 {
+        return None;
+    }
+    // Hammerstad's effective permittivity for a microstrip.
+    let er_eff = (er + 1.0) / 2.0 + ((er - 1.0) / 2.0) / (1.0 + 10.0 * h / w_mm).sqrt();
+    // c0 in mm/s, so the result is F/mm; scale to pF.
+    const C0_MM_PER_S: f64 = 2.998e11;
+    let c_pf_per_mm = 1e12 * er_eff.sqrt() / (C0_MM_PER_S * z0);
+    c_pf_per_mm.is_finite().then_some(c_pf_per_mm)
+}
+
+/// The bus-capacitance estimate. A range when the trace's impedance is unknown,
+/// collapsed to a single computed value when the board declares enough geometry.
 #[derive(Debug, Clone, Copy)]
 struct BusCapacitance {
     /// Pin capacitance plus the low-end trace term (pF). Gates findings.
@@ -869,6 +896,9 @@ struct BusCapacitance {
     devices: usize,
     /// Routed length actually measured (mm), or `None` with no layout.
     trace_len_mm: Option<f64>,
+    /// Set when the trace term was COMPUTED from the board's stackup and the net's
+    /// track width rather than assumed from a range. Carries that pF/mm figure.
+    measured_pf_per_mm: Option<f64>,
 }
 
 /// Rise time (ns) for a pull-up R (ohms) charging a bus capacitance C (pF).
@@ -962,6 +992,7 @@ fn bus_capacitance_pf(
     board: &ExtractedBoard,
     net_id: i64,
     trace_len_mm: Option<f64>,
+    measured_pf_per_mm: Option<f64>,
 ) -> BusCapacitance {
     // Dedup by (reference, pad number): an IPC-356 both-sided through-hole access
     // record lists the same pad twice, and counting raw net_members double-counts
@@ -982,11 +1013,18 @@ fn bus_capacitance_pf(
     }
     let c_dev = devices as f64 * C_PIN_PF;
     let len = trace_len_mm.unwrap_or(0.0);
+    // A computed figure replaces both ends of the range: there is nothing left to
+    // bracket once the geometry is known.
+    let (low, high) = match measured_pf_per_mm {
+        Some(c) => (c, c),
+        None => (C_TRACE_PF_PER_MM_LOW, C_TRACE_PF_PER_MM_HIGH),
+    };
     BusCapacitance {
-        low_pf: c_dev + len * C_TRACE_PF_PER_MM_LOW,
-        high_pf: c_dev + len * C_TRACE_PF_PER_MM_HIGH,
+        low_pf: c_dev + len * low,
+        high_pf: c_dev + len * high,
         devices,
         trace_len_mm,
+        measured_pf_per_mm,
     }
 }
 
@@ -1011,7 +1049,15 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
         // layout is available. Without a layout the device-count model is all we
         // have; the message says so rather than passing it off as complete.
         let trace_len_mm = root.map(|r| routed_length_mm(r, net.id));
-        let c = bus_capacitance_pf(board, net.id, trace_len_mm);
+        // With a stackup and a routed track width, the trace capacitance is
+        // computable rather than assumed, which is what actually settles the
+        // range. Falls back to the range when either is missing.
+        let measured = root.and_then(|r| {
+            let stack = impedance::read_stackup(r)?;
+            let (w_min, _) = track_width_range(r, net.id)?;
+            trace_capacitance_pf_per_mm(w_min, &stack)
+        });
+        let c = bus_capacitance_pf(board, net.id, trace_len_mm, measured);
         if c.low_pf <= 0.0 {
             continue;
         }
@@ -1042,12 +1088,17 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
         // geometry-backed number from a pin-count-only floor, and can see that
         // the trace term is a range rather than a measurement.
         let devices = c.devices;
-        let basis = match c.trace_len_mm {
-            Some(len) => format!(
-                "{devices} devices + {len:.0} mm routing at \
-                 {C_TRACE_PF_PER_MM_LOW}-{C_TRACE_PF_PER_MM_HIGH} pF/mm"
+        let basis = match (c.trace_len_mm, c.measured_pf_per_mm) {
+            (Some(len), Some(cpm)) => format!(
+                "{devices} devices + {len:.0} mm routing at {cpm:.3} pF/mm, computed from the \
+                 board stackup and the net's track width"
             ),
-            None => format!(
+            (Some(len), None) => format!(
+                "{devices} devices + {len:.0} mm routing at an ASSUMED \
+                 {C_TRACE_PF_PER_MM_LOW}-{C_TRACE_PF_PER_MM_HIGH} pF/mm; declare the stackup to \
+                 compute it from the real geometry"
+            ),
+            (None, _) => format!(
                 "{devices} devices, routing capacitance NOT counted - \
                  upload the .kicad_pcb layout to include trace copper"
             ),
@@ -1068,10 +1119,15 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
             } else {
                 SiSeverity::Medium
             };
-            let caveat = if rests_on_trace {
-                " This shortfall depends on the assumed trace capacitance: the device pins \
+            let caveat = if rests_on_trace && c.measured_pf_per_mm.is_none() {
+                " This shortfall depends on the ASSUMED trace capacitance: the device pins \
                  alone are within the limit, so a higher-impedance route than assumed would \
-                 pass. Declare the stackup and trace width to settle it."
+                 pass. Declare the board's stackup and this shortfall is recomputed from the \
+                 real trace geometry instead of a range."
+            } else if rests_on_trace {
+                " The device pins alone are within the limit, so this rests on the trace \
+                 capacitance - which was computed from the board's own stackup and track \
+                 width, not assumed."
             } else {
                 " The device pins alone exceed the limit, so this does not rest on any routing \
                  assumption (it does still use the datasheet-typical 10 pF per I2C pin; give \
