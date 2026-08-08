@@ -1,38 +1,7486 @@
 {
- "analog_abort": false,
- "assertions_passed": true,
- "board": "watchy.kicad_pcb",
- "coverage": null,
- "coverage_warnings": [],
- "dead_rails": [],
- "elapsed_s": 0.860419292,
- "exit_code": 0,
+ "schema_version": 1,
  "ok": true,
- "passed": true,
- "results": [
+ "spec_name": "watchy checks",
+ "board": "watchy.kicad_pcb",
+ "passed": false,
+ "assertions_passed": true,
+ "run_valid": false,
+ "exit_code": 3,
+ "analog_abort": false,
+ "refusal": {
+  "claim": "an overall CI verdict for the requested assertions",
+  "missing_prerequisite": "a converged analog solve across every assertion window; 2 assertion(s) overlapped held-stale analog spans",
+  "valid_partial_conclusions": [
+   "the spec and board loaded; every emitted assertion record remains available"
+  ],
+  "next_action": "inspect INVALID assertion 'no stress faults raised' and its failed-window detail, fix the first named net/device, then rerun the same spec"
+ },
+ "seeds": 1,
+ "elapsed_s": 0.1799845,
+ "coverage": null,
+ "substitutions": [],
+ "coverage_warnings": [],
+ "timing_coverage": [],
+ "timing_refusals": [],
+ "dead_rails": [],
+ "waiver_notes": [],
+ "inventory": [
   {
-   "detail": "no stress faults",
-   "failing_seed": null,
-   "failing_seeds": [],
-   "invalid": false,
-   "kind": "no_faults",
-   "label": "no stress faults raised",
-   "passed": true,
-   "seeds_total": 1
+   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmpeV4NAq/watchy.kicad_pcb",
+   "kind": "ki_cad_pcb",
+   "role": "layout",
+   "sha256": "d7f8eb56613968aa061cd612a8679a034430fd9a1fcb08f83690b92c167db217",
+   "contributed": [
+    {
+     "what": "connectivity",
+     "detail": "component and net incidence consumed by binding and electrical checks"
+    },
+    {
+     "what": "copper_geometry",
+     "detail": "layout geometry consumed by geometry-bearing checks"
+    }
+   ]
   },
   {
-   "detail": "GND: min=0.000V (>= -0.1V), max=0.000V (<= 0.1V) [settled 0.000V]",
-   "failing_seed": null,
-   "failing_seeds": [],
-   "invalid": false,
-   "kind": "voltage",
-   "label": "GND in [-0.1, 0.1] V",
-   "passed": true,
-   "seeds_total": 1
+   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmpeV4NAq/spec.toml",
+   "kind": "toml",
+   "role": "spec",
+   "sha256": "3fa3a2b1ba2d237f2977bfb9c21251ae707b720d175ffed02e4b52ceb075872a",
+   "contributed": [
+    {
+     "what": "assertions",
+     "detail": "run configuration, stimuli, supplies, and assertion thresholds"
+    }
+   ]
   }
  ],
- "run_valid": true,
- "seeds": 1,
- "spec_name": "watchy checks",
- "substitutions": []
+ "assumptions": [
+  {
+   "id": "open-part:M1",
+   "kind": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "M1"
+     }
+    ]
+   },
+   "statement": "M1 (Vibration_Motor) is treated as an open circuit.",
+   "because": "No model; left open.",
+   "consequence": "Nets through M1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for M1 to your models directory, or mark it DNP if the board does not fit it."
+  },
+  {
+   "id": "open-part:Y2",
+   "kind": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "Y2"
+     }
+    ]
+   },
+   "statement": "Y2 (40MHz) is treated as an open circuit.",
+   "because": "Unparseable value '40MHz'.",
+   "consequence": "Nets through Y2 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for Y2 to your models directory, or mark it DNP if the board does not fit it."
+  },
+  {
+   "id": "open-part:L1",
+   "kind": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "L1"
+     }
+    ]
+   },
+   "statement": "L1 (TBD) is treated as an open circuit.",
+   "because": "No model; left open.",
+   "consequence": "Nets through L1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for L1 to your models directory, or mark it DNP if the board does not fit it."
+  },
+  {
+   "id": "open-part:C9",
+   "kind": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "C9"
+     }
+    ]
+   },
+   "statement": "C9 (TBD) is treated as an open circuit.",
+   "because": "No model; left open.",
+   "consequence": "Nets through C9 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for C9 to your models directory, or mark it DNP if the board does not fit it."
+  },
+  {
+   "id": "open-part:AE1",
+   "kind": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "AE1"
+     }
+    ]
+   },
+   "statement": "AE1 (Antenna_Chip) is treated as an open circuit.",
+   "because": "No model; left open.",
+   "consequence": "Nets through AE1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for AE1 to your models directory, or mark it DNP if the board does not fit it."
+  },
+  {
+   "id": "open-part:C7",
+   "kind": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "C7"
+     }
+    ]
+   },
+   "statement": "C7 (TBD) is treated as an open circuit.",
+   "because": "No model; left open.",
+   "consequence": "Nets through C7 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for C7 to your models directory, or mark it DNP if the board does not fit it."
+  },
+  {
+   "id": "open-part:R12",
+   "kind": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "R12"
+     }
+    ]
+   },
+   "statement": "R12 (TBD) is treated as an open circuit.",
+   "because": "No model; left open.",
+   "consequence": "Nets through R12 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for R12 to your models directory, or mark it DNP if the board does not fit it."
+  },
+  {
+   "id": "open-part:Y1",
+   "kind": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "Y1"
+     }
+    ]
+   },
+   "statement": "Y1 (32.768KHz) is treated as an open circuit.",
+   "because": "Unparseable value '32.768KHz'.",
+   "consequence": "Nets through Y1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for Y1 to your models directory, or mark it DNP if the board does not fit it."
+  }
+ ],
+ "evidence": [
+  {
+   "assertion": "no stress faults raised",
+   "artifacts": [
+    0,
+    1
+   ],
+   "models": [
+    {
+     "reference": "C1",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C10",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C11",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C12",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C13",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C14",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C15",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C16",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C17",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C18",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C19",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C2",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C20",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C21",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C22",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C23",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C24",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C25",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C26",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C27",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C28",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C29",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C3",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C4",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C5",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C6",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "D1",
+     "model_id": "signal_diode_1n4148_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "signal_diode_1n4148_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "D2",
+     "model_id": "1n4001",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "diodes",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "1n4001.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "D3",
+     "model_id": "signal_diode_1n4148_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "signal_diode_1n4148_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "D4",
+     "model_id": "signal_diode_1n4148_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "signal_diode_1n4148_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "D5",
+     "model_id": "signal_diode_1n4148_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "signal_diode_1n4148_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "J1",
+     "model_id": "connector_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "connector_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "J2",
+     "model_id": "connector_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "connector_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "J3",
+     "model_id": "connector_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "connector_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "L2",
+     "model_id": "l_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "l_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "Q1",
+     "model_id": "cj2301",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "mosfet",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "cj2301.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "Q2",
+     "model_id": "s8050",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "bjt",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "s8050.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "Q3",
+     "model_id": "ao3400a",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "mosfet",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "ao3400a.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "R1",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R10",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R11",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R13",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R14",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R15",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R16",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R17",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R18",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R19",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R2",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R20",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R3",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R4",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R5",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R6",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R7",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R8",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R9",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "SW1",
+     "model_id": "tactile_switch",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tactile_switch.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "SW2",
+     "model_id": "tactile_switch",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tactile_switch.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "SW3",
+     "model_id": "tactile_switch",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tactile_switch.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "SW4",
+     "model_id": "tactile_switch",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tactile_switch.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "TP1",
+     "model_id": "test_point",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "test_point.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "TP2",
+     "model_id": "test_point",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "test_point.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "TP3",
+     "model_id": "test_point",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "test_point.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "TP4",
+     "model_id": "test_point",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "test_point.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "TP5",
+     "model_id": "test_point",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "test_point.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "TP6",
+     "model_id": "test_point",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "test_point.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "TP7",
+     "model_id": "test_point",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "test_point.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "U1",
+     "model_id": "sr2",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "power_ics",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "sr2.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "U2",
+     "model_id": "rt9080_3v3",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "vreg",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "rt9080_3v3.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "exact"
+    },
+    {
+     "reference": "U3",
+     "model_id": "tp4054",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "power_ics",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tp4054.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "U4",
+     "model_id": "esp32s3",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "mcu",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "esp32s3.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "U5",
+     "model_id": "usblc6_2",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "diodes",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "usblc6_2.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "U6",
+     "model_id": "bma423",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "digital",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "bma423.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "Y1",
+     "model_id": "crystal_value",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "passives",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "crystal_value.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "Y2",
+     "model_id": "crystal_value",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "passives",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "crystal_value.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    }
+   ],
+   "parameters": [
+    {
+     "parameter": "C1.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C10.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C11.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C12.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C13.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C14.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C15.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C16.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C17.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C18.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C19.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C2.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C20.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C21.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C22.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C23.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C24.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C25.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C26.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C27.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C28.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C29.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C3.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C4.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C5.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C6.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "D1.model",
+     "value": "signal_diode_1n4148_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "D2.model",
+     "value": "1n4001",
+     "origin": {
+      "type": "model",
+      "model_id": "1n4001",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "D3.model",
+     "value": "signal_diode_1n4148_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "D4.model",
+     "value": "signal_diode_1n4148_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "D5.model",
+     "value": "signal_diode_1n4148_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "J1.model",
+     "value": "connector_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "J2.model",
+     "value": "connector_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "J3.model",
+     "value": "connector_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "L2.model",
+     "value": "l_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "l_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "Q1.model",
+     "value": "cj2301",
+     "origin": {
+      "type": "model",
+      "model_id": "cj2301",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "Q2.model",
+     "value": "s8050",
+     "origin": {
+      "type": "model",
+      "model_id": "s8050",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "Q3.model",
+     "value": "ao3400a",
+     "origin": {
+      "type": "model",
+      "model_id": "ao3400a",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "R1.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R10.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R11.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R13.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R14.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R15.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R16.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R17.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R18.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R19.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R2.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R20.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R3.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R4.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R5.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R6.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R7.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R8.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R9.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "SW1.model",
+     "value": "tactile_switch",
+     "origin": {
+      "type": "model",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "SW2.model",
+     "value": "tactile_switch",
+     "origin": {
+      "type": "model",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "SW3.model",
+     "value": "tactile_switch",
+     "origin": {
+      "type": "model",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "SW4.model",
+     "value": "tactile_switch",
+     "origin": {
+      "type": "model",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "TP1.model",
+     "value": "test_point",
+     "origin": {
+      "type": "model",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "TP2.model",
+     "value": "test_point",
+     "origin": {
+      "type": "model",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "TP3.model",
+     "value": "test_point",
+     "origin": {
+      "type": "model",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "TP4.model",
+     "value": "test_point",
+     "origin": {
+      "type": "model",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "TP5.model",
+     "value": "test_point",
+     "origin": {
+      "type": "model",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "TP6.model",
+     "value": "test_point",
+     "origin": {
+      "type": "model",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "TP7.model",
+     "value": "test_point",
+     "origin": {
+      "type": "model",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "U1.model",
+     "value": "sr2",
+     "origin": {
+      "type": "model",
+      "model_id": "sr2",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "U2.model",
+     "value": "rt9080_3v3",
+     "origin": {
+      "type": "model",
+      "model_id": "rt9080_3v3",
+      "layer": "builtin",
+      "confidence": "exact"
+     }
+    },
+    {
+     "parameter": "U3.model",
+     "value": "tp4054",
+     "origin": {
+      "type": "model",
+      "model_id": "tp4054",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "U4.model",
+     "value": "esp32s3",
+     "origin": {
+      "type": "model",
+      "model_id": "esp32s3",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "U5.model",
+     "value": "usblc6_2",
+     "origin": {
+      "type": "model",
+      "model_id": "usblc6_2",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "U6.model",
+     "value": "bma423",
+     "origin": {
+      "type": "model",
+      "model_id": "bma423",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "Y1.model",
+     "value": "crystal_value",
+     "origin": {
+      "type": "model",
+      "model_id": "crystal_value",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "Y2.model",
+     "value": "crystal_value",
+     "origin": {
+      "type": "model",
+      "model_id": "crystal_value",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    }
+   ],
+   "assumptions": [
+    "open-part:M1",
+    "open-part:Y2",
+    "open-part:L1",
+    "open-part:C9",
+    "open-part:AE1",
+    "open-part:C7",
+    "open-part:R12",
+    "open-part:Y1"
+   ],
+   "status": "undermined"
+  },
+  {
+   "assertion": "GND in [-0.1, 0.1] V",
+   "artifacts": [
+    0,
+    1
+   ],
+   "models": [
+    {
+     "reference": "C1",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C10",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C11",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C12",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C13",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C15",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C16",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C17",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C18",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C19",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C2",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C20",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C22",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C23",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C24",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C25",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C26",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C27",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C28",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C29",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C3",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C4",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C5",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "C6",
+     "model_id": "c_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "c_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "D4",
+     "model_id": "signal_diode_1n4148_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "signal_diode_1n4148_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "J1",
+     "model_id": "connector_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "connector_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "J2",
+     "model_id": "connector_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "connector_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "J3",
+     "model_id": "connector_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "connector_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "Q2",
+     "model_id": "s8050",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "bjt",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "s8050.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "R15",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R16",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R17",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R2",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R3",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R9",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "SW1",
+     "model_id": "tactile_switch",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tactile_switch.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "SW2",
+     "model_id": "tactile_switch",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tactile_switch.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "SW3",
+     "model_id": "tactile_switch",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tactile_switch.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "SW4",
+     "model_id": "tactile_switch",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tactile_switch.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "TP5",
+     "model_id": "test_point",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "ignore",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "test_point.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "U1",
+     "model_id": "sr2",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "power_ics",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "sr2.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "U2",
+     "model_id": "rt9080_3v3",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "vreg",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "rt9080_3v3.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "exact"
+    },
+    {
+     "reference": "U3",
+     "model_id": "tp4054",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "power_ics",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "tp4054.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "U4",
+     "model_id": "esp32s3",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "mcu",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "esp32s3.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "U5",
+     "model_id": "usblc6_2",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "diodes",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "usblc6_2.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "U6",
+     "model_id": "bma423",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "digital",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "bma423.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    },
+    {
+     "reference": "Y2",
+     "model_id": "crystal_value",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "passives",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "crystal_value.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "high"
+    }
+   ],
+   "parameters": [
+    {
+     "parameter": "C1.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C10.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C11.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C12.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C13.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C15.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C16.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C17.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C18.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C19.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C2.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C20.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C22.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C23.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C24.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C25.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C26.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C27.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C28.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C29.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C3.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C4.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C5.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "C6.model",
+     "value": "c_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "D4.model",
+     "value": "signal_diode_1n4148_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "J1.model",
+     "value": "connector_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "J2.model",
+     "value": "connector_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "J3.model",
+     "value": "connector_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "Q2.model",
+     "value": "s8050",
+     "origin": {
+      "type": "model",
+      "model_id": "s8050",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "R15.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R16.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R17.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R2.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R3.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R9.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "SW1.model",
+     "value": "tactile_switch",
+     "origin": {
+      "type": "model",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "SW2.model",
+     "value": "tactile_switch",
+     "origin": {
+      "type": "model",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "SW3.model",
+     "value": "tactile_switch",
+     "origin": {
+      "type": "model",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "SW4.model",
+     "value": "tactile_switch",
+     "origin": {
+      "type": "model",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "TP5.model",
+     "value": "test_point",
+     "origin": {
+      "type": "model",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "U1.model",
+     "value": "sr2",
+     "origin": {
+      "type": "model",
+      "model_id": "sr2",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "U2.model",
+     "value": "rt9080_3v3",
+     "origin": {
+      "type": "model",
+      "model_id": "rt9080_3v3",
+      "layer": "builtin",
+      "confidence": "exact"
+     }
+    },
+    {
+     "parameter": "U3.model",
+     "value": "tp4054",
+     "origin": {
+      "type": "model",
+      "model_id": "tp4054",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "U4.model",
+     "value": "esp32s3",
+     "origin": {
+      "type": "model",
+      "model_id": "esp32s3",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "U5.model",
+     "value": "usblc6_2",
+     "origin": {
+      "type": "model",
+      "model_id": "usblc6_2",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "U6.model",
+     "value": "bma423",
+     "origin": {
+      "type": "model",
+      "model_id": "bma423",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    },
+    {
+     "parameter": "Y2.model",
+     "value": "crystal_value",
+     "origin": {
+      "type": "model",
+      "model_id": "crystal_value",
+      "layer": "builtin",
+      "confidence": "high"
+     }
+    }
+   ],
+   "assumptions": [
+    "open-part:Y2",
+    "open-part:C9",
+    "open-part:AE1",
+    "open-part:C7"
+   ],
+   "error_budget": {
+    "tolerance": {
+     "reltol": 0.001,
+     "vntol": 0.000001,
+     "abstol": 1e-12,
+     "chgtol": 1e-14
+    },
+    "methods": [
+     {
+      "window": {
+       "start_s": 0,
+       "end_s": 0.050000000000000405
+      },
+      "method": "trapezoidal"
+     }
+    ],
+    "residual": {
+     "max_abs": 1.1108128306069887e-12,
+     "at": "VBUS"
+    },
+    "event_time_error_s": 0.001
+   },
+   "status": "undermined"
+  }
+ ],
+ "results": [
+  {
+   "label": "no stress faults raised",
+   "kind": "no_faults",
+   "passed": true,
+   "invalid": true,
+   "detail": "INVALID evidence: this assertion rests on a critical unresolved assumption. no stress faults",
+   "failing_seed": null,
+   "failing_seeds": [],
+   "seeds_total": 1,
+   "evidence": {
+    "assertion": "no stress faults raised",
+    "artifacts": [
+     0,
+     1
+    ],
+    "models": [
+     {
+      "reference": "C1",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C10",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C11",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C12",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C13",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C14",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C15",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C16",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C17",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C18",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C19",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C2",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C20",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C21",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C22",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C23",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C24",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C25",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C26",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C27",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C28",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C29",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C3",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C4",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C5",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C6",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "D1",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "signal_diode_1n4148_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "D2",
+      "model_id": "1n4001",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "diodes",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "1n4001.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "D3",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "signal_diode_1n4148_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "D4",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "signal_diode_1n4148_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "D5",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "signal_diode_1n4148_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "J1",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "connector_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "J2",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "connector_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "J3",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "connector_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "L2",
+      "model_id": "l_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "l_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "Q1",
+      "model_id": "cj2301",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "mosfet",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "cj2301.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "Q2",
+      "model_id": "s8050",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "bjt",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "s8050.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "Q3",
+      "model_id": "ao3400a",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "mosfet",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "ao3400a.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "R1",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R10",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R11",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R13",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R14",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R15",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R16",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R17",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R18",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R19",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R2",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R20",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R3",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R4",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R5",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R6",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R7",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R8",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R9",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "SW1",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tactile_switch.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "SW2",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tactile_switch.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "SW3",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tactile_switch.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "SW4",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tactile_switch.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "TP1",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "test_point.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "TP2",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "test_point.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "TP3",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "test_point.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "TP4",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "test_point.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "TP5",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "test_point.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "TP6",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "test_point.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "TP7",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "test_point.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "U1",
+      "model_id": "sr2",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "power_ics",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "sr2.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "U2",
+      "model_id": "rt9080_3v3",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "vreg",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "rt9080_3v3.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "exact"
+     },
+     {
+      "reference": "U3",
+      "model_id": "tp4054",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "power_ics",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tp4054.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "U4",
+      "model_id": "esp32s3",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "mcu",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "esp32s3.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "U5",
+      "model_id": "usblc6_2",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "diodes",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "usblc6_2.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "U6",
+      "model_id": "bma423",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "digital",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "bma423.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "Y1",
+      "model_id": "crystal_value",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "passives",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "crystal_value.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "Y2",
+      "model_id": "crystal_value",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "passives",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "crystal_value.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     }
+    ],
+    "parameters": [
+     {
+      "parameter": "C1.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C10.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C11.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C12.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C13.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C14.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C15.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C16.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C17.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C18.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C19.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C2.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C20.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C21.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C22.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C23.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C24.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C25.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C26.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C27.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C28.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C29.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C3.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C4.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C5.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C6.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "D1.model",
+      "value": "signal_diode_1n4148_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "signal_diode_1n4148_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "D2.model",
+      "value": "1n4001",
+      "origin": {
+       "type": "model",
+       "model_id": "1n4001",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "D3.model",
+      "value": "signal_diode_1n4148_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "signal_diode_1n4148_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "D4.model",
+      "value": "signal_diode_1n4148_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "signal_diode_1n4148_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "D5.model",
+      "value": "signal_diode_1n4148_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "signal_diode_1n4148_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "J1.model",
+      "value": "connector_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "connector_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "J2.model",
+      "value": "connector_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "connector_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "J3.model",
+      "value": "connector_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "connector_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "L2.model",
+      "value": "l_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "l_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "Q1.model",
+      "value": "cj2301",
+      "origin": {
+       "type": "model",
+       "model_id": "cj2301",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "Q2.model",
+      "value": "s8050",
+      "origin": {
+       "type": "model",
+       "model_id": "s8050",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "Q3.model",
+      "value": "ao3400a",
+      "origin": {
+       "type": "model",
+       "model_id": "ao3400a",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "R1.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R10.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R11.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R13.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R14.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R15.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R16.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R17.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R18.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R19.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R2.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R20.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R3.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R4.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R5.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R6.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R7.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R8.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R9.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "SW1.model",
+      "value": "tactile_switch",
+      "origin": {
+       "type": "model",
+       "model_id": "tactile_switch",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "SW2.model",
+      "value": "tactile_switch",
+      "origin": {
+       "type": "model",
+       "model_id": "tactile_switch",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "SW3.model",
+      "value": "tactile_switch",
+      "origin": {
+       "type": "model",
+       "model_id": "tactile_switch",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "SW4.model",
+      "value": "tactile_switch",
+      "origin": {
+       "type": "model",
+       "model_id": "tactile_switch",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "TP1.model",
+      "value": "test_point",
+      "origin": {
+       "type": "model",
+       "model_id": "test_point",
+       "layer": "builtin",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "TP2.model",
+      "value": "test_point",
+      "origin": {
+       "type": "model",
+       "model_id": "test_point",
+       "layer": "builtin",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "TP3.model",
+      "value": "test_point",
+      "origin": {
+       "type": "model",
+       "model_id": "test_point",
+       "layer": "builtin",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "TP4.model",
+      "value": "test_point",
+      "origin": {
+       "type": "model",
+       "model_id": "test_point",
+       "layer": "builtin",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "TP5.model",
+      "value": "test_point",
+      "origin": {
+       "type": "model",
+       "model_id": "test_point",
+       "layer": "builtin",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "TP6.model",
+      "value": "test_point",
+      "origin": {
+       "type": "model",
+       "model_id": "test_point",
+       "layer": "builtin",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "TP7.model",
+      "value": "test_point",
+      "origin": {
+       "type": "model",
+       "model_id": "test_point",
+       "layer": "builtin",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "U1.model",
+      "value": "sr2",
+      "origin": {
+       "type": "model",
+       "model_id": "sr2",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "U2.model",
+      "value": "rt9080_3v3",
+      "origin": {
+       "type": "model",
+       "model_id": "rt9080_3v3",
+       "layer": "builtin",
+       "confidence": "exact"
+      }
+     },
+     {
+      "parameter": "U3.model",
+      "value": "tp4054",
+      "origin": {
+       "type": "model",
+       "model_id": "tp4054",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "U4.model",
+      "value": "esp32s3",
+      "origin": {
+       "type": "model",
+       "model_id": "esp32s3",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "U5.model",
+      "value": "usblc6_2",
+      "origin": {
+       "type": "model",
+       "model_id": "usblc6_2",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "U6.model",
+      "value": "bma423",
+      "origin": {
+       "type": "model",
+       "model_id": "bma423",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "Y1.model",
+      "value": "crystal_value",
+      "origin": {
+       "type": "model",
+       "model_id": "crystal_value",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "Y2.model",
+      "value": "crystal_value",
+      "origin": {
+       "type": "model",
+       "model_id": "crystal_value",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     }
+    ],
+    "assumptions": [
+     "open-part:M1",
+     "open-part:Y2",
+     "open-part:L1",
+     "open-part:C9",
+     "open-part:AE1",
+     "open-part:C7",
+     "open-part:R12",
+     "open-part:Y1"
+    ],
+    "status": "undermined"
+   }
+  },
+  {
+   "label": "GND in [-0.1, 0.1] V",
+   "kind": "voltage",
+   "passed": true,
+   "invalid": true,
+   "detail": "INVALID evidence: this assertion rests on a critical unresolved assumption. GND: min=0.000V (>= -0.1V), max=0.000V (<= 0.1V) [settled 0.000V]",
+   "failing_seed": null,
+   "failing_seeds": [],
+   "seeds_total": 1,
+   "evidence": {
+    "assertion": "GND in [-0.1, 0.1] V",
+    "artifacts": [
+     0,
+     1
+    ],
+    "models": [
+     {
+      "reference": "C1",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C10",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C11",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C12",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C13",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C15",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C16",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C17",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C18",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C19",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C2",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C20",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C22",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C23",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C24",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C25",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C26",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C27",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C28",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C29",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C3",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C4",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C5",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "C6",
+      "model_id": "c_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "c_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "D4",
+      "model_id": "signal_diode_1n4148_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "signal_diode_1n4148_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "J1",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "connector_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "J2",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "connector_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "J3",
+      "model_id": "connector_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "connector_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "Q2",
+      "model_id": "s8050",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "bjt",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "s8050.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "R15",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R16",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R17",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R2",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R3",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "R9",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "source": {
+       "tier": "estimated-fallback",
+       "layer": "engine-fallback",
+       "origin": "engine-fallback",
+       "validation": "unvalidated",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "r_fallback.model",
+         "reason": "the engine fallback is estimated and has no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "SW1",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tactile_switch.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "SW2",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tactile_switch.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "SW3",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tactile_switch.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "SW4",
+      "model_id": "tactile_switch",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tactile_switch.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "TP5",
+      "model_id": "test_point",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "ignore",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "test_point.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "guessed"
+     },
+     {
+      "reference": "U1",
+      "model_id": "sr2",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "power_ics",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "sr2.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "U2",
+      "model_id": "rt9080_3v3",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "vreg",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "rt9080_3v3.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "exact"
+     },
+     {
+      "reference": "U3",
+      "model_id": "tp4054",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "power_ics",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "tp4054.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "U4",
+      "model_id": "esp32s3",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "mcu",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "esp32s3.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "U5",
+      "model_id": "usblc6_2",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "diodes",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "usblc6_2.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "U6",
+      "model_id": "bma423",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "digital",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "bma423.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     },
+     {
+      "reference": "Y2",
+      "model_id": "crystal_value",
+      "layer": "builtin",
+      "source": {
+       "tier": "curated-library",
+       "layer": "builtin",
+       "origin": "passives",
+       "validation": "physical-bounds-only",
+       "uncertainty": [
+        {
+         "status": "unknown",
+         "parameter": "crystal_value.model",
+         "reason": "the source publishes no validated numeric error interval"
+        }
+       ]
+      },
+      "confidence": "high"
+     }
+    ],
+    "parameters": [
+     {
+      "parameter": "C1.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C10.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C11.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C12.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C13.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C15.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C16.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C17.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C18.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C19.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C2.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C20.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C22.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C23.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C24.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C25.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C26.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C27.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C28.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C29.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C3.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C4.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C5.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "C6.model",
+      "value": "c_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "c_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "D4.model",
+      "value": "signal_diode_1n4148_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "signal_diode_1n4148_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "J1.model",
+      "value": "connector_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "connector_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "J2.model",
+      "value": "connector_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "connector_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "J3.model",
+      "value": "connector_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "connector_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "Q2.model",
+      "value": "s8050",
+      "origin": {
+       "type": "model",
+       "model_id": "s8050",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "R15.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R16.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R17.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R2.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R3.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "R9.model",
+      "value": "r_fallback",
+      "origin": {
+       "type": "model",
+       "model_id": "r_fallback",
+       "layer": "engine-fallback",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "SW1.model",
+      "value": "tactile_switch",
+      "origin": {
+       "type": "model",
+       "model_id": "tactile_switch",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "SW2.model",
+      "value": "tactile_switch",
+      "origin": {
+       "type": "model",
+       "model_id": "tactile_switch",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "SW3.model",
+      "value": "tactile_switch",
+      "origin": {
+       "type": "model",
+       "model_id": "tactile_switch",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "SW4.model",
+      "value": "tactile_switch",
+      "origin": {
+       "type": "model",
+       "model_id": "tactile_switch",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "TP5.model",
+      "value": "test_point",
+      "origin": {
+       "type": "model",
+       "model_id": "test_point",
+       "layer": "builtin",
+       "confidence": "guessed"
+      }
+     },
+     {
+      "parameter": "U1.model",
+      "value": "sr2",
+      "origin": {
+       "type": "model",
+       "model_id": "sr2",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "U2.model",
+      "value": "rt9080_3v3",
+      "origin": {
+       "type": "model",
+       "model_id": "rt9080_3v3",
+       "layer": "builtin",
+       "confidence": "exact"
+      }
+     },
+     {
+      "parameter": "U3.model",
+      "value": "tp4054",
+      "origin": {
+       "type": "model",
+       "model_id": "tp4054",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "U4.model",
+      "value": "esp32s3",
+      "origin": {
+       "type": "model",
+       "model_id": "esp32s3",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "U5.model",
+      "value": "usblc6_2",
+      "origin": {
+       "type": "model",
+       "model_id": "usblc6_2",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "U6.model",
+      "value": "bma423",
+      "origin": {
+       "type": "model",
+       "model_id": "bma423",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     },
+     {
+      "parameter": "Y2.model",
+      "value": "crystal_value",
+      "origin": {
+       "type": "model",
+       "model_id": "crystal_value",
+       "layer": "builtin",
+       "confidence": "high"
+      }
+     }
+    ],
+    "assumptions": [
+     "open-part:Y2",
+     "open-part:C9",
+     "open-part:AE1",
+     "open-part:C7"
+    ],
+    "error_budget": {
+     "tolerance": {
+      "reltol": 0.001,
+      "vntol": 0.000001,
+      "abstol": 1e-12,
+      "chgtol": 1e-14
+     },
+     "methods": [
+      {
+       "window": {
+        "start_s": 0,
+        "end_s": 0.050000000000000405
+       },
+       "method": "trapezoidal"
+      }
+     ],
+     "residual": {
+      "max_abs": 1.1108128306069887e-12,
+      "at": "VBUS"
+     },
+     "event_time_error_s": 0.001
+    },
+    "status": "undermined"
+   }
+  }
+ ]
 }

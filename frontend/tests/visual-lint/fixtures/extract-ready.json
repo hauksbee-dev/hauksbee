@@ -1,6 +1,6 @@
 {
  "backend": "codex",
- "consent_notice": "This sends the datasheet's text to an LLM backend (codex, or the API backend when HAUKSBEE_LLM_API_KEY is set). Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\".",
+ "consent_notice": "This sends the datasheet's text to an LLM backend (codex by default; claude-code or an OpenAI-compatible API with --backend). Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\".",
  "cost": "Codex signs in with a ChatGPT account, so if you already pay for one this costs nothing extra. Otherwise it bills against whatever account you sign in with.",
  "default_effort": "high",
  "default_model": "gpt-5.6-sol",

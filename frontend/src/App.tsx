@@ -469,8 +469,11 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
           <div className="flex-1" />
 
           {/* Status chips need about 190px of their own. They appear from `md`,
-              where the header has it to spare once the secondary action is a glyph. */}
-          <div className="hidden md:flex items-center gap-1.5 overflow-hidden">{chips}</div>
+              where the header has it to spare once the secondary action is a glyph.
+              A long board name can still leave too little: the row then scrolls
+              horizontally in its own container (the site-wide thin scrollbar),
+              so every chip stays reachable and none is served cut in half. */}
+          <div className="hidden md:flex items-center gap-1.5 overflow-x-auto min-w-0">{chips}</div>
 
           {/* Both header actions keep their glyph at every width and give up their
               words as the header narrows: the secondary one first (from `lg`), the
