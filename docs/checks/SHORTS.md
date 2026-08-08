@@ -177,17 +177,21 @@ header pads and manufactured an SDA/SCL collision.
 
 ### Honest polygon (copper pour) fidelity caveat
 
-A `.brd` stores only a signal polygon's **requested outline**, not the copper
-Eagle actually pours. The real fill carves an `isolate` antipad gap around every
-foreign-net wire / pad / via inside the outline, and arbitrates overlapping pours
-by `rank`. Neither the antipads nor the rank are in the file. Treating the drawn
-outline as solid copper turns every trace that legitimately crosses into a pour
-(and every foreign pad the pour isolates around) into a false short, so the pour
-is **excluded from the short / clearance test entirely** rather than reported
-dishonestly. The outline is still parsed (with its per-vertex curves) so the
-limitation is explicit, not silent. Checking pour-to-copper shorts honestly would
-need the board re-poured in Eagle and the computed polygons (with antipads)
-exported. That data is not in the source `.brd`.
+A `.brd` stores a signal polygon's **requested outline** plus its pour settings
+(`isolate`, `rank`, `thermals`, `orphans`, `pour`), all of which are parsed;
+only the *computed* fill polygon is absent, because Eagle re-derives it on every
+ratsnest / CAM run. That derivation is what keeps the fill out of the
+pour-to-copper short test: Eagle carves max(`isolate`, the applicable
+design-rule / net-class clearance) around every foreign-net wire, pad and via
+(an `isolate` below the rules distance is ignored), thermal spokes only remove
+same-net copper, and orphan removal only deletes fill pockets. Every setting
+keeps or widens gaps, so a correctly derived fill cannot short or crowd foreign
+copper in the same file, while treating the drawn outline as solid copper would
+turn every trace the fill legitimately carves around into a false short. The one
+construct the settings cannot make safe **is** checked: two overlapping
+same-rank pours of different signals have no arbitration (Eagle pours both, a
+physical short on the fabricated board, and Eagle's own DRC flags the overlap),
+and that short is reported with the pour settings disclosed on the finding.
 
 ### Deliberate ties exempted locally
 
@@ -373,16 +377,17 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
 - **Arc flattening.** Arc tracks are approximated by 8 straight capsule links.
   The chord error is sub-micron for typical track radii, but a pathologically
   large arc could under-report a grazing clearance by a few microns.
-- **Roundrect / custom pads** are approximated (roundrect as an inset
-  rectangle plus a corner radius, custom pads by their first polygon
-  primitive or bounding rect). This is conservative for overlap and tight for
-  clearance to within the corner radius.
-- **Eagle signal pours.** A `.brd` stores only a pour's requested outline,
-  not the poured copper with its `isolate` antipads or `rank` arbitration, so
-  pours are excluded from the Eagle short / clearance test entirely (see the
-  fidelity caveat above). A short *into* a pour is therefore not detected on
-  Eagle boards. Wires, vias and pads against each other are fully covered.
-  KiCad pours, which do carry the computed fill, are covered.
+- **Roundrect pads** are represented as an inset rectangle plus a corner
+  radius. This is conservative for overlap and tight for clearance to within
+  the corner radius. Custom pads stamp their anchor shape and every drawn
+  primitive (all polygons, lines, arcs, circles and rectangles); trapezoid
+  pads honor `rect_delta`.
+- **Eagle signal pours.** The computed fill is not in the `.brd` but is
+  provably violation-free against same-file copper (see the fidelity caveat
+  above), so pour-to-copper pairs are not checked; overlapping same-rank
+  pours of different signals ARE reported as shorts. Wires, vias and pads
+  against each other are fully covered. KiCad pours, which do carry the
+  computed fill, are covered.
 - **Eagle multilayer.** The Eagle reader spans through-hole pads and vias
   over a two-layer (`1`/`16`) copper stack, which matches the entire
   famous-board corpus. A genuinely multilayer Eagle `.brd` with inner-layer
