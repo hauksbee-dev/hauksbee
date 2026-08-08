@@ -101,14 +101,13 @@ conservative for both surface-mount and through-hole parts:
 | Surface-mount, size code unrecognised | 1/16 W | `UnknownSmdFloor` |
 | No readable package at all | none derived | `Unknown` |
 
-The old behaviour was a flat 1/4 W for everything unrecognised, described as
-conservative. On an SMD board it is the opposite: 1/4 W **exceeds** a real 0402
-(1/16 W) by 4x and an 0603 (1/10 W) by 2.5x, so a genuinely overstressed chip
-resistor whose footprint string was not recognised had its overpower check
-silently suppressed. The conservative floor for a chip resistor is the smallest
-one anyone ships, 1/16 W. A through-hole axial body genuinely is 1/4 W, so it
-keeps that figure; applying the chip floor there would invent overpower faults
-on correct designs.
+A flat 1/4 W for everything unrecognised would not be conservative on an SMD
+board: 1/4 W **exceeds** a real 0402 (1/16 W) by 4x and an 0603 (1/10 W) by
+2.5x, so an overstressed chip resistor whose footprint string went unrecognised
+would have its overpower check silently suppressed. The conservative floor for a
+chip resistor is the smallest one anyone ships, 1/16 W. A through-hole axial body
+genuinely is 1/4 W, so it keeps that figure; applying the chip floor there would
+invent overpower faults on correct designs.
 
 When the footprint says neither, nothing is derived. Guessing would be wrong in
 opposite directions, so the device is reported instead: `StressMonitor::

@@ -281,13 +281,14 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
         match zip_board_code(file_name, contents)? {
             Some(src) => zip_code = Some(src),
             None => {
-                let board = gerber_from_zip_bytes(file_name, contents)?;
+                let out = gerber_from_zip_bytes(file_name, contents)?;
+                let notes = out.stats.coverage_notes();
                 return Ok(NormalizedBoard {
-                    board,
+                    board: out.board,
                     layout_text: None,
                     raw: contents.to_vec(),
                     kind: InputKind::Gerber,
-                    notes: Vec::new(),
+                    notes,
                 });
             }
         }
@@ -419,8 +420,9 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         }
         // Gerber job input, directory form: reverse-extracted from copper
         // geometry.
-        let board = ExtractedBoard::from_gerber(path)
+        let out = ExtractedBoard::from_gerber_with_stats(path)
             .map_err(|e| BoardInputError::Gerber(gerber_path_message(path, &e.to_string())))?;
+        let board = out.board;
         if board.components.is_empty() {
             return Err(BoardInputError::Gerber(gerber_without_parts_message(
                 path, &board,
@@ -432,7 +434,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 layout_text: None,
                 raw: Vec::new(),
                 kind: InputKind::Gerber,
-                notes: Vec::new(),
+                notes: out.stats.coverage_notes(),
             },
             path,
         ));
@@ -522,7 +524,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 path,
             ));
         }
-        let board = ExtractedBoard::from_gerber(path).map_err(|e| {
+        let out = ExtractedBoard::from_gerber_with_stats(path).map_err(|e| {
             // A zip that is neither a gerber set nor a .board export is often
             // a FIRMWARE project zipped by mistake; say where firmware goes
             // instead of only rejecting.
@@ -532,6 +534,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 BoardInputError::Gerber(gerber_path_message(path, &e.to_string()))
             }
         })?;
+        let board = out.board;
         if board.components.is_empty() {
             return Err(BoardInputError::Gerber(gerber_without_parts_message(
                 path, &board,
@@ -543,7 +546,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 layout_text: None,
                 raw,
                 kind: InputKind::Gerber,
-                notes: Vec::new(),
+                notes: out.stats.coverage_notes(),
             },
             path,
         ));
@@ -832,7 +835,7 @@ fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, Bo
 fn gerber_from_zip_bytes(
     file_name: &str,
     contents: &[u8],
-) -> Result<ExtractedBoard, BoardInputError> {
+) -> Result<hauksbee_extract::gerber::GerberExtraction, BoardInputError> {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
     let tmp = std::env::temp_dir().join(format!(
@@ -842,7 +845,7 @@ fn gerber_from_zip_bytes(
     ));
     std::fs::write(&tmp, contents)
         .map_err(|e| BoardInputError::Zip(format!("could not stage the zip: {e}")))?;
-    let result = ExtractedBoard::from_gerber(&tmp);
+    let result = ExtractedBoard::from_gerber_with_stats(&tmp);
     let _ = std::fs::remove_file(&tmp);
     result.map_err(|e| {
         // A zip that fails the gerber read is often a FIRMWARE project zipped
