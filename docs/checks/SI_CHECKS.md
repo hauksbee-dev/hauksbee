@@ -150,26 +150,38 @@ Too-weak a pull (R too high) or too much bus capacitance blows it.
 Bus capacitance is `Cbus = devices * 10 pF + trace_length * 0.15 pF/mm`:
 
 - 10 pF per I2C device pin (a common datasheet figure, refinable per part).
-- **0.15 pF/mm** of routed trace, summed from the layout's discrete segments and
-  arcs via `routed_length_mm`, the same geometry the USB skew check reads.
+- **0.057 to 0.15 pF/mm** of routed trace, a range rather than a number, summed
+  from the layout's discrete segments and arcs via `routed_length_mm`, the same
+  geometry the USB skew check reads.
 
-The trace figure is derived, not picked: for a transmission line
+The trace figures are derived, not picked: for a transmission line
 `C' = sqrt(Er_eff) / (c0 * Z0)`, which on FR4 (`Er_eff ~ 3`) is 0.116 pF/mm at
-50 ohm, 0.077 pF/mm at 75 ohm and 0.057 pF/mm at 100 ohm. An I2C trace is an
-ordinary signal-width route and usually sits at the high-impedance, low-C end;
-the widest, closest-coupled realistic case (`Er_eff 3.2`, `Z0 40 ohm`) gives
-0.149 pF/mm. 0.15 pF/mm is therefore the conservative **high-capacitance** end of
-the real range, which is the safe direction for a rise-time limit: it
-over-estimates `t_r` rather than under-estimating it. `C_TRACE_PF_PER_MM` is
-pinned against that closed form by
+50 ohm, 0.077 pF/mm at 75 ohm and 0.057 pF/mm at 100 ohm; the widest,
+closest-coupled realistic case (`Er_eff 3.2`, `Z0 40 ohm`) gives 0.149 pF/mm.
+
+Hauksbee does not know a given route's impedance, so it does not pretend to. It
+carries the whole range, and **which end is used where** follows this module's
+standing rule that a check fires only when even the most lenient assumption is
+violated:
+
+| Figure | Value | Used for |
+|--------|-------|----------|
+| `C_TRACE_PF_PER_MM_LOW` | 0.057 pF/mm (100 ohm) | **gating findings**, so a bus is never failed on an assumed geometry it may not have |
+| `C_TRACE_PF_PER_MM_HIGH` | 0.15 pF/mm (40 ohm worst case) | reported alongside, so the reader sees the worst case the geometry permits |
+
+Firing on the high end would fail real boards: a 500 mm 100 ohm route on an
+8-device bus behind a 10 kohm pull is 923 ns at its own impedance (in spec) but
+1313 ns if charged 0.15 pF/mm. Findings therefore quote both numbers and are
+raised only when the low bound is already over the limit. Both constants are
+pinned against the closed form by
 `si::tests::trace_capacitance_per_mm_matches_transmission_line_physics`, so a
 units slip (a pF/inch or pF/cm figure written as pF/mm, which would inflate every
 bus by an order of magnitude) fails a test rather than shipping.
 
-Both terms are real: on a 10-device bus behind a 10 kohm pull, a 500 mm run adds
-75 pF, taking `Cbus` from 100 pF to 175 pF and `t_r` from ~847 ns (in spec) to
-~1483 ns (out). Dropping the trace term under-reports rise time, so a
-`.kicad_pcb` layout is always folded in when one is uploaded. **Without a layout the routing
+The trace term is real either way: on a 10-device bus behind a 10 kohm pull, a
+500 mm run adds 28.5 pF even at the low end, taking `Cbus` to 128 pF and `t_r`
+from ~847 ns (in spec) to ~1089 ns (out). Dropping it under-reports rise time, so
+a `.kicad_pcb` layout is always folded in when one is uploaded. **Without a layout the routing
 term is unavailable**, and the note says so in words (`routing capacitance NOT
 counted - upload the .kicad_pcb layout to include trace copper`): the
 device-count number is a floor, not a verdict. With a layout the note states the
@@ -190,16 +202,17 @@ otherwise. This is exactly what keeps it silent on the proven-good corpus buses.
 
 Measured on the real layouts, with the routed term included:
 
+`Cbus` and `t_r` are given as the reported range (low bound first):
+
 | Board / bus | Pull | Devices | Routing | `Cbus` | `t_r` | Verdict |
 |-------------|------|---------|---------|--------|-------|---------|
-| Olimex UEXT SDA (REV-L) | 2.2 kohm | 1 | 73 mm | ~21 pF | ~39 ns | ok |
-| ZSWatch RTC SDA (PCA9306+RV-8263) | 3.3 kohm | 2 | 1 mm | ~20 pF | ~57 ns | ok |
-| ZSWatch Extension SDA | 1.8 kohm | 8 | 62 mm | ~89 pF | ~136 ns | ok |
+| Olimex UEXT SDA (REV-L) | 2.2 kohm | 1 | 73 mm | 14-21 pF | 26-39 ns | ok |
+| ZSWatch RTC SDA (PCA9306+RV-8263) | 3.3 kohm | 2 | 1 mm | 20 pF | 56 ns | ok |
+| ZSWatch Extension SDA | 1.8 kohm | 8 | 62 mm | 84-89 pF | 127-136 ns | ok |
 
 Routed copper is a real term without being the dominant one: on the Olimex UEXT
-bus, one device pin and 73 mm of track means half the capacitance is trace
-(~11 pF of ~21 pF), so a device-count-only model rates it ~19 ns instead of
-~39 ns.
+bus, one device pin and 73 mm of track puts a third to a half of the capacitance
+in the trace, so a device-count-only model rates it ~19 ns instead of 26-39 ns.
 
 The ZSWatch 8-device Extension bus is the corpus's closest-to-the-limit I2C bus
 and still sits ~7x under standard mode. The designers chose 1.8 kohm precisely
@@ -575,8 +588,16 @@ stackup" about a board that declares one is itself a false claim:
 | Case | `CopperSource` | Message |
 |------|----------------|---------|
 | No stackup in the layout | `AssumedNoStackup` | `ASSUMED 1 oz external - the layout declares no stackup, so upload a stackup declaration or fab drawing ...` |
-| Stackup present, this layer absent or zero-thickness | `AssumedLayerMissing` | `ASSUMED 1 oz external - the layout declares a stackup but no copper weight for In9.Cu, so upload ... that covers every layer` |
+| Stackup present, this layer absent or zero-thickness | `AssumedLayerMissing` | `ASSUMED 1 oz internal - the layout declares a stackup but no copper weight for In9.Cu, so upload ... that covers every layer` |
 | Layer declared with a thickness | `Stackup` | `0.50 oz internal In1.Cu, per the board stackup` |
+
+Only the **weight** falls back to 1 oz. The internal/external side is inferred
+from the layer's own name (`F.Cu` / `B.Cu` external, `In<N>.Cu` internal,
+anything unrecognised internal), because defaulting an undeclared `In1.Cu` to
+external doubles its apparent capacity and would suppress the very findings
+per-layer rating exists to recover. `TraceAudit` therefore has no `external`
+field at all: which constant applies is a property of the layer, never a
+per-audit choice.
 
 The `--ampacity` table carries the matching header and a per-row
 `1 oz ext (assumed)` basis, so measured and assumed ratings are never confusable.

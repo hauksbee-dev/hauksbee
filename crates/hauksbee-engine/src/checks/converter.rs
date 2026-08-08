@@ -248,6 +248,38 @@ fn pin_is_gate_by_name(p: &Pin) -> bool {
 /// nobody could classify then produced exactly the same output as a board with
 /// no converter on it: nothing. The two are very different claims, and only one
 /// of them is a pass.
+/// Why a detected switching stage could not be given a direction.
+///
+/// `classify_topology` returns `None` for several distinct situations, and they
+/// do not warrant the same sentence: telling a user that "neither rail name says
+/// which is the input" about a stage whose rails are `VIN_A` and `VIN_B` is a
+/// false statement about their board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbstentionReason {
+    /// Neither rail name encodes a direction at all.
+    NoDirectionalNames,
+    /// Both rails name themselves inputs.
+    BothNamedInput,
+    /// Both rails name themselves outputs.
+    BothNamedOutput,
+}
+
+impl AbstentionReason {
+    fn describe(self) -> &'static str {
+        match self {
+            AbstentionReason::NoDirectionalNames => {
+                "the connectivity is reversible, so it is equally consistent with a buck and a                  boost, and neither rail name says which is the input"
+            }
+            AbstentionReason::BothNamedInput => {
+                "the connectivity is reversible, and BOTH rail names claim to be the input, so                  the names contradict each other rather than settling the direction"
+            }
+            AbstentionReason::BothNamedOutput => {
+                "the connectivity is reversible, and BOTH rail names claim to be the output, so                  the names contradict each other rather than settling the direction"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConverterAbstention {
     /// The power inductor that anchors the unclassified stage.
@@ -258,6 +290,8 @@ pub struct ConverterAbstention {
     pub fet_side_rail: String,
     /// The rail at the far end of the inductor.
     pub inductor_far_rail: String,
+    /// Which of the several unclassifiable situations this stage is in.
+    pub reason: AbstentionReason,
 }
 
 impl ConverterAbstention {
@@ -265,12 +299,14 @@ impl ConverterAbstention {
     pub fn message(&self) -> String {
         format!(
             "converter: the switching stage around {} (switch node '{}', rails '{}' and '{}') \
-             was detected but not classified: the connectivity is reversible, so it is equally \
-             consistent with a buck and a boost, and neither rail name says which is the input. \
-             No ripple or duty verdict was reached for this stage. Rename the rails to carry \
-             their role (VIN / VOUT, or a *_IN / *_OUT suffix), or give the controller a model \
-             declaring its topology, to cover it.",
-            self.inductor_ref, self.switch_node, self.fet_side_rail, self.inductor_far_rail,
+             was detected but not classified: {}. No ripple or duty verdict was reached for \
+             this stage. Rename the rails to carry their role (VIN / VOUT, or a *_IN / *_OUT \
+             suffix), or give the controller a model declaring its topology, to cover it.",
+            self.inductor_ref,
+            self.switch_node,
+            self.fet_side_rail,
+            self.inductor_far_rail,
+            self.reason.describe(),
         )
     }
 }
@@ -387,17 +423,22 @@ pub fn detect_converters_with_abstentions(
             // high rail + inductor-side low rail can be either a buck or a boost.
             // Accept a direction only when rail names explicitly identify input
             // and/or output. Numeric voltage ordering alone is not evidence.
-            let Some(topology) = classify_topology(&name_of(input_rail_id), &name_of(other_rail))
-            else {
-                // Not "no converter here": a converter we could not orient. Say so.
-                abstentions.push(ConverterAbstention {
-                    inductor_ref: ind.reference.clone(),
-                    switch_node: name_of(cand_sw),
-                    fet_side_rail: name_of(input_rail_id),
-                    inductor_far_rail: name_of(other_rail),
-                });
-                continue;
-            };
+            let topology =
+                match classify_topology_or_reason(&name_of(input_rail_id), &name_of(other_rail)) {
+                    Ok(topology) => topology,
+                    Err(reason) => {
+                        // Not "no converter here": a converter we could not orient,
+                        // and the note says which situation blocked it.
+                        abstentions.push(ConverterAbstention {
+                            inductor_ref: ind.reference.clone(),
+                            switch_node: name_of(cand_sw),
+                            fet_side_rail: name_of(input_rail_id),
+                            inductor_far_rail: name_of(other_rail),
+                            reason,
+                        });
+                        continue;
+                    }
+                };
             let (input_rail, output_rail) = match topology {
                 Topology::Buck => (input_rail_id, other_rail),
                 Topology::Boost => (other_rail, input_rail_id),
@@ -476,18 +517,33 @@ fn rail_direction(name: &str) -> Option<RailDirection> {
 /// Classify the FET-side rail versus the inductor-far rail. `None` is a first-
 /// class result: without a directional name, the graph is compatible with both
 /// buck and boost and a buck-only ripple equation must abstain.
+/// Test-only view of [`classify_topology_or_reason`] that discards the reason.
+/// Production code takes the reason, because an abstention has to say why.
+#[cfg(test)]
 fn classify_topology(fet_side_name: &str, inductor_far_name: &str) -> Option<Topology> {
+    classify_topology_or_reason(fet_side_name, inductor_far_name).ok()
+}
+
+/// [`classify_topology`], but the failure carries WHICH situation blocked it so
+/// the abstention note can state the real reason.
+fn classify_topology_or_reason(
+    fet_side_name: &str,
+    inductor_far_name: &str,
+) -> Result<Topology, AbstentionReason> {
+    use RailDirection::{Input, Output};
     match (
         rail_direction(fet_side_name),
         rail_direction(inductor_far_name),
     ) {
-        (Some(RailDirection::Input), Some(RailDirection::Output))
-        | (Some(RailDirection::Input), None)
-        | (None, Some(RailDirection::Output)) => Some(Topology::Buck),
-        (Some(RailDirection::Output), Some(RailDirection::Input))
-        | (Some(RailDirection::Output), None)
-        | (None, Some(RailDirection::Input)) => Some(Topology::Boost),
-        _ => None,
+        (Some(Input), Some(Output)) | (Some(Input), None) | (None, Some(Output)) => {
+            Ok(Topology::Buck)
+        }
+        (Some(Output), Some(Input)) | (Some(Output), None) | (None, Some(Input)) => {
+            Ok(Topology::Boost)
+        }
+        (Some(Input), Some(Input)) => Err(AbstentionReason::BothNamedInput),
+        (Some(Output), Some(Output)) => Err(AbstentionReason::BothNamedOutput),
+        (None, None) => Err(AbstentionReason::NoDirectionalNames),
     }
 }
 
@@ -606,6 +662,50 @@ mod tests {
         assert!(
             m.contains("VIN") && m.contains("VOUT"),
             "names the unlock: {m}"
+        );
+        assert_eq!(abstentions[0].reason, AbstentionReason::NoDirectionalNames);
+        assert!(
+            m.contains("neither rail name says which is the input"),
+            "the reason must match the situation: {m}"
+        );
+    }
+
+    #[test]
+    fn contradicting_rail_names_get_their_own_reason() {
+        // classify_topology also abstains when BOTH rails claim the same role.
+        // Telling that user "neither rail name says which is the input" is a false
+        // statement about their board.
+        assert_eq!(
+            classify_topology_or_reason("VIN_A", "VIN_B"),
+            Err(AbstentionReason::BothNamedInput)
+        );
+        assert_eq!(
+            classify_topology_or_reason("VOUT_A", "VOUT_B"),
+            Err(AbstentionReason::BothNamedOutput)
+        );
+        assert_eq!(
+            classify_topology_or_reason("+12V", "+3V3"),
+            Err(AbstentionReason::NoDirectionalNames)
+        );
+        // And the rendered sentence differs per reason.
+        let msg = |reason| {
+            ConverterAbstention {
+                inductor_ref: "L1".into(),
+                switch_node: "SW".into(),
+                fet_side_rail: "VIN_A".into(),
+                inductor_far_rail: "VIN_B".into(),
+                reason,
+            }
+            .message()
+        };
+        let both_in = msg(AbstentionReason::BothNamedInput);
+        assert!(
+            both_in.contains("BOTH rail names claim to be the input"),
+            "{both_in}"
+        );
+        assert!(
+            !both_in.contains("neither rail name"),
+            "must not also claim the names are silent: {both_in}"
         );
     }
 

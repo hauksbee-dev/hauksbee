@@ -361,7 +361,10 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
 
   Dropping a whole finding class silently would make "no shorts found" and "no
   shorts found, having declined to look at a category" render identically.
-  `DrcReport::zone_pad_overlaps_suppressed` counts the drops and
+  `DrcReport::zone_pad_overlaps_suppressed` counts the suppressed **primitive
+  pairs** (a zone boundary is indexed edge by edge, so one carve around one pad
+  contributes several, making the number an upper bound rather than a pad count,
+  which the disclosure states) and
   `DrcReport::suppression_note()` renders the disclosure, which every surface
   prints ahead of any clean claim (the text report as `NOT CHECKED:`, the plain
   report as a heads-up, JSON as `suppression_note`). Boards where nothing was
