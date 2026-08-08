@@ -100,6 +100,7 @@ field name is a loud parse error rather than a value that vanishes.
 | `expected_e_machine` | yes | `EM_ARM`, `EM_RISCV`, `EM_XTENSA`, `EM_AVR` | The ISA gate. A wrong-architecture ELF is refused before it runs as garbage |
 | `mcu_label` | yes | string | The human name in reports and errors |
 | `watchdog_limitation` | no | string | How this part's watchdog fidelity falls short, as one sentence rendered verbatim on every report surface. Omitting it CLAIMS that an armed, never-fed watchdog reboots the core the way silicon does, so omit it only if you measured that |
+| `timing_limitation` | no | string | How this part's timing fidelity falls short, one sentence, same verbatim rendering. Omitting it claims a firmware delay costs the virtual time it costs on silicon, which is a clock-truth-gate measurement, not a default |
 | `extra_setup` | no | array of strings | Monitor commands run after the platform loads, before the firmware |
 | `post_load_setup` | no | array of strings | Monitor commands run after the firmware loads. `{cpu}` is substituted with `cpu_path` |
 

@@ -119,6 +119,11 @@ have their own shape (`arch`, `icount_shift`, mailbox-style `banks`), see
   claims that a starved watchdog reboots the core the way silicon does, which on
   the shipped parts is true of exactly one of them, so leave it out only if you
   measured it.
+- `timing_limitation` (optional): the timing twin of the field above, one
+  sentence rendered verbatim on every report surface. Leaving it out claims a
+  firmware delay costs the virtual time it costs on silicon; the shipped parts
+  earn that silence through the clock-truth gate, so a variant that diverges (a
+  timer block deliberately clocked off its reset default, say) must say so here.
 - `[[soc.ports]]`, one per GPIO port: `letter`, the platform `peripheral`
   name (**without** `sysbus.`, the backend prepends it when polling),
   `odr_offset` (the output-data register's byte offset), and `width` (the port's
