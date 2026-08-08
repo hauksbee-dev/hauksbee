@@ -626,7 +626,7 @@
       "type": "object"
     },
     "CosimFallbackWindow": {
-      "description": "One sim-time window `[start_s, end_s)` whose answer was produced by a\nper-chunk fallback integration rung after the primary analog solve failed\nthere. `method` is the rung's stable name\n(`crate::scheduler::ChunkFallbackMethod::as_str`), `fidelity_note` names\nthe known algorithmic trade-off, and `error_estimate_v` is the MEASURED\nstep-doubling estimate of the chunk-end node-voltage error in volts\n(worst chunk of a merged window; omitted when the refinement companion\nfailed to converge, never invented). The record travels with the number it\nqualifies.",
+      "description": "One sim-time window `[start_s, end_s)` whose answer was produced by a\nper-chunk fallback integration rung after the primary analog solve failed\nthere. `method` is the rung's stable name\n(`crate::scheduler::ChunkFallbackMethod::as_str`), `fidelity_note` names\nthe known algorithmic trade-off, and `error_estimate_v` is a MEASURED\nestimate, in volts, of the chunk-end node-voltage error each chunk's march\nadded relative to its own chunk-start state, from a companion re-solve at\na 4x-shifted accuracy dial (tighter first, a coarser leg when the tight\ncompanion will not converge), conservatively Richardson-scaled. Worst\nchunk of a merged window, not a sum across it; omitted when no companion\nconverged, never invented. The record travels with the number it\nqualifies.",
       "properties": {
         "end_s": {
           "format": "double",
