@@ -95,6 +95,7 @@ fn outcome_with(
         dead_rails: Vec::new(),
         unexercised_bus_ids: Default::default(),
         spi_framing: Default::default(),
+        spi_cs_provenance: Default::default(),
     }
 }
 

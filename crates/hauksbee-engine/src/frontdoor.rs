@@ -331,6 +331,10 @@ pub struct WebSpiFraming {
     pub bus: String,
     /// `"exact"` | `"backend"` | `"heuristic"`.
     pub mode: String,
+    /// On the exact tier, who supplied the chip-select net: `"spec"` or
+    /// `"model-roles"`. Absent on the backend and heuristic tiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cs_provenance: Option<String>,
 }
 
 /// One sim-time window `[start_s, end_s)` where the analog co-sim solve failed to
@@ -1599,6 +1603,7 @@ fn run_web_cosim(
         .map(|(bus, mode)| WebSpiFraming {
             bus,
             mode: mode.as_str().to_string(),
+            cs_provenance: mode.cs_provenance().map(|p| p.as_str().to_string()),
         })
         .collect();
 

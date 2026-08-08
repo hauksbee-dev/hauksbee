@@ -2828,8 +2828,8 @@ impl Scheduler {
                 eprintln!(
                     "WARN: SPI bus '{}' deselected mid-transaction at chunk boundary \
                      (transfer spans the {:.3} ms chunk); reply may be truncated. \
-                     Resolve the CS net (cs_pin) or use a backend that surfaces \
-                     chip-select for exact framing.",
+                     Declare the CS net, bind a model that maps a `cs` pin, or use \
+                     a backend that surfaces chip-select, for exact framing.",
                     guard.id(),
                     chunk * 1e3,
                 );

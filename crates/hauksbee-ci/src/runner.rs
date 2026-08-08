@@ -218,6 +218,14 @@ pub struct RunOutcome {
     /// heuristic tier is documented actively wrong (merges two transactions in
     /// one chunk; truncates a boundary-spanning one).
     pub spi_framing: HashMap<String, String>,
+    /// For each SPI bus on the `"exact"` tier, who supplied the chip-select net:
+    /// `"spec"` (the peripheral's own `cs_net`) or `"model-roles"` (the `cs` pin
+    /// role of the bound model for the board component the peripheral names).
+    /// Buses on the `backend` or `heuristic` tier are absent, because no CS net
+    /// was resolved for them. Kept beside the tier rather than folded into it:
+    /// the tier is what a verdict is graded on, the provenance is what a reader
+    /// needs to reproduce or override it.
+    pub spi_cs_provenance: HashMap<String, String>,
     /// How much of the board bound to a real device model, from the binder.
     ///
     /// Analogue accuracy is capped by model availability, and part of that cap
@@ -1287,8 +1295,14 @@ fn run_one(
     // In a multi-member fuzz/tolerance ensemble, make each seed's VCD path
     // distinct so per-seed waveforms are not all overwritten to one fixed file.
     let vcd_seed = (member_count > 1).then_some(seed);
-    let vcd_targets =
-        attach_peripherals(spec, &board, &net_node, engine.scheduler_mut(), vcd_seed)?;
+    let vcd_targets = attach_peripherals(
+        spec,
+        &board,
+        &net_node,
+        engine.scheduler_mut(),
+        lib,
+        vcd_seed,
+    )?;
 
     // Attach declarative sensors (RegisterMapSensor) to their buses.
     attach_sensors(spec, engine.scheduler_mut())?;
@@ -1831,6 +1845,12 @@ fn run_one(
             .into_iter()
             .map(|(bus, mode)| (bus, mode.as_str().to_string()))
             .collect(),
+        spi_cs_provenance: engine
+            .scheduler()
+            .spi_framing_modes()
+            .into_iter()
+            .filter_map(|(bus, mode)| mode.cs_provenance().map(|p| (bus, p.as_str().to_string())))
+            .collect(),
     })
 }
 
@@ -2238,24 +2258,61 @@ fn resolve_net(
     None
 }
 
-/// Resolve a SPI peripheral's `cs_net` to the MCU pin that drives it (05 §2.1),
-/// so the co-sim frames transactions on the real chip-select edges. The net name
-/// is looked up in the bound net map, then traced back to the GPIO driver pin via
-/// the scheduler (the same net-to-driving-pin trace the 74HC595 chain wiring
-/// uses). Returns `None` when `cs_net` is absent or does not resolve to a driven
-/// MCU pin, in which case the bus falls back to the chunk-boundary heuristic and
-/// the coverage reports `heuristic`.
+use hauksbee_engine::CsProvenance;
+
+/// Which CS net a SPI peripheral gets, and who supplied it.
+///
+/// The spec's `cs_net` wins outright: a board whose model pad map is wrong, or
+/// whose CS is buffered through something the model cannot see, must stay
+/// overridable by hand. Only when the spec is silent does the bound model's `cs`
+/// pin role get a say, via `ref` naming the slave's own board component.
+///
+/// `None` means neither route produced a net, so the bus stays on the
+/// chunk-boundary heuristic and the coverage reports `heuristic` — the same
+/// honest answer as before the model-role route existed.
+fn cs_net_name(
+    p: &crate::spec::PeripheralSpec,
+    board: &ExtractedBoard,
+    lib: &hauksbee_models::ModelLibrary,
+) -> Option<(String, CsProvenance)> {
+    if let Some(net) = &p.cs_net {
+        return Some((net.clone(), CsProvenance::SpecDeclared));
+    }
+    let reference = p.reference.as_ref()?;
+    let net = hauksbee_engine::binder::model_role_cs_net(board, reference, lib)?;
+    Some((net, CsProvenance::ModelRoles))
+}
+
+/// Resolve a SPI peripheral's chip-select net to the MCU pin that drives it
+/// (05 §2.1), so the co-sim frames transactions on the real chip-select edges.
+///
+/// The net comes from [`cs_net_name`] (spec-declared, else the bound model's
+/// `cs` pin role). It is then looked up in the bound net map and traced back to
+/// the GPIO driver pin via the scheduler (the same net-to-driving-pin trace the
+/// 74HC595 chain wiring uses).
+///
+/// Returns `None` when no CS net was found, or when the net does not resolve to
+/// a driven MCU pin (an unrouted CS, or one driven by something that is not an
+/// MCU GPIO): the bus falls back to the chunk-boundary heuristic and the
+/// coverage reports `heuristic`. The [`CsProvenance`] rides along so the report
+/// can say which route produced the exact tier, because the two fail
+/// differently: a spec typo is caught by net validation, whereas a model pad map
+/// is only as right as the model entry.
 fn resolve_cs_pin(
     p: &crate::spec::PeripheralSpec,
+    board: &ExtractedBoard,
     net_node: &HashMap<String, NodeId>,
     sched: &hauksbee_engine::scheduler::Scheduler,
-) -> Option<((char, u8), NodeId)> {
-    let net = p.cs_net.as_ref()?;
-    let node = net_node.get(net).copied()?;
+    lib: &hauksbee_models::ModelLibrary,
+) -> Option<((char, u8), NodeId, CsProvenance)> {
+    let (net, provenance) = cs_net_name(p, board, lib)?;
+    let node = net_node.get(&net).copied()?;
     // Return the CS NET NODE alongside the pin so attach_spi_bus can install the
     // CS frame on the MCU that actually drives this net, not merely the first MCU
     // that owns the identical chip-local (port,bit) tuple.
-    sched.pin_driving_node(node).map(|pin| (pin, node))
+    sched
+        .pin_driving_node(node)
+        .map(|pin| (pin, node, provenance))
 }
 
 /// Attach every peripheral in the spec to the scheduler. Returns the list of
@@ -2265,6 +2322,9 @@ fn attach_peripherals(
     board: &ExtractedBoard,
     net_node: &HashMap<String, NodeId>,
     sched: &mut hauksbee_engine::scheduler::Scheduler,
+    // The model library, for the SPI chip-select route that reads a bound model's
+    // `cs` pin role when the spec declares no `cs_net`.
+    lib: &hauksbee_models::ModelLibrary,
     // `Some(seed)` in a multi-member ensemble: the vcd_sink path is made
     // per-seed so N runs do not overwrite one fixed file. `None` for a single run.
     vcd_seed: Option<u32>,
@@ -2390,19 +2450,23 @@ fn attach_peripherals(
                 sched.attach_i2c_bus(Arc::new(Mutex::new(bus)));
             }
             "spi_eeprom" => {
-                let (cs_pin, cs_net) = match resolve_cs_pin(p, net_node, sched) {
-                    Some((pin, node)) => (Some(pin), Some(node)),
-                    None => (None, None),
-                };
-                let bus = SpiBus::new(&p.id, Box::new(Spi25Eeprom::new(p.size.unwrap_or(256))));
+                let (cs_pin, cs_net, provenance) =
+                    match resolve_cs_pin(p, board, net_node, sched, lib) {
+                        Some((pin, node, prov)) => (Some(pin), Some(node), prov),
+                        None => (None, None, CsProvenance::SpecDeclared),
+                    };
+                let bus = SpiBus::new(&p.id, Box::new(Spi25Eeprom::new(p.size.unwrap_or(256))))
+                    .with_cs_provenance(provenance);
                 sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin, cs_net);
             }
             "spi_mcp3008" => {
-                let (cs_pin, cs_net) = match resolve_cs_pin(p, net_node, sched) {
-                    Some((pin, node)) => (Some(pin), Some(node)),
-                    None => (None, None),
-                };
-                let bus = SpiBus::new(&p.id, Box::new(Mcp3008::new(p.vref.unwrap_or(5.0))));
+                let (cs_pin, cs_net, provenance) =
+                    match resolve_cs_pin(p, board, net_node, sched, lib) {
+                        Some((pin, node, prov)) => (Some(pin), Some(node), prov),
+                        None => (None, None, CsProvenance::SpecDeclared),
+                    };
+                let bus = SpiBus::new(&p.id, Box::new(Mcp3008::new(p.vref.unwrap_or(5.0))))
+                    .with_cs_provenance(provenance);
                 sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin, cs_net);
             }
             "vcd_sink" => {
