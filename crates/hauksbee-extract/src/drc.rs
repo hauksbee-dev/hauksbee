@@ -1496,7 +1496,7 @@ fn collect_pad(
         // Trapezoid: `(rect_delta dx dy)` skews the rectangle. KiCad's
         // outline (legacy `PAD::BuildPadPolygon`): `size` is the average of
         // the two parallel edges and the delta is the full difference, so the
-        // wide edge extends BEYOND the size box — a bounding rectangle both
+        // wide edge extends BEYOND the size box, so a bounding rectangle both
         // understates the wide edge and overstates the narrow one.
         "trapezoid" => vec![trapezoid_polygon(pad, sx, sy, &outline_to_world)],
         // Custom pad: the copper is the anchor pad shape UNION every drawn
@@ -1714,7 +1714,7 @@ fn trapezoid_polygon(
 /// All solid copper shapes of a KiCad custom pad, transformed to world
 /// coordinates: the anchor pad shape (`(options (anchor circle|rect))` over
 /// `(size sx sy)`, circle by default) plus every drawn primitive inside
-/// `(primitives ...)` — all `gr_poly`/`poly` outlines (not just the first),
+/// `(primitives ...)`: all `gr_poly`/`poly` outlines (not just the first),
 /// stroked lines, arcs, circles and rectangles.
 fn custom_pad_shapes(
     pad: &List,
@@ -1810,7 +1810,11 @@ fn custom_pad_shapes(
                     // Stroke-only ring: the interior is NOT copper. Flatten the
                     // circumference into capsule links of the stroke radius so
                     // copper legitimately inside the ring stays silent.
-                    out.extend(ring_capsules(c.0, c.1, radius, r).into_iter().map(Shape::Capsule));
+                    out.extend(
+                        ring_capsules(c.0, c.1, radius, r)
+                            .into_iter()
+                            .map(Shape::Capsule),
+                    );
                 }
             }
             Some("gr_rect") => {
@@ -2979,7 +2983,11 @@ pub mod eagle_drc {
                                     num(&a, "class").map(|v| v as i64),
                                     a.get("value").and_then(|s| parse_len_mm(s)),
                                 ) {
-                                    out.classes.entry(n).or_default().clearances.push((other, v));
+                                    out.classes
+                                        .entry(n)
+                                        .or_default()
+                                        .clearances
+                                        .push((other, v));
                                 }
                             }
                         }
@@ -3038,10 +3046,8 @@ pub mod eagle_drc {
                                         rank: num(&a, "rank").map(|v| v as i64).unwrap_or(0),
                                         thermals: a.get("thermals").map(String::as_str)
                                             != Some("off"),
-                                        orphans: a.get("orphans").map(String::as_str)
-                                            == Some("on"),
-                                        cutout: a.get("pour").map(String::as_str)
-                                            == Some("cutout"),
+                                        orphans: a.get("orphans").map(String::as_str) == Some("on"),
+                                        cutout: a.get("pour").map(String::as_str) == Some("cutout"),
                                         verts: Vec::new(),
                                     });
                                 }
@@ -3553,7 +3559,7 @@ pub mod eagle_drc {
                     } => {
                         // Signal polygon (copper pour). The `.brd` stores the
                         // pour's requested outline and its pour settings
-                        // (`isolate`, `rank`, `thermals`, `orphans` — all
+                        // (`isolate`, `rank`, `thermals`, `orphans`, all
                         // parsed above); only the COMPUTED fill polygon is
                         // absent, because Eagle re-derives it on every
                         // ratsnest / CAM run. That derivation is what makes
@@ -3565,7 +3571,7 @@ pub mod eagle_drc {
                         // remove same-net copper, and orphan removal only
                         // deletes fill pockets. Every setting keeps or widens
                         // gaps, so the fill can never short or crowd foreign
-                        // copper in the same file — while treating the drawn
+                        // copper in the same file, while treating the drawn
                         // outline as solid copper would turn every legitimate
                         // crossing track and every isolated foreign pad into a
                         // false short. The one construct the settings CANNOT
@@ -3618,7 +3624,7 @@ pub mod eagle_drc {
                     } => {
                         // A drawn circle on copper. With a nonzero stroke width
                         // the copper is ONLY the annulus of that stroke at
-                        // `radius` — the interior is bare board, and stamping a
+                        // `radius`; the interior is bare board, and stamping a
                         // solid disc manufactures phantom shorts against copper
                         // legitimately routed through the hole. Eagle renders a
                         // zero-width circle as a filled disc, so only that case
@@ -3727,20 +3733,29 @@ pub mod eagle_drc {
                 diff_pair_gap_mm: None,
             });
         }
-        for (number, class) in &parsed.classes {
-            for other in parsed.classes.keys() {
-                if other == number {
-                    continue;
-                }
-                let entry = class
-                    .clearances
-                    .iter()
-                    .find(|(m, _)| m == other)
-                    .map(|(_, v)| *v);
+        let class_numbers: Vec<i64> = parsed.classes.keys().copied().collect();
+        let matrix_entry = |from: i64, to: i64| -> Option<f64> {
+            parsed
+                .classes
+                .get(&from)?
+                .clearances
+                .iter()
+                .find(|(other, _)| *other == to)
+                .map(|(_, v)| *v)
+        };
+        for (i, &n) in class_numbers.iter().enumerate() {
+            for &m in class_numbers.iter().skip(i + 1) {
+                // The matrix is stored one-directional (class N lists its row
+                // toward lower-numbered classes); accept either direction and
+                // take the stricter if a file carries both.
+                let explicit = match (matrix_entry(n, m), matrix_entry(m, n)) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
+                };
                 rules.add_class_pair_clearance(
-                    &class_key(*number),
-                    &class_key(*other),
-                    entry.map_or(clearance, |v| v.max(clearance)),
+                    &class_key(n),
+                    &class_key(m),
+                    explicit.map_or(clearance, |v| v.max(clearance)),
                 );
             }
         }
@@ -3783,7 +3798,11 @@ pub mod eagle_drc {
                 }
                 let (x, y) = if is_touching(gap) {
                     qa
-                } else if a.pts.first().is_some_and(|&(px, py)| point_in_polygon(px, py, &b.pts)) {
+                } else if a
+                    .pts
+                    .first()
+                    .is_some_and(|&(px, py)| point_in_polygon(px, py, &b.pts))
+                {
                     a.pts[0]
                 } else {
                     b.pts[0]
