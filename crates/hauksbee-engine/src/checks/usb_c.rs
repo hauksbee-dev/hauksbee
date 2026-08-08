@@ -604,8 +604,7 @@ fn net_resistance_to_grounds(
         if !AssemblyState::of(comp).is_present() {
             continue;
         }
-        // Only resistors (Device:R or a value that parses to ohms with a
-        // resistor-ish reference).
+        // Only plain resistors, per the extract classification ladder.
         if !is_resistor(comp) {
             continue;
         }
@@ -929,22 +928,16 @@ fn receptacle_score(comp: &hauksbee_extract::Component) -> i32 {
     s
 }
 
-/// Heuristic: is this component a plain resistor (a candidate CC pulldown)?
-/// Excludes the R-prefixed parts that are NOT plain resistors, RV (varistor),
-/// RT (thermistor/NTC), RN (network), RP/RM (arrays), so an ESD/EMC part on the
-/// CC line is never over-credited as an Rd. Mirrors device_decode::resistor_ohms.
+/// Is this component a plain resistor (a candidate CC pulldown)?
+///
+/// Delegates to the evidence ladder in `hauksbee_extract`, which answers from
+/// the model DB's declared passive class through the assembly witness and only
+/// falls back to the designator/`lib_id` strings when nothing better exists.
+/// This used to be a designator-prefix test with an exclusion list, so a
+/// capacitor a designer had labelled `R5` on the CC line was over-credited as
+/// an Rd, and a model-DB-known resistor in an odd slot was lost.
 fn is_resistor(comp: &hauksbee_extract::Component) -> bool {
-    let lib = comp.lib_id.to_ascii_uppercase();
-    if lib == "DEVICE:R" || lib.ends_with(":R") || lib.contains(":R_") {
-        return true;
-    }
-    let r = comp.reference.to_ascii_uppercase();
-    r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RT")
-        && !r.starts_with("RN")
-        && !r.starts_with("RP")
-        && !r.starts_with("RM")
+    hauksbee_extract::is_plain_resistor(comp)
 }
 
 /// Convenience: parse a board, extract its sink CC termination, attach the given
@@ -1268,7 +1261,25 @@ mod tests {
             layer: String::new(),
             properties: vec![],
             dnp: false,
-            pins: vec![],
+            // Two netted pads: the classification ladder's first rung is the
+            // terminal count, and every real bridge/pulldown candidate reaches
+            // these fns with both pads on nets.
+            pins: vec![
+                hauksbee_extract::Pin {
+                    number: "1".into(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                },
+                hauksbee_extract::Pin {
+                    number: "2".into(),
+                    net: Some(2),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                },
+            ],
         }
     }
 
