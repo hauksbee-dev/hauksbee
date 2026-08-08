@@ -170,7 +170,8 @@ fn thermal_partial_json_is_refused_by_default_and_valid_under_opt_out() {
     ]);
     assert_eq!(out.status.code(), Some(3));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
-    assert_eq!(v["thermal"]["validity"]["valid"], false);
+    // Validity is #[serde(flatten)]ed into the thermal object.
+    assert_eq!(v["thermal"]["valid"], false);
     assert_eq!(v["thermal"]["coverage"]["partial"], true);
     // Opt-out: valid data, coverage still says partial, note still present.
     let out = run(&[
@@ -184,7 +185,7 @@ fn thermal_partial_json_is_refused_by_default_and_valid_under_opt_out() {
     ]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
-    assert_eq!(v["thermal"]["validity"]["valid"], true);
+    assert_eq!(v["thermal"]["valid"], true);
     assert_eq!(v["thermal"]["coverage"]["partial"], true);
     let notes = v["notes"].as_array().expect("coverage note rides notes");
     assert!(

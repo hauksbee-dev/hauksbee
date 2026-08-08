@@ -481,7 +481,7 @@
       "type": "object"
     },
     "CheckCoverage": {
-      "description": "Coverage is distinct from [`Validity`]. `Validity` stays BINARY and drives\nexit 3. `CheckCoverage` is the honest \"N of M active parts actually entered\nthis check\" metric: it is ALWAYS emittable and NEVER changes the exit code on\nits own (the partial-coverage thermal escalation is opt-in behind\n`--strict-thermal`). `partial == true` means a renderer should print a\ncoverage caveat even though the check itself produced rows.",
+      "description": "Coverage is distinct from [`Validity`]. `Validity` stays BINARY and drives\nexit 3. `CheckCoverage` is the honest \"N of M active parts actually entered\nthis check\" metric: it is ALWAYS emittable and NEVER changes the exit code on\nits own (the partial-coverage thermal escalation is applied by the thermal\nreport, by default; `--no-strict-thermal` opts out). `partial == true` means\na renderer should print a coverage caveat even though the check itself\nproduced rows.",
       "properties": {
         "dissipating_count": {
           "description": "Devices that actually produced a row in the check's table.",
