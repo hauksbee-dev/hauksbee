@@ -133,6 +133,43 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             }
         }
     }
+    // Rank the manifest's copper films into provisional stack indices. The
+    // declared numbers ORDER the stack (side tags first, then the number:
+    // both hold even on exporters whose numbers are not physical positions;
+    // KiCad 9 writes internal layer IDs, so a four-layer manifest can read
+    // L1, L5, L7, L4). The numbers are fed onward as PHYSICAL positions only
+    // when they are exactly `1..=n` in that rank order, anything else is a
+    // numbering scheme we cannot vouch for, and feeding it to the drill
+    // layer-pair resolver would invent layers the board does not have.
+    let present: std::collections::HashSet<String> = all_files
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(String::from))
+        .collect();
+    let mut job_copper: Vec<(String, u32, layers::GbrJobSide)> = gbrjob
+        .iter()
+        .filter_map(|(f, r)| match r {
+            layers::GbrJobRole::Copper { layer, side } if present.contains(f) => {
+                Some((f.clone(), *layer, *side))
+            }
+            _ => None,
+        })
+        .collect();
+    job_copper.sort_by_key(|(_, n, side)| (*side, *n));
+    let gbrjob_numbers_physical = job_copper
+        .iter()
+        .map(|(_, n, _)| *n)
+        .eq(1..=job_copper.len() as u32);
+    let gbrjob_index: std::collections::HashMap<String, usize> = job_copper
+        .iter()
+        .enumerate()
+        .map(|(i, (f, _, side))| {
+            let idx = match side {
+                layers::GbrJobSide::Bottom => usize::MAX,
+                _ => i,
+            };
+            (f.clone(), idx)
+        })
+        .collect();
 
     let mut copper: Vec<(LayerRole, std::path::PathBuf)> = Vec::new();
     let mut drills: Vec<std::path::PathBuf> = Vec::new();
@@ -150,11 +187,15 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         // name-based classification.
         let role = mapping.get(&fname).cloned().unwrap_or_else(|| {
             match gbrjob.get(&fname) {
-                // The physical layer number is the provisional stack index:
-                // L1 = 0 (top) and deeper layers sort after it, exactly the
-                // ordering contract `assign_inner_indices` densifies.
-                Some(layers::GbrJobRole::Copper { layer }) => LayerRole::Copper {
-                    index: (*layer - 1) as usize,
+                // The provisional stack index is the film's RANK among the
+                // manifest's copper entries (top first, bottom `usize::MAX`,
+                // exactly the ordering contract `assign_inner_indices`
+                // densifies), never the raw declared number.
+                Some(layers::GbrJobRole::Copper { layer, .. }) => LayerRole::Copper {
+                    index: gbrjob_index
+                        .get(&fname)
+                        .copied()
+                        .unwrap_or((*layer - 1) as usize),
                     name: path
                         .file_stem()
                         .and_then(|s| s.to_str())
@@ -232,13 +273,18 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             physical_to_stack.insert(l, *index);
             declared_physical_max = declared_physical_max.max(l);
         }
-        // The job manifest also states the film's physical layer. The film's
-        // own X2 attribute wins where both exist (it is the file speaking for
-        // itself); the manifest fills in for films that carry no attribute.
-        let base = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if let Some(layers::GbrJobRole::Copper { layer }) = gbrjob.get(base) {
-            physical_to_stack.entry(*layer).or_insert(*index);
-            declared_physical_max = declared_physical_max.max(*layer);
+        // The job manifest also states the film's physical layer, but only a
+        // manifest whose copper numbers are exactly 1..=n is believed about
+        // PHYSICAL positions (see the trust note where the manifest is read).
+        // The film's own X2 attribute wins where both exist (it is the file
+        // speaking for itself); the manifest fills in for films that carry no
+        // attribute.
+        if gbrjob_numbers_physical {
+            let base = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if let Some(layers::GbrJobRole::Copper { layer, .. }) = gbrjob.get(base) {
+                physical_to_stack.entry(*layer).or_insert(*index);
+                declared_physical_max = declared_physical_max.max(*layer);
+            }
         }
         match rs274x::parse_layer(&text) {
             Ok(prims) => layer_prims[*index] = prims,

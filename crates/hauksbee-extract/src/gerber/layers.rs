@@ -388,14 +388,31 @@ pub fn parse_mapping(text: &str) -> std::collections::HashMap<String, LayerRole>
 /// jobs that ship no `.gbrjob`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GbrJobRole {
-    /// A copper film with its 1-based physical layer number.
-    Copper { layer: u32 },
+    /// A copper film with its declared layer number and side.
+    ///
+    /// The NUMBER is not blindly trusted as a physical stack position: real
+    /// exporters get it wrong (KiCad 9 writes its internal layer IDs for
+    /// inner films, so a four-layer board's manifest reads L1, L5, L7, L4).
+    /// What holds even then is the ORDER: the side tags are correct and the
+    /// inner numbers increase with depth. The caller therefore ranks films by
+    /// (side, number) and treats the numbers as physical only when they are
+    /// contiguous `1..=n`.
+    Copper { layer: u32, side: GbrJobSide },
     /// A drill/rout file (`Plated`/`NonPlated`).
     Drill,
     /// The board outline (`Profile`).
     Outline,
     /// Recognised and electrically irrelevant (mask, silk, paste, ...).
     Ignored,
+}
+
+/// The side tag of a `Copper,L<n>,<side>` manifest entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum GbrJobSide {
+    Top,
+    /// `Inr`, or a missing/unrecognised side field.
+    Inner,
+    Bottom,
 }
 
 /// Parse a `.gbrjob` file's `FilesAttributes` into basename -> role.
@@ -426,7 +443,7 @@ pub fn parse_gbrjob(text: &str) -> std::collections::HashMap<String, GbrJobRole>
         let head = fields.next().unwrap_or("").to_ascii_uppercase();
         let role = match head.as_str() {
             "COPPER" => {
-                // `Copper,L<n>,<side>`: the physical layer number.
+                // `Copper,L<n>,<side>`: the declared layer number + side.
                 let Some(n) = fields.next().and_then(|l| {
                     let digits: String = l
                         .strip_prefix(['L', 'l'])?
@@ -440,7 +457,17 @@ pub fn parse_gbrjob(text: &str) -> std::collections::HashMap<String, GbrJobRole>
                 if n < 1 {
                     continue;
                 }
-                GbrJobRole::Copper { layer: n }
+                let side = match fields
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_uppercase()
+                    .as_str()
+                {
+                    "TOP" => GbrJobSide::Top,
+                    "BOT" | "BOTTOM" => GbrJobSide::Bottom,
+                    _ => GbrJobSide::Inner,
+                };
+                GbrJobRole::Copper { layer: n, side }
             }
             "PLATED" | "NONPLATED" => GbrJobRole::Drill,
             "PROFILE" => GbrJobRole::Outline,
@@ -732,16 +759,25 @@ mod tests {
         let m = parse_gbrjob(text);
         assert_eq!(
             m.get("brd-F_Cu.gbr"),
-            Some(&GbrJobRole::Copper { layer: 1 })
+            Some(&GbrJobRole::Copper {
+                layer: 1,
+                side: GbrJobSide::Top
+            })
         );
         // Sub-directory paths key by basename, like the file walk does.
         assert_eq!(
             m.get("inner_gnd.gbr"),
-            Some(&GbrJobRole::Copper { layer: 2 })
+            Some(&GbrJobRole::Copper {
+                layer: 2,
+                side: GbrJobSide::Inner
+            })
         );
         assert_eq!(
             m.get("brd-B_Cu.gbr"),
-            Some(&GbrJobRole::Copper { layer: 4 })
+            Some(&GbrJobRole::Copper {
+                layer: 4,
+                side: GbrJobSide::Bottom
+            })
         );
         assert_eq!(m.get("brd-PTH.drl"), Some(&GbrJobRole::Drill));
         assert_eq!(m.get("brd-NPTH.drl"), Some(&GbrJobRole::Drill));
