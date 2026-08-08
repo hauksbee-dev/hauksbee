@@ -37,7 +37,7 @@ use std::collections::{BTreeMap, HashSet};
 use hauksbee_extract::{ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
 use hauksbee_models::ModelLibrary;
 
-use super::converter::{detect_converters, ConverterStage, Topology};
+use super::converter::{detect_converters_with_abstentions, ConverterStage, Topology};
 use crate::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
 
@@ -167,7 +167,18 @@ fn nominal_buck_duty(input_rail: &str, output_rail: &str) -> Option<f64> {
 /// Run the input-cap ripple check and append findings / info notes to the SI
 /// report.
 pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut SiReport) {
-    let stages = detect_converters(board, lib);
+    let (stages, abstentions) = detect_converters_with_abstentions(board, lib);
+    // A converter that was found but could not be oriented used to leave no
+    // trace at all, which reads identically to a board with no converter on it.
+    for a in &abstentions {
+        report.findings.push(SiFinding {
+            check: SiCheck::InputCapRipple,
+            severity: SiSeverity::Info,
+            message: a.message(),
+            refs: vec![a.inductor_ref.clone()],
+            nets: vec![a.switch_node.clone()],
+        });
+    }
     let mut suppliers: BTreeMap<i64, Vec<&ConverterStage>> = BTreeMap::new();
     for stage in &stages {
         suppliers

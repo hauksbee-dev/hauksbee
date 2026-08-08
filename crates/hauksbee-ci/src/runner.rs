@@ -1821,6 +1821,14 @@ fn run_one(
             // run forever, so a CI assertion about behaviour after a hang proves
             // nothing; and a reboot that DID happen means an assertion which
             // passed across it measured a rebooted core.
+            // Overpower coverage: a passive whose package could not be read has
+            // no derived power rating, so its overpower check never ran. Silence
+            // there is not a pass.
+            .chain(engine.scheduler().stress.power_coverage_gaps())
+            // Model-provenance honesty: a verdict resting on a generic
+            // estimated-fallback model rests on invented ratings, and looked
+            // identical to one resting on a real datasheet until now.
+            .chain(engine.report().estimated_fallback_warnings())
             .chain(engine.scheduler().watchdog_limitations().into_iter().map(
                 |(mcu_ref, limitation)| {
                     hauksbee_engine::scheduler::watchdog_limitation_message(&mcu_ref, &limitation)

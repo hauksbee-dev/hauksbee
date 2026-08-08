@@ -241,7 +241,99 @@ fn pin_is_gate_by_name(p: &Pin) -> bool {
 /// to a power inductor and the input rail (the FET power net that is *not* the
 /// switch node) is distinct and not ground. Boards with no discrete switching
 /// stage (or whose topology is ambiguous) return an empty vector.
-pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<ConverterStage> {
+/// A switching stage that was found in the graph but whose direction could not
+/// be established, so no buck/boost verdict was reached for it.
+///
+/// This exists because the abstention used to be a bare `continue`. A converter
+/// nobody could classify then produced exactly the same output as a board with
+/// no converter on it: nothing. The two are very different claims, and only one
+/// of them is a pass.
+/// Why a detected switching stage could not be given a direction.
+///
+/// `classify_topology` returns `None` for several distinct situations, and they
+/// do not warrant the same sentence: telling a user that "neither rail name says
+/// which is the input" about a stage whose rails are `VIN_A` and `VIN_B` is a
+/// false statement about their board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbstentionReason {
+    /// Neither rail name encodes a direction at all.
+    NoDirectionalNames,
+    /// Both rails name themselves inputs.
+    BothNamedInput,
+    /// Both rails name themselves outputs.
+    BothNamedOutput,
+}
+
+impl AbstentionReason {
+    fn describe(self) -> &'static str {
+        match self {
+            AbstentionReason::NoDirectionalNames => {
+                concat!(
+                    "the connectivity is reversible, so it is equally consistent with a buck ",
+                    "and a boost, and neither rail name says which is the input"
+                )
+            }
+            AbstentionReason::BothNamedInput => {
+                concat!(
+                    "the connectivity is reversible, and BOTH rail names claim to be the ",
+                    "input, so the names contradict each other rather than settling the ",
+                    "direction"
+                )
+            }
+            AbstentionReason::BothNamedOutput => {
+                concat!(
+                    "the connectivity is reversible, and BOTH rail names claim to be the ",
+                    "output, so the names contradict each other rather than settling the ",
+                    "direction"
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConverterAbstention {
+    /// The power inductor that anchors the unclassified stage.
+    pub inductor_ref: String,
+    /// The switch-node net name.
+    pub switch_node: String,
+    /// The rail on the FET side of the switch.
+    pub fet_side_rail: String,
+    /// The rail at the far end of the inductor.
+    pub inductor_far_rail: String,
+    /// Which of the several unclassifiable situations this stage is in.
+    pub reason: AbstentionReason,
+}
+
+impl ConverterAbstention {
+    /// The canonical user-facing sentence, naming the part and the unlock.
+    pub fn message(&self) -> String {
+        format!(
+            "converter: the switching stage around {} (switch node '{}', rails '{}' and '{}') \
+             was detected but not classified: {}. No ripple or duty verdict was reached for \
+             this stage. Rename the rails to carry their role (VIN / VOUT, or a *_IN / *_OUT \
+             suffix) to cover it.",
+            self.inductor_ref,
+            self.switch_node,
+            self.fet_side_rail,
+            self.inductor_far_rail,
+            self.reason.describe(),
+        )
+    }
+}
+
+/// Detect the switching stages on a board, alongside every stage that was found
+/// but could not be given a direction.
+///
+/// The only entry point, deliberately. A variant returning stages alone cannot
+/// distinguish "no converter here" from "a converter nobody could orient", which
+/// is the exact dishonesty the abstentions exist to remove, so no such variant is
+/// offered for a caller to reach for.
+pub fn detect_converters_with_abstentions(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+) -> (Vec<ConverterStage>, Vec<ConverterAbstention>) {
+    let mut abstentions: Vec<ConverterAbstention> = Vec::new();
     let ground_ids: HashSet<i64> = board
         .nets
         .iter()
@@ -339,10 +431,22 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
             // high rail + inductor-side low rail can be either a buck or a boost.
             // Accept a direction only when rail names explicitly identify input
             // and/or output. Numeric voltage ordering alone is not evidence.
-            let Some(topology) = classify_topology(&name_of(input_rail_id), &name_of(other_rail))
-            else {
-                continue;
-            };
+            let topology =
+                match classify_topology_or_reason(&name_of(input_rail_id), &name_of(other_rail)) {
+                    Ok(topology) => topology,
+                    Err(reason) => {
+                        // Not "no converter here": a converter we could not orient,
+                        // and the note says which situation blocked it.
+                        abstentions.push(ConverterAbstention {
+                            inductor_ref: ind.reference.clone(),
+                            switch_node: name_of(cand_sw),
+                            fet_side_rail: name_of(input_rail_id),
+                            inductor_far_rail: name_of(other_rail),
+                            reason,
+                        });
+                        continue;
+                    }
+                };
             let (input_rail, output_rail) = match topology {
                 Topology::Buck => (input_rail_id, other_rail),
                 Topology::Boost => (other_rail, input_rail_id),
@@ -370,7 +474,10 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
             break; // one stage per inductor
         }
     }
-    stages
+    // An abstention for a stage we DID classify (a second inductor sharing the
+    // switch node, say) is noise, not a coverage hole.
+    abstentions.retain(|a| !stages.iter().any(|s| s.inductor_ref == a.inductor_ref));
+    (stages, abstentions)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -418,18 +525,33 @@ fn rail_direction(name: &str) -> Option<RailDirection> {
 /// Classify the FET-side rail versus the inductor-far rail. `None` is a first-
 /// class result: without a directional name, the graph is compatible with both
 /// buck and boost and a buck-only ripple equation must abstain.
+/// Test-only view of [`classify_topology_or_reason`] that discards the reason.
+/// Production code takes the reason, because an abstention has to say why.
+#[cfg(test)]
 fn classify_topology(fet_side_name: &str, inductor_far_name: &str) -> Option<Topology> {
+    classify_topology_or_reason(fet_side_name, inductor_far_name).ok()
+}
+
+/// [`classify_topology`], but the failure carries WHICH situation blocked it so
+/// the abstention note can state the real reason.
+fn classify_topology_or_reason(
+    fet_side_name: &str,
+    inductor_far_name: &str,
+) -> Result<Topology, AbstentionReason> {
+    use RailDirection::{Input, Output};
     match (
         rail_direction(fet_side_name),
         rail_direction(inductor_far_name),
     ) {
-        (Some(RailDirection::Input), Some(RailDirection::Output))
-        | (Some(RailDirection::Input), None)
-        | (None, Some(RailDirection::Output)) => Some(Topology::Buck),
-        (Some(RailDirection::Output), Some(RailDirection::Input))
-        | (Some(RailDirection::Output), None)
-        | (None, Some(RailDirection::Input)) => Some(Topology::Boost),
-        _ => None,
+        (Some(Input), Some(Output)) | (Some(Input), None) | (None, Some(Output)) => {
+            Ok(Topology::Buck)
+        }
+        (Some(Output), Some(Input)) | (Some(Output), None) | (None, Some(Input)) => {
+            Ok(Topology::Boost)
+        }
+        (Some(Input), Some(Input)) => Err(AbstentionReason::BothNamedInput),
+        (Some(Output), Some(Output)) => Err(AbstentionReason::BothNamedOutput),
+        (None, None) => Err(AbstentionReason::NoDirectionalNames),
     }
 }
 
@@ -533,9 +655,135 @@ mod tests {
                 component("C1", "100uF", vec![("1", 3), ("2", 4)]),
             ],
         };
+        let (stages, abstentions) =
+            detect_converters_with_abstentions(&board, &ModelLibrary::builtin());
         assert!(
-            detect_converters(&board, &ModelLibrary::builtin()).is_empty(),
+            stages.is_empty(),
             "directionless synchronous connectivity is compatible with boost; abstain"
+        );
+        // The abstention must be visible. A bare skip here reads exactly like a
+        // board with no converter on it, which is a different claim entirely.
+        assert_eq!(abstentions.len(), 1, "the unclassified stage must be named");
+        let m = abstentions[0].message();
+        assert!(m.contains("L1"), "names the part: {m}");
+        assert!(m.contains("SW"), "names the switch node: {m}");
+        assert!(
+            m.contains("VIN") && m.contains("VOUT"),
+            "names the unlock: {m}"
+        );
+        // Only remedies the detector actually acts on may be suggested: direction
+        // comes from rail names alone, so promising that a controller model would
+        // fix it would send the user to do work that changes nothing.
+        assert!(
+            !m.contains("model"),
+            "must not suggest a remedy the detector does not consult: {m}"
+        );
+        assert_eq!(abstentions[0].reason, AbstentionReason::NoDirectionalNames);
+        assert!(
+            m.contains("neither rail name says which is the input"),
+            "the reason must match the situation: {m}"
+        );
+    }
+
+    #[test]
+    fn contradicting_rail_names_get_their_own_reason() {
+        // classify_topology also abstains when BOTH rails claim the same role.
+        // Telling that user "neither rail name says which is the input" is a false
+        // statement about their board.
+        assert_eq!(
+            classify_topology_or_reason("VIN_A", "VIN_B"),
+            Err(AbstentionReason::BothNamedInput)
+        );
+        assert_eq!(
+            classify_topology_or_reason("VOUT_A", "VOUT_B"),
+            Err(AbstentionReason::BothNamedOutput)
+        );
+        assert_eq!(
+            classify_topology_or_reason("+12V", "+3V3"),
+            Err(AbstentionReason::NoDirectionalNames)
+        );
+        // And the rendered sentence differs per reason.
+        let msg = |reason| {
+            ConverterAbstention {
+                inductor_ref: "L1".into(),
+                switch_node: "SW".into(),
+                fet_side_rail: "VIN_A".into(),
+                inductor_far_rail: "VIN_B".into(),
+                reason,
+            }
+            .message()
+        };
+        let both_in = msg(AbstentionReason::BothNamedInput);
+        assert!(
+            both_in.contains("BOTH rail names claim to be the input"),
+            "{both_in}"
+        );
+        assert!(
+            !both_in.contains("neither rail name"),
+            "must not also claim the names are silent: {both_in}"
+        );
+    }
+
+    #[test]
+    fn a_classified_stage_leaves_no_abstention() {
+        // The note must not fire on boards whose converters were understood, or
+        // it becomes noise that trains users to ignore it.
+        let component = |reference: &str, value: &str, pins: Vec<(&str, i64)>| -> Component {
+            Component {
+                reference: reference.into(),
+                value: value.into(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: "F.Cu".into(),
+                properties: vec![],
+                dnp: false,
+                pins: pins
+                    .into_iter()
+                    .map(|(number, net)| Pin {
+                        number: number.into(),
+                        net: Some(net),
+                        function: String::new(),
+                        kind: String::new(),
+                        position: None,
+                    })
+                    .collect(),
+            }
+        };
+        let board = ExtractedBoard {
+            name: "named_sync_stage".into(),
+            nets: vec![
+                hauksbee_extract::Net {
+                    id: 1,
+                    name: "VOUT_3V3".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 2,
+                    name: "SW".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 3,
+                    name: "VIN_12V".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 4,
+                    name: "GND".into(),
+                },
+            ],
+            components: vec![
+                component("L1", "10uH", vec![("1", 1), ("2", 2)]),
+                component("Q1", "NMOS", vec![("1", 2), ("2", 3)]),
+                component("Q2", "NMOS", vec![("1", 2), ("2", 4)]),
+                component("C1", "100uF", vec![("1", 3), ("2", 4)]),
+            ],
+        };
+        let (stages, abstentions) =
+            detect_converters_with_abstentions(&board, &ModelLibrary::builtin());
+        assert_eq!(stages.len(), 1, "named rails must classify");
+        assert_eq!(stages[0].topology, Topology::Buck);
+        assert!(
+            abstentions.is_empty(),
+            "a classified stage must not also be reported as uncovered: {abstentions:?}"
         );
     }
 }
