@@ -60,10 +60,15 @@ pub fn emit(
     )?
     .with_input_artifact(board_path, raw, input_kind)?;
     let coverage = evidence.check_coverage_map("si", "Signal-integrity input coverage")?;
-    let evidence = if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
-        evidence.with_maps(vec![coverage])
+    let run_level = if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
+        vec![coverage]
     } else {
+        Vec::new()
+    };
+    let evidence = if run_level.is_empty() {
         evidence
+    } else {
+        evidence.with_maps(run_level.clone())
     };
     // The verdict blockers: a clean SI result over an unbound power FET / main
     // IC is a vacuous pass, so every surface says INCONCLUSIVE (count, named
@@ -76,7 +81,7 @@ pub fn emit(
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.findings = Some(si_findings_json(&report));
-            jr.attach_finding_evidence(&evidence)?;
+            jr.attach_finding_evidence(&evidence, run_level.clone())?;
             if !blockers.is_empty() {
                 jr.notes.push(crate::result::JsonNote {
                     kind: crate::result::JsonNoteKind::Coverage,
