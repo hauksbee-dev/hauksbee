@@ -148,14 +148,22 @@ pub enum CsProvenance {
     /// witness is the only door to a model), so a DNP or identity-refused slave
     /// contributes nothing and the bus stays on the heuristic.
     ModelRoles,
+    /// The bus is a bit-banged SPI slave (05 §1.5) whose CS pin came from the
+    /// GPIO wiring the responder was attached with, not from a `cs_net` and not
+    /// from a model pad map. The framing is real (the responder owns the CS
+    /// edges), but neither of the other two labels would be true of it, and a
+    /// report that said `spec` here would be claiming a declaration nobody made.
+    BitBangPins,
 }
 
 impl CsProvenance {
-    /// Lower-case tag for JSON coverage: `"spec"` | `"model-roles"`.
+    /// Lower-case tag for JSON coverage: `"spec"` | `"model-roles"` |
+    /// `"bitbang-pins"`.
     pub fn as_str(self) -> &'static str {
         match self {
             CsProvenance::SpecDeclared => "spec",
             CsProvenance::ModelRoles => "model-roles",
+            CsProvenance::BitBangPins => "bitbang-pins",
         }
     }
 
@@ -165,6 +173,7 @@ impl CsProvenance {
         match self {
             CsProvenance::SpecDeclared => "CS net declared by the spec",
             CsProvenance::ModelRoles => "CS net resolved from the bound model's pin roles",
+            CsProvenance::BitBangPins => "CS pin taken from the bit-banged SPI wiring",
         }
     }
 }
@@ -277,6 +286,12 @@ impl SpiBus {
     pub fn with_cs_provenance(mut self, provenance: CsProvenance) -> Self {
         self.cs_provenance = provenance;
         self
+    }
+
+    /// As [`SpiBus::with_cs_provenance`], for a bus already behind an `Arc<Mutex<_>>`
+    /// by the time its CS source is known (the bit-banged attach path).
+    pub fn set_cs_provenance(&mut self, provenance: CsProvenance) {
+        self.cs_provenance = provenance;
     }
 
     /// The MCU pin driving this slave's chip-select, if resolved.

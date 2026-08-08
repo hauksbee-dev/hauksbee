@@ -1809,6 +1809,34 @@ pub fn is_spi_slave_kind(kind: &str) -> bool {
     matches!(kind, "spi_eeprom" | "spi_mcp3008")
 }
 
+/// The built-in model entry a SPI peripheral kind describes, when the model DB
+/// ships one for it.
+///
+/// Used to refuse a `ref` that names a real board component of the WRONG part.
+/// Pointing a `spi_eeprom` at the board's MCP3008 would otherwise resolve that
+/// ADC's `cs` role and frame the EEPROM's transactions off a chip-select that
+/// belongs to a different device, reported as `exact`. A wrong answer wearing
+/// the exact tier is worse than the heuristic it replaced.
+///
+/// `None` means "no built-in entry for this kind", and an unrecognised bound
+/// model id is ALLOWED: a user model pack may legitimately supply the part, and
+/// this list cannot know its id. The check therefore only fires on the case it
+/// can actually judge, one built-in SPI-slave model bound to the kind that
+/// describes the other.
+pub fn builtin_model_id_for_spi_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "spi_eeprom" => Some("eeprom_25xx_spi"),
+        "spi_mcp3008" => Some("mcp3008"),
+        _ => None,
+    }
+}
+
+/// Every built-in model id that some SPI peripheral kind claims, so a bound id
+/// can be told apart from "something this list has never heard of".
+pub fn is_builtin_spi_slave_model_id(id: &str) -> bool {
+    ["eeprom_25xx_spi", "mcp3008"].contains(&id)
+}
+
 impl SupplySpec {
     fn validate(&self) -> Result<(), SpecError> {
         const KINDS: [&str; 5] = ["ideal", "bench", "wall", "usb", "battery"];

@@ -937,7 +937,10 @@ pub(crate) fn resolve(
 /// Every gate the rest of the tree uses is honoured, and each is a reason a
 /// caller gets `None` rather than a guess:
 ///
-/// - the record must exist under `reference`;
+/// - exactly ONE record must exist under `reference`. Two records sharing a
+///   designator that the extractor did NOT flag as a conflict would otherwise be
+///   resolved by iteration order, so whichever happened to come first would
+///   decide which edge stream the co-sim called exact;
 /// - [`AssemblyState::of`] must classify it `Present`, so a DNP-absent part (not
 ///   on the assembled board, its CS net electrically meaningless) and an
 ///   identity-refused part (nothing about the record is evidence, including
@@ -948,6 +951,12 @@ pub(crate) fn resolve(
 ///   real, non-ground net ([`crate::component_evidence::role_net`] refuses a
 ///   role split across two nets rather than picking one).
 ///
+/// Returns the net name AND the id of the model that supplied it, so a caller
+/// that knows what part it EXPECTED (the CI runner knows the peripheral kind) can
+/// refuse a `ref` pointing at the wrong device. This function deliberately does
+/// not judge that itself: it reports which part answered, and the layer that
+/// knows what was asked decides whether the answer is admissible.
+///
 /// A `None` here is never silently wrong: the bus stays on the heuristic tier
 /// and reports itself as heuristic, which is the same honest answer it gave
 /// before this route existed.
@@ -955,22 +964,31 @@ pub fn model_role_cs_net(
     board: &ExtractedBoard,
     reference: &str,
     lib: &ModelLibrary,
-) -> Option<String> {
-    let comp = board.components.iter().find(|c| c.reference == reference)?;
+) -> Option<(String, String)> {
+    // Exactly one match, never the first of several: `find` would let iteration
+    // order pick the record, and two same-designator records can carry different
+    // CS nets. Ambiguity here has to be refused, not resolved by luck.
+    let mut matching = board.components.iter().filter(|c| c.reference == reference);
+    let comp = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
     let part = AssemblyState::of(comp).fitted()?;
     let model = resolve(lib, part).model?;
     let net_id = crate::component_evidence::role_net(part, &model, "cs").ok()?;
-    // Net id 0 is ground in the extractor's numbering; a chip-select tied to
-    // ground is a permanently-selected slave, not a framing signal, and tracing
-    // it would install a CS frame on a net that never edges.
+    // Net id 0 is the extractor's "no net" sentinel, not a real node. A pad on it
+    // is unconnected, so there is no chip-select to frame from.
     if net_id == 0 {
         return None;
     }
+    // A chip-select strapped to ground is a permanently-selected slave, not a
+    // framing signal: installing a CS frame on it would report exact framing off
+    // a net that never edges.
     let net = board.net(net_id)?;
     if is_ground(&net.name) {
         return None;
     }
-    Some(net.name.clone())
+    Some((net.name.clone(), model.id.clone()))
 }
 
 /// What the model library would say about one component RECORD, assembled or
@@ -6610,8 +6628,8 @@ mod model_role_cs_net_tests {
     fn a_cs_wired_modeled_slave_yields_its_cs_net() {
         let lib = ModelLibrary::builtin();
         assert_eq!(
-            model_role_cs_net(&eeprom_board(Some(1)), "U5", &lib).as_deref(),
-            Some("EE_CS"),
+            model_role_cs_net(&eeprom_board(Some(1)), "U5", &lib),
+            Some(("EE_CS".to_string(), "eeprom_25xx_spi".to_string())),
             "a 25xx EEPROM whose pad 1 is on EE_CS must hand back that net; this is the \
              whole point of the `cs` pin role"
         );
@@ -6693,6 +6711,31 @@ mod model_role_cs_net_tests {
             model_role_cs_net(&board, "U5", &lib),
             None,
             "a part no model matches cannot declare a cs role"
+        );
+    }
+
+    #[test]
+    fn duplicate_references_yield_nothing_rather_than_the_first_one() {
+        // Two records under U5 that the extractor did NOT flag as conflicting, on
+        // different CS nets. `find` would hand back whichever came first, so
+        // iteration order would decide which edge stream the co-sim called exact.
+        // Ambiguity has to be refused, not resolved by luck.
+        let lib = ModelLibrary::builtin();
+        let mut board = eeprom_board(Some(1));
+        let mut twin = board.components[0].clone();
+        twin.pins[0].net = Some(4); // same designator, a different CS net
+        board.components.push(twin);
+        assert!(
+            board.components.iter().all(|c| matches!(
+                AssemblyState::of(c),
+                AssemblyState::Present(_)
+            )),
+            "both records must be individually Present, or this tests the refusal path              instead of the ambiguity path"
+        );
+        assert_eq!(
+            model_role_cs_net(&board, "U5", &lib),
+            None,
+            "a duplicated designator must not resolve to either record's cs net"
         );
     }
 
