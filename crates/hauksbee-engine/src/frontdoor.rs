@@ -122,9 +122,11 @@ impl WebSection {
 pub struct BindSummaryWeb {
     /// `"M/N"`, active ICs that bound, over the total active ICs on the board.
     pub critical_parts_bound: String,
-    /// References of active ICs left open on the live circuit (unresolved active
-    /// ICs + resolved-but-open active ICs). Non-empty => analog/AC/thermal on
-    /// those nets is not trustworthy; the web banner must say so loudly.
+    /// References of verdict-critical parts left open on the live circuit:
+    /// unresolved active ICs, unresolved discrete transistors (Q prefix, the
+    /// power FETs; [`crate::result::is_verdict_critical`]), and
+    /// resolved-but-open active ICs. Non-empty => analog/AC/thermal on those
+    /// nets is not trustworthy; the web banner must say so loudly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_path_unresolved: Vec<String>,
     /// The parts behind that list, one entry each, with what went wrong and what
@@ -161,13 +163,17 @@ pub struct WebOpenPart {
 
 impl BindSummaryWeb {
     /// Bridge a [`BindSummary`] into the web shape: keep the critical-parts ratio
-    /// and the union of open active ICs (unresolved + resolved-but-open), refs
-    /// only, in report order.
+    /// and the union of verdict-critical open parts, unresolved active ICs AND
+    /// unresolved discrete transistors (the power FETs on a protection path),
+    /// plus resolved-but-open active ICs. The transistor half uses the same
+    /// [`crate::result::is_verdict_critical`] predicate the CLI INCONCLUSIVE
+    /// verdict uses, so the browser can never print a clean bill over an
+    /// unbound FET the CLI refuses to bless.
     pub fn from_summary(s: &BindSummary) -> Self {
         let mut active_path_unresolved: Vec<String> = s
             .active_path_unresolved
             .iter()
-            .filter(|u| u.active_ic)
+            .filter(|u| crate::result::is_verdict_critical(u))
             .chain(s.resolved_but_open_active.iter().filter(|u| u.active_ic))
             .map(|u| u.reference.clone())
             .collect();
@@ -191,7 +197,7 @@ impl BindSummaryWeb {
         let mut open_parts: Vec<WebOpenPart> = s
             .active_path_unresolved
             .iter()
-            .filter(|u| u.active_ic)
+            .filter(|u| crate::result::is_verdict_critical(u))
             .map(|u| (u, false))
             .chain(
                 s.resolved_but_open_active
@@ -523,12 +529,21 @@ fn analyze_normalized(
     // "at minimum clearance (no margin)" rather than the wrong "below the rule".
     let drc_plain = plain_drc_structured(&crate::result::DrcStructured::from_report(&drc));
 
+    // Bind FIRST (also consumed below for the report panel and evidence): the
+    // lint/SI section verdicts need the unmodelled-critical part list so the
+    // web sections read INCONCLUSIVE, not "Looks healthy", over an unbound
+    // main IC or power FET, the same contract as the CLI surfaces.
+    let bound = bind_board(board, &lib);
+    let bind_summary = BindSummary::from_report(&bound.report);
+    let verdict_blockers = crate::result::unmodelled_critical_refs(&bind_summary);
+
     // Lint = the same bundle the `--lint` CLI surface assembles, via the single
     // `engine_lint` chokepoint (connectivity + strap lint + MCU resource conflicts
     // + the unchecked-strap-bearing-MCU coverage note), so the web report never
     // prints "Looks healthy" over a strap-bearing MCU whose BOOT0 was unexamined.
     let lint = crate::checks::engine_lint(board, &lib);
-    let lint_plain = plain_netlint(&lint);
+    let mut lint_plain = plain_netlint(&lint);
+    lint_plain.unmodelled_critical = verdict_blockers.clone();
 
     // SI needs the layout text for the geometry-bearing checks; a binary board
     // has none, so it gets the netlist-only subset (`None`). Route through the SI
@@ -536,7 +551,8 @@ fn analyze_normalized(
     // findings too; the bare `si_checks` left the web "Signal integrity" section
     // silently missing an under-width power trace the CLI `--si` flags.
     let si = crate::checks::engine_si(board, &lib, text_view);
-    let si_plain = plain_si(&si);
+    let mut si_plain = plain_si(&si);
+    si_plain.unmodelled_critical = verdict_blockers.clone();
 
     let mut sections = vec![
         if is_gerber {
@@ -578,12 +594,9 @@ fn analyze_normalized(
         .sum();
     let total: usize = sections.iter().map(|s| s.findings.len()).sum();
 
-    // Bind to count nets/components consistently with the report panel, AND to
-    // derive the same bind-role honesty data the CLI/JSON surfaces carry. The
-    // web dropping this would let a board with every active IC open show "Looks
-    // healthy"; compute it once here from the bound report.
-    let bound = bind_board(board, &lib);
-    let bind_summary = BindSummary::from_report(&bound.report);
+    // The bind-role honesty data the CLI/JSON surfaces carry, in the web
+    // shape, from the SAME bind computed above the sections. The web dropping
+    // this would let a board with every active IC open show "Looks healthy".
     let bind_web = BindSummaryWeb::from_summary(&bind_summary);
     let evidence = match crate::evidence::BoardEvidence::from_bound(
         board,
@@ -698,7 +711,7 @@ fn analyze_normalized(
         notes.push(JsonNote {
             kind: JsonNoteKind::BindRole,
             message: format!(
-                "Active IC(s) left open on the live circuit: {}. Analog/AC/thermal results on their nets are NOT trustworthy.",
+                "Current-carrying / active part(s) left open on the live circuit: {}. Analog/AC/thermal results on their nets are NOT trustworthy.",
                 bind_web.active_path_unresolved.join(", ")
             ),
         });

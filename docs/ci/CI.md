@@ -1131,7 +1131,28 @@ the CLI says so on stderr.
 | 0 | clean, or a report-only run without `--strict` |
 | 1 | the run never happened: the board could not be read (unrecognized format, a Git LFS pointer, a missing file, an ASCII-Protel `.PcbDoc`) or the analysis could not be set up |
 | 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`). Also a usage error, such as two report flags at once |
-| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict`, thermal table with no usable coverage) |
+| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict`, thermal table with no usable coverage, or a PARTIAL-coverage `--thermal` result, see below) |
+
+`--thermal` gates on coverage **by default**: a partial-coverage table (real
+rows while an active power IC on the live circuit is open/unresolved) exits 3,
+because a table that understates the true thermal load must not read as "runs
+cool". This is a deliberate default flip: a pipeline that ran bare `--thermal`
+on a partial-coverage board and relied on exit 0 will now see exit 3, and the
+fix is either to bind the named power ICs or to pass `--no-strict-thermal`.
+The opt-out restores the old non-strict behaviour (exit 0 for partial coverage
+and for undermined thermal evidence) while the INCONCLUSIVE coverage caveat
+still prints on stderr and rides the JSON `notes`. `--strict-thermal` is
+accepted as a quiet no-op: it used to opt in to what is now the default, so
+invocations that passed it keep their exact behaviour.
+
+The INCONCLUSIVE verdict itself never moves an exit code. When
+current-carrying / active parts have no model, `--lint` / `--si` / `--check`
+print "INCONCLUSIVE: N current-carrying / active part(s) have no model (U3,
+Q1, ...)" instead of a clean bill, and the same sentence rides the JSON
+`notes` (kind `coverage`); the exit code stays whatever the table above says
+for the run. Prose honesty and exit-code policy are deliberately separate
+contracts: making INCONCLUSIVE alone exit non-zero would change what `--lint`
+and `--si` mean to every pipeline that calls them without `--strict`.
 
 Exit 1 and exit 2 are worth keeping apart in a pipeline: 1 means your input was
 never analysed, 2 means it was analysed and the board is at fault. A CI step that

@@ -68,17 +68,36 @@ pub fn emit(
         .guess_warnings()
         .map(|(r, g)| (r.to_string(), g.to_string()))
         .collect();
+    // The verdict blockers: current-carrying / active parts with no model. A
+    // lint that came back clean over an unbound power FET or main IC must say
+    // INCONCLUSIVE (naming them, and what unlocks a conclusive verdict) rather
+    // than a clean bill, on every surface. Exit codes are unchanged.
+    let blockers =
+        crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
     match mode {
         OutputMode::Json => {
             println!(
                 "{}",
-                lint_json(&bound, &report, &guesses, &waived, inputs, &evidence)?
+                lint_json(&bound, &report, &guesses, &waived, &blockers, inputs, &evidence)?
             );
         }
         OutputMode::Plain | OutputMode::Text => {
             match mode {
-                OutputMode::Plain => print!("{}", crate::plain_netlint(&report).render()),
-                _ => print!("{}", hauksbee_extract::render_netlint(&report)),
+                OutputMode::Plain => {
+                    let mut plain = crate::plain_netlint(&report);
+                    plain.unmodelled_critical = blockers.clone();
+                    print!("{}", plain.render());
+                }
+                _ => {
+                    // The INCONCLUSIVE verdict LEADS: "net-lint: no findings."
+                    // over an unmodelled FET/IC reads as a clean bill, so the
+                    // refusal has to be the first line, with the factual body
+                    // underneath it, not an afterthought below one.
+                    if !blockers.is_empty() {
+                        println!("{}", crate::result::inconclusive_verdict(&blockers));
+                    }
+                    print!("{}", hauksbee_extract::render_netlint(&report));
+                }
             }
             if !guesses.is_empty() {
                 print!("{}", render_pin_role_guesses(&guesses));
@@ -152,6 +171,7 @@ fn lint_json(
     report: &hauksbee_extract::NetLintReport,
     guesses: &[(String, String)],
     waived: &[crate::waiver::WaivedFinding],
+    blockers: &[String],
     inputs: &[JsonInputEvidence],
     evidence: &crate::evidence::BoardEvidence,
 ) -> Result<String, hauksbee_ir::evidence::EvidenceError> {
@@ -160,6 +180,15 @@ fn lint_json(
         .with_evidence(evidence);
     jr.findings = Some(lint_findings_json(report));
     jr.attach_finding_evidence(evidence)?;
+    // The INCONCLUSIVE verdict on the machine surface: a coverage note with the
+    // same sentence the text/plain verdicts print. Informational, never gating;
+    // the structured part list is already in `bind.active_path_unresolved`.
+    if !blockers.is_empty() {
+        jr.notes.push(JsonNote {
+            kind: JsonNoteKind::Coverage,
+            message: crate::result::inconclusive_verdict(blockers),
+        });
+    }
     jr.notes.extend(guesses.iter().map(|(r, g)| JsonNote {
         kind: JsonNoteKind::BindRole,
         message: format!("pin-role guess {r}: {g}"),
@@ -208,6 +237,10 @@ pub fn emit_resources(
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
     .with_input_artifact(board_path, raw, input_kind)?;
+    // Same INCONCLUSIVE contract as the full `--lint`: this subset's clean
+    // verdict is just as vacuous over an unmodelled critical part.
+    let blockers =
+        crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
@@ -215,6 +248,12 @@ pub fn emit_resources(
                 .with_evidence(&evidence);
             jr.findings = Some(lint_findings_json(&report));
             jr.attach_finding_evidence(&evidence)?;
+            if !blockers.is_empty() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: crate::result::inconclusive_verdict(&blockers),
+                });
+            }
             // Same honesty rule as every other machine surface: the verdict may
             // not quietly drop findings, so the waived list travels with it.
             jr.waived = waived.iter().cloned().map(Into::into).collect();
@@ -227,9 +266,15 @@ pub fn emit_resources(
             // say so: "no connectivity problems found" claimed a clean bill for
             // checks this command never ran.
             plain.verdict_noun = Some("MCU resource conflicts".to_string());
+            plain.unmodelled_critical = blockers.clone();
             print!("{}", plain.render());
         }
         OutputMode::Text => {
+            // Same verdict-first rule as `--lint`: the refusal leads, the
+            // "no findings" body sits under it.
+            if !blockers.is_empty() {
+                println!("{}", crate::result::inconclusive_verdict(&blockers));
+            }
             print!("{}", render_resources_text(&report));
             // Route a novice from the expert text (bare severity + jargon) to the
             // already-built plain-language what/why/fix. Only when there is
@@ -362,7 +407,7 @@ mod tests {
             ("U1.PA0".to_string(), "adc0".to_string()),
             ("U1.PB3".to_string(), "spi_sck".to_string()),
         ];
-        let out = lint_json(&bound, &report, &guesses, &[], &[], &evidence)
+        let out = lint_json(&bound, &report, &guesses, &[], &[], &[], &evidence)
             .expect("evidence attachment succeeds");
         // The ENTIRE output must parse as a single JSON value, no trailing text.
         let v: serde_json::Value =
@@ -381,7 +426,7 @@ mod tests {
             .any(|n| n.get("message").and_then(|m| m.as_str())
                 == Some("pin-role guess U1.PA0: adc0")));
         // With no guesses, notes is omitted (skip_serializing_if) and it still parses.
-        let clean = lint_json(&bound, &report, &[], &[], &[], &evidence)
+        let clean = lint_json(&bound, &report, &[], &[], &[], &[], &evidence)
             .expect("evidence attachment succeeds");
         let cv: serde_json::Value = serde_json::from_str(&clean).expect("clean lint --json parses");
         assert!(cv.get("notes").is_none(), "no guesses => no notes key");
