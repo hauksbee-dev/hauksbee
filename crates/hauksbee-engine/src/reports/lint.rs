@@ -176,6 +176,7 @@ fn lint_json(
     evidence: &crate::evidence::BoardEvidence,
 ) -> Result<String, hauksbee_ir::evidence::EvidenceError> {
     let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+        .with_bind_verdict_gate()
         .with_inputs(inputs)
         .with_evidence(evidence);
     jr.findings = Some(lint_findings_json(report));
@@ -244,6 +245,7 @@ pub fn emit_resources(
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+                .with_bind_verdict_gate()
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.findings = Some(lint_findings_json(&report));

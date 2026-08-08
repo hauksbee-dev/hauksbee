@@ -10,16 +10,29 @@ use std::path::Path;
 use crate::result::{JsonFinding, Refusal};
 
 /// Convert non-clean evidence statuses into the same finding vocabulary CI
-/// writers already consume. Undermined evidence is gate-grade; qualified
-/// evidence remains visible without becoming green-by-omission.
+/// writers already consume. Undermined RUN-LEVEL evidence is gate-grade;
+/// qualified evidence remains visible without becoming green-by-omission.
 pub fn evidence_findings(maps: &[hauksbee_ir::evidence::EvidenceMap]) -> Vec<JsonFinding> {
+    evidence_findings_with_gate(maps, |_| true)
+}
+
+/// As [`evidence_findings`], with the same run-level split the JSON verdict
+/// makes: an undermined map whose assertion `gates` says is NOT run-level
+/// (it backs an individual finding) is demoted to a warning badge instead of
+/// a gate-grade failure, so JUnit/SARIF can never fail a run whose JSON
+/// verdict says pass, or vice versa.
+pub fn evidence_findings_with_gate(
+    maps: &[hauksbee_ir::evidence::EvidenceMap],
+    gates: impl Fn(&hauksbee_ir::evidence::EvidenceMap) -> bool,
+) -> Vec<JsonFinding> {
     use hauksbee_ir::evidence::EvidenceStatus;
     maps.iter()
         .filter_map(|map| {
             let (severity, prefix) = match map.status() {
                 EvidenceStatus::Clean => return None,
                 EvidenceStatus::Qualified => ("warning", "QUALIFIED evidence"),
-                EvidenceStatus::Undermined => ("serious", "INVALID evidence"),
+                EvidenceStatus::Undermined if gates(map) => ("serious", "INVALID evidence"),
+                EvidenceStatus::Undermined => ("warning", "UNDERMINED evidence"),
             };
             Some(JsonFinding {
                 check: "evidence".into(),
