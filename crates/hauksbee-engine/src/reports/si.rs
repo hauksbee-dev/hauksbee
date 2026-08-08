@@ -94,10 +94,12 @@ pub fn emit(
             print!("{}", plain.render());
         }
         OutputMode::Text => {
-            print!("{}", hauksbee_extract::render_si(&report));
+            // Verdict first: "si-checks: no gating findings." over an unbound
+            // FET reads as a clean bill unless the INCONCLUSIVE line leads.
             if !blockers.is_empty() {
                 println!("{}", crate::result::inconclusive_verdict(&blockers));
             }
+            print!("{}", hauksbee_extract::render_si(&report));
             if !report.is_clean() {
                 eprintln!(
                     "note: run the same command with --plain for a plain-language \

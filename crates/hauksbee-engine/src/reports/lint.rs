@@ -89,13 +89,14 @@ pub fn emit(
                     print!("{}", plain.render());
                 }
                 _ => {
-                    print!("{}", hauksbee_extract::render_netlint(&report));
-                    // "no findings." over an unmodelled FET/IC is a vacuous
-                    // pass; the expert text gets the same INCONCLUSIVE line the
-                    // plain verdict leads with.
+                    // The INCONCLUSIVE verdict LEADS: "net-lint: no findings."
+                    // over an unmodelled FET/IC reads as a clean bill, so the
+                    // refusal has to be the first line, with the factual body
+                    // underneath it, not an afterthought below one.
                     if !blockers.is_empty() {
                         println!("{}", crate::result::inconclusive_verdict(&blockers));
                     }
+                    print!("{}", hauksbee_extract::render_netlint(&report));
                 }
             }
             if !guesses.is_empty() {
@@ -269,10 +270,12 @@ pub fn emit_resources(
             print!("{}", plain.render());
         }
         OutputMode::Text => {
-            print!("{}", render_resources_text(&report));
+            // Same verdict-first rule as `--lint`: the refusal leads, the
+            // "no findings" body sits under it.
             if !blockers.is_empty() {
                 println!("{}", crate::result::inconclusive_verdict(&blockers));
             }
+            print!("{}", render_resources_text(&report));
             // Route a novice from the expert text (bare severity + jargon) to the
             // already-built plain-language what/why/fix. Only when there is
             // something to explain, and only to stderr so pipes stay clean.

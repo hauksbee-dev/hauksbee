@@ -122,9 +122,11 @@ impl WebSection {
 pub struct BindSummaryWeb {
     /// `"M/N"`, active ICs that bound, over the total active ICs on the board.
     pub critical_parts_bound: String,
-    /// References of active ICs left open on the live circuit (unresolved active
-    /// ICs + resolved-but-open active ICs). Non-empty => analog/AC/thermal on
-    /// those nets is not trustworthy; the web banner must say so loudly.
+    /// References of verdict-critical parts left open on the live circuit:
+    /// unresolved active ICs, unresolved discrete transistors (Q prefix, the
+    /// power FETs; [`crate::result::is_verdict_critical`]), and
+    /// resolved-but-open active ICs. Non-empty => analog/AC/thermal on those
+    /// nets is not trustworthy; the web banner must say so loudly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_path_unresolved: Vec<String>,
     /// The parts behind that list, one entry each, with what went wrong and what
