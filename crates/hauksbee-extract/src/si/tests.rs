@@ -647,6 +647,44 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
             .any(|f| f.message.contains("800 mm routing")),
         "the finding must name the routed length it counted"
     );
+    // The device pins alone are inside the limit, so this verdict rests on the
+    // assumed trace capacitance. It must say so, and must not claim top severity.
+    let f = r.of_check(SiCheck::I2cRiseTime).next().unwrap();
+    assert_eq!(
+        f.severity,
+        SiSeverity::Medium,
+        "a trace-dependent shortfall is capped at Medium: {}",
+        f.message
+    );
+    assert!(
+        f.message
+            .contains("depends on the assumed trace capacitance"),
+        "must disclose what the verdict rests on: {}",
+        f.message
+    );
+}
+
+#[test]
+fn a_pin_only_overrun_is_full_severity_and_assumption_free() {
+    // 10k pull with 25 device pins is 250 pF of pin capacitance alone: 2118 ns,
+    // over standard mode without counting a single millimetre of copper. That
+    // verdict rests on the netlist only, so it must NOT be softened or hedged.
+    let text = i2c_routed_text(25, 5.0);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r
+        .of_check(SiCheck::I2cRiseTime)
+        .find(|f| f.severity.is_finding())
+        .expect("a pin-only overrun must fire");
+    assert_eq!(f.severity, SiSeverity::High, "{}", f.message);
+    assert!(
+        f.message
+            .contains("does not depend on any routing assumption"),
+        "must say the verdict is assumption-free: {}",
+        f.message
+    );
 }
 
 #[test]

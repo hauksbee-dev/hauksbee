@@ -166,7 +166,7 @@ violated:
 
 | Figure | Value | Used for |
 |--------|-------|----------|
-| `C_TRACE_PF_PER_MM_LOW` | 0.038 pF/mm (thin 2-layer, 150 ohm) | **gating findings**, so a bus is not failed on a capacitance a high-impedance route would not have |
+| `C_TRACE_PF_PER_MM_LOW` | 0.038 pF/mm (thin 2-layer, 150 ohm) | **gating whether a finding is raised at all** |
 | `C_TRACE_PF_PER_MM_HIGH` | 0.15 pF/mm (40 ohm worst case) | reported alongside, so the reader sees the worst case the geometry permits |
 
 Firing on the high end would fail real boards: a 700 mm 150 ohm route on an
@@ -178,7 +178,17 @@ The low figure is the bottom of the range hauksbee will reason about, **not** a
 proof that no route is lower: impedance rises without bound as a trace narrows
 and its plane recedes, and the 10 pF per device pin beside it is a
 datasheet-typical figure rather than a floor either. The messages say "the low
-end of the plausible range" and never claim it is the lowest possible. Both constants are
+end of the plausible range" and never claim it is the lowest possible.
+
+Because of that, **severity depends on what the verdict rests on.** The
+pin-capacitance figure needs no geometry at all: device count and pull-up value
+both come from the netlist. When that alone exceeds the limit, the finding is
+assumption-free and carries full severity, and says so. When the limit is only
+exceeded once the trace term is added, the shortfall is true for the impedance
+range assumed and false above it, so it is capped at `medium` and states that the
+device pins alone are within the limit and a higher-impedance route would pass.
+The check still fires, because a long bus really is the failure mode this exists
+to catch; it just does not dress an assumption as a measurement. Both constants are
 pinned against the closed form by
 `si::tests::trace_capacitance_per_mm_matches_transmission_line_physics`, so a
 units slip (a pF/inch or pF/cm figure written as pF/mm, which would inflate every
@@ -606,7 +616,19 @@ field at all: which constant applies is a property of the layer, never a
 per-audit choice.
 
 The `--ampacity` table carries the matching header and a per-row
-`1 oz ext (assumed)` basis, so measured and assumed ratings are never confusable.
+`1 oz ext (assumed)` / `1 oz int (assumed)` basis, so measured and assumed ratings
+are never confusable. Only the weight is defaulted; the side comes from the layer
+name, which is why the header says so rather than claiming every fallback is
+external.
+
+**An assumed weight never produces a verdict.** A shortfall computed on assumed
+copper is real under that assumption and false under another: a 0.25 mm trace
+rates 0.88 A as 1 oz and 1.45 A as 2 oz, so a cited 1.2 A would fail the estimate
+and pass the real board. Those rows are therefore reported at `info` with the
+words "This is NOT a verdict", naming the upload that would make it one. Only a
+bottleneck whose weight was read from a declared stackup raises a `high` finding.
+This is the same rule the controlled-impedance check above already follows, where
+a defaulted stackup is always informational.
 
 ### Attribution (the zero-false-positive boundary)
 
@@ -676,10 +698,17 @@ steady-state ampacity at all.
 ### Calibration evidence
 
 - Integration: `--si` surfaces an ampacity finding on a synthetic programmed
-  charger whose regulated output is routed on an undersized discrete trace. It
-  stays silent when the rail is poured, when only a regulator rating is known,
-  and when no operating-current source is attributable
-  (`crates/hauksbee-engine/tests/si_ampacity_ripple.rs`).
+  charger whose regulated output is routed on an undersized discrete trace **and
+  whose board declares its copper weight**. It stays silent when the rail is
+  poured, when only a regulator rating is known, and when no operating-current
+  source is attributable (`crates/hauksbee-engine/tests/si_ampacity_ripple.rs`).
+- Two-sided on the copper-weight evidence, same file: the identical 0.05 mm rail
+  with **no** declared stackup produces an `info` note saying "NOT a verdict"
+  rather than a finding. The arithmetic is why, not squeamishness: 0.05 mm carries
+  0.27 A as 1 oz but 0.46 A as 2 oz, which is above the cited 0.40 A, so the
+  shortfall is an artefact of the assumed weight and the board may be fine.
+  `tests/waiver_gate.rs` declares a stackup on its fixture for the same reason,
+  since a note is not a thing a waiver can gate.
 - Zero-FP corpus sweep across the famous boards (gated by
   `HAUKSBEE_REQUIRE_CORPUS=1`) raises no ampacity findings. That sweep caught,
   and forced the fix of, two attribution false positives: the generic power-FET
