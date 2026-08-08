@@ -138,10 +138,16 @@ pub enum EnsembleCoverage {
     /// arithmetic doesn't apply, report the member honestly instead. `corners`
     /// distinguishes a deterministic corner (corners mode) from a random draw
     /// (Monte-Carlo), so the banner matches the mode-aware per-assertion wording.
+    /// `interior` is set when the pinned member turned out to be a corner-mode
+    /// INTERIOR probe rather than a corner: the member numbering runs on past the
+    /// last corner, so mode alone cannot tell which one `--seed N` selected, and
+    /// calling a probe "corner N" sends the reader looking for a min/max
+    /// combination that does not exist.
     SingleMember {
         seed: u32,
         components: usize,
         corners: bool,
+        interior: bool,
     },
 }
 
@@ -171,14 +177,25 @@ impl EnsembleCoverage {
                 components,
             } => format!(
                 "tolerance corners: {corners} deterministic min/max corner(s) + {interior} \
-                 interior probe(s) over {components} component(s): the probes test the \
-                 monotonicity the corner bound rests on, and a probe that beats every \
-                 corner fails the assertion"
+                 interior probe(s) over {components} component(s): the corners bound the \
+                 worst case where the response is monotonic in each value, and the probes \
+                 sample the interior for a point that breaks an assertion the corners passed"
+            ),
+            EnsembleCoverage::SingleMember {
+                seed,
+                components,
+                interior: true,
+                ..
+            } => format!(
+                "single interior probe: interior probe {seed} over {components} toleranced \
+                 component(s): one pinned point strictly inside the tolerance ranges, \
+                 carrying none of the corner set's bounded claim"
             ),
             EnsembleCoverage::SingleMember {
                 seed,
                 components,
                 corners: true,
+                interior: false,
             } => format!(
                 "single corner: corner {seed} over {components} toleranced \
                  component(s): one pinned deterministic corner, not full corner coverage"
@@ -187,6 +204,7 @@ impl EnsembleCoverage {
                 seed,
                 components,
                 corners: false,
+                interior: false,
             } => format!(
                 "single ensemble member: seed {seed} over {components} toleranced \
                  component(s): one pinned draw, not ensemble coverage"
@@ -1338,6 +1356,7 @@ mod ensemble_coverage_tests {
             seed: 7,
             components: 3,
             corners: false,
+            interior: false,
         }
         .describe();
         assert!(d.contains("seed 7"), "{d}");
@@ -1357,6 +1376,7 @@ mod ensemble_coverage_tests {
             seed: 2,
             components: 2,
             corners: true,
+            interior: false,
         }
         .describe();
         assert!(

@@ -350,12 +350,15 @@ mode runs a small stratified **Latin-hypercube sample of the interior**: 4
 probes for one toleranced component, 6 for two, 8 from three up, so the check
 is a bounded handful of extra runs and never a multiple of the corner set. An
 interior probe that fails where every corner passed **fails the assertion**
-and says so, because the corners demonstrably did not bound that response. A
-clean probe set narrows the disclosure to what is left, a non-monotonicity
-sitting between the probes, instead of leaving monotonicity as an unchecked
-premise. Sampling the interior is detection, not proof, and the report keeps
-saying so. Interior probes are numbered on from the last corner, so `--seed k`
-isolates one exactly like a corner; the report calls them `interior probe k`.
+and says so, because the corners demonstrably did not bound that response.
+
+A clean probe set is evidence for the monotonicity the bound needs, not proof
+of it, and the report words it that way. Two limits are stated rather than
+glossed: the probes sample the interior, so a non-monotonicity between them is
+still possible; and each member is judged against the assertion's own window,
+so a probe worse than every corner still passes while it stays in band.
+Interior probes are numbered on from the last corner, so `--seed k` isolates
+one exactly like a corner; the report calls them `interior probe k`.
 
 Full enumeration is capped at 2^10 = 1024 components' corners. Above 10
 toleranced components, corner mode refuses and points at Monte-Carlo. Corner

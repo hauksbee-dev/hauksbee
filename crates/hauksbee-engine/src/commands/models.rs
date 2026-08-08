@@ -70,6 +70,13 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
 
     let mut findings = 0usize;
     let mut checked = 0usize;
+    // Warnings are the suspected-mistake tier: they never gate the exit code,
+    // but they must be counted. Printing a warning and then "ok" for the same
+    // entry and ": clean" for the file makes the warning look like decoration,
+    // which is how a lint gets ignored. (The `[soc]` `note:` advisories are a
+    // different tier: they report a capability the descriptor leaves absent,
+    // which is usually correct, and deliberately do not count.)
+    let mut warnings = 0usize;
 
     if root.get("sensor").is_some() {
         checked += 1;
@@ -96,6 +103,7 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
         for entry in &db.models {
             checked += 1;
             let mut entry_findings = 0usize;
+            let mut entry_warnings = 0usize;
             if let Err(errors) = hauksbee_models::validation::validate(entry) {
                 for err in errors {
                     entry_findings += 1;
@@ -110,6 +118,7 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
             // Unknown names can also be genuine extensions, which is why it
             // cannot gate.
             for u in hauksbee_models::param_names::unknown_params(entry) {
+                entry_warnings += 1;
                 println!(
                     "model '{}' [models.params]: warning: {}",
                     entry.id,
@@ -120,6 +129,7 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
                 match crate::logic::LogicComponent::compile(&entry.id, &entry.logic) {
                     Ok(compiled) => {
                         for w in &compiled.warnings {
+                            entry_warnings += 1;
                             println!("model '{}' [models.logic]: warning: {w}", entry.id);
                         }
                     }
@@ -139,9 +149,13 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
                 }
             }
             if entry_findings == 0 {
-                println!("model '{}': ok", entry.id);
+                match entry_warnings {
+                    0 => println!("model '{}': ok", entry.id),
+                    n => println!("model '{}': ok, {n} warning(s) above", entry.id),
+                }
             }
             findings += entry_findings;
+            warnings += entry_warnings;
         }
     } else if root.get("soc").is_some() {
         checked += 1;
@@ -154,9 +168,18 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
         );
     }
 
+    let warning_note = if warnings > 0 {
+        format!(", {warnings} warning(s)")
+    } else {
+        String::new()
+    };
     println!(
-        "{checked} item(s) checked, {findings} finding(s){}",
-        if findings == 0 { ": clean" } else { "" }
+        "{checked} item(s) checked, {findings} finding(s){warning_note}{}",
+        if findings == 0 && warnings == 0 {
+            ": clean"
+        } else {
+            ""
+        }
     );
     if findings > 0 {
         std::process::exit(2);

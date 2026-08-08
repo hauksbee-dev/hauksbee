@@ -272,10 +272,16 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             // draw, carry the mode so the banner says "corner N", matching the
             // mode-aware per-assertion INVALID/FAIL wording.
             let corners = matches!(spec.ensemble_mode()?, tolerance::Mode::Corners);
+            // Which member it turned out to be: corner mode numbers the interior
+            // probes on past the last corner, so mode alone cannot say whether
+            // `--seed N` pinned a corner or a probe. Read it off the outcome the
+            // runner actually produced.
+            let interior = outcomes.first().is_some_and(|o| o.interior);
             Some(report::EnsembleCoverage::SingleMember {
                 seed,
                 components,
                 corners,
+                interior,
             })
         } else {
             Some(match spec.ensemble_mode()? {
