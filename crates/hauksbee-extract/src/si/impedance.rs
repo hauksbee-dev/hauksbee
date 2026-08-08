@@ -36,8 +36,10 @@
 //!
 //! ## Honesty / zero-false-positive discipline
 //!
-//! Two gates, both required before a deviation becomes a *finding* (anything
-//! short of both is an *info* note carrying the computed value):
+//! Three gates. A deviation becomes a *finding* only with gates 1 and 3;
+//! anything short of both is an *info* note carrying the computed value. Gate 2
+//! is the veto: when it fails outright there is no impedance to report at all,
+//! only the named span where the reference is absent.
 //!
 //! 1. **A real stackup.** The impedance can only be computed when the stackup is
 //!    known: KiCad stores it in `(setup (stackup ...))` with per-dielectric
@@ -46,7 +48,54 @@
 //!    stated default assumption (1.6 mm 2-layer FR4, Er 4.3, 1 oz copper) as info
 //!    only, never a fire.
 //!
-//! 2. **Declared impedance-control intent.** This is the hard-won corpus lesson.
+//! 2. **A reference plane verified under the trace.** Every formula above takes
+//!    `H`, the height to a reference plane, and so assumes solid copper exists
+//!    at that height directly beneath the trace. The stackup says how far away
+//!    the next copper layer is; it does not say whether that layer has copper
+//!    under *this* trace. A pair that crosses a plane void, a power-domain split,
+//!    or the edge of a partial pour has no reference there, its real impedance
+//!    rises steeply as the return current detours, and the formula's output is
+//!    not an estimate of anything. So for a differential pair (only: the
+//!    single-ended 50 ohm path still assumes its plane) the assumption is checked
+//!    against the copper. Points along both legs, at a half-millimetre pitch, are
+//!    tested against the fill polygons of the pours on the adjacent copper layer,
+//!    on *every* outer layer the pair routes on rather than only its longest.
+//!    Three guards keep designed plane features from reading as defects:
+//!
+//!    - Samples inside the anti-pad of a via **or pad** are excused. Anti-pads are
+//!      deliberate clearance, and because a pair's segments terminate at its
+//!      layer-transition vias, endpoint samples land in one systematically. A
+//!      through-hole connector pad or mounting hole clears far more copper than a
+//!      signal via, which is why pads count too.
+//!    - Uncovered samples are grouped by proximity, and a void's size is its
+//!      geometric *extent* within one group. Copper between two clearances
+//!      therefore separates them instead of being bridged, so a scatter of small
+//!      holes cannot add up to one large void.
+//!    - The extent must reach 2 mm. That is a conservative floor rather than a
+//!      derived limit, set where a void is unambiguous even after clearances are
+//!      excused; see [`MIN_REFERENCE_VOID_MM`].
+//!
+//!    Two limitations are worth stating plainly. The reference layer is taken to
+//!    be the copper layer ADJACENT to the routing layer, which is the same
+//!    assumption [`read_stackup`] already makes when it reads `H` from the first
+//!    dielectric: the stackup block names no plane layer, so neither can this. On
+//!    a stack whose adjacent layer is a signal layer with routing channels and
+//!    whose real plane is one deeper, a gap in that adjacent layer is reported,
+//!    and a solid plane further down does not rescue the estimate because `H`
+//!    would be measured to the wrong layer anyway. And an unfilled or absent pour
+//!    yields `Unverified` rather than an abstention, so the estimate is still
+//!    printed with its reference declared unverified; that is a deliberate choice
+//!    to keep boards that were simply never poured reporting what they used to.
+//!
+//!    Where copper is genuinely absent over such a void, the check reports
+//!    "reference missing under trace", names it, and says what would unlock a
+//!    confident answer, instead of printing a Zdiff. Where the reference cannot be
+//!    established either way (no pour on the adjacent layer, zones with no stored
+//!    fill, no declared `(layers)` stack, a pair routed on an inner layer) the
+//!    estimate is reported as before with its reference stated as unverified: the
+//!    bias is against inventing a void.
+//!
+//! 3. **Declared impedance-control intent.** This is the hard-won corpus lesson.
 //!    The closed-form microstrip/differential model is a quasi-static estimate
 //!    with a real error band on dense real boards: it has no co-planar-ground
 //!    term and assumes the trace references the nearest plane at the dielectric
@@ -65,16 +114,20 @@
 //!    class this fires on.
 //!
 //! A finding therefore always carries a real, file-derived stackup AND the
-//! board's own statement that the net should be controlled. This matches checks
-//! 1-4: unknown / unintended -> info, never a confident false positive.
+//! board's own statement that the net should be controlled. A reported
+//! *differential* impedance additionally carries a reference plane that was
+//! either verified under the pair or explicitly stated as unverified; the
+//! single-ended 50 ohm path does NOT yet check its plane and still assumes one,
+//! which is a known gap rather than a claim. This matches checks 1-4: unknown /
+//! unintended -> info, never a confident false positive.
 
 use forge_sexpr::List;
 
 use std::collections::HashMap;
 
 use super::{
-    elem_net_id, is_unconnected_net, net_name_index, norm, routed_length_mm, track_width_range,
-    usb_pairs, SiCheck, SiFinding, SiReport, SiSeverity,
+    elem_net_id, is_unconnected_net, local_to_board, net_name_index, norm, routed_length_mm,
+    track_width_range, usb_pairs, SiCheck, SiFinding, SiReport, SiSeverity,
 };
 use crate::ExtractedBoard;
 
@@ -543,14 +596,32 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
             continue;
         };
 
+        // The formula's H is the height to a reference plane. Check that the
+        // plane is actually under the pair before reporting the number it
+        // produces; where it is not, name the span instead.
+        let reference = reference_plane_under_pair(root, pid, mid);
+        if let ReferencePlane::Missing(missing) = &reference {
+            emit_reference_missing(&pname, &mname, class, w, s, stackup, missing, report);
+            continue;
+        }
+        // Solid, or unverifiable: report the Zdiff as before. A verified plane
+        // is not narrated (a check that says "ok" about every assumption it
+        // discharged is unreadable); an unverified one says so, so the estimate
+        // never reads as more grounded than it is.
+        let reference_note = match &reference {
+            ReferencePlane::Solid => String::new(),
+            ReferencePlane::Unverified(why) => format!(" (reference plane unverified: {why})"),
+            ReferencePlane::Missing(_) => unreachable!("handled above"),
+        };
+
         judge(
             report,
             stackup,
             class,
             zdiff,
             &format!(
-                "{} / {}: W~{:.3} mm, S~{:.3} mm microstrip -> Zdiff ~ {:.0} ohm",
-                pname, mname, w, s, zdiff
+                "{} / {}: W~{:.3} mm, S~{:.3} mm microstrip -> Zdiff ~ {:.0} ohm{}",
+                pname, mname, w, s, zdiff, reference_note
             ),
             vec![pname.clone(), mname.clone()],
         );
@@ -649,15 +720,7 @@ fn judge(
     // control these nets (e.g. a full-speed USB keyboard), so a deviation is not
     // a defect. Report the computed impedance as an auditable info note. Only a
     // board that declares it is impedance-controlled can produce a finding.
-    if stackup.source == StackupSource::Default || !stackup.impedance_controlled {
-        let why = if stackup.source == StackupSource::Default {
-            stackup.describe()
-        } else {
-            format!(
-                "board does not declare controlled impedance (dielectric_constraints no); {}",
-                stackup.describe()
-            )
-        };
+    if let Some(why) = confidence_caveat(stackup) {
         report.findings.push(SiFinding {
             check: SiCheck::ControlledImpedance,
             severity: SiSeverity::Info,
@@ -718,6 +781,699 @@ fn judge(
 }
 
 // ===========================================================================
+// Reference-plane verification.
+// ===========================================================================
+//
+// The microstrip and differential-microstrip formulas both take `H`, the height
+// to *the reference plane*, and every one of them assumes there IS solid copper
+// at that height directly beneath the trace. The stackup block says how far away
+// the next copper layer is; it does not say whether that layer has copper under
+// this particular trace. A pair that crosses a plane void, a split between two
+// power domains, or the edge of a partial pour has no reference under it there:
+// its real impedance rises steeply (the return current has to detour) and the
+// number the formula produces is not an estimate of anything. Emitting it as a
+// confident Zdiff is exactly the kind of unearned confidence this codebase
+// refuses, and the fact that the assumption existed only in this module's prose
+// is what made it invisible.
+//
+// So the assumption is now checked against the copper: sample points along both
+// legs of the pair and test each against the fill polygons of the pours on the
+// adjacent copper layer. Where copper is absent, the check names the span and
+// says what would unlock a confident answer instead of printing a Zdiff.
+//
+// The bias is deliberately toward *not* abstaining: a board whose reference
+// layer has no pour at all, or whose zones carry no stored fill, or whose pair
+// routes somewhere the microstrip model does not describe, yields "cannot
+// verify" and the existing behaviour, never a fabricated void.
+
+/// The state of the reference copper under a routed pair.
+#[derive(Debug, Clone, PartialEq)]
+enum ReferencePlane {
+    /// Reference copper found under every sampled point, on every outer layer
+    /// the pair routes on.
+    Solid,
+    /// A void wide enough to matter sits under the pair.
+    Missing(MissingReference),
+    /// Nothing could be tested, with the reason. The impedance keeps its
+    /// previous, stackup-gated treatment; the reason is stated so the estimate's
+    /// unverified reference is never silent.
+    Unverified(String),
+}
+
+/// The named void under the pair.
+#[derive(Debug, Clone, PartialEq)]
+struct MissingReference {
+    /// The copper layer that should have carried the reference plane there.
+    layer: String,
+    /// How far across the void is (mm): the greatest distance between two
+    /// uncovered samples belonging to it.
+    extent_mm: f64,
+    /// Uncovered samples in this void, and the total sampled on its layer.
+    uncovered: usize,
+    total: usize,
+    /// The void's bounding box in board mm, so a designer can go and look.
+    from: (f64, f64),
+    to: (f64, f64),
+}
+
+impl MissingReference {
+    /// The void, as a report reads it.
+    fn describe_span(&self) -> String {
+        format!(
+            "a void ~{:.2} mm across, bounded by ({:.2}, {:.2}) and ({:.2}, {:.2}) mm, {} of {} \
+             sampled points with no {} copper beneath",
+            self.extent_mm,
+            self.from.0,
+            self.from.1,
+            self.to.0,
+            self.to.1,
+            self.uncovered,
+            self.total,
+            self.layer,
+        )
+    }
+}
+
+/// Sampling pitch (mm) along a routed segment. Fine enough to size a void to a
+/// fraction of a millimetre, coarse enough that a 20 mm run costs forty polygon
+/// tests rather than the twenty thousand a per-mil walk would.
+const SAMPLE_PITCH_MM: f64 = 0.5;
+
+/// Cap on samples per segment. Set high enough that [`SAMPLE_PITCH_MM`] is
+/// actually honoured for any segment a real board contains (512 samples covers a
+/// 256 mm run at 0.5 mm, longer than any PCB dimension), because the alternative
+/// of loosening the void-linking distance to match a coarse pitch reintroduces
+/// exactly the clearance-bridging false positive the clustering exists to stop.
+/// The cap remains only so a corrupt or absurd coordinate cannot make this
+/// unbounded.
+const MAX_SAMPLES_PER_SEG: usize = 512;
+
+/// Radial clearance (mm) added to a via barrel's or pad's own extent to reach
+/// the edge of the anti-pad it punches in a plane.
+///
+/// Anti-pads are a *designed* feature: the copper is deliberately cleared so the
+/// hole can pass through. Sampling into one is not evidence of a missing
+/// reference, and because a pair's segments terminate at its layer-transition
+/// vias, endpoint samples land in one systematically. Watchy proved it: the first
+/// cut of this check reported a 2.91 mm void there where all seven uncovered
+/// samples were within 0.36 mm of a via centre, four exactly on one, on a plane
+/// that is in fact continuous.
+///
+/// This is a FLOOR, not the whole margin. The actual clearance a board's filler
+/// left around each aperture is the zone's own declared clearance, which can be
+/// larger: a board pulling its pour back 0.5 mm from every hole would leave rings
+/// of bare laminate outside a fixed 0.3 mm excuse radius, and a via fence
+/// flanking a pair would then read as a void. So the margin used is this floor or
+/// the largest clearance declared by the pours on the reference layer, whichever
+/// is greater. Erring high only ever loses an abstention; erring low invents one,
+/// which is the direction that matters here.
+const ANTIPAD_MARGIN_FLOOR_MM: f64 = 0.3;
+
+/// Baseline distance (mm) within which two uncovered samples belong to the same
+/// void.
+///
+/// This is what stops two separate designed clearances from being read as one
+/// large void: the criterion is a void's *extent*, measured within a cluster of
+/// mutually-close uncovered samples, so copper between two holes separates them
+/// instead of being bridged over.
+///
+/// It is deliberately FIXED rather than scaled to the sampling pitch. Scaling it
+/// looked like a fix for coarsely-sampled long segments and was in fact a false
+/// positive: on a 100 mm run the pitch reaches 1.56 mm, a 1.5x-scaled link
+/// reaches 2.34 mm, and two designed clearances 2 mm apart would single-link into
+/// one "void" past the threshold, undoing the separation clustering is for. The
+/// pitch is instead kept fine enough ([`MAX_SAMPLES_PER_SEG`]) that consecutive
+/// samples always fall well inside this distance.
+const VOID_LINK_MM: f64 = 1.0;
+
+/// Minimum void extent (mm) before the check abstains.
+///
+/// A conservative floor, not a derived physical limit. What actually matters to a
+/// pair is a gap comparable to or larger than its trace-to-plane height, which is
+/// a few tenths of a millimetre, so a stricter threshold would be defensible
+/// physics and a much worse check: the geometry available here (fill outlines
+/// that weave around every aperture, plus a 0.5 mm sampling pitch) cannot resolve
+/// sub-millimetre features reliably. 2 mm is set where a void is unambiguous
+/// enough to report even after designed clearances have been excused. It is
+/// deliberately loose, in the same spirit as the +-15% impedance tolerance:
+/// whatever it lets through was never going to be a confident finding.
+const MIN_REFERENCE_VOID_MM: f64 = 2.0;
+
+/// Verify that solid reference copper exists under both legs of a pair.
+///
+/// Checks EVERY outer copper layer the pair routes on, not just the one carrying
+/// most of its length: a pair that runs mostly over solid copper and then drops
+/// to the other side over a void is exactly the case worth catching, and picking
+/// a single majority layer would miss it.
+///
+/// Only straight `(segment ...)` copper is sampled, not `(arc ...)`: the same
+/// limitation [`pair_edge_spacing`] already has. A curved stretch is therefore
+/// simply not examined, so an arc over a void is a miss rather than a false
+/// alarm, and a pair routed entirely in arcs yields no samples and reports
+/// `Unverified`. That is the intended direction of failure here.
+fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane {
+    let mut segs = net_segments(root, pid);
+    segs.extend(net_segments(root, mid));
+    if segs.is_empty() {
+        return ReferencePlane::Unverified("the pair has no routed copper segments".into());
+    }
+
+    // The copper stack must be DECLARED. Assuming a two-layer F.Cu/B.Cu stack
+    // when the board says nothing would pick the wrong reference layer on a
+    // 4-layer board and could invent a void against a pour that is not the
+    // reference at all.
+    let Some(stack) = declared_copper_stack(root) else {
+        return ReferencePlane::Unverified(
+            "the board declares no (layers) block, so which copper layer the pair references is \
+             unknown"
+                .into(),
+        );
+    };
+
+    // Group the pair's segments by the layer they run on, in a deterministic
+    // order so the reported void does not depend on hash iteration order.
+    let mut layers: Vec<String> = segs.iter().map(|s| s.layer.clone()).collect();
+    layers.sort();
+    layers.dedup();
+
+    let mut reasons: Vec<String> = Vec::new();
+    let mut verified: Vec<String> = Vec::new();
+    let mut worst: Option<MissingReference> = None;
+
+    for layer in &layers {
+        let Some(ref_layer) = adjacent_reference_layer(&stack, layer) else {
+            reasons.push(format!(
+                "{layer} is not an outer layer of the declared copper stack, so the microstrip \
+                 reference layer is not determined"
+            ));
+            continue;
+        };
+        // Hatched pours contribute no testable fills (see `plane_fills`). When
+        // they were the ONLY pour on the layer there is nothing to verify against
+        // and the reason must say which case this is, because "no pour" and "a
+        // pour we cannot read" are different facts about the board.
+        let fills = plane_fills(root, &ref_layer);
+        if fills.is_empty() {
+            reasons.push(if has_hatched_pour(root, &ref_layer) {
+                format!(
+                    "the pour on {ref_layer} is hatched, so its fill polygons cannot show whether \
+                     the return path under the pair is continuous"
+                )
+            } else {
+                format!("no filled copper pour on {ref_layer} to reference against")
+            });
+            continue;
+        }
+        // The anti-pad margin is the board's own clearance where it declares one,
+        // never less than the floor.
+        let margin = ANTIPAD_MARGIN_FLOOR_MM.max(max_zone_clearance(root, &ref_layer));
+        // Only the holes that actually pierce this reference layer clear copper
+        // in it. An SMD pad on the opposite side punches nothing here.
+        let holes = plane_piercings(root, margin);
+        let relevant: Vec<&Piercing> = holes
+            .iter()
+            .filter(|h| h.pierces(&ref_layer))
+            .collect::<Vec<_>>();
+
+        // Sample and cluster ONE LEG AT A TIME. The legs of a USB pair sit about
+        // half a millimetre apart, well inside the linking distance, so pooling
+        // their samples let a sub-threshold bite under D+ and another under D-
+        // merge into a single "void" whose extent was largely the diagonal gap
+        // between the two legs. A void's extent along the leg it undermines is
+        // what the impedance of that leg responds to.
+        let mut total = 0usize;
+        for net in [pid, mid] {
+            let mut uncovered: Vec<(f64, f64)> = Vec::new();
+            let mut leg_total = 0usize;
+            for s in segs.iter().filter(|s| &s.layer == layer && s.net == net) {
+                let len = s.length();
+                let steps = ((len / SAMPLE_PITCH_MM).ceil() as usize).clamp(2, MAX_SAMPLES_PER_SEG);
+                for i in 0..=steps {
+                    let t = i as f64 / steps as f64;
+                    let (x, y) = (s.ax + t * (s.bx - s.ax), s.ay + t * (s.by - s.ay));
+                    // A sample inside an anti-pad carries no information about
+                    // the plane, so it is neither counted nor allowed to join two
+                    // voids.
+                    if relevant.iter().any(|h| h.covers(x, y)) {
+                        continue;
+                    }
+                    leg_total += 1;
+                    if !fills
+                        .iter()
+                        .any(|poly| crate::gerber::geo::point_in_polygon(x, y, poly))
+                    {
+                        uncovered.push((x, y));
+                    }
+                }
+            }
+            total += leg_total;
+            if let Some(void) = widest_void(&uncovered, &ref_layer, leg_total) {
+                if worst
+                    .as_ref()
+                    .map_or(true, |w| void.extent_mm > w.extent_mm)
+                {
+                    worst = Some(void);
+                }
+            }
+        }
+        if total == 0 {
+            reasons.push(format!(
+                "no sampleable {layer} routing on the pair outside the anti-pads in {ref_layer}"
+            ));
+            continue;
+        }
+        verified.push(ref_layer.clone());
+    }
+
+    if let Some(void) = worst {
+        return ReferencePlane::Missing(void);
+    }
+    // `Solid` is a claim about the WHOLE pair, which is what the report says when
+    // it stays silent about the plane. So any stretch that could not be checked
+    // demotes the pair to unverified even when another layer verified cleanly:
+    // otherwise a via-dropped stub over an unpourable layer would be silently
+    // absorbed into a clean verdict.
+    if !reasons.is_empty() {
+        return ReferencePlane::Unverified(reasons.join("; "));
+    }
+    if !verified.is_empty() {
+        return ReferencePlane::Solid;
+    }
+    ReferencePlane::Unverified("the pair has no verifiable routed copper".into())
+}
+
+/// The widest void among the uncovered samples, if any reaches
+/// [`MIN_REFERENCE_VOID_MM`].
+///
+/// Uncovered samples are grouped by single linkage at [`VOID_LINK_MM`]: samples
+/// within that distance of each other are the same void. A void's size is then
+/// its *extent*, the greatest distance between two of its samples, measured
+/// geometrically rather than inferred from how much routed length happened to
+/// pass over it. That is what makes a scatter of small designed clearances
+/// unable to add up to one large void, whether they lie on one segment or on
+/// several.
+fn widest_void(uncovered: &[(f64, f64)], layer: &str, total: usize) -> Option<MissingReference> {
+    if uncovered.is_empty() {
+        return None;
+    }
+    // Single-linkage grouping. The sample count here is small (uncovered points
+    // on one pair, after anti-pads are excused), so the quadratic walk is cheap
+    // and needs no spatial index.
+    let n = uncovered.len();
+    let mut group = vec![usize::MAX; n];
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for i in 0..n {
+        if group[i] != usize::MAX {
+            continue;
+        }
+        let id = groups.len();
+        let mut members = vec![i];
+        group[i] = id;
+        // Breadth-first: pull in anything within the link distance of a member,
+        // transitively, so an elongated void along a trace stays one void.
+        let mut head = 0;
+        while head < members.len() {
+            let a = uncovered[members[head]];
+            head += 1;
+            for j in 0..n {
+                if group[j] != usize::MAX {
+                    continue;
+                }
+                let b = uncovered[j];
+                if (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) <= VOID_LINK_MM * VOID_LINK_MM {
+                    group[j] = id;
+                    members.push(j);
+                }
+            }
+        }
+        groups.push(members);
+    }
+
+    let mut best: Option<MissingReference> = None;
+    for members in &groups {
+        let pts: Vec<(f64, f64)> = members.iter().map(|&i| uncovered[i]).collect();
+        let mut extent = 0.0_f64;
+        for (i, a) in pts.iter().enumerate() {
+            for b in &pts[i + 1..] {
+                extent = extent.max(((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt());
+            }
+        }
+        // The uncovered samples sit INSIDE the void, so the distance between the
+        // outermost two under-measures its true width by up to one pitch at each
+        // end. The width is therefore in [extent, extent + 2 * pitch]; take the
+        // midpoint, or a 2.4 mm moat sampled at 0.5 mm measures 1.9 mm and slips
+        // under the floor.
+        let width = extent + SAMPLE_PITCH_MM;
+        if width < MIN_REFERENCE_VOID_MM {
+            continue;
+        }
+        let (mut min_x, mut min_y) = pts[0];
+        let (mut max_x, mut max_y) = pts[0];
+        for &(x, y) in &pts {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+        let candidate = MissingReference {
+            layer: layer.to_string(),
+            extent_mm: width,
+            uncovered: pts.len(),
+            total,
+            from: (min_x, min_y),
+            to: (max_x, max_y),
+        };
+        if best.as_ref().map_or(true, |b| width > b.extent_mm) {
+            best = Some(candidate);
+        }
+    }
+    best
+}
+
+/// A hole that clears copper out of the planes it passes through: a via, or a
+/// pad with the copper layers it occupies.
+struct Piercing {
+    x: f64,
+    y: f64,
+    radius: f64,
+    /// Copper layers this hole clears. Empty means "every copper layer" (the
+    /// `*.Cu` wildcard, and a via with no layer list).
+    layers: Vec<String>,
+}
+
+impl Piercing {
+    fn pierces(&self, layer: &str) -> bool {
+        self.layers.is_empty() || self.layers.iter().any(|l| l == layer)
+    }
+    fn covers(&self, x: f64, y: f64) -> bool {
+        (x - self.x).powi(2) + (y - self.y).powi(2) <= self.radius * self.radius
+    }
+}
+
+/// Every via and pad that clears copper from a plane, with its anti-pad radius.
+///
+/// Pads matter as much as vias: a through-hole connector pad or a mounting hole
+/// clears far more copper than a signal via, and treating that clearance as a
+/// plane defect was the false-positive class a review caught after the via fix.
+/// A pad is recorded with the copper layers it occupies, so an SMD pad on the far
+/// side of the board is not credited with piercing an inner plane.
+fn plane_piercings(root: &List, margin: f64) -> Vec<Piercing> {
+    let mut out = Vec::new();
+    for via in root.find_all("via") {
+        let Some(at) = via.find("at") else { continue };
+        let (Some(x), Some(y)) = (at.arg_f64(0), at.arg_f64(1)) else {
+            continue;
+        };
+        let size = via.find_f64("size").unwrap_or(0.0).max(0.0);
+        // A via's layer list is its span; a plane between the ends is pierced.
+        // Treating every via as piercing all copper over-excuses only for a
+        // blind/buried via, which is the safe direction.
+        out.push(Piercing {
+            x,
+            y,
+            radius: size / 2.0 + margin,
+            layers: Vec::new(),
+        });
+    }
+    // Both spellings: KiCad 6+ writes `footprint`, KiCad 4/5 wrote `module`, and
+    // boards of both vintages are in the corpus. Missing the legacy one left
+    // through-hole and mounting-hole clearances unexcused on those boards, which
+    // is a false void on a continuous plane. `drc.rs` chains the same pair.
+    for fp in root.find_all("footprint").chain(root.find_all("module")) {
+        let Some(at) = fp.find("at") else { continue };
+        let (fx, fy) = (at.arg_f64(0).unwrap_or(0.0), at.arg_f64(1).unwrap_or(0.0));
+        let frot = at.arg_f64(2).unwrap_or(0.0);
+        for pad in fp.find_all("pad") {
+            let Some(pat) = pad.find("at") else { continue };
+            let (px, py) = (pat.arg_f64(0).unwrap_or(0.0), pat.arg_f64(1).unwrap_or(0.0));
+            let (x, y) = local_to_board(fx, fy, frot, px, py);
+            let (sx, sy) = pad
+                .find("size")
+                .map(|s| (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0)))
+                .unwrap_or((0.0, 0.0));
+            // A round mounting hole may carry only a drill.
+            let drill = pad.find("drill").and_then(|d| d.arg_f64(0)).unwrap_or(0.0);
+            let extent = sx.max(sy).max(drill);
+            if extent <= 0.0 {
+                continue;
+            }
+            // Circumscribe the cleared rectangle rather than inscribe it. The
+            // pour is pulled back around the pad OUTLINE, so for an elongated
+            // pad (a 4 x 1.2 mm connector pin) the clearance reaches furthest at
+            // the corners, and a disc of the pad's half-length left those corners
+            // just outside the excuse: a row of them along a fanout read as a
+            // void. Using the corner distance over-excuses a little, which only
+            // ever loses an abstention.
+            let half_diag = ((sx.max(drill) / 2.0 + margin).powi(2)
+                + (sy.max(drill) / 2.0 + margin).powi(2))
+            .sqrt();
+            let mut layers: Vec<String> = pad
+                .find("layers")
+                .map(|l| (0..).map_while(|i| l.arg_value(i)).collect())
+                .unwrap_or_default();
+            // `*.Cu` means every copper layer: record that as "all".
+            if layers.iter().any(|l| l == "*.Cu") {
+                layers.clear();
+            } else {
+                layers.retain(|l| l.ends_with(".Cu"));
+                if layers.is_empty() {
+                    continue; // a paste/mask-only aperture clears no copper
+                }
+            }
+            out.push(Piercing {
+                x,
+                y,
+                radius: half_diag.max(extent / 2.0 + margin),
+                layers,
+            });
+        }
+    }
+    out
+}
+
+/// The copper layers the board DECLARES, in stack order, or `None` when it
+/// declares no `(layers)` block at all.
+///
+/// Deliberately not falling back to an assumed `F.Cu`/`B.Cu` pair: the caller
+/// needs to know which layer is adjacent to which, and guessing that on a board
+/// that never said would point the check at a pour that is not the reference.
+fn declared_copper_stack(root: &List) -> Option<Vec<String>> {
+    let decl = root.find("layers")?;
+    let stack: Vec<String> = decl
+        .lists()
+        .filter_map(|l| l.arg_value(0))
+        .filter(|n| n.ends_with(".Cu"))
+        .collect();
+    (stack.len() >= 2).then_some(stack)
+}
+
+/// The copper layer a microstrip trace on `route_layer` references: the next
+/// layer inward from the top of the stack, or the next one inward from the
+/// bottom. `None` for an inner layer, where the trace is a stripline between two
+/// planes and this module's microstrip model does not apply.
+fn adjacent_reference_layer(stack: &[String], route_layer: &str) -> Option<String> {
+    let idx = stack.iter().position(|l| l == route_layer)?;
+    if idx == 0 {
+        stack.get(1).cloned()
+    } else if idx == stack.len() - 1 {
+        stack.get(idx - 1).cloned()
+    } else {
+        None
+    }
+}
+
+/// The fill polygons of every copper pour on `layer`.
+///
+/// Any pour counts as reference copper, not only a ground one: a solid power
+/// plane is a perfectly good AC return path, and demanding a ground net here
+/// would fabricate a "reference missing" on a board whose second layer is a
+/// power plane. Zones with no stored `filled_polygon` (a board saved without
+/// being refilled) contribute nothing, which lands the caller in `Unverified`
+/// rather than in a false void.
+///
+/// A fill's own `(layer ...)` tag is authoritative when present, and is checked
+/// *before* the zone's layer list, because a multi-layer zone stores one fill per
+/// layer and its header may name those layers in a form better left unparsed
+/// (Watchy carries a `(layers "F&B.Cu")` zone, KiCad's front-and-back shorthand).
+///
+/// Islands are separate polygons and a hole in a pour is written by the outline
+/// weaving in and back out, so testing a point against each polygon in turn and
+/// taking any hit is correct for both: the even-odd ray cast handles the weaving
+/// outline, and an island is simply another polygon to hit.
+fn plane_fills(root: &List, layer: &str) -> Vec<Vec<(f64, f64)>> {
+    let mut out = Vec::new();
+    for zone in root.find_all("zone") {
+        // A hatched zone's fill is a lattice of strips with deliberate gaps, so
+        // its polygons cannot answer "is the return path continuous here". Drop
+        // it rather than disqualifying the layer: a board often carries a solid
+        // GND pour AND a hatched copper-balance zone on the same layer, and the
+        // solid one can still be verified against.
+        if is_hatched(zone) {
+            continue;
+        }
+        for fp in zone.find_all("filled_polygon") {
+            let belongs = match fp.find_value("layer") {
+                // Tagged: the tag decides, whatever the zone header says.
+                Some(fl) => fl == layer,
+                // Untagged: fall back to the zone's own declaration.
+                None => zone_covers_layer(zone, layer),
+            };
+            if !belongs {
+                continue;
+            }
+            if let Some(pts) = fp.find("pts") {
+                let poly: Vec<(f64, f64)> = pts
+                    .find_all("xy")
+                    .map(|xy| (xy.arg_f64(0).unwrap_or(0.0), xy.arg_f64(1).unwrap_or(0.0)))
+                    .collect();
+                if poly.len() >= 3 {
+                    out.push(poly);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Does any pour on `layer` use a hatched / meshed fill?
+///
+/// KiCad writes this as `(fill yes (mode hatch) ...)`. Such a pour's fill is a
+/// lattice of strips, so fill-polygon containment says nothing useful about
+/// whether the return path is continuous.
+fn has_hatched_pour(root: &List, layer: &str) -> bool {
+    root.find_all("zone").any(|zone| {
+        let on_layer = zone_covers_layer(zone, layer)
+            || zone
+                .find_all("filled_polygon")
+                .any(|fp| fp.find_value("layer").as_deref() == Some(layer));
+        on_layer && is_hatched(zone)
+    })
+}
+
+/// Is this zone filled as a hatch / mesh rather than solid?
+fn is_hatched(zone: &List) -> bool {
+    zone.find("fill")
+        .and_then(|f| f.find_value("mode"))
+        .is_some_and(|m| m.eq_ignore_ascii_case("hatch"))
+}
+
+/// The largest copper clearance declared by any pour on `layer`.
+///
+/// Read so the anti-pad excuse radius reflects what the board's filler actually
+/// pulled back, rather than a single assumed number. Both the zone-level
+/// `(clearance ...)` and the `(connect_pads (clearance ...))` thermal-relief gap
+/// are considered, since either can be the wider one. Returns 0.0 when nothing is
+/// declared, leaving the caller on its floor.
+fn max_zone_clearance(root: &List, layer: &str) -> f64 {
+    let mut max = 0.0_f64;
+    for zone in root.find_all("zone") {
+        if !zone_covers_layer(zone, layer)
+            && !zone
+                .find_all("filled_polygon")
+                .any(|fp| fp.find_value("layer").as_deref() == Some(layer))
+        {
+            continue;
+        }
+        if let Some(c) = zone.find_f64("clearance") {
+            max = max.max(c);
+        }
+        if let Some(c) = zone
+            .find("connect_pads")
+            .and_then(|cp| cp.find_f64("clearance"))
+        {
+            max = max.max(c);
+        }
+    }
+    if max.is_finite() {
+        max
+    } else {
+        0.0
+    }
+}
+
+/// Does a zone's own layer declaration name `layer`? Handles the `(layers ...)`
+/// list, the single `(layer ...)` form, the `*.Cu` all-copper wildcard, and
+/// KiCad's `F&B.Cu` front-and-back shorthand.
+fn zone_covers_layer(zone: &List, layer: &str) -> bool {
+    let named = |n: &str| {
+        n == layer
+            || (n == "*.Cu" && layer.ends_with(".Cu"))
+            || (n == "F&B.Cu" && (layer == "F.Cu" || layer == "B.Cu"))
+    };
+    zone.find("layers")
+        .map(|l| (0..).map_while(|i| l.arg_value(i)).any(|n| named(&n)))
+        .unwrap_or(false)
+        || zone.find_value("layer").map(|l| named(&l)).unwrap_or(false)
+}
+
+/// The abstention: say the reference plane is missing over the named void, and say
+/// what would turn this into a confident answer. No Zdiff is printed, because
+/// there is no reference plane for such a number to be the impedance against.
+fn emit_reference_missing(
+    pname: &str,
+    mname: &str,
+    class: ImpedanceClass,
+    w: f64,
+    s: f64,
+    stackup: &Stackup,
+    missing: &MissingReference,
+    report: &mut SiReport,
+) {
+    // A board that declares controlled impedance and then routes a controlled
+    // pair across a plane void has a real defect, and the declaration is what
+    // makes us confident enough to say so. Without the declaration this is the
+    // same informational note the rest of the module emits, carrying the same
+    // explanation of why it is only informational.
+    let caveat = confidence_caveat(stackup);
+    let severity = if caveat.is_none() {
+        SiSeverity::Medium
+    } else {
+        SiSeverity::Info
+    };
+    report.findings.push(SiFinding {
+        check: SiCheck::ControlledImpedance,
+        severity,
+        message: format!(
+            "{} / {} ({}): reference missing under trace - {}. W~{:.3} mm, S~{:.3} mm; no Zdiff \
+             reported, because the microstrip formula's H is the height to a reference plane that \
+             is not there over that span. A confident answer needs reference-plane copper along \
+             the pair's routed length: route the pair over the plane, or close the void / plane \
+             split it crosses. Note that a plane on a layer FURTHER from the trace does not \
+             substitute, because H is the height to the adjacent layer [{}]",
+            pname,
+            mname,
+            class.label(),
+            missing.describe_span(),
+            w,
+            s,
+            caveat.unwrap_or_else(|| stackup.describe()),
+        ),
+        refs: vec![],
+        nets: vec![pname.to_string(), mname.to_string()],
+    });
+}
+
+/// Why an impedance statement about this board can only be informational, or
+/// `None` when both confidence gates are met (a file-derived stackup AND the
+/// board's own declaration that these nets are controlled).
+///
+/// Shared by [`judge`] and [`emit_reference_missing`] so the two never explain
+/// the same gate differently: a reader comparing an out-of-band note with an
+/// abstention on the same board must see the same reason for both.
+fn confidence_caveat(stackup: &Stackup) -> Option<String> {
+    if stackup.source == StackupSource::Default {
+        return Some(stackup.describe());
+    }
+    if !stackup.impedance_controlled {
+        return Some(format!(
+            "board does not declare controlled impedance (dielectric_constraints no); {}",
+            stackup.describe()
+        ));
+    }
+    None
+}
+
+// ===========================================================================
 // Pair coupling geometry.
 // ===========================================================================
 
@@ -774,13 +1530,21 @@ fn pair_edge_spacing(root: &List, pid: i64, mid: i64) -> Option<f64> {
     Some(median)
 }
 
-/// A routed segment's endpoints and width.
+/// A routed segment's endpoints, width, copper layer and net.
 struct Seg {
     ax: f64,
     ay: f64,
     bx: f64,
     by: f64,
     w: f64,
+    layer: String,
+    net: i64,
+}
+
+impl Seg {
+    fn length(&self) -> f64 {
+        ((self.bx - self.ax).powi(2) + (self.by - self.ay).powi(2)).sqrt()
+    }
 }
 
 /// All copper `(segment ...)` of a net as (endpoints, width). Arcs are not used
@@ -805,6 +1569,8 @@ fn net_segments(root: &List, net_id: i64) -> Vec<Seg> {
             bx: e.arg_f64(0).unwrap_or(0.0),
             by: e.arg_f64(1).unwrap_or(0.0),
             w: seg.find_f64("width").unwrap_or(0.0),
+            layer,
+            net: net_id,
         });
     }
     out
