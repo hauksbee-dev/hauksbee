@@ -128,8 +128,8 @@ Time-based co-sim results rest on the emulator advancing at the part's clock
 rate. `simavr:atmega328p`, `renode:rp2040`, `renode:stm32f103`,
 `renode:stm32f4_discovery` and `renode:nrf52840` are each measured at the part's
 rate to within the 0.2% quantization of the measurement, and
-`crates/hauksbee-mcu/tests/clock_truth.rs` re-measures the three Renode STM32 and
-nRF parts on every run. Four platforms previously ran 4.5x to 9x fast, because
+`crates/hauksbee-mcu/tests/clock_truth.rs` re-measures the Renode STM32, nRF and
+FE310 parts on every run. Four platforms previously ran 4.5x to 9x fast, because
 the stock platform file declared a 72 MHz SysTick and a 100 MIPS core whatever
 part the descriptor claimed, and `frequency_hz` cancelled out of the engine's
 arithmetic so nothing disagreed. Each descriptor now declares the part's
@@ -137,15 +137,21 @@ reset-default core clock inline, and the loader refuses a descriptor whose
 declarations disagree with `frequency_hz` or which declares no core clock at all,
 bundled platforms included, so the defect cannot be re-added as data.
 
-Two gaps remain. `qemu:esp32`, `-s3` and `-c3` run 1.35x to 1.45x slow and the
-figure is host-load dependent by construction: the guest keeps running during the
-QMP `cont` and `stop` round trips and that slack is uncredited, and a requested
-5 ms boot chunk runs 8 ms of guest time while the engine credits 5 ms. Treat
-ESP32 virtual time as approximate to within tens of percent.
-`renode:sifive_fe310` has its core clock corrected from 100 MIPS to the part's
-16 MHz, but a RISC-V part has no SysTick and the stock platform's CLINT frequency
-disagrees with the real FE310's 32768 Hz `mtime`, so there is no silicon-exact
-reference on that part to assert against: it is corrected rather than gated.
+The two former gaps here are closed and gated. `renode:sifive_fe310` now
+declares the real FE310's 32768 Hz `mtime` (the stock platform had it 1892x
+wrong at 62 MHz), held by a two-sided measurement in the same clock-truth
+suite: an mtime-timed oracle firmware measures 1.00x on the corrected platform
+and the identical measurement fails loudly against the old rate. `qemu:esp32`,
+`-s3` and `-c3` credit each chunk from the measured QMP RESUME/STOP window
+instead of the slept one, so the control-channel slack that used to make them
+read 1.35x-1.6x biased is now priced in
+(`crates/hauksbee-mcu/tests/qemu_clock_truth.rs` measures both crediting
+schemes from one run). What remains on the ESP32 family is wall-clock pacing
+itself: virtual time tracks the host clock only approximately and degrades
+under load, which every affected run states through the same
+`timing_limitation` coverage channel the watchdog gaps use. The STM32F103's
+TIMx blocks likewise stay at the post-PLL 72 MHz on purpose (a stock HAL
+project cannot boot otherwise) and every F103 run says so.
 
 One trap worth keeping, because it hides the defect in the flattering direction:
 the GPIO poll aliases any half-period near the chunk width. At 5 ms chunks the

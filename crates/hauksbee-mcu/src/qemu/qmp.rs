@@ -227,20 +227,31 @@ impl Qmp {
     /// `None` must be treated as "unmeasured", never as "zero".
     ///
     /// The drain keeps going until the pair is ORDERED (stop after resume),
-    /// not merely present: a stale STOP that slipped past
-    /// [`Qmp::clear_run_events`]'s buffer drain fills the slot with a
-    /// timestamp older than this chunk's RESUME, and stopping there would
-    /// return `None` while the real STOP sits buffered, silently restoring
-    /// the uncredited-slack bias for this chunk AND arming the next one with
-    /// another stale event. Timestamps are monotone and `note_event` keeps
-    /// the newest, so waiting for order converges on the true pair.
+    /// not merely present: a stale STOP still buffered from an earlier chunk
+    /// (see [`Qmp::clear_run_events`]) fills the slot with a timestamp older
+    /// than this chunk's RESUME, and stopping there would return `None` while
+    /// the real STOP sits buffered, silently restoring the uncredited-slack
+    /// bias for this chunk AND arming the next one with another stale event.
+    /// Timestamps are monotone and `note_event` keeps the newest, so waiting
+    /// for order converges on the true pair.
     pub fn measured_run_window(&mut self, grace: Duration) -> Option<Duration> {
         let deadline = Instant::now() + grace;
         let ordered = |resume: Option<f64>, stop: Option<f64>| matches!((resume, stop), (Some(r), Some(s)) if s > r);
         while !ordered(self.event_resume, self.event_stop) && Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
+            // The socket's standing read timeout is 200 ms, so a read entered
+            // with a few ms of grace left would still block the full 200 ms
+            // and the advertised bound would be fiction: shrink the OS
+            // timeout to the remaining grace for this read, restore after.
+            self.stream
+                .set_read_timeout(Some(remaining.min(Duration::from_millis(200))))
+                .ok();
             // A read timeout just means no more messages are in flight.
-            let Ok(msg) = self.read_message(remaining) else {
+            let res = self.read_message(remaining);
+            self.stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .ok();
+            let Ok(msg) = res else {
                 break;
             };
             self.note_event(&msg);
