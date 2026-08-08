@@ -98,15 +98,23 @@ conservative for both surface-mount and through-hole parts:
 |--------------------|--------|-------|
 | Recognised imperial chip size code | the table above | `ChipPackage` |
 | Metric-only chip code (`R_3216Metric` = imperial 1206) | the imperial equivalent | `ChipPackage` |
-| Through-hole axial body (`THT`, `Axial`, `DIN0…`) | 1/4 W | `ThtAxial` |
-| Surface-mount, size code unrecognised | 1/16 W | `UnknownSmdFloor` |
-| No readable package at all | none derived | `Unknown` |
+| Recognised small axial body (`Axial`, `DIN0…`) | 1/4 W | `ThtAxial` |
+| Anything else, including an unrecognised SMD size or a `Power` axial | none derived | `Unknown` |
 
-The metric table is consulted **only after** the imperial pass fails, which is
-what keeps the known collisions safe (imperial 0201 is metric 0603, imperial
-01005 is metric 0402). Without it a `R_3216Metric` (a 1/4 W 1206) fell to the
-1/16 W unknown-SMD floor, a 4x under-rating that invents overpower faults on
-correct designs.
+A metric-only name is read **before** the imperial pass, and a name carrying a
+separate imperial token is left to it. That ordering is what keeps both cases
+right: `R_0402Metric` is metric 0402, an imperial 01005 at 1/32 W (reading its
+`0402` as imperial rates it 1/16 W, double its real limit), while KiCad's dual
+form `R_0201_0603Metric` must be read from its imperial `0201` at 1/20 W, not
+from the metric `0603`.
+
+There is **no floor for an unrecognised size**, because no direction is
+conservative. A 1/4 W default exceeds a real 0402 (1/16 W) by 4x and suppresses
+genuine overpower findings. A 1/16 W floor undercuts everything above the
+smallest and invents them: a real 0603 behind a custom footprint name dissipating
+80 mW sits inside its 100 mW rating but outside a guessed 62.5 mW one. So the size
+is either read or the part abstains and is named. A `Power` axial abstains for the
+same reason (those bodies are 1 W and up).
 
 **Only resistors get a footprint-derived wattage.** `ComponentKind::Passive` also
 covers capacitors, inductors and ferrite beads, whose limits are current and

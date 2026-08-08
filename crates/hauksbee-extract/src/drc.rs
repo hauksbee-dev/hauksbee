@@ -494,12 +494,18 @@ pub struct DrcReport {
     /// results. `None` on a validated version (no behaviour change).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_warning: Option<String>,
-    /// How many Zone-versus-Pad overlaps were suppressed as antipad carves
-    /// rather than reported as shorts. The suppression is deliberate and
-    /// well-founded (see the note at the suppression site), but it silences a
-    /// whole finding class, and a silenced class the user cannot see is
-    /// indistinguishable from a clean board. Surfaces disclose this via
-    /// [`DrcReport::suppression_note`].
+    /// How many Zone-versus-Pad **primitive pairs** were suppressed as antipad
+    /// carves rather than reported as shorts.
+    ///
+    /// A pair, not a distinct overlap: a zone's boundary is indexed edge by edge,
+    /// so one keyhole carve around one pad contributes several pairs. The number
+    /// is therefore an upper bound on the physical overlaps involved, and the
+    /// disclosure says so rather than presenting it as a pad count.
+    ///
+    /// The suppression is deliberate and well-founded (see the note at the
+    /// suppression site), but it silences a whole finding class, and a silenced
+    /// class the user cannot see is indistinguishable from a clean board.
+    /// Surfaces disclose this via [`DrcReport::suppression_note`].
     #[serde(default, skip_serializing_if = "is_zero_usize")]
     pub zone_pad_overlaps_suppressed: usize,
 }
@@ -576,7 +582,9 @@ impl DrcReport {
     pub fn suppression_note(&self) -> Option<String> {
         (self.zone_pad_overlaps_suppressed > 0).then(|| {
             format!(
-                "drc: {} zone-versus-pad overlap(s) were suppressed, not evaluated as shorts. \
+                "drc: {} zone-versus-pad primitive pair(s) were suppressed, not evaluated as \
+                 shorts (a zone boundary is indexed edge by edge, so one carve around one pad \
+                 contributes several pairs; this is an upper bound, not a pad count). \
                  A pad overlapping a different-net pour is nearly always the antipad carve \
                  (KiCad-10 keyhole fills draw that carve with slits running through the pad \
                  interior), so this class is dropped wholesale to avoid a false-positive \

@@ -252,10 +252,6 @@ pub enum ResistorPowerBasis {
     ChipPackage,
     /// A recognised through-hole axial body: the 1/4 W industry default.
     ThtAxial,
-    /// An SMD footprint whose size code was not recognised. Rated at the
-    /// smallest chip resistor anyone ships (1/16 W), which is a floor, not a
-    /// measurement.
-    UnknownSmdFloor,
     /// No usable package evidence at all. No rating is derived, and the device
     /// is reported as an uncovered gap instead of being handed a number.
     Unknown,
@@ -274,26 +270,36 @@ pub struct ResistorPower {
 /// chip-resistor ratings: 01005 1/32 W, 0201 1/20 W, 0402 1/16 W, 0603 1/10 W,
 /// 0805 1/8 W, 1206 1/4 W.
 ///
-/// ## Why the unknown case is not 1/4 W
+/// ## Why an unrecognised package gets no rating
 ///
-/// The fallback used to be a flat 1/4 W "conservative" default for anything
-/// unrecognised. It is the opposite of conservative on an SMD board: 1/4 W
-/// **exceeds** the real rating of an 0402 (1/16 W) by 4x and an 0603 (1/10 W) by
-/// 2.5x, so a genuinely overstressed chip resistor whose footprint string was
-/// not recognised had its overpower check silently suppressed. The conservative
-/// floor for a chip resistor is the smallest one anyone ships, 1/16 W.
+/// A flat "conservative" default for anything unrecognised cannot exist, because
+/// there is no direction that is safe. A 1/4 W default **exceeds** the real
+/// rating of an 0402 (1/16 W) by 4x and an 0603 (1/10 W) by 2.5x, so it silently
+/// suppresses genuine overpower findings. A 1/16 W floor **undercuts** every part
+/// above the smallest, so it invents overpower faults on correct designs: a real
+/// 0603 behind a custom footprint name dissipating 80 mW is inside its 100 mW
+/// rating but outside a guessed 62.5 mW one.
 ///
-/// A through-hole axial body really is 1/4 W by default, so it keeps that
-/// rating: applying the 1/16 W chip floor to an axial resistor would invent
-/// overpower faults on correct designs. When the footprint says neither (no
-/// package evidence at all), nothing is derived: the device becomes a named
-/// coverage gap, because guessing in either direction is wrong.
+/// So the size is either read or the part abstains. A recognised chip code (by
+/// imperial or metric token) gives the standard rating; a recognised small axial
+/// body gives its genuine 1/4 W; everything else derives nothing and becomes a
+/// named coverage gap naming the unlock.
 pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     let f = footprint.to_ascii_uppercase();
     let chip = |w: f64| ResistorPower {
         watts: Some(w),
         basis: ResistorPowerBasis::ChipPackage,
     };
+    // A name carrying ONLY a metric code must be read as metric, before the
+    // imperial pass gets to it. "R_0402Metric" is metric 0402, an imperial
+    // 01005 at 1/32 W; letting `contains("0402")` claim it rates the part
+    // 1/16 W, double its real limit, and suppresses genuine overpower findings.
+    // KiCad's dual form ("R_0201_0603Metric") carries a separate imperial token
+    // and is deliberately left to the imperial pass below, which is what keeps
+    // the 0201-is-metric-0603 collision correct.
+    if let Some(w) = metric_only_chip_rating(&f) {
+        return chip(w);
+    }
     // Match the imperial size token anywhere in the footprint string
     // (e.g. "Resistor_SMD:R_0402_1005Metric"). The imperial code is paired with
     // its metric code, and the metric code of a small part collides with the
@@ -323,24 +329,22 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
         chip(1.0)
     } else if f.contains("2220") {
         chip(1.0)
-    } else if let Some(w) = metric_chip_rating(&f) {
-        // A metric-only name ("R_3216Metric" is an imperial 1206). Without this,
-        // a 1/4 W part fell to the 1/16 W unknown-SMD floor, a 4x under-rating
-        // that invents overpower faults on correct designs.
-        chip(w)
-    } else if is_tht_axial_footprint(&f) {
-        // A real axial body: 1/4 W is the genuine industry default here.
+    } else if is_tht_axial_footprint(&f) && !f.contains("POWER") {
+        // A recognised small axial body (DIN0204 / DIN0207 class): 1/4 W is the
+        // genuine industry default. Bodies whose name says POWER are 1 W and up
+        // and fall through to the abstention, because guessing 1/4 W for a 1 W
+        // part invents faults on a correct design.
         ResistorPower {
             watts: Some(1.0 / 4.0),
             basis: ResistorPowerBasis::ThtAxial,
         }
-    } else if is_smd_footprint(&f) {
-        // Known-SMD but unrecognised size: the smallest chip resistor shipped.
-        ResistorPower {
-            watts: Some(1.0 / 16.0),
-            basis: ResistorPowerBasis::UnknownSmdFloor,
-        }
     } else {
+        // The package class may be known but its SIZE is not, or nothing is known
+        // at all. Either way there is no rating to derive: a real 0603 behind a
+        // custom footprint name is a 1/10 W part, and handing it any floor either
+        // invents an overpower fault (if the floor is lower than the truth) or
+        // suppresses a real one (if it is higher). It becomes a named coverage
+        // gap instead, which is the honest form of not knowing.
         ResistorPower {
             watts: None,
             basis: ResistorPowerBasis::Unknown,
@@ -354,28 +358,50 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
 /// well-known collisions safe: an imperial 0201 is metric 0603 and an imperial
 /// 01005 is metric 0402, so a metric code must never be consulted while an
 /// imperial token is still available.
-fn metric_chip_rating(f: &str) -> Option<f64> {
+fn metric_only_chip_rating(f: &str) -> Option<f64> {
     // (metric code, imperial equivalent, rating W)
     const TABLE: &[(&str, f64)] = &[
-        ("0402METRIC", 1.0 / 32.0), // imperial 01005
-        ("0603METRIC", 1.0 / 20.0), // imperial 0201
-        ("1005METRIC", 1.0 / 16.0), // imperial 0402
-        ("1608METRIC", 1.0 / 10.0), // imperial 0603
-        ("2012METRIC", 1.0 / 8.0),  // imperial 0805
-        ("3216METRIC", 1.0 / 4.0),  // imperial 1206
-        ("3225METRIC", 1.0 / 2.0),  // imperial 1210
-        ("5025METRIC", 3.0 / 4.0),  // imperial 2010
-        ("6332METRIC", 1.0),        // imperial 2512
-        ("4532METRIC", 1.0),        // imperial 1812
-        ("5750METRIC", 1.0),        // imperial 2220
+        ("0402", 1.0 / 32.0), // imperial 01005
+        ("0603", 1.0 / 20.0), // imperial 0201
+        ("1005", 1.0 / 16.0), // imperial 0402
+        ("1608", 1.0 / 10.0), // imperial 0603
+        ("2012", 1.0 / 8.0),  // imperial 0805
+        ("3216", 1.0 / 4.0),  // imperial 1206
+        ("3225", 1.0 / 2.0),  // imperial 1210
+        ("5025", 3.0 / 4.0),  // imperial 2010
+        ("6332", 1.0),        // imperial 2512
+        ("4532", 1.0),        // imperial 1812
+        ("5750", 1.0),        // imperial 2220
     ];
-    let squashed: String = f
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != '_')
-        .collect();
+    // The metric code is the digit run immediately before "METRIC".
+    let idx = f.find("METRIC")?;
+    let metric: String = {
+        let head: Vec<char> = f[..idx].chars().collect();
+        let mut digits: Vec<char> = head
+            .iter()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .copied()
+            .collect();
+        digits.reverse();
+        digits.into_iter().collect()
+    };
+    if metric.is_empty() {
+        return None;
+    }
+    // If any OTHER digit run appears in the name, this is the dual-code form and
+    // the imperial token is authoritative; leave it to the imperial pass.
+    let others = f
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|t| !t.is_empty())
+        .filter(|t| *t != metric.as_str())
+        .count();
+    if others > 0 {
+        return None;
+    }
     TABLE
         .iter()
-        .find(|(code, _)| squashed.contains(code))
+        .find(|(code, _)| *code == metric.as_str())
         .map(|(_, w)| *w)
 }
 
@@ -386,11 +412,6 @@ fn is_tht_axial_footprint(f: &str) -> bool {
     // Note: RADIAL is deliberately absent. `CP_Radial_*` is an electrolytic
     // capacitor body, and this function must not hand it a resistor wattage.
     f.contains("AXIAL") || f.contains("DIN0") || f.contains("BARE_METAL") || f.contains("THT")
-}
-
-/// Whether an (already uppercased) footprint names a surface-mount body.
-fn is_smd_footprint(f: &str) -> bool {
-    f.contains("SMD") || f.contains("CHIP") || f.contains("SMT")
 }
 
 /// Strip a multi-unit stamping suffix from a device name, yielding the package
@@ -1467,18 +1488,67 @@ mod monitor_temp_tests {
     }
 
     #[test]
-    fn unknown_smd_package_falls_to_the_real_floor_not_a_quarter_watt() {
-        // An SMD chip resistor whose size code is not in the table. The old 1/4 W
-        // fallback EXCEEDS a real 0402 (1/16 W) by 4x and an 0603 (1/10 W) by
-        // 2.5x, so an overstressed part sailed through. The conservative floor is
-        // the smallest chip resistor anyone ships.
-        let r = resistor_power_from_footprint("Resistor_SMD:R_0475_WeirdMetric");
-        assert_eq!(r.basis, ResistorPowerBasis::UnknownSmdFloor);
+    fn an_unrecognised_smd_size_derives_nothing_rather_than_guessing() {
+        // A 1/4 W default exceeds a real 0402 (1/16 W) by 4x and suppresses
+        // genuine findings; a 1/16 W floor undercuts everything above the
+        // smallest and invents them. No direction is conservative, so the size is
+        // either read or the part abstains.
+        let r = resistor_power_from_footprint("Resistor_SMD:R_CustomHouseFootprint");
+        assert_eq!(r.basis, ResistorPowerBasis::Unknown);
         assert!(
-            (r.watts.unwrap() - 1.0 / 16.0).abs() < 1e-12,
-            "unknown SMD must floor at 1/16 W, got {:?}",
+            r.watts.is_none(),
+            "an unreadable size must derive no rating, got {:?}",
             r.watts
         );
+        // And the abstention is visible, naming the part and the unlock.
+        let meta = passive("R9", "Resistor_SMD:R_CustomHouseFootprint");
+        let gap = meta.power_coverage_gap().expect("a named gap");
+        assert!(gap.contains("R9") && gap.contains("BOM"), "{gap}");
+    }
+
+    #[test]
+    fn a_metric_only_code_is_read_as_metric_not_imperial() {
+        // "R_0402Metric" is metric 0402, an imperial 01005 at 1/32 W. Reading the
+        // 0402 as imperial rates it 1/16 W, double its real limit, and suppresses
+        // real overpower findings. Same for metric 0603 (imperial 0201, 1/20 W).
+        for (f, want) in [
+            ("Resistor_SMD:R_0402Metric", 1.0 / 32.0),
+            ("Resistor_SMD:R_0603Metric", 1.0 / 20.0),
+            ("Resistor_SMD:R_1005Metric", 1.0 / 16.0),
+            ("Resistor_SMD:R_3216Metric", 1.0 / 4.0),
+        ] {
+            let r = resistor_power_from_footprint(f);
+            assert_eq!(r.basis, ResistorPowerBasis::ChipPackage, "{f}");
+            assert!(
+                (r.watts.unwrap() - want).abs() < 1e-12,
+                "{f} must rate {want} W, got {:?}",
+                r.watts
+            );
+        }
+        // KiCad's dual form carries a separate imperial token, which stays
+        // authoritative: 0201 imperial (1/20 W), NOT 0603 metric read as imperial.
+        for (f, want) in [
+            ("Resistor_SMD:R_0201_0603Metric", 1.0 / 20.0),
+            ("Resistor_SMD:R_01005_0402Metric", 1.0 / 32.0),
+            ("Resistor_SMD:R_0402_1005Metric", 1.0 / 16.0),
+            ("Resistor_SMD:R_1206_3216Metric", 1.0 / 4.0),
+        ] {
+            let r = resistor_power_from_footprint(f);
+            assert!(
+                (r.watts.unwrap() - want).abs() < 1e-12,
+                "{f} must rate {want} W from its imperial token, got {:?}",
+                r.watts
+            );
+        }
+    }
+
+    #[test]
+    fn a_power_axial_body_does_not_get_the_quarter_watt_default() {
+        // A "Power" axial is 1 W and up. Handing it 1/4 W invents faults on a
+        // correct design, so it abstains like any other unknown size.
+        let r = resistor_power_from_footprint("Resistor_THT:R_Axial_Power_L11.9mm_W4.5mm_P15.24mm");
+        assert_eq!(r.basis, ResistorPowerBasis::Unknown);
+        assert!(r.watts.is_none(), "got {:?}", r.watts);
     }
 
     fn passive(reference: &str, footprint: &str) -> DeviceMeta {
@@ -1570,7 +1640,7 @@ mod monitor_temp_tests {
         // overpower faults on correct through-hole designs.
         for f in [
             "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
-            "Resistor_THT:R_Axial_Power_L11.9mm_W4.5mm_P15.24mm",
+            "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal",
         ] {
             let r = resistor_power_from_footprint(f);
             assert_eq!(r.basis, ResistorPowerBasis::ThtAxial, "{f}");
@@ -1613,8 +1683,8 @@ mod monitor_temp_tests {
         // The gap list must stay empty on ordinary boards, or it is noise.
         for f in [
             "Resistor_SMD:R_0402_1005Metric",
+            "Resistor_SMD:R_3216Metric",
             "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
-            "Resistor_SMD:R_0475_WeirdMetric",
         ] {
             let meta = DeviceMeta {
                 reference: "R1".into(),

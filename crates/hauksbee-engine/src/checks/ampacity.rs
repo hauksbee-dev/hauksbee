@@ -907,12 +907,12 @@ pub fn append_ampacity(
             check: SiCheck::TraceAmpacity,
             severity: SiSeverity::High,
             message: format!(
-                "net '{}' narrowest routed trace {:.2} mm carries a cited {:.2} A but IPC-2221 \
-                 rates that width at only {:.2} A ({}, {:.0} C rise); needs >= {:.2} mm. \
+                "net '{}' carries a cited {:.2} A, but its lowest-rated routed trace is {:.2} mm \
+                 and IPC-2221 rates that at only {:.2} A ({}, {:.0} C rise); needs >= {:.2} mm. \
                  Attributed from: {}",
                 f.net,
-                f.min_width_mm,
                 f.cited_current_a,
+                f.bottleneck_width_mm,
                 f.ampacity_a,
                 f.describe_copper(),
                 audit.dt_c,

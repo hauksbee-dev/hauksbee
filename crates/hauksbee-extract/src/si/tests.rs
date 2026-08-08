@@ -63,13 +63,25 @@ fn trace_capacitance_per_mm_matches_transmission_line_physics() {
         (worst - 0.149).abs() < 0.005,
         "40 ohm worst case is ~0.149 pF/mm, got {worst}"
     );
-    // The constant must sit at the conservative (high-C) end of that real range,
-    // never above it and never at a different order of magnitude.
+    // The reported range must bracket the real one: the low end at the
+    // high-impedance (100 ohm) figure that gates findings, the high end at the
+    // worst realistic case. Neither may drift an order of magnitude.
+    let hundred = c_per_mm(2.9, 100.0);
     assert!(
-        super::C_TRACE_PF_PER_MM >= fifty && super::C_TRACE_PF_PER_MM <= worst + 0.005,
-        "C_TRACE_PF_PER_MM {} must lie between the 50 ohm and worst-case figures \
-         [{fifty}, {worst}]",
-        super::C_TRACE_PF_PER_MM
+        (super::C_TRACE_PF_PER_MM_LOW - hundred).abs() < 0.005,
+        "the firing bound {} must be the ~100 ohm figure {hundred}",
+        super::C_TRACE_PF_PER_MM_LOW
+    );
+    assert!(
+        (super::C_TRACE_PF_PER_MM_HIGH - worst).abs() < 0.005,
+        "the reported ceiling {} must be the worst-case figure {worst}",
+        super::C_TRACE_PF_PER_MM_HIGH
+    );
+    // And the 50 ohm nominal must fall inside the reported range, or the range
+    // does not describe real routing at all.
+    assert!(
+        super::C_TRACE_PF_PER_MM_LOW < fifty && fifty < super::C_TRACE_PF_PER_MM_HIGH,
+        "the 50 ohm nominal {fifty} must lie inside the reported range"
     );
 }
 
@@ -548,8 +560,10 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
     // 10k pull, 10 devices = 100 pF: t_r ~ 0.8473*10000*100e-3 = 847 ns, inside
     // the 1000 ns standard-mode limit on pin capacitance ALONE. A 500 mm bus run
     // (an I2C link across a backplane, exactly where rise time bites) adds
-    // 500*0.15 = 75 pF, taking C to 175 pF and t_r to ~1483 ns. Passing None for
-    // the trace length silently rates this in-spec.
+    // 500*0.057 = 28.5 pF even at the LOW end of the trace-capacitance range,
+    // taking C to 128 pF and t_r to ~1089 ns: over the limit on the lenient
+    // bound, which is what firing requires. Passing None for the trace length
+    // silently rates this in-spec.
     let text = i2c_routed_text(10, 500.0);
     let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
     let doc = forge_sexpr::parse(&text).unwrap();
@@ -569,8 +583,9 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
 
 #[test]
 fn i2c_short_routing_leaves_the_same_bus_silent() {
-    // The identical bus routed compactly (10 mm) is 101.5 pF / ~860 ns: in spec.
-    // Counting trace copper must not turn every marginal bus into a finding.
+    // The identical bus routed compactly (10 mm) is 101 pF / ~852 ns even at the
+    // high end of the range: in spec. Counting trace copper must not turn every
+    // marginal bus into a finding.
     let text = i2c_routed_text(10, 10.0);
     let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
     let doc = forge_sexpr::parse(&text).unwrap();
@@ -1171,9 +1186,9 @@ fn bus_capacitance_dedups_a_double_listed_pad() {
     // pin capacitance (2 devices instead of 1), inflating the I2C rise time enough
     // to fire a spurious fast-mode finding. Dedup by (ref, pad number).
     let board = double_listed_board("U1", "SENSOR", 2);
-    let (_pf, devices) = super::bus_capacitance_pf(&board, 1, None);
+    let c = super::bus_capacitance_pf(&board, 1, None);
     assert_eq!(
-        devices, 1,
+        c.devices, 1,
         "a doubly-listed pad must count as one device, not two"
     );
 }
