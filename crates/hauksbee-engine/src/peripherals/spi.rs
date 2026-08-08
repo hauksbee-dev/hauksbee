@@ -230,11 +230,16 @@ impl SpiFramingMode {
 /// net it was traced from (when known), and who supplied that net.
 ///
 /// One value rather than three loose arguments, because they are only meaningful
-/// together. Separately, a caller could pass a pin with no net, or a pin with a
-/// provenance describing a different route, and the coverage would report a tier
-/// justified by evidence nobody actually had. `Option<ResolvedCs>` also says the
-/// thing the old `(Option<pin>, Option<net>)` pair could not: either a chip
-/// select was resolved or it was not.
+/// together: a pin with no net, or a pin labelled with a route that did not
+/// produce it, would have the coverage report a tier justified by evidence nobody
+/// held. `Option<ResolvedCs>` also says the thing the old
+/// `(Option<pin>, Option<net>)` pair could not: either a chip select was resolved
+/// or it was not.
+///
+/// This groups the evidence, it does not police it. The fields are plain data and
+/// any caller inside the workspace can assert whatever it likes; what stops a
+/// fabricated chip-select reaching a real run is the resolution path in
+/// `hauksbee-ci`'s `resolve_cs_pin`, which is the only production constructor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedCs<N> {
     /// The MCU pin `(port, bit)` driving the chip-select net.

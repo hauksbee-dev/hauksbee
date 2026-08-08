@@ -204,6 +204,7 @@ fn the_package_gate_admits_eight_pin_spellings_and_nothing_else() {
         "SO08", // Eagle / Altium
         "SOP8",
         "DIP08",
+        "DIL08",              // Eagle's name for the same DIL package
         "SOIC127P600X175-8N", // IPC generated
     ] {
         assert!(
@@ -225,6 +226,55 @@ fn the_package_gate_admits_eight_pin_spellings_and_nothing_else() {
             "{footprint:?} is not the package this pad map describes and must not bind it"
         );
     }
+}
+
+/// The MCP3008 needs the same package gate for the same reason. A carrier module
+/// ("MCP3008-breakout") routes the IC's pins to a header in whatever order it
+/// likes, so its pad 10 is not the IC's CS; binding the bare-IC map to it would
+/// hand the co-sim a confidently wrong chip-select. And neither rule may match the
+/// prefix of a longer part number.
+#[test]
+fn the_bare_ic_maps_do_not_bind_modules_or_longer_part_numbers() {
+    let lib = ModelLibrary::builtin();
+    let id = |value: &str, footprint: &str| {
+        let q = ComponentQuery {
+            value: Some(value.into()),
+            mpn: Some(value.into()),
+            footprint: Some(footprint.into()),
+            ..Default::default()
+        };
+        lib.resolve(&q).model.map(|m| m.id.clone())
+    };
+
+    assert_eq!(
+        id("MCP3008", "Package_DIP:DIP-16_W7.62mm").as_deref(),
+        Some("mcp3008"),
+        "the bare IC in a 16-pin package must still resolve"
+    );
+    assert_eq!(
+        id(
+            "MCP3008-breakout",
+            "Connector_PinHeader_2.54mm:PinHeader_1x16_P2.54mm"
+        ),
+        None,
+        "a carrier module must not bind the bare-IC pad map: its header pad 10 is \
+         whatever the module routed there, not the IC's chip-select"
+    );
+    assert_eq!(
+        id("MCP3008", ""),
+        None,
+        "with no footprint the package is unknown, so the pad map is unproven"
+    );
+    assert_eq!(
+        id("MCP30081", "Package_DIP:DIP-16_W7.62mm"),
+        None,
+        "the rule must not match the prefix of a longer number"
+    );
+    assert_eq!(
+        id("25LC25600", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"),
+        None,
+        "nor must the 25xx rule; a digit-count bound alone does not stop a 5-digit number"
+    );
 }
 
 /// A real board often carries a generic Value ("ADC", "EEPROM") with the actual
