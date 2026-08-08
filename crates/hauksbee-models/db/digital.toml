@@ -1517,3 +1517,72 @@ disable = [
 # luminous intensities but NOT the pin-number-to-signal map, and the 2020
 # footprint is not the 5050 one, so even the pinout is unknown for that part.
 # It stays unresolved on the stronger ground that nothing about it was verified.
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 25xx SPI SERIAL EEPROM (Microchip 25AA / 25LC families).
+#
+# SAME REASON AS THE MCP3008 ENTRY IN db/dac_adc.toml: the memory behaviour is
+# `hauksbee_engine::Spi25Eeprom`, reached over the `spi_eeprom` peripheral kind,
+# and nothing about it lives in this entry. What this entry contributes is the
+# pad map, and the `cs` role in it is what lets a run spec naming this part as
+# its SPI peripheral's `ref` frame transactions on the real chip-select edges
+# instead of the chunk-boundary heuristic. See `SpiFramingMode` in
+# crates/hauksbee-engine/src/peripherals/spi.rs for what the heuristic gets
+# wrong.
+#
+# WHY `kind = "digital"` FOR A MEMORY. There is no memory kind, and the honest
+# options were this or nothing. `digital` with no `[models.logic]` block stamps
+# no drivers and synthesises no logic (the passthrough synthesiser needs paired
+# `a<n>`/`y<n>` roles and finds none here), so the part is bound and inert:
+# exactly the "contributes its pad map, claims nothing electrical" position the
+# MCP3008 entry takes. It is NOT modelled as a buffer, and its SO pin is not
+# driven by anything in the analogue solve.
+#
+# WHY THE MATCH IS NARROW. Restricted to the Microchip 25AA/25LC part numbers,
+# whose 8-pin pinout below is verified. Atmel/Microchip AT25 SPI EEPROM and most
+# 25-series SPI NOR flash share this pinout in practice, but "in practice" is not
+# a datasheet, and a wrong pad map here would put the `cs` role on a pin that is
+# not chip-select and hand the co-sim a confidently-wrong frame. A family whose
+# sheet has been read can be added to the regex.
+[[models]]
+id = "eeprom_25xx_spi"
+kind = "digital"
+description = "25AA/25LC SPI serial EEPROM, 8-pin PDIP/SOIC/TSSOP/MSOP (pad map only)"
+
+[models.match]
+# Left UNANCHORED at the end on purpose: a real Value/MPN field carries the
+# temperature and package suffix ("25LC256-I/SN", "25AA010A-I/OT"), so a `$` here
+# would match the bare part number in a test and nothing on an actual board. The
+# {3,4}-digit bound is what keeps the rule from swallowing neighbours.
+value_re = "(?i)^25(AA|LC)[0-9]{3,4}"
+mpn_re   = "(?i)^25(AA|LC)[0-9]{3,4}"
+
+# Pad->role map, Microchip 25LC256 datasheet DS22065 Section 2.0 (Pin
+# Descriptions) and Figure 2-1; identical across the 25AA/25LC 8-pin packages:
+# CS = 1, SO = 2, WP = 3, VSS = 4, SI = 5, SCK = 6, HOLD = 7, VCC = 8.
+# CS, WP and HOLD are active LOW on the part (overbarred on the sheet), hence the
+# `_n` suffixes; `cs` itself carries no suffix because that is the role string
+# the binder's chip-select lookup asks for, and the active-low sense is the
+# engine's (`cs_assert` fires on the falling edge).
+#
+# SI/SO are named from the CONTROLLER's side (`mosi`/`miso`) rather than the
+# datasheet's, for the reason crates/hauksbee-models/tests/pin_roles.rs records:
+# a model that names its pins in the datasheet's vocabulary matches, loads, and
+# then resolves to nothing.
+[models.pins]
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "vss"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# DS22065 Section 1.0 Absolute Maximum Ratings: VCC 6.5 V, and 5 mA output
+# current on SO. The per-pin figure is the SO drive, which is the only pin on the
+# part that sources current.
+max_pin_current_a = 0.005
+max_voltage_v = 6.5
