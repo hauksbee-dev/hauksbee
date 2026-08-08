@@ -109,7 +109,7 @@ fn transaction_spanning_a_chunk_boundary_is_not_reset() {
         bus.frames_itself(),
         "a resolved CS pin means the bus frames itself"
     );
-    assert_eq!(bus.framing_mode(), SpiFramingMode::Exact);
+    assert_eq!(bus.framing_mode().as_str(), "exact");
 
     // Begin a READ transaction and clock the first two bytes (instruction + high
     // address). This is the state a chunk boundary can fall into.
@@ -180,7 +180,7 @@ fn framing_mode_reflects_the_cs_source() {
 
     // Resolved CS pin: exact.
     bus.set_cs_pin(Some(('D', 4)));
-    assert_eq!(bus.framing_mode(), SpiFramingMode::Exact);
+    assert_eq!(bus.framing_mode().as_str(), "exact");
     assert!(bus.frames_itself());
     assert_eq!(bus.framing_mode().as_str(), "exact");
 

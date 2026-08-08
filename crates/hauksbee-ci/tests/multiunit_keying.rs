@@ -68,6 +68,7 @@ fn outcome_with(peak_temp_c: HashMap<String, f64>, faults: Vec<RunFault>) -> Run
         dead_rails: Vec::new(),
         unexercised_bus_ids: Default::default(),
         spi_framing: Default::default(),
+        spi_cs_provenance: Default::default(),
     }
 }
 

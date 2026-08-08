@@ -141,6 +141,7 @@ pub fn build_cosim_json(
             .map(|(bus, mode)| crate::result::CosimSpiFraming {
                 bus,
                 mode: mode.as_str().to_string(),
+                cs_provenance: mode.cs_provenance().map(|p| p.as_str().to_string()),
             })
             .collect(),
         adc_dropped: sched
@@ -218,7 +219,8 @@ pub fn heuristic_framing_warnings(
                 "SPI bus '{bus}' ran on HEURISTIC transaction framing (no chip-select \
                  edge available): boundaries are guessed at chunk edges; two \
                  transactions in one chunk merge, and one spanning a boundary is \
-                 truncated. Wire cs_net for exact framing."
+                 truncated. Declare cs_net on the peripheral, or point it at a board \
+                 component whose model maps a `cs` pin, for exact framing."
             )
         })
         .collect()
@@ -711,7 +713,14 @@ mod tests {
         use crate::peripherals::SpiFramingMode;
         let framing = vec![
             ("ADC1".to_string(), SpiFramingMode::Heuristic),
-            ("FLASH1".to_string(), SpiFramingMode::Exact),
+            (
+                "FLASH1".to_string(),
+                SpiFramingMode::Exact(crate::peripherals::CsProvenance::SpecDeclared),
+            ),
+            (
+                "EE1".to_string(),
+                SpiFramingMode::Exact(crate::peripherals::CsProvenance::ModelRoles),
+            ),
             ("IMU1".to_string(), SpiFramingMode::Backend),
         ];
         let warnings = heuristic_framing_warnings(&framing);

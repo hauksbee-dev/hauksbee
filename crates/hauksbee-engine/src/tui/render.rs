@@ -634,7 +634,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                 if !u.heuristic_spi_buses.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!(
-                            "SPI framing is heuristic on [{}]: transaction boundaries are guessed at chunk edges (wire cs_net in the spec for exact framing)",
+                            "SPI framing is heuristic on [{}]: transaction boundaries are guessed at chunk edges (declare cs_net, or point the peripheral at a board component whose model maps a cs pin, for exact framing)",
                             u.heuristic_spi_buses.join(", ")
                         ),
                         Style::default().fg(Color::Yellow),
