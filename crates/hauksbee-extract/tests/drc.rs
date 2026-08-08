@@ -1142,7 +1142,7 @@ const CUSTOM_PRIMITIVE_ZOO_PAD: &str = r#"
     (pad "1" smd custom (at 0 0) (size 1 1) (layers "F.Cu") (net 2)
       (options (clearance outline) (anchor circle))
       (primitives
-        (gr_line (start 3 0) (end 5 0) (width 0.4))
+        (gr_line (start 3 0) (end 5 0) (stroke (width 0.4)))
         (gr_circle (center -5 0) (end -3 0) (width 0.4))
         (gr_circle (center 0 -5) (end 1 -5) (width 0.2) (fill yes))
         (gr_rect (start 7 -1) (end 9 1) (width 0.2))
@@ -1364,4 +1364,19 @@ fn custom_pad_nonsquare_anchor_is_a_stadium_not_a_disc() {
 "#
     );
     assert_short(&drc(&end_cap), "A", "B");
+}
+
+#[test]
+fn custom_pad_arc_covering_inflation_keeps_an_exact_edge_touch_a_short() {
+    // The zoo arc (centre (0, 6), radius 2, stroke 0.4: true outer edge at
+    // 2.2 from the centre). A track whose copper tip reaches 0.5 um INTO
+    // that edge, aimed at +2.8125 degrees from the centre - a mid-chord of
+    // the 32-segment sagitta-bounded chain, where densified-but-uninflated
+    // vertices would still sag ~2.4 um inward and read this overlap as a
+    // positive gap (a clearance note, not a short). The covering inflation
+    // must keep it a short.
+    let track = r#"
+  (segment (start 2.246789 6.110378) (end 2.996385 6.147204) (width 0.1) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
 }
