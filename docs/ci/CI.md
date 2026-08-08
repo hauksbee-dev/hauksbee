@@ -345,7 +345,7 @@ case is a corner, so a green corner run bounds it. For non-monotonic responses
 (filters peaking mid-band, matched pairs) the interior can be worse than any
 corner.
 
-That assumption is checked rather than assumed. Alongside the corners, corner
+That condition is not left as a caveat with nothing behind it. Alongside the corners, corner
 mode runs a small stratified **Latin-hypercube sample of the interior**: 4
 probes for one toleranced component, 6 for two, 8 from three up, so the check
 is a bounded handful of extra runs and never a multiple of the corner set. An
