@@ -829,15 +829,22 @@ const C_PIN_PF: f64 = 10.0;
 // matters, and the split follows the module's standing rule that a check fires
 // only when even the most LENIENT assumption is violated:
 //
-//   - the LOW figure decides whether to fire, so a bus is never failed on an
+//   - the LOW figure decides whether to fire, so a bus is not failed on an
 //     assumed geometry it may not have;
 //   - the HIGH figure is reported alongside it, so the reader sees the worst
 //     case the geometry permits.
 
-/// Low end of the trace-capacitance range (pF/mm): a 100 ohm route on FR4.
-/// Findings are gated on this, so the check cannot fail a bus that a
-/// high-impedance route would keep in spec.
-const C_TRACE_PF_PER_MM_LOW: f64 = 0.057;
+/// Low end of the trace-capacitance range (pF/mm): a thin 2-layer route over a
+/// distant plane, `Er_eff 2.9` at 150 ohm. Findings are gated on this, so a bus
+/// is not failed on a capacitance a high-impedance route would not have.
+///
+/// This is the low end of the range hauksbee is willing to reason about, not a
+/// proof that no route can be lower: impedance rises without bound as a trace
+/// narrows and its plane recedes, and the 10 pF per device pin beside it is a
+/// datasheet-typical figure rather than a floor either. The messages say "the low
+/// end of the plausible range" for exactly that reason, and never call it the
+/// lowest possible.
+const C_TRACE_PF_PER_MM_LOW: f64 = 0.038;
 /// High end of the trace-capacitance range (pF/mm): `Er_eff 3.2` at 40 ohm, the
 /// widest, closest-coupled realistic case. Reported, never used to fire.
 const C_TRACE_PF_PER_MM_HIGH: f64 = 0.15;
@@ -1050,8 +1057,8 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
                 severity: sev,
                 message: format!(
                     "I2C {role} '{}': pull-up {:.0} ohm x bus {} pF ({}) gives t_r ~ {:.0} ns \
-                     even at the lowest trace capacitance in range (up to {:.0} ns at the \
-                     highest), over the {} limit {:.0} ns",
+                     at the LOW end of the plausible trace-capacitance range (up to {:.0} ns at \
+                     the high end), over the {} limit {:.0} ns",
                     net.name,
                     r,
                     range_0dp(c.low_pf, c.high_pf),
@@ -1572,10 +1579,12 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
         let (ex, ey) = (e.arg_f64(0).unwrap_or(0.0), e.arg_f64(1).unwrap_or(0.0));
         total += ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
     }
-    // Arcs: approximate by the chord plus a small bulge is overkill; use the
-    // straight chord between start and end (KiCad arcs on a diff pair are gentle
-    // and the chord under-estimates by < a few percent, which is well inside the
-    // skew tolerance and documented).
+    // Arcs carry their true swept length, computed from KiCad's start/mid/end
+    // triple. The chord is NOT a usable approximation: it is exact only in the
+    // limit of a straight arc and under-reports a quarter turn by 10% and a
+    // semicircle by 36% (chord 2r against arc pi*r). Copper that goes missing
+    // here under-reports both I2C bus capacitance and USB intra-pair skew, so a
+    // curve-heavy route would read as shorter than it is.
     for arc in root.find_all("arc") {
         if elem_net_id(arc, &by_name) != Some(net_id) {
             continue;
@@ -1585,9 +1594,47 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
         };
         let (sx, sy) = (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0));
         let (ex, ey) = (e.arg_f64(0).unwrap_or(0.0), e.arg_f64(1).unwrap_or(0.0));
-        total += ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
+        let mid = arc
+            .find("mid")
+            .and_then(|m| Some((m.arg_f64(0)?, m.arg_f64(1)?)));
+        total += match mid {
+            Some((mx, my)) => arc_length_mm((sx, sy), (mx, my), (ex, ey)),
+            // No mid point recorded: the chord is all the file gives us. It is a
+            // floor on the real length, never an over-estimate.
+            None => ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt(),
+        };
     }
     total
+}
+
+/// True length (mm) of the circular arc through `start`, `mid`, `end`.
+///
+/// KiCad stores a track arc as those three points. The circumcentre gives the
+/// radius, and the swept angle is the sum of the two half-sweeps start->mid and
+/// mid->end, which is what makes this correct for a major arc (over 180 degrees)
+/// as well as a minor one: summing halves cannot wrap the way a single
+/// start-to-end angle does.
+///
+/// Falls back to the chord when the three points are collinear (a degenerate
+/// arc, zero curvature), where the chord IS the length.
+pub fn arc_length_mm(start: (f64, f64), mid: (f64, f64), end: (f64, f64)) -> f64 {
+    let ((sx, sy), (mx, my), (ex, ey)) = (start, mid, end);
+    let chord = |a: (f64, f64), b: (f64, f64)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+    // Twice the signed triangle area; zero when collinear.
+    let cross = (mx - sx) * (ey - sy) - (my - sy) * (ex - sx);
+    if cross.abs() < 1e-12 {
+        return chord(start, end);
+    }
+    // Circumradius R = abc / (4 * area), with area = |cross| / 2.
+    let (a, b, c) = (chord(start, mid), chord(mid, end), chord(start, end));
+    let r = (a * b * c) / (2.0 * cross.abs());
+    if !r.is_finite() || r <= 0.0 {
+        return c;
+    }
+    // Half-sweep of a sub-chord of length `l` on radius `r`: 2*asin(l / 2r),
+    // clamped because floating point can push the ratio a hair past 1.
+    let sweep = |l: f64| 2.0 * (l / (2.0 * r)).clamp(-1.0, 1.0).asin();
+    r * (sweep(a) + sweep(b))
 }
 
 /// Narrowest and widest discrete-track width on a net (mm), for the width/gap
