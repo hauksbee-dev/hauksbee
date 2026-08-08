@@ -1283,6 +1283,16 @@ fn oversized_trapezoid_delta_is_clamped_not_a_bowtie() {
 "#
     );
     assert_short(&drc(&body), "A", "B");
+    // Wing pin: copper crossing at x = 3, inside the clamped triangle's wing
+    // (interior band y in (0.5, 1) there) but 0.9 mm outside the plain
+    // (size 4 2) box, so a lazy clamp-to-size-box fallback would miss it.
+    let clamped_wing = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 3 -3) (end 3 3) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    assert_short(&drc(&clamped_wing), "A", "B");
     // Clamp pin: copper crossing where only the UNCLAMPED bowtie edge would
     // reach (the naive corner sits at (5, 1)); the clamped triangle ends at
     // x = 4, leaving 0.75 mm of air.
@@ -1344,4 +1354,14 @@ fn custom_pad_nonsquare_anchor_is_a_stadium_not_a_disc() {
 "#
     );
     assert_short(&drc(&body), "A", "B");
+    // End-cap pin: copper crossing at x = 1.2 sits past a min-side DISC
+    // (radius 0.5) but inside the stadium's long axis (copper to x = 1.5),
+    // so only the true stadium model shorts here.
+    let end_cap = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 1.2 -2) (end 1.2 2) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    assert_short(&drc(&end_cap), "A", "B");
 }
