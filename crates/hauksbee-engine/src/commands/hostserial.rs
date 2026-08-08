@@ -193,8 +193,12 @@ impl PacedInbox {
     }
 
     /// Move the anchor to the present (attach/detach transition, or a
-    /// firmware->host emission the peer will react to). Only ever moves it
-    /// forward in sim time, so already-stamped targets stay valid.
+    /// firmware->host emission the peer will react to). Every caller passes
+    /// the current sim time, which only grows, so the anchor's sim component
+    /// never rewinds; the schedule ahead of it re-bases (the ceiling restarts
+    /// from `sim_now`), and targets stamped under the OLD anchor keep their
+    /// instants because [`Self::push`] clamps each new target to be no
+    /// earlier than the queue's tail.
     fn re_anchor(&mut self, sim_now: f64, wall_now: f64) {
         if self.anchor.is_some() {
             self.anchor = Some((sim_now, wall_now));
@@ -364,7 +368,8 @@ pub fn run_session(
             ", and sim time is paced to wall-clock time"
         } else {
             ", and the co-sim free-runs until a peer attaches (--serial-no-pace), \
-             then holds to wall-clock time so byte timing is load-independent"
+             then delivers host bytes on a compressed schedule (wall gaps scaled \
+             into sim time by a fixed factor) so byte timing is load-independent"
         }
     ));
 
@@ -465,6 +470,16 @@ pub fn run_session(
         // the detach/attach pair, undercounting attaches and mis-anchoring
         // the new peer. Polling here also stamps bytes closer to their true
         // arrival than a once-per-frame read would.
+        //
+        // The naps READ and STAMP but never DELIVER: `take_due` runs at the
+        // loop top only, so a chunk stamped mid-nap reaches the firmware at
+        // the next frame boundary. That is not a load-dependent skew — on a
+        // busy machine the same chunk is read at the next loop top and lands
+        // on the same boundary; delivery is frame-quantized identically
+        // either way. Draining inside this loop (a second delivery point
+        // whose firing depends on how much the frame napped, i.e. on wall
+        // behavior) was tried and measurably destabilised the NEP positive
+        // control: keep exactly one delivery point per frame.
         if cfg.pace || attached || inbox.pending() {
             loop {
                 let ahead = (t + frame_dt) - inbox.sim_ceiling(run_started.elapsed().as_secs_f64());
@@ -720,22 +735,93 @@ mod tests {
 
     /// Re-anchoring at a firmware emission measures the host's next gap from
     /// that emission, so a starved sim's slow production of the emission does
-    /// not stretch the measured gap; and re-anchoring never rewinds already
-    /// stamped targets.
+    /// not stretch the measured gap; and a chunk stamped BEFORE the re-anchor
+    /// keeps its instant and its place in line (push clamps every later
+    /// target to the queue's tail, so the schedule never rewinds).
     #[test]
     fn re_anchor_measures_reaction_gaps_from_the_emission() {
         let mut inbox = PacedInbox::new(0.05);
         inbox.engage(0.0, 0.0);
+        // Stamped under the FIRST anchor: 4 s of host wall gap -> due at 0.2.
+        inbox.push(0.0, 4.0, b"old".to_vec());
         // The sim took 8 wall seconds to reach sim 0.4 (badly starved), where
         // the firmware emitted its response; the host replies 1 s later.
         inbox.re_anchor(0.4, 8.0);
         inbox.push(0.4, 9.0, b"r".to_vec());
+        assert!(inbox.take_due(0.1999).is_empty());
+        assert_eq!(
+            inbox.take_due(0.2),
+            b"old",
+            "a target stamped before the re-anchor keeps its instant"
+        );
         assert!(inbox.take_due(0.4499).is_empty());
         assert_eq!(
             inbox.take_due(0.45),
             b"r",
             "the reply lands 1 s * 0.05 = 50 ms of sim after the emission, \
              independent of the 8 wall seconds the sim needed to get there"
+        );
+    }
+
+    /// The two-rate determinism check again, now with the anchor moving the
+    /// way a live session moves it: the firmware emits at fixed SIM instants,
+    /// each emission re-anchors at whatever WALL time that run's sim rate
+    /// reached the instant, and the host replies a fixed wall gap after each
+    /// emission. The delivery schedule must not depend on the sim rate even
+    /// though the anchors' wall components differ between the runs.
+    #[test]
+    fn re_anchored_delivery_is_identical_regardless_of_sim_rate() {
+        // Emissions at these sim instants; the host replies 0.040 s (wall)
+        // after hearing each one.
+        let emissions = [0.003, 0.011];
+        let reaction_wall = 0.040;
+        let scale = 0.05;
+        let mut runs = Vec::new();
+        // 0.001 wall/frame: the sim outpaces the scaled schedule and rides the
+        // ceiling. 0.05 wall/frame: 1 ms of sim costs 50 ms of wall (rate
+        // 0.02, below the 0.05 scale), a genuinely starved sim whose
+        // emissions therefore happen at very different wall times.
+        for wall_per_sim_frame in [0.001, 0.05] {
+            let mut inbox = PacedInbox::new(scale);
+            inbox.engage(0.0, 0.0);
+            let mut delivered = Vec::new();
+            let mut pending_reply: Option<(f64, Vec<u8>)> = None; // (wall due, bytes)
+            let mut next_emit = 0;
+            let mut t = 0.0f64;
+            for frame in 0..400 {
+                let wall = frame as f64 * wall_per_sim_frame;
+                if let Some((reply_wall, bytes)) = pending_reply.take() {
+                    if reply_wall <= wall {
+                        inbox.push(t, reply_wall, bytes);
+                    } else {
+                        pending_reply = Some((reply_wall, bytes));
+                    }
+                }
+                let due = inbox.take_due(t);
+                if !due.is_empty() {
+                    delivered.push((format!("{t:.6}"), due));
+                }
+                if t + 0.001 <= inbox.sim_ceiling(wall) {
+                    t += 0.001;
+                    if next_emit < emissions.len() && t >= emissions[next_emit] {
+                        // The firmware speaks at sim `t`; this run's wall
+                        // clock happens to read `wall` here, and the host's
+                        // reply lands a fixed wall gap later.
+                        inbox.re_anchor(t, wall);
+                        pending_reply = Some((wall + reaction_wall, vec![b'0' + next_emit as u8]));
+                        next_emit += 1;
+                    }
+                }
+            }
+            assert_eq!(next_emit, emissions.len(), "every emission happened");
+            assert!(pending_reply.is_none(), "every reply was offered");
+            runs.push(delivered);
+        }
+        assert!(!runs[0].is_empty(), "the schedule must deliver something");
+        assert_eq!(
+            runs[0], runs[1],
+            "emission-relative stamping must make the delivery schedule \
+             independent of the sim rate"
         );
     }
 

@@ -294,9 +294,29 @@ impl ParallelMemoryStorage {
         if address >= self.cells.len() {
             return false;
         }
+        // HAUKSBEE_EEPROM_DEBUG diagnostics: env-gated, silent by default. Kept
+        // for the documented residual positive-control flake (a page-load
+        // occasionally converts to a program cycle right after the previous
+        // page's poll completes; see the NEP acceptance test's module header).
+        if std::env::var_os("HAUKSBEE_EEPROM_DEBUG").is_some() {
+            eprintln!(
+                "EEPROM-DEBUG write ENTER addr {address:#06x} val {value:#04x} cycle {cycle} busy {:?} pending {:?}",
+                self.busy.as_ref().map(|b| b.until_cycle),
+                self.timed_page
+                    .as_ref()
+                    .map(|p| (p.page, p.last_cycle, p.load_count))
+            );
+        }
         self.advance_timed(cycle);
         if self.busy.is_some() {
             // A write during the internal program cycle is inhibited.
+            // HAUKSBEE_EEPROM_DEBUG: name every swallowed write.
+            if std::env::var_os("HAUKSBEE_EEPROM_DEBUG").is_some() {
+                eprintln!(
+                    "EEPROM-DEBUG write INHIBITED addr {address:#06x} val {value:#04x} cycle {cycle} busy_until {:?}",
+                    self.busy.as_ref().map(|b| b.until_cycle)
+                );
+            }
             return true;
         }
         let page = address / self.page_words;
@@ -461,7 +481,24 @@ impl ParallelMemoryStorage {
             value = (value & !(1 << 7)) | ((!busy.poll_value) & (1 << 7));
             busy.toggle = !busy.toggle;
             value = (value & !(1 << 6)) | (u64::from(busy.toggle) << 6);
+            // HAUKSBEE_EEPROM_DEBUG: trace busy poll answers.
+            if std::env::var_os("HAUKSBEE_EEPROM_DEBUG").is_some() {
+                eprintln!(
+                    "EEPROM-DEBUG read POLL addr {address:#06x} -> {:#04x} cycle {cycle} busy_until {} poll_value {:#04x}",
+                    value & mask,
+                    busy.until_cycle,
+                    busy.poll_value
+                );
+            }
             return Some(value & mask);
+        }
+        // HAUKSBEE_EEPROM_DEBUG: trace settled reads too (they are what a
+        // wrongly-satisfied poll consumed).
+        if std::env::var_os("HAUKSBEE_EEPROM_DEBUG").is_some() {
+            eprintln!(
+                "EEPROM-DEBUG read SETTLED addr {address:#06x} -> {:?} cycle {cycle}",
+                self.cells.get(address).map(|v| v & mask)
+            );
         }
         self.read(address, mask)
     }

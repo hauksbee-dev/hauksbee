@@ -2573,9 +2573,10 @@ impl Scheduler {
             }
             // 2b. Promotion AND release from the configured pin direction
             // (`pins_configured_output`); see `sync_configured_outputs`.
-            // Backends that cannot report direction return an empty set,
-            // making both halves a no-op there; the edge-driven enable above
-            // remains the primary path.
+            // On a direction-blind backend the set is empty and the
+            // edge-evidence release arm is gated off, so nothing is promoted
+            // or torn down there; the edge-driven enable above remains the
+            // primary path.
             let configured: std::collections::HashSet<(char, u8)> = m
                 .core
                 .pins_configured_output()
@@ -3796,16 +3797,22 @@ impl Scheduler {
         // direction-blind backend (empty set every chunk, no DDR hook) never
         // reaches either clause with a live pin, so its edge-enabled drivers
         // are never torn down.
-        let release: Vec<(char, u8)> = m
+        let mut release: Vec<(char, u8)> = m
             .configured_outputs
             .difference(&configured)
             .copied()
-            .chain(edge_pins.difference(&configured).copied())
             .collect();
+        if m.core.drive_direction_observable() {
+            // The edge-evidence arm needs a trustworthy direction report: on
+            // a direction-blind (or partially covered) backend, "edged but
+            // not in the set" describes every driven pin, and releasing them
+            // would tear down the edge-driven enables that are those
+            // backends' only signal. The dropped-from-last-chunk arm above
+            // stays unconditional: it only ever names pins the core itself
+            // previously reported as outputs, which is exactly the old rule.
+            release.extend(edge_pins.difference(&configured).copied());
+        }
         for (port, bit) in release {
-            if !m.core.drive_direction_observable() {
-                break;
-            }
             if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
                 if drv.enabled {
                     drv.set_enabled(&mut self.circuit, false);

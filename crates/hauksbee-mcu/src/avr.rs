@@ -878,20 +878,24 @@ impl AvrMcu {
         // `avr_uart_udr_write`). simavr is linked from the system by license
         // choice, so the minimal correct fix on our side is to switch the
         // whole feature off before any firmware byte can be transmitted.
-        unsafe {
-            let mut flags: u32 = 0;
-            if ffi::avr_ioctl(
-                avr,
-                uart_get_flags(b'0'),
-                &mut flags as *mut u32 as *mut std::os::raw::c_void,
-            ) == 0
-            {
-                flags &= !AVR_UART_FLAG_STDIO;
-                let _ = ffi::avr_ioctl(
+        // Every UART the part actually has (the ioctl simply misses on absent
+        // ones): a mega2560 streaming binary on USART1 has the same overflow.
+        for uart in [b'0', b'1', b'2', b'3'] {
+            unsafe {
+                let mut flags: u32 = 0;
+                if ffi::avr_ioctl(
                     avr,
-                    uart_set_flags(b'0'),
+                    uart_get_flags(uart),
                     &mut flags as *mut u32 as *mut std::os::raw::c_void,
-                );
+                ) == 0
+                {
+                    flags &= !AVR_UART_FLAG_STDIO;
+                    let _ = ffi::avr_ioctl(
+                        avr,
+                        uart_set_flags(uart),
+                        &mut flags as *mut u32 as *mut std::os::raw::c_void,
+                    );
+                }
             }
         }
 
