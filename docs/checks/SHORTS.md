@@ -187,7 +187,10 @@ design-rule / net-class clearance) around every foreign-net wire, pad and via
 same-net copper, and orphan removal only deletes fill pockets. Every setting
 keeps or widens gaps, so a correctly derived fill cannot short or crowd foreign
 copper in the same file, while treating the drawn outline as solid copper would
-turn every trace the fill legitimately carves around into a false short. The one
+turn every trace the fill legitimately carves around into a false short. The
+fill itself is never reconstructed and the isolate distance never numerically
+re-verified; the settings are parsed, drive this reasoning, and are disclosed
+verbatim on pour findings. The one
 construct the settings cannot make safe **is** checked: two overlapping
 same-rank pours of different signals have no arbitration (Eagle pours both, a
 physical short on the fabricated board, and Eagle's own DRC flags the overlap),

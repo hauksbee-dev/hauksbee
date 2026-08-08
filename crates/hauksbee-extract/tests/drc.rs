@@ -1108,3 +1108,120 @@ fn gap_between_custom_pad_primitives_is_not_copper() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn trapezoid_delta_x_skews_the_side_edges() {
+    // rect_delta (2 0) on a (size 2 4) pad: corners (-1, 3), (-1, -3),
+    // (1, -1), (1, 1) — the LEFT edge is 6 mm long, the right 2 mm. A track
+    // at (-0.9..-0.6, 2.5) sits inside the tall-left region, 0.5 mm OUTSIDE
+    // the size box: only the true dx-skewed outline reads it as a short.
+    let items = r#"
+  (segment (start -0.9 2.5) (end -0.6 2.5) (width 0.2) (layer "F.Cu") (net 1))
+  (footprint "lib:trapx" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U3")
+    (pad "1" smd trapezoid (at 0 0) (size 2 4) (rect_delta 2 0) (layers "F.Cu") (net 2))
+  )
+"#;
+    assert_short(&drc(items), "A", "B");
+}
+
+// ---------------------------------------------------------------------------
+// Custom-pad primitive kinds beyond gr_poly: stroked lines, arcs, unfilled
+// rings and rectangles are copper only along their strokes; filled rects are
+// solid.
+// ---------------------------------------------------------------------------
+
+/// A custom pad exercising every primitive kind: circle anchor at the origin,
+/// a stroked line at x in [3, 5], a stroked (unfilled) ring of radius 2 at
+/// (-5, 0), an unfilled rect at x in [7, 9], a filled rect at x in [-9, -7],
+/// and an arc through (0, 4) - (2, 6) - (0, 8).
+const CUSTOM_PRIMITIVE_ZOO_PAD: &str = r#"
+  (footprint "lib:zoo" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U4")
+    (pad "1" smd custom (at 0 0) (size 1 1) (layers "F.Cu") (net 2)
+      (options (clearance outline) (anchor circle))
+      (primitives
+        (gr_line (start 3 0) (end 5 0) (width 0.4))
+        (gr_circle (center -5 0) (end -3 0) (width 0.4))
+        (gr_rect (start 7 -1) (end 9 1) (width 0.2))
+        (gr_rect (start -9 -1) (end -7 1) (width 0.2) (fill yes))
+        (gr_arc (start 0 4) (mid 2 6) (end 0 8) (width 0.4))
+      ))
+  )
+"#;
+
+fn zoo_report(track: &str) -> hauksbee_extract::DrcReport {
+    drc(&format!("{track}{CUSTOM_PRIMITIVE_ZOO_PAD}"))
+}
+
+fn assert_zoo_silent(track: &str, what: &str) {
+    let report = zoo_report(track);
+    assert!(
+        report.findings.is_empty(),
+        "{what}: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm, f.x, f.y))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn custom_pad_gr_line_stroke_is_copper() {
+    let track = r#"
+  (segment (start 4 -1) (end 4 1) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_unfilled_circle_interior_is_bare() {
+    // A stub at the ring's centre: 1.4 mm clear of the stroke band.
+    let track = r#"
+  (segment (start -5.3 0) (end -4.7 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_zoo_silent(track, "inside the unfilled gr_circle ring is bare board");
+}
+
+#[test]
+fn custom_pad_unfilled_circle_stroke_is_copper() {
+    let track = r#"
+  (segment (start -7.5 0) (end -6.5 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_unfilled_rect_interior_is_bare() {
+    let track = r#"
+  (segment (start 7.8 0) (end 8.2 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_zoo_silent(track, "inside the unfilled gr_rect is bare board");
+}
+
+#[test]
+fn custom_pad_unfilled_rect_edge_is_copper() {
+    let track = r#"
+  (segment (start 6.5 0) (end 7.5 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_filled_rect_body_is_copper() {
+    let track = r#"
+  (segment (start -8.2 0) (end -7.8 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_gr_arc_stroke_is_copper() {
+    // The arc through (0,4)-(2,6)-(0,8) bulges to (2, 6); a track poking that
+    // apex crosses the stroke.
+    let track = r#"
+  (segment (start 1.5 6) (end 2.5 6) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}

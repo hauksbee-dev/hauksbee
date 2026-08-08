@@ -321,7 +321,10 @@ same-net copper, and orphan removal only deletes fill pockets. Every setting
 keeps or widens gaps, so a correctly derived fill cannot short or crowd foreign
 copper in the same file. Treating the drawn outline as solid copper instead
 would manufacture false shorts on every trace the fill legitimately carves
-around. The one construct the settings cannot make safe IS checked: two
+around. To be precise about what is and is not computed: the fill itself is
+never reconstructed and the isolate distance is never numerically re-verified;
+the settings are parsed, drive the reasoning above, and are disclosed verbatim
+on pour findings. The one construct the settings cannot make safe IS checked: two
 overlapping same-rank pours of different signals have no arbitration (Eagle
 pours both, a physical short, and its own DRC flags the overlap), and the
 Eagle path reports that short with the pour settings disclosed on the finding.
