@@ -42,7 +42,13 @@ pub struct RunConfig {
     pub verbose: bool,
     pub json: bool,
     pub strict: bool,
+    /// `--strict-thermal`: accepted for compatibility; partial-coverage
+    /// escalation is the default, so this is a quiet no-op. Recorded in the
+    /// invocation echo so a rerun reproduces the exact command.
     pub strict_thermal: bool,
+    /// `--no-strict-thermal`: opt out of the default partial-coverage thermal
+    /// escalation (exit stays 0; the INCONCLUSIVE caveat still prints).
+    pub no_strict_thermal: bool,
     pub strict_boot: bool,
     pub list_nets: bool,
     pub check: bool,
@@ -852,6 +858,9 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // temperature per dissipating device and exit. Fix #1: a thermal table that
     // covers ~no dissipating devices because the power ICs are UNRESOLVED is a
     // meaningless result, not a "runs cool" pass, flag it invalid and exit 3.
+    // Strict is the DEFAULT: a PARTIAL-coverage table escalates to exit 3
+    // unless --no-strict-thermal opts out (--strict-thermal is accepted as a
+    // quiet no-op so existing CI invocations keep working).
     if cfg.thermal {
         return crate::reports::thermal::emit(
             &mut engine,
@@ -859,7 +868,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.ambient,
             cfg.seconds,
             cfg.json,
-            cfg.strict_thermal,
+            !cfg.no_strict_thermal,
             &inputs,
         );
     }
@@ -1651,6 +1660,10 @@ fn capture_manifest(
         (
             "strict_thermal".into(),
             serde_json::json!(cfg.strict_thermal),
+        ),
+        (
+            "no_strict_thermal".into(),
+            serde_json::json!(cfg.no_strict_thermal),
         ),
         ("thermal".into(), serde_json::json!(cfg.thermal)),
         ("tui".into(), serde_json::json!(cfg.tui)),

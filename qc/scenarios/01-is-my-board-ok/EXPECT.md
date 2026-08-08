@@ -22,8 +22,16 @@ sentence:
 
 - Copper spacing: "Looks healthy". The board ships with its own KiCad project
   file, so the check runs under the designer's clearance rule, not a default.
-- Connectivity: "Looks healthy" when it is.
-- Signal integrity: no failures, but three things worth a look.
+  Copper is read straight off the layout, so this verdict owes nothing to
+  device models and may claim health on its own.
+- Connectivity and signal integrity: "INCONCLUSIVE", because two of the
+  board's active ICs have no device model. A clean bill from a check that
+  never saw the parts that matter would be vacuous, the exact false comfort
+  this tool exists to refuse. The verdict counts the unmodelled parts, names
+  them, and says what unlocks a conclusive answer (device models or BOM
+  identity). The findings and heads-up notes underneath are still real.
+- The closing verdict line says "inconclusive", not "clean", for the same
+  reason.
 
 Each finding underneath is three parts: what it is, why it matters, what to do.
 He never has to ask "so is that bad?".

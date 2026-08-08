@@ -566,9 +566,10 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
 /// Coverage is distinct from [`Validity`]. `Validity` stays BINARY and drives
 /// exit 3. `CheckCoverage` is the honest "N of M active parts actually entered
 /// this check" metric: it is ALWAYS emittable and NEVER changes the exit code on
-/// its own (the partial-coverage thermal escalation is opt-in behind
-/// `--strict-thermal`). `partial == true` means a renderer should print a
-/// coverage caveat even though the check itself produced rows.
+/// its own (the partial-coverage thermal escalation is applied by the thermal
+/// report, by default; `--no-strict-thermal` opts out). `partial == true` means
+/// a renderer should print a coverage caveat even though the check itself
+/// produced rows.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CheckCoverage {
     /// Covered active ICs / total active ICs, clamped to `[0, 1]`: how much of the
@@ -587,11 +588,12 @@ pub struct CheckCoverage {
     pub partial: bool,
 }
 
-/// Thermal coverage, parallel to [`thermal_validity`] but NON-gating. Returns
-/// `partial = true` when there ARE dissipating rows yet an active IC on the live
-/// circuit is open or unresolved, i.e. the table is real but incomplete (rows
-/// exist only because some passives/parts resolved while a power IC is open).
-/// `thermal_validity` itself is unchanged; this is the honest companion metric.
+/// Thermal coverage, parallel to [`thermal_validity`]. Returns `partial = true`
+/// when there ARE dissipating rows yet an active IC on the live circuit is open
+/// or unresolved, i.e. the table is real but incomplete (rows exist only because
+/// some passives/parts resolved while a power IC is open). The thermal report
+/// escalates the partial case to exit 3 by default (`--no-strict-thermal` opts
+/// out); `thermal_validity` itself is unchanged.
 pub fn thermal_coverage(dissipating_rows: usize, summary: &BindSummary) -> CheckCoverage {
     let open_unresolved = summary
         .active_path_unresolved
@@ -644,6 +646,83 @@ pub fn coverage_open_active_refs(summary: &BindSummary) -> Vec<String> {
         )
         .map(|u| u.reference.clone())
         .collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The INCONCLUSIVE verdict vocabulary (one dialect for every static surface)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The current-carrying / active parts whose absence of a model makes a clean
+/// static verdict vacuous: the [`coverage_open_active_refs`] set (active ICs
+/// that are unresolved or resolved-but-open on the live circuit) plus
+/// unresolved discrete transistors (`Q` prefix) on the live circuit, the power
+/// FETs on a protection path. A clean `--lint`/`--si` result over these parts
+/// is not a clean bill, and the verdict line must say so instead of "Looks
+/// healthy" (PROCESS_AND_UX_LOG item 4: a vacuous pass on a BMS protection
+/// path is the most dangerous UX failure here).
+///
+/// Passives are deliberately excluded: an unbound connector or resistor does
+/// not blind these checks the way an open driver or FET does, and flagging
+/// every unresolved part would cry wolf on healthy boards.
+pub fn unmodelled_critical_refs(summary: &BindSummary) -> Vec<String> {
+    let mut refs: Vec<String> = summary
+        .active_path_unresolved
+        .iter()
+        .filter(|u| is_verdict_critical(u))
+        .chain(
+            summary
+                .resolved_but_open_active
+                .iter()
+                .filter(|u| u.active_ic),
+        )
+        .map(|u| u.reference.clone())
+        .collect();
+    refs.sort_by_key(|r| crate::report::natural_ref_key(r));
+    refs.dedup();
+    refs
+}
+
+/// The one INCONCLUSIVE verdict sentence the lint/SI/check surfaces share: the
+/// count, the named parts, and the input that unlocks a conclusive verdict.
+/// Their `--plain` verdict lines, default text summaries, the `--check`
+/// closing verdict and their JSON coverage notes all render THIS string (the
+/// closing verdict drops the leading tag it already states), so the vocabulary
+/// cannot fork across those surfaces. Thermal and AC speak through their own
+/// coverage caveats, which lead with the same INCONCLUSIVE tag. It never
+/// changes an exit code on its own; the exit-code contract is documented in
+/// docs/ci/CI.md.
+pub fn inconclusive_verdict(refs: &[String]) -> String {
+    let list = refs.join(", ");
+    format!(
+        "INCONCLUSIVE: {} current-carrying / active part(s) have no model ({list}), \
+         so a clean result here is not a clean bill. Supply device models \
+         (--models-dir; scaffold one with `hauksbee models new`) or BOM identity \
+         (--bom) for them to make this verdict conclusive.",
+        refs.len(),
+    )
+}
+
+/// Whether an unresolved/open part on the live circuit blocks a conclusive
+/// verdict: an active IC, or a discrete transistor. Shared by
+/// [`unmodelled_critical_refs`] and the web front door so the CLI and browser
+/// can never disagree about which parts forbid a clean bill.
+pub(crate) fn is_verdict_critical(u: &UnresolvedActive) -> bool {
+    u.active_ic || is_transistor_ref(&u.reference)
+}
+
+/// Whether a reference designator names a discrete transistor (prefix `Q`),
+/// the current-carrying part class whose unbound absence blinds the static
+/// checks without being an active IC.
+fn is_transistor_ref(reference: &str) -> bool {
+    if is_tool_generated_ref(reference) {
+        return false;
+    }
+    let prefix: String = reference
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    prefix == "Q"
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

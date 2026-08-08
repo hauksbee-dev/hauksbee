@@ -124,6 +124,14 @@ pub struct PlainReport {
     /// of trust we refuse to ship. Each note carries a what / why / what-to-do
     /// gloss so it translates the jargon rather than dumping it.
     pub heads_up: Vec<HeadsUp>,
+    /// Current-carrying / active parts with no model
+    /// ([`crate::result::unmodelled_critical_refs`]). Non-empty forces the
+    /// verdict off "Looks healthy": a clean check over an unmodelled power FET
+    /// or main IC is vacuous, and the verdict must read INCONCLUSIVE, naming
+    /// the parts and the unlocking input, instead of a clean bill. The emit
+    /// sites that hold a bind report set this; renderers with no bind context
+    /// leave it empty and are unchanged.
+    pub unmodelled_critical: Vec<String>,
 }
 
 /// De-escape KiCad's label escapes so a plain sentence names the net the way
@@ -148,6 +156,7 @@ impl PlainReport {
             verdict_noun: None,
             findings: Vec::new(),
             heads_up: Vec::new(),
+            unmodelled_critical: Vec::new(),
         }
     }
 
@@ -218,6 +227,22 @@ impl PlainReport {
             }
         };
         if n == 0 {
+            // A clean check over unmodelled current-carrying / active parts is
+            // vacuous, not healthy. Refuse the clean bill and name what unlocks
+            // a conclusive verdict. This does NOT change any exit code; it is
+            // verdict prose only (the exit contract lives in docs/ci/CI.md).
+            // Actionable heads-up notes stay on the verdict line (Fix #3's
+            // never-bury rule): INCONCLUSIVE must not hide the one observation
+            // the user may have come to check.
+            if !self.unmodelled_critical.is_empty() {
+                let mut v = crate::result::inconclusive_verdict(&self.unmodelled_critical);
+                if !self.heads_up.is_empty() {
+                    let hn = self.heads_up.len();
+                    let things = if hn == 1 { "thing" } else { "things" };
+                    v.push_str(&format!(" Plus {hn} {things} worth a look (see below)."));
+                }
+                return v;
+            }
             // No failures, but if there are actionable heads-up notes (e.g. a USB
             // pair off its impedance target), don't claim "no problems found",
             // that buries the one thing the user may have come to check. Point at
@@ -243,6 +268,16 @@ impl PlainReport {
     pub fn render(&self) -> String {
         let mut s = String::new();
         let _ = writeln!(s, "{}", self.verdict());
+        // With real findings, the verdict line counts them (not a clean bill),
+        // but the coverage hole must still be said out loud: fixing the listed
+        // findings would otherwise flip the verdict straight to a vacuous pass.
+        if !self.findings.is_empty() && !self.unmodelled_critical.is_empty() {
+            let _ = writeln!(
+                s,
+                "{}",
+                crate::result::inconclusive_verdict(&self.unmodelled_critical)
+            );
+        }
         if !self.findings.is_empty() {
             let _ = writeln!(s);
             for (i, f) in self.sorted().iter().enumerate() {
@@ -1037,6 +1072,32 @@ fn volts(v: f64) -> String {
 mod tests {
     use super::*;
     use hauksbee_extract::{DrcFinding, Item, LintFinding, SiFinding};
+
+    /// The INCONCLUSIVE verdict must not bury actionable heads-up notes: the
+    /// verdict line refuses the clean bill AND still points at the notes
+    /// below (Fix #3's never-bury rule), and with real findings the sentence
+    /// rides the render under the counted verdict.
+    #[test]
+    fn inconclusive_verdict_keeps_the_heads_up_pointer() {
+        let mut r = PlainReport::new("signal-integrity");
+        r.unmodelled_critical = vec!["Q1".to_string()];
+        r.heads_up.push(HeadsUp::note("USB pair off target"));
+        let v = r.verdict();
+        assert!(v.starts_with("INCONCLUSIVE"), "{v}");
+        assert!(
+            v.contains("1 thing worth a look (see below)"),
+            "the heads-up pointer survives the refusal: {v}"
+        );
+        assert!(!v.contains("Looks healthy"), "{v}");
+        // With findings, the verdict counts them and the sentence still prints.
+        r.push(PlainLevel::Warning, "w".into(), "why".into(), "fix".into());
+        let rendered = r.render();
+        assert!(rendered.contains("1 issue found"), "{rendered}");
+        assert!(
+            rendered.contains("INCONCLUSIVE: 1 current-carrying / active part(s)"),
+            "the coverage hole is still said out loud next to real findings:\n{rendered}"
+        );
+    }
 
     fn drc_short() -> DrcFinding {
         DrcFinding {
