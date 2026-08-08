@@ -962,6 +962,16 @@ pub struct CosimUnexercisedBus {
 pub struct CosimSpiFraming {
     pub bus: String,
     pub mode: String,
+    /// On `mode = "exact"`, where the chip-select came from: `"spec"` (the run
+    /// spec's `cs_net`), `"model-roles"` (the `cs` pin role of the bound model for
+    /// the board component the peripheral names), or `"bitbang-pins"` (a
+    /// bit-banged SPI slave, whose CS pin comes from the GPIO wiring the responder
+    /// was attached with rather than from any net lookup). Absent on the `backend`
+    /// and `heuristic` tiers, where no chip-select was resolved. The tier alone
+    /// does not say this, and the routes fail differently, so a consumer
+    /// reproducing a result needs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cs_provenance: Option<String>,
 }
 
 /// One sim-time window `[start_s, end_s)` where the analog solve failed to

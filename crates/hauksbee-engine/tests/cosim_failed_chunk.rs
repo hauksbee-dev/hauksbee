@@ -119,6 +119,7 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
             .map(|(bus, mode)| hauksbee_engine::result::CosimSpiFraming {
                 bus,
                 mode: mode.as_str().to_string(),
+                cs_provenance: mode.cs_provenance().map(|p| p.as_str().to_string()),
             })
             .collect(),
         adc_dropped: sched

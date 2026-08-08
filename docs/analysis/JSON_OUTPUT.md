@@ -188,7 +188,14 @@ degradation so a run that silently lost fidelity never reads as healthy:
 - `unexercised_buses[]`, bound I2C/SPI peripherals the platform's controller set
   never exercised (a `peripheral` assertion against one fails, not green-passes).
 - `spi_framing[]`, per-bus framing tier: a `"heuristic"` tier means transaction
-  boundaries were guessed at chunk edges.
+  boundaries were guessed at chunk edges. On an `"exact"` tier, `cs_provenance`
+  says where the chip-select came from: `"spec"` (the peripheral's `cs_net`),
+  `"model-roles"` (the `cs` pin role of the model bound to the board component
+  the peripheral's `ref` names), or `"bitbang-pins"` (a bit-banged slave, whose
+  CS pin comes from its GPIO wiring rather than a net lookup). All three are the
+  same electrical fact and earn the same tier, but they fail differently, so the
+  field is there for a consumer reproducing or overriding the result. Absent on
+  the `backend` and `heuristic` tiers, where none was resolved.
 - `short_pulses[]`, firmware GPIO pulses that rose and fell inside one solver
   chunk on a net clocking a TICK-evaluated sequential part, so that part never
   observed the pulse. Entries carry `{net, mcu_ref, pin, pulse_s, chunk_s,

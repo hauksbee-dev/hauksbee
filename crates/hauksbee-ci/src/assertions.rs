@@ -1168,7 +1168,8 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         Some("heuristic") => {
             " [SPI framing: HEURISTIC; transaction boundaries guessed at chunk \
              edges; two transactions in one chunk merge and a boundary-spanning \
-             one is truncated. Wire cs_net for exact framing]"
+             one is truncated. Declare cs_net, or point `ref` at a modelled part, \
+             for exact framing]"
         }
         _ => "",
     };

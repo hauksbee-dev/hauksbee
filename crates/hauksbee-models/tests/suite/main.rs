@@ -31,6 +31,7 @@ mod power_fet_afe_resolve;
 mod power_ic_resolve;
 mod quad_opamp_pinout;
 mod schottky_1n58xx;
+mod spi_cs_pin_roles;
 mod user_dir_layering;
 mod vreg_78xx_resolve;
 mod vreg_79xx_negative;

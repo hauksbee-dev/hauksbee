@@ -381,7 +381,15 @@ on every report surface, and a hauksbee-ci `peripheral` assertion against it
 **fails** rather than green-passing on the slave's power-on defaults. The
 run summary likewise prints the per-SPI-bus transaction-framing tier (exact /
 backend / heuristic), flags it as a `--plain` heads-up and `--json` note when
-heuristic, and attaches it to each CI peripheral assertion's detail. See
+heuristic, and attaches it to each CI peripheral assertion's detail. Exact
+framing is reached two ways: the spec's `cs_net`, or the `cs` pin role of the
+model bound to the component the peripheral's `ref` names, so a modelled slave
+needs no chip-select net written out. Both routes still require the net to trace
+to an MCU GPIO, so a buffered or externally driven chip-select stays heuristic,
+and both are only as exact as the backend: CS edges are interleaved with the byte
+stream on a push backend (simavr), while a poll backend samples GPIO once per
+chunk and can miss a chip-select pulse inside one. The `--json` coverage records
+which route it was. See
 `docs/cosim/MCU.md` ("ADC / bus coverage by platform") for the full matrix.
 
 #### Espressif QEMU, `QemuBackend` (external, ESP32 family)
