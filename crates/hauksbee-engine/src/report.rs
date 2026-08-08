@@ -144,17 +144,45 @@ impl BindReport {
                 }
                 _ => false,
             })
-            .map(|r| {
+            .map(|r| (r.model_id.as_deref().unwrap_or("(unnamed)"), &r.reference))
+            .fold(
+                std::collections::BTreeMap::<&str, Vec<&String>>::new(),
+                |mut acc, (model, reference)| {
+                    let refs = acc.entry(model).or_default();
+                    if !refs.contains(&reference) {
+                        refs.push(reference);
+                    }
+                    acc
+                },
+            )
+            .into_iter()
+            .map(|(model, mut refs)| {
+                // Aggregated per MODEL, not per part: a motor driver board with
+                // eight identical unmodeled FETs is one hole with eight instances,
+                // and eight near-identical notes is how this channel gets ignored.
+                refs.sort();
+                const SHOWN: usize = 5;
+                let listed = refs
+                    .iter()
+                    .take(SHOWN)
+                    .map(|r| r.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let rest = refs.len().saturating_sub(SHOWN);
+                let named = if rest > 0 {
+                    format!("{listed} and {rest} more")
+                } else {
+                    listed
+                };
                 format!(
-                    "models: {} ({}) bound to the generic fallback model '{}', whose ratings \
-                     and device parameters are estimates for the package class, not values \
-                     from any datasheet. Any verdict citing {} rests on invented numbers. \
-                     Add a model entry matching the part (value_re or mpn_re), or put the \
-                     manufacturer part number on the component, to replace them.",
-                    r.reference,
-                    r.value,
-                    r.model_id.as_deref().unwrap_or("(unnamed)"),
-                    r.reference,
+                    "models: {} part(s) ({}) are bound to the generic fallback model '{}', \
+                     whose ratings and device parameters are estimates for the package class, \
+                     not values from any datasheet. Any verdict citing them rests on invented \
+                     numbers. Add a model entry matching the part (value_re or mpn_re), or put \
+                     the manufacturer part number on the component, to replace them.",
+                    refs.len(),
+                    named,
+                    model,
                 )
             })
             .filter(|m| seen.insert(m.clone()))
@@ -525,6 +553,24 @@ mod resolved_count_tests {
             hauksbee_ir::evidence::AssumptionSource::Binder,
             "a stress-monitor limit is the binder's, not the reader's"
         );
+    }
+
+    #[test]
+    fn many_parts_on_one_fallback_model_make_one_warning() {
+        // Eight identical unmodeled FETs is one coverage hole with eight
+        // instances, not eight holes.
+        let mut report = BindReport::default();
+        for i in 1..=8 {
+            report.push(sourced_row(
+                &format!("Q{i}"),
+                "generic_nmos_power_pkg",
+                ModelSourceTier::EstimatedFallback,
+            ));
+        }
+        let w = report.estimated_fallback_warnings();
+        assert_eq!(w.len(), 1, "one model, one warning: {w:?}");
+        assert!(w[0].contains("8 part(s)"), "states the count: {}", w[0]);
+        assert!(w[0].contains("and 3 more"), "{}", w[0]);
     }
 
     #[test]

@@ -148,12 +148,7 @@ impl BoundBoard {
     /// the CI runner: an abstention visible on one surface and silent on the
     /// others is still a silent abstention on those others.
     pub fn power_coverage_gaps(&self) -> Vec<String> {
-        let mut seen = std::collections::BTreeSet::new();
-        self.device_meta
-            .iter()
-            .filter_map(|m| m.power_coverage_gap())
-            .filter(|m| seen.insert(m.clone()))
-            .collect()
+        crate::stress::aggregate_power_coverage_gaps(&self.device_meta)
     }
 
     /// Look up a net node by name.
