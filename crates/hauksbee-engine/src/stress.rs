@@ -352,6 +352,12 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     }
 }
 
+/// Every imperial chip size code the rating table recognises. Used to tell
+/// KiCad's dual "imperial_metricMetric" form from a metric-only name.
+const IMPERIAL_CHIP_CODES: &[&str] = &[
+    "01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2220", "2512",
+];
+
 /// The chip rating for a footprint that carries only the METRIC size code.
 ///
 /// Reached only after the imperial pass has failed, which is what keeps the
@@ -389,15 +395,28 @@ fn metric_only_chip_rating(f: &str) -> Option<f64> {
     if metric.is_empty() {
         return None;
     }
-    // If any OTHER digit run appears in the name, this is the dual-code form and
-    // the imperial token is authoritative; leave it to the imperial pass.
-    let others = f
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|t| !t.is_empty())
-        .filter(|t| *t != metric.as_str())
-        .count();
-    if others > 0 {
-        return None;
+    // Dual-code detection has to be STRUCTURAL, not "does any other number
+    // appear". Real KiCad names carry pad dimensions
+    // ("R_0402Metric_Pad0.74x0.62mm"), and counting those as a second code sends
+    // a metric-only name to the imperial pass, which reads its 0402 as imperial
+    // 0402 (1/16 W) instead of metric 0402 (imperial 01005, 1/32 W).
+    //
+    // The dual form is exactly "<imperial>_<metric>METRIC", so look only at the
+    // token immediately before the metric code, separated by a single '_'.
+    let before = &f[..idx - metric.len()];
+    if let Some(prev) = before.strip_suffix('_') {
+        let prev_token: String = prev
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        if !prev_token.is_empty() && IMPERIAL_CHIP_CODES.contains(&prev_token.as_str()) {
+            // The imperial token is authoritative; leave it to the imperial pass.
+            return None;
+        }
     }
     TABLE
         .iter()
@@ -409,9 +428,13 @@ fn metric_only_chip_rating(f: &str) -> Option<f64> {
 /// KiCad writes these as `Resistor_THT:R_Axial_DIN0207_...`; the DIN/RM tokens
 /// cover libraries that omit the word "axial".
 fn is_tht_axial_footprint(f: &str) -> bool {
-    // Note: RADIAL is deliberately absent. `CP_Radial_*` is an electrolytic
-    // capacitor body, and this function must not hand it a resistor wattage.
-    f.contains("AXIAL") || f.contains("DIN0") || f.contains("BARE_METAL") || f.contains("THT")
+    // Only bodies that actually name themselves axial. Notably absent:
+    //
+    //   - a bare "THT" match, which claimed every through-hole resistor footprint
+    //     including `Resistor_THT:R_Vertical` and custom cement bodies, none of
+    //     which the 1/4 W axial default describes;
+    //   - RADIAL, because `CP_Radial_*` is an electrolytic capacitor.
+    f.contains("AXIAL") || f.contains("DIN0") || f.contains("BARE_METAL")
 }
 
 /// Strip a multi-unit stamping suffix from a device name, yielding the package
@@ -1525,6 +1548,21 @@ mod monitor_temp_tests {
                 r.watts
             );
         }
+        // Real KiCad names carry pad dimensions after the size code. Treating
+        // those digits as a second size code sent the name to the imperial pass,
+        // which read metric 0402 as imperial 0402 and doubled the rating.
+        for (f, want) in [
+            ("Resistor_SMD:R_0402Metric_Pad0.74x0.62mm", 1.0 / 32.0),
+            ("Resistor_SMD:R_0603Metric_Pad0.98x0.95mm", 1.0 / 20.0),
+            ("Resistor_SMD:R_3216Metric_Pad1.42x1.75mm", 1.0 / 4.0),
+        ] {
+            let r = resistor_power_from_footprint(f);
+            assert!(
+                (r.watts.unwrap() - want).abs() < 1e-12,
+                "{f} must still read as metric-only and rate {want} W, got {:?}",
+                r.watts
+            );
+        }
         // KiCad's dual form carries a separate imperial token, which stays
         // authoritative: 0201 imperial (1/20 W), NOT 0603 metric read as imperial.
         for (f, want) in [
@@ -1532,6 +1570,8 @@ mod monitor_temp_tests {
             ("Resistor_SMD:R_01005_0402Metric", 1.0 / 32.0),
             ("Resistor_SMD:R_0402_1005Metric", 1.0 / 16.0),
             ("Resistor_SMD:R_1206_3216Metric", 1.0 / 4.0),
+            ("Resistor_SMD:R_0402_1005Metric_Pad0.72x0.64mm", 1.0 / 16.0),
+            ("Resistor_SMD:R_0201_0603Metric_Pad0.64x0.40mm", 1.0 / 20.0),
         ] {
             let r = resistor_power_from_footprint(f);
             assert!(
@@ -1539,6 +1579,22 @@ mod monitor_temp_tests {
                 "{f} must rate {want} W from its imperial token, got {:?}",
                 r.watts
             );
+        }
+    }
+
+    #[test]
+    fn a_generic_through_hole_body_is_not_assumed_axial() {
+        // A bare "THT" match claimed every through-hole resistor footprint. A
+        // vertical body or a cement power resistor is not a 1/4 W axial, and
+        // guessing that both suppresses faults on smaller parts and invents them
+        // on larger ones.
+        for f in [
+            "Resistor_THT:R_Vertical",
+            "Resistor_THT:R_Cement_L20mm_W7mm_Px15mm",
+        ] {
+            let r = resistor_power_from_footprint(f);
+            assert_eq!(r.basis, ResistorPowerBasis::Unknown, "{f}");
+            assert!(r.watts.is_none(), "{f} got {:?}", r.watts);
         }
     }
 

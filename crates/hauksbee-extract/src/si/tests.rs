@@ -66,10 +66,10 @@ fn trace_capacitance_per_mm_matches_transmission_line_physics() {
     // The reported range must bracket the real one: the low end at the
     // high-impedance (100 ohm) figure that gates findings, the high end at the
     // worst realistic case. Neither may drift an order of magnitude.
-    let hundred = c_per_mm(2.9, 100.0);
+    let thin_two_layer = c_per_mm(2.9, 150.0);
     assert!(
-        (super::C_TRACE_PF_PER_MM_LOW - hundred).abs() < 0.005,
-        "the firing bound {} must be the ~100 ohm figure {hundred}",
+        (super::C_TRACE_PF_PER_MM_LOW - thin_two_layer).abs() < 0.005,
+        "the firing bound {} must be the thin 2-layer figure {thin_two_layer}",
         super::C_TRACE_PF_PER_MM_LOW
     );
     assert!(
@@ -160,6 +160,74 @@ fn routed_length_sums_segments() {
     );
     let l = routed_length_mm(doc.root().unwrap(), 1);
     assert!((l - 7.0).abs() < 1e-9, "3 + 4 = 7 mm, got {l}");
+}
+
+#[test]
+fn arc_length_is_the_swept_arc_not_the_chord() {
+    use std::f64::consts::PI;
+    let r = 50.0;
+    // Semicircle from (50,0) through (0,50) to (-50,0): pi*r = 157.08 mm, whose
+    // chord is only 2r = 100 mm, a 36% under-report.
+    let semi = arc_length_mm((r, 0.0), (0.0, r), (-r, 0.0));
+    assert!(
+        (semi - PI * r).abs() < 1e-6,
+        "semicircle is {} mm, got {semi}",
+        PI * r
+    );
+    // Quarter turn: pi*r/2 = 78.54 mm against a 70.71 mm chord.
+    let quarter = arc_length_mm(
+        (r, 0.0),
+        (r * (PI / 8.0).cos(), r * (PI / 8.0).sin()),
+        (0.0, r),
+    );
+    assert!(
+        (quarter - PI * r / 2.0).abs() < 1e-6,
+        "quarter turn is {} mm, got {quarter}",
+        PI * r / 2.0
+    );
+    // Major arc (270 degrees): summing the two half-sweeps must not wrap back to
+    // the minor arc. 3/4 of the circle is 235.62 mm.
+    let major = arc_length_mm((r, 0.0), (-r, 0.0), (0.0, -r));
+    // Looser tolerance here on purpose: the start-to-mid sub-chord is the
+    // diameter, so its half-sweep is asin(1), the worst-conditioned point of the
+    // function. ~1e-6 relative error at a 236 mm length is far inside anything
+    // the rise-time or skew limits can notice.
+    assert!(
+        (major - 1.5 * PI * r).abs() < 1e-4,
+        "270 degree arc is {} mm, got {major}",
+        1.5 * PI * r
+    );
+    // Collinear points are a degenerate arc: the chord IS the length.
+    let flat = arc_length_mm((0.0, 0.0), (5.0, 0.0), (10.0, 0.0));
+    assert!((flat - 10.0).abs() < 1e-9, "got {flat}");
+}
+
+#[test]
+fn routed_length_counts_arc_sweep() {
+    // A net routed as one semicircle of radius 50: 157.08 mm of copper, not the
+    // 100 mm chord. Under-reporting this suppresses I2C rise-time findings and
+    // corrupts USB skew.
+    let doc = root_of(
+        r#"(net 1 "SDA")
+           (arc (start 50 0) (mid 0 50) (end -50 0) (width 0.2) (layer "F.Cu") (net 1))"#,
+    );
+    let l = routed_length_mm(doc.root().unwrap(), 1);
+    assert!(
+        (l - std::f64::consts::PI * 50.0).abs() < 1e-6,
+        "expected the swept 157.08 mm, got {l}"
+    );
+}
+
+#[test]
+fn routed_length_falls_back_to_the_chord_without_a_mid_point() {
+    // An arc with no (mid ...) gives us nothing but the chord, which is a floor
+    // on the real length and never an over-estimate.
+    let doc = root_of(
+        r#"(net 1 "SDA")
+           (arc (start 0 0) (end 3 4) (width 0.2) (layer "F.Cu") (net 1))"#,
+    );
+    let l = routed_length_mm(doc.root().unwrap(), 1);
+    assert!((l - 5.0).abs() < 1e-9, "expected the 5 mm chord, got {l}");
 }
 
 #[test]
@@ -560,11 +628,11 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
     // 10k pull, 10 devices = 100 pF: t_r ~ 0.8473*10000*100e-3 = 847 ns, inside
     // the 1000 ns standard-mode limit on pin capacitance ALONE. A 500 mm bus run
     // (an I2C link across a backplane, exactly where rise time bites) adds
-    // 500*0.057 = 28.5 pF even at the LOW end of the trace-capacitance range,
-    // taking C to 128 pF and t_r to ~1089 ns: over the limit on the lenient
-    // bound, which is what firing requires. Passing None for the trace length
-    // silently rates this in-spec.
-    let text = i2c_routed_text(10, 500.0);
+    // 800*0.038 = 30.4 pF even at the LOW end of the plausible trace-capacitance
+    // range, taking C to 130 pF and t_r to ~1105 ns: over the limit on the
+    // lenient bound, which is what firing requires. Passing None for the trace
+    // length silently rates this in-spec.
+    let text = i2c_routed_text(10, 800.0);
     let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
     let doc = forge_sexpr::parse(&text).unwrap();
     let mut r = SiReport::default();
@@ -576,14 +644,14 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
     );
     assert!(
         r.of_check(SiCheck::I2cRiseTime)
-            .any(|f| f.message.contains("500 mm routing")),
+            .any(|f| f.message.contains("800 mm routing")),
         "the finding must name the routed length it counted"
     );
 }
 
 #[test]
 fn i2c_short_routing_leaves_the_same_bus_silent() {
-    // The identical bus routed compactly (10 mm) is 101 pF / ~852 ns even at the
+    // The identical bus routed compactly (10 mm) is 101.5 pF / ~860 ns even at the
     // high end of the range: in spec. Counting trace copper must not turn every
     // marginal bus into a finding.
     let text = i2c_routed_text(10, 10.0);

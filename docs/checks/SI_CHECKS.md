@@ -147,12 +147,12 @@ t_r = 0.8473 * Rpull * Cbus
 limit is **1000 ns standard mode** (100 kHz) and **300 ns fast mode** (400 kHz).
 Too-weak a pull (R too high) or too much bus capacitance blows it.
 
-Bus capacitance is `Cbus = devices * 10 pF + trace_length * 0.15 pF/mm`:
+Bus capacitance is `Cbus = devices * 10 pF + trace_length * (0.038 to 0.15 pF/mm)`:
 
 - 10 pF per I2C device pin (a common datasheet figure, refinable per part).
-- **0.057 to 0.15 pF/mm** of routed trace, a range rather than a number, summed
-  from the layout's discrete segments and arcs via `routed_length_mm`, the same
-  geometry the USB skew check reads.
+- **0.038 to 0.15 pF/mm** of routed trace, a range rather than a number, summed
+  from the layout's discrete segments and true arc sweeps via `routed_length_mm`,
+  the same geometry the USB skew check reads.
 
 The trace figures are derived, not picked: for a transmission line
 `C' = sqrt(Er_eff) / (c0 * Z0)`, which on FR4 (`Er_eff ~ 3`) is 0.116 pF/mm at
@@ -166,21 +166,27 @@ violated:
 
 | Figure | Value | Used for |
 |--------|-------|----------|
-| `C_TRACE_PF_PER_MM_LOW` | 0.057 pF/mm (100 ohm) | **gating findings**, so a bus is never failed on an assumed geometry it may not have |
+| `C_TRACE_PF_PER_MM_LOW` | 0.038 pF/mm (thin 2-layer, 150 ohm) | **gating findings**, so a bus is not failed on a capacitance a high-impedance route would not have |
 | `C_TRACE_PF_PER_MM_HIGH` | 0.15 pF/mm (40 ohm worst case) | reported alongside, so the reader sees the worst case the geometry permits |
 
-Firing on the high end would fail real boards: a 500 mm 100 ohm route on an
-8-device bus behind a 10 kohm pull is 923 ns at its own impedance (in spec) but
-1313 ns if charged 0.15 pF/mm. Findings therefore quote both numbers and are
-raised only when the low bound is already over the limit. Both constants are
+Firing on the high end would fail real boards: a 700 mm 150 ohm route on an
+8-device bus behind a 10 kohm pull is ~902 ns at its own impedance (in spec) but
+well over the limit if charged 0.15 pF/mm. Findings therefore quote both numbers
+and are raised only when the low bound is already over the limit.
+
+The low figure is the bottom of the range hauksbee will reason about, **not** a
+proof that no route is lower: impedance rises without bound as a trace narrows
+and its plane recedes, and the 10 pF per device pin beside it is a
+datasheet-typical figure rather than a floor either. The messages say "the low
+end of the plausible range" and never claim it is the lowest possible. Both constants are
 pinned against the closed form by
 `si::tests::trace_capacitance_per_mm_matches_transmission_line_physics`, so a
 units slip (a pF/inch or pF/cm figure written as pF/mm, which would inflate every
 bus by an order of magnitude) fails a test rather than shipping.
 
-The trace term is real either way: on a 10-device bus behind a 10 kohm pull, a
-500 mm run adds 28.5 pF even at the low end, taking `Cbus` to 128 pF and `t_r`
-from ~847 ns (in spec) to ~1089 ns (out). Dropping it under-reports rise time, so
+The trace term is real either way: on a 10-device bus behind a 10 kohm pull, an
+800 mm run adds 30 pF even at the low end, taking `Cbus` to 130 pF and `t_r` from
+~847 ns (in spec) to ~1105 ns (out). Dropping it under-reports rise time, so
 a `.kicad_pcb` layout is always folded in when one is uploaded. **Without a layout the routing
 term is unavailable**, and the note says so in words (`routing capacitance NOT
 counted - upload the .kicad_pcb layout to include trace copper`): the
@@ -206,13 +212,13 @@ Measured on the real layouts, with the routed term included:
 
 | Board / bus | Pull | Devices | Routing | `Cbus` | `t_r` | Verdict |
 |-------------|------|---------|---------|--------|-------|---------|
-| Olimex UEXT SDA (REV-L) | 2.2 kohm | 1 | 73 mm | 14-21 pF | 26-39 ns | ok |
+| Olimex UEXT SDA (REV-L) | 2.2 kohm | 1 | 73 mm | 13-21 pF | 24-39 ns | ok |
 | ZSWatch RTC SDA (PCA9306+RV-8263) | 3.3 kohm | 2 | 1 mm | 20 pF | 56 ns | ok |
-| ZSWatch Extension SDA | 1.8 kohm | 8 | 62 mm | 84-89 pF | 127-136 ns | ok |
+| ZSWatch Extension SDA | 1.8 kohm | 8 | 62 mm | 82-89 pF | 126-136 ns | ok |
 
 Routed copper is a real term without being the dominant one: on the Olimex UEXT
-bus, one device pin and 73 mm of track puts a third to a half of the capacitance
-in the trace, so a device-count-only model rates it ~19 ns instead of 26-39 ns.
+bus, one device pin and 73 mm of track puts a fifth to a half of the capacitance
+in the trace, so a device-count-only model rates it ~19 ns instead of 24-39 ns.
 
 The ZSWatch 8-device Extension bus is the corpus's closest-to-the-limit I2C bus
 and still sits ~7x under standard mode. The designers chose 1.8 kohm precisely

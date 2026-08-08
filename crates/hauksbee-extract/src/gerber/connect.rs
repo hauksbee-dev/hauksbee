@@ -727,6 +727,11 @@ impl ReconStats {
     /// closed-loop percentage computed off this reconstruction only scores the
     /// pads that WERE located, which is a claim about part of the board being
     /// presented as a claim about the board.
+    ///
+    /// Note the precise scope of an unmatched flash: it is copper, so it still
+    /// joins whatever net it touches during connectivity reconstruction. What it
+    /// lacks is a component and a pin, which is what makes every per-part figure
+    /// partial.
     pub fn coverage_notes(&self) -> Vec<String> {
         let mut out = self.notes.clone();
         if self.unassigned_flashes > 0 {
@@ -737,11 +742,11 @@ impl ReconStats {
             };
             out.push(format!(
                 "gerber reconstruction: {} of {} pad flashes ({:.0}%) were matched to a placed \
-                 component; {} were not. An unmatched flash is copper that belongs to no \
-                 component here, so it has no pin and no net, and every component-level figure \
-                 (including any closed-loop percentage) scores only the matched pads. Supply a \
-                 pick-and-place file (.csv / .pos, or an Allegro smt_loc.txt) covering the \
-                 missing parts to place them.",
+                 component; {} were not. An unmatched flash still joins the copper net it \
+                 touches, but belongs to no component here, so it carries no pin, and every \
+                 component-level figure (including any closed-loop percentage) scores only the \
+                 matched pads. Supply a pick-and-place file (.csv / .pos, or an Allegro \
+                 smt_loc.txt) covering the missing parts to place them.",
                 self.assigned_flashes, self.total_flashes, pct, self.unassigned_flashes,
             ));
         }
