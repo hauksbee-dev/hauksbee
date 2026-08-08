@@ -603,6 +603,13 @@ pub fn reconstruct(
         .iter()
         .map(|p| footprint_half_extent(&p.package))
         .collect();
+    // Grid footprints (headers/connectors) additionally get an ORIENTED
+    // window: the P&P stores each part's rotation, and a 1x40 header is a
+    // 100 mm line, not a 100 mm square. See [`grid_window`].
+    let grid_windows: Vec<Option<GridWindow>> = placements
+        .iter()
+        .map(|p| grid_window(&p.package, p.rotation))
+        .collect();
     let comp_leaves: Vec<CompLeaf> = placements
         .iter()
         .enumerate()
@@ -699,6 +706,14 @@ pub fn reconstruct(
             let point_box = AABB::from_corners([cx, cy], [cx, cy]);
             for leaf in comp_tree.locate_in_envelope_intersecting(point_box) {
                 let pl = &placements[leaf.idx];
+                // A grid footprint's window is oriented by the part's stored
+                // rotation; the square envelope alone let a long header claim
+                // flashes sitting far off its pin row.
+                if let Some(w) = &grid_windows[leaf.idx] {
+                    if !w.contains(cx - pl.x, cy - pl.y) {
+                        continue;
+                    }
+                }
                 let d = (pl.x - cx).hypot(pl.y - cy);
                 if best.map(|(bd, _)| d < bd).unwrap_or(true) {
                     best = Some((d, leaf.idx));
@@ -995,6 +1010,55 @@ fn footprint_half_extent(package: &str) -> f64 {
     }
     // Connectors, crystals, unknown: a moderate window.
     4.0
+}
+
+/// The oriented pad window of a grid footprint (pin header / connector),
+/// rotated by the placement's stored rotation.
+///
+/// The square window sized for a long header's full span is enormous in BOTH
+/// axes (a 1x40 header gets a ~100 mm square), while the part itself is a
+/// line. The P&P row stores the rotation, so the window can be the part's
+/// actual shape: a box `long` half-extent along the pin row and `cross`
+/// half-extent across it, rotated by the placement angle. Which of the
+/// footprint's two grid dimensions runs along the placement's local x is not
+/// derivable from the name alone, so BOTH orientations of the box are
+/// accepted (their union is still a small subset of the old square). Non-grid
+/// packages keep the square window unchanged.
+struct GridWindow {
+    /// Half-extent along the pin row (the full span, pin-1-corner origins).
+    long: f64,
+    /// Half-extent across the rows.
+    cross: f64,
+    sin: f64,
+    cos: f64,
+}
+
+impl GridWindow {
+    /// Whether the offset (dx, dy) from the placement point falls inside the
+    /// oriented window (either orientation of the row axis).
+    fn contains(&self, dx: f64, dy: f64) -> bool {
+        let u = (dx * self.cos + dy * self.sin).abs();
+        let v = (-dx * self.sin + dy * self.cos).abs();
+        (u <= self.long && v <= self.cross) || (u <= self.cross && v <= self.long)
+    }
+}
+
+/// The oriented window for `package`, if it names a pin grid.
+fn grid_window(package: &str, rotation_deg: f64) -> Option<GridWindow> {
+    let p = package.to_ascii_lowercase();
+    let (rows, cols) = grid_hint(&p)?;
+    let pitch = pitch_hint(&p).unwrap_or(2.54);
+    // Same margins as `footprint_half_extent`: the row span is the FULL grid
+    // length (KiCad headers origin at pin 1), plus one pitch of slack.
+    let long = (rows.max(cols) as f64) * pitch + pitch;
+    let cross = (rows.min(cols) as f64) * pitch + pitch;
+    let (sin, cos) = rotation_deg.to_radians().sin_cos();
+    Some(GridWindow {
+        long,
+        cross,
+        sin,
+        cos,
+    })
 }
 
 /// Parse a `RxC` pin grid from a connector footprint name (`2x18`, `01x02`).
@@ -1480,6 +1544,41 @@ mod tests {
         assert_eq!(pins[0].number, "1", "invented claim-order numbering stays");
         assert_eq!(pins[1].number, "2");
         assert!(board.nets.iter().all(|n| n.name.starts_with("NET_")));
+    }
+
+    #[test]
+    fn a_header_window_follows_its_stored_rotation() {
+        // A 1x40 header is a ~100 mm LINE. Its old square window was ~104 mm
+        // in BOTH axes, so it claimed flashes sitting nowhere near its pin
+        // row. The P&P stores the rotation; at 45° the window must follow it:
+        // a pad on the rotated row axis is claimed, a stray flash the same
+        // distance out on the unrotated axis is not.
+        let header = |rot: f64| Placement {
+            reference: "J1".into(),
+            value: String::new(),
+            package: "PinHeader_1x40_P2.54mm".into(),
+            x: 0.0,
+            y: 0.0,
+            rotation: rot,
+            top: true,
+            dnp: false,
+        };
+        let on_axis_45 = 42.4; // (42.4, 42.4) is ~60 mm along the 45° row
+        let layer = vec![
+            cap(on_axis_45, on_axis_45, on_axis_45, on_axis_45, 0.3, PrimKind::Flash),
+            cap(60.0, 0.0, 60.0, 0.0, 0.3, PrimKind::Flash),
+        ];
+        let (board, stats) = reconstruct("t", vec![layer.clone()], vec![], vec![header(45.0)]);
+        assert_eq!(
+            stats.assigned_flashes, 1,
+            "only the pad on the rotated pin row belongs to the header"
+        );
+        let pos = board.components[0].pins[0].position.unwrap();
+        assert!((pos.0 - on_axis_45).abs() < 1e-6, "the claimed pad is the on-axis one");
+
+        // At rotation 0 the same header claims the (60, 0) pad instead.
+        let (_b, stats) = reconstruct("t", vec![layer], vec![], vec![header(0.0)]);
+        assert_eq!(stats.assigned_flashes, 1);
     }
 
     #[test]
