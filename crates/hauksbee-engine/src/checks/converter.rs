@@ -268,13 +268,24 @@ impl AbstentionReason {
     fn describe(self) -> &'static str {
         match self {
             AbstentionReason::NoDirectionalNames => {
-                "the connectivity is reversible, so it is equally consistent with a buck and a                  boost, and neither rail name says which is the input"
+                concat!(
+                    "the connectivity is reversible, so it is equally consistent with a buck ",
+                    "and a boost, and neither rail name says which is the input"
+                )
             }
             AbstentionReason::BothNamedInput => {
-                "the connectivity is reversible, and BOTH rail names claim to be the input, so                  the names contradict each other rather than settling the direction"
+                concat!(
+                    "the connectivity is reversible, and BOTH rail names claim to be the ",
+                    "input, so the names contradict each other rather than settling the ",
+                    "direction"
+                )
             }
             AbstentionReason::BothNamedOutput => {
-                "the connectivity is reversible, and BOTH rail names claim to be the output, so                  the names contradict each other rather than settling the direction"
+                concat!(
+                    "the connectivity is reversible, and BOTH rail names claim to be the ",
+                    "output, so the names contradict each other rather than settling the ",
+                    "direction"
+                )
             }
         }
     }
