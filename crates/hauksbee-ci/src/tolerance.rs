@@ -409,8 +409,12 @@ pub fn build_plans(
 /// One probe per stratum per component: each component's `[-tol, +tol]` range is
 /// cut into `N` equal strata, each probe takes one stratum's midpoint, and the
 /// stratum order is permuted INDEPENDENTLY per component. That independence is
-/// the whole design: without it every probe would sit on the range's diagonal and
-/// a response that only misbehaves off-diagonal would never be sampled.
+/// the whole design: with a shared order every probe would sit on the range's
+/// diagonal, and a response that only misbehaves when two components move
+/// oppositely would never be sampled. Independence makes an all-diagonal design
+/// vanishingly unlikely rather than impossible, and nothing rejects one; a
+/// coincidence there costs this run's off-diagonal coverage, not correctness of
+/// anything the run reports.
 ///
 /// Midpoints keep every probe strictly interior, so a probe can never coincide
 /// with a corner and re-report it as new information. The permutation comes from
@@ -780,9 +784,12 @@ mod tests {
 
     /// Latin hypercube, both halves: every stratum of every component is hit
     /// exactly once (the "Latin" part), and the axes are permuted independently
-    /// so the probes are not all on the diagonal (the "hypercube" part). A
-    /// diagonal-only design would miss any response that only misbehaves when
-    /// two components move oppositely.
+    /// rather than sharing one order (the "hypercube" part). The strata property
+    /// is a guarantee. The off-diagonal check is a property of THIS fixture's
+    /// permutations, not of the design: independent permutations can coincide,
+    /// and nothing rejects that. It is asserted here because a regression that
+    /// collapsed the axes onto one shared order would show up as a permanent
+    /// diagonal, which is the failure worth catching.
     #[test]
     fn interior_probes_cover_every_stratum_and_are_not_diagonal() {
         let ts = vec![
