@@ -114,9 +114,9 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
             // params bag is free-form on purpose, so a misspelled key is not an
             // error, it is a key nothing reads: the entry validates and then
             // silently runs on the default. This is the only place that key is
-            // ever mentioned, so it says so and names the nearest real one.
-            // Unknown names can also be genuine extensions, which is why it
-            // cannot gate.
+            // ever mentioned, so it says so, and adds the nearest real name when
+            // one is close enough to be worth naming. Unknown names can also be
+            // genuine extensions, which is why it cannot gate.
             for u in hauksbee_models::param_names::unknown_params(entry) {
                 entry_warnings += 1;
                 println!(
