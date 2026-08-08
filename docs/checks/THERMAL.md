@@ -84,6 +84,77 @@ and 01005's metric code *is* 0402 (`R_01005_0402Metric`), so a plain substring
 search would hand the smallest, worst-cooling body the 0402 figure of 600 and
 under-estimate its temperature.
 
+### Chip-resistor power rating (and why the fallback is 1/16 W)
+
+An explicit `ratings.max_power_w` always wins. Otherwise the rating comes from
+the same imperial size token, smallest-body-first for the same metric-collision
+reason: 01005 1/32 W, 0201 1/20 W, 0402 1/16 W, 0603 1/10 W, 0805 1/8 W,
+1206 1/4 W, 1210 1/2 W, 2010 3/4 W, 2512 1 W.
+
+The unrecognised case is split three ways, because a single fallback cannot be
+conservative for both surface-mount and through-hole parts:
+
+| Footprint evidence | Rating | Basis |
+|--------------------|--------|-------|
+| Recognised imperial chip size code | the table above | `ChipPackage` |
+| Metric-only chip code (`R_3216Metric` = imperial 1206) | the imperial equivalent | `ChipPackage` |
+| Recognised DIN axial body code | per the DIN table below | `ThtAxial` |
+| Anything else, including an unrecognised SMD size, an axial body with no DIN code, or a `Power` axial | none derived | `Unknown` |
+
+The DIN codes are size evidence and are **not** interchangeable, so each carries
+its own rating: DIN0204 0.125 W, DIN0207 0.25 W, DIN0309 0.5 W, DIN0411 1 W,
+DIN0414 2 W, DIN0516 3 W, DIN0617 5 W. A blanket 1/4 W for anything axial
+over-rates a DIN0204 twofold and suppresses its overpower check, and under-rates
+a DIN0411 fourfold. An axial footprint carrying no DIN code has no size evidence
+at all (the codes span 0.125 W to 5 W) and abstains.
+
+A metric-only name is read **before** the imperial pass, and a name carrying a
+separate imperial token is left to it. That ordering is what keeps both cases
+right: `R_0402Metric` is metric 0402, an imperial 01005 at 1/32 W (reading its
+`0402` as imperial rates it 1/16 W, double its real limit), while KiCad's dual
+form `R_0201_0603Metric` must be read from its imperial `0201` at 1/20 W, not
+from the metric `0603`.
+
+There is **no floor for an unrecognised size**, because no direction is
+conservative. A 1/4 W default exceeds a real 0402 (1/16 W) by 4x and suppresses
+genuine overpower findings. A 1/16 W floor undercuts everything above the
+smallest and invents them: a real 0603 behind a custom footprint name dissipating
+80 mW sits inside its 100 mW rating but outside a guessed 62.5 mW one. So the size
+is either read or the part abstains and is named. A `Power` axial abstains for the
+same reason (those bodies are 1 W and up).
+
+**Only resistors get a footprint-derived wattage.** `ComponentKind::Passive` also
+covers capacitors, inductors and ferrite beads, whose limits are current and
+voltage rather than a chip-resistor wattage; handing an
+`Inductor_SMD:L_0805_2012Metric` an 0805 resistor's 1/8 W would invent an
+overpower fault out of ordinary coil heating, and the 1/16 W floor makes that
+misfire easier to hit, not harder. `DeviceMeta::is_resistor_like` gates it on the
+footprint library/body name (`Resistor_*`, `R_*`) with the reference-designator
+prefix (`R`, `RN`, `RA`) as the fallback, and anything naming another passive
+family is excluded outright. A non-resistor passive therefore gets no derived
+rating and is not reported as an overpower coverage hole either.
+
+A flat 1/4 W for everything unrecognised would not be conservative on an SMD
+board: 1/4 W **exceeds** a real 0402 (1/16 W) by 4x and an 0603 (1/10 W) by
+2.5x, so an overstressed chip resistor whose footprint string went unrecognised
+would have its overpower check silently suppressed. The conservative floor for a
+chip resistor is the smallest one anyone ships, 1/16 W. A through-hole axial body
+genuinely is 1/4 W, so it keeps that figure; applying the chip floor there would
+invent overpower faults on correct designs.
+
+When the footprint says neither, nothing is derived. Guessing would be wrong in
+opposite directions, so the device is reported instead: `StressMonitor::
+power_coverage_gaps` names the affected parts and the unlock (a model with
+`ratings.max_power_w`, or a footprint / BOM line naming the package). It reports
+**one note per unreadable package**, with a count and up to five representative
+references, because a board carrying fifty resistors from one unparseable library
+is one coverage hole with fifty instances and fifty near-identical notes is how an
+honesty channel stops being read. The CI
+report carries it in `coverage_warnings` alongside the co-sim coverage holes, and
+`BoundBoard::power_coverage_gaps` feeds the same sentence into the evidence map
+on the `run` / `--plain` / `--json` / TUI surfaces, so the gap is not visible in
+CI alone. An overpower check that did not run is a visible gap, not a pass.
+
 `theta_jc_c_per_w` (junction-to-case) can also be carried in the model DB. It
 is informational today. The free-air estimate uses `theta_JA`. A heatsinked
 path (`theta_JC + theta_CS + theta_SA`) is a future extension.

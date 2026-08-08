@@ -1128,6 +1128,11 @@ pub struct DrcStructured {
     /// every renderer; CI gates ignore the shorts when it is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_warning: Option<String>,
+    /// Set when the run suppressed zone-versus-pad overlaps as antipad carves.
+    /// "No shorts found" and "no shorts found, having skipped a whole class"
+    /// are different claims, so every renderer states this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppression_note: Option<String>,
 }
 
 impl DrcStructured {
@@ -1242,6 +1247,7 @@ impl DrcStructured {
             violations,
             at_limit,
             version_warning: report.version_warning.clone(),
+            suppression_note: report.suppression_note(),
         }
     }
 
@@ -1258,6 +1264,10 @@ impl DrcStructured {
         );
         if let Some(w) = &self.version_warning {
             let _ = writeln!(s, "\n⚠ UNRELIABLE: {w}");
+        }
+        // Before any "clean" claim: a suppressed class is not a checked class.
+        if let Some(n) = &self.suppression_note {
+            let _ = writeln!(s, "\nNOT CHECKED: {n}");
         }
         if self.shorts.is_empty() && self.violations.is_empty() && self.at_limit.is_empty() {
             let _ = writeln!(s, "no shorts or clearance violations.");
@@ -2170,6 +2180,7 @@ mod tests {
             findings: vec![short("GND", "+3V3")],
             primitive_count: 2,
             version_warning: Some("unreliable on this version".into()),
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let st = DrcStructured::from_report(&report);
         assert_eq!(st.shorts.len(), 1);

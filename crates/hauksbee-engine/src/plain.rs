@@ -452,6 +452,22 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     // DRC finding parity remains unvalidated. Those results carry a downgraded
     // severity (set once in DrcStructured::from_report). Surface the caveat as a
     // never-dropped heads-up so the verdict is "worth a look", not "N serious".
+    // A suppressed finding class must be visible on the human report too: a
+    // reader who is never told the rule was applied cannot audit it.
+    if let Some(n) = &st.suppression_note {
+        out.push_note(HeadsUp::glossed(
+            n.clone(),
+            "KiCad always carves a different-net pad out of a pour, and KiCad 10 draws that \
+             carve as a keyhole slit running through the pad interior, so the geometry reads \
+             as a negative gap. Reporting those as shorts produced over a thousand false \
+             positives on a single board, so the whole Zone-versus-Pad overlap class is \
+             dropped.",
+            "Pour incursions by a track, via or arc are still reported normally. If you need \
+             the suppressed class audited, run KiCad's own DRC (Inspect -> Design Rules \
+             Checker) on the board.",
+        ));
+    }
+
     if let Some(w) = &st.version_warning {
         out.push_note(HeadsUp::glossed(
             format!("These KiCad 10 copper findings are downgraded pending exact native-DRC parity: {w}"),
@@ -1155,6 +1171,7 @@ mod tests {
             findings: vec![f],
             primitive_count: 2,
             version_warning: None,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let plain = plain_drc(&report);
         assert_eq!(plain.findings[0].level, PlainLevel::Warning);
@@ -1175,6 +1192,7 @@ mod tests {
                  findings are UNVALIDATED"
                     .to_string(),
             ),
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let plain = plain_drc_structured(&crate::result::DrcStructured::from_report(&report));
         let text = plain.render().to_lowercase();
@@ -1219,6 +1237,7 @@ mod tests {
             findings: vec![at_limit(), at_limit(), at_limit()],
             primitive_count: 6,
             version_warning: None,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let st = DrcStructured::from_report(&report);
         let plain = plain_drc_structured(&st);
@@ -1257,6 +1276,7 @@ mod tests {
             findings: vec![below],
             primitive_count: 2,
             version_warning: None,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let below_plain = plain_drc_structured(&DrcStructured::from_report(&below_report));
         assert_eq!(below_plain.findings.len(), 1);
@@ -1294,6 +1314,7 @@ mod tests {
             findings,
             primitive_count: 100,
             version_warning: None,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let st = DrcStructured::from_report(&report);
 

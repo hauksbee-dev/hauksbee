@@ -1233,12 +1233,14 @@ mod tests {
             violations: Vec::new(),
             at_limit: Vec::new(),
             version_warning: None,
+            suppression_note: None,
         };
         AppState::new(
             "ScopeDemo".into(),
             &report,
             &summary,
             &drc,
+            &[],
             &[],
             &[],
             vec![

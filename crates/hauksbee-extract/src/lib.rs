@@ -72,7 +72,7 @@ pub use si::{
 pub use trace_current::{
     audit_trace_currents, ipc2221_ampacity, ipc2221_min_width_mm, net_copper_from_root,
     net_copper_from_text, render_trace_capacity_report, trace_capacity_report, CopperKind,
-    NetCopper, TraceAudit, TraceCapacityRow, TraceCurrentFinding,
+    CopperSource, CopperWeights, NetCopper, TraceAudit, TraceCapacityRow, TraceCurrentFinding,
 };
 
 use serde::{Deserialize, Serialize};

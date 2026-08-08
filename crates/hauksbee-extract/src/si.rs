@@ -152,23 +152,28 @@ impl ExtractedBoard {
     /// Run all four signal-integrity checks. The raw `.kicad_pcb` text is needed
     /// for the geometry-bearing checks (antenna keepout, USB length skew); when
     /// it is absent or not a KiCad layout, those checks are inert (they report
-    /// nothing rather than guessing), while the netlist-only checks (crystal CL
-    /// from values, I2C rise time) still run.
+    /// nothing rather than guessing). The crystal CL check is netlist-only and
+    /// always runs. The I2C rise-time check runs either way, but folds routed
+    /// trace capacitance in when a layout is present and says out loud that it
+    /// could not when one is not.
     pub fn si_checks(&self, pcb_text: Option<&str>) -> SiReport {
         let mut report = SiReport::default();
         check_crystal_load_cap(self, &mut report);
-        check_i2c_rise_time(self, &mut report);
 
         // Geometry checks need the layout s-expression.
         let root = pcb_text
             .filter(|t| t.contains("(kicad_pcb"))
             .and_then(|t| forge_sexpr::parse(t).ok());
-        if let Some(doc) = &root {
-            if let Some(r) = doc.root() {
-                check_antenna_keepout(self, r, &mut report);
-                check_usb_diff_pair(self, r, &mut report);
-                impedance::check_controlled_impedance(self, r, &mut report);
-            }
+        let geom = root.as_ref().and_then(|doc| doc.root());
+
+        // The I2C bus model runs netlist-only, but folds in routed trace
+        // capacitance whenever the layout is available.
+        check_i2c_rise_time(self, geom, &mut report);
+
+        if let Some(r) = geom {
+            check_antenna_keepout(self, r, &mut report);
+            check_usb_diff_pair(self, r, &mut report);
+            impedance::check_controlled_impedance(self, r, &mut report);
         }
         report
     }
@@ -767,9 +772,9 @@ fn load_cap_through_resistor(board: &ExtractedBoard, net_id: i64) -> Option<f64>
 // either fails outright or only works slow.
 //
 // Bus capacitance is the sum of: per-device pin capacitance (datasheet ~10 pF
-// default per I2C pin) + trace capacitance (a microstrip over a plane is
-// ~0.3-1.0 pF/mm; we use a documented 1.0 pF/mm conservative figure times the
-// net's routed length, OR a flat per-device allowance when geometry is absent).
+// default per I2C pin) + trace capacitance (C_TRACE_PF_PER_MM times the net's
+// routed length, or nothing at all when no layout is available - and the note
+// then says the routing term is missing rather than implying it was zero).
 //
 // Mode inference is conservative: assume STANDARD mode (1000 ns) unless the net
 // name encodes fast mode. So we only ever fire when even the most lenient mode
@@ -785,6 +790,90 @@ pub const T_R_STANDARD_NS: f64 = 1000.0;
 pub const T_R_FAST_NS: f64 = 300.0;
 /// Default capacitance per I2C device pin (pF), a common datasheet figure.
 const C_PIN_PF: f64 = 10.0;
+
+// Trace self-capacitance to the reference plane, pF per mm of routed length.
+//
+// For a transmission line, `C' = sqrt(Er_eff) / (c0 * Z0)`. On FR4
+// (`Er_eff ~ 3`) that is 0.116 pF/mm for a 50 ohm line, 0.077 pF/mm at 75 ohm
+// and 0.057 pF/mm at 100 ohm; the widest, closest-coupled realistic case
+// (`Er_eff 3.2`, `Z0 40 ohm`) gives 0.149 pF/mm.
+//
+// Hauksbee does not know a given I2C route's impedance, so it does not pretend
+// to: it carries the whole real range and reports it. Which end is used where
+// matters, and the split follows the module's standing rule that a check fires
+// only when even the most LENIENT assumption is violated:
+//
+//   - the LOW figure decides whether to fire, so a bus is not failed on an
+//     assumed geometry it may not have;
+//   - the HIGH figure is reported alongside it, so the reader sees the worst
+//     case the geometry permits.
+
+/// Low end of the trace-capacitance range (pF/mm): a thin 2-layer route over a
+/// distant plane, `Er_eff 2.9` at 150 ohm. Findings are gated on this, so a bus
+/// is not failed on a capacitance a high-impedance route would not have.
+///
+/// This is the low end of the range hauksbee is willing to reason about, not a
+/// proof that no route can be lower: impedance rises without bound as a trace
+/// narrows and its plane recedes, and the 10 pF per device pin beside it is a
+/// datasheet-typical figure rather than a floor either. The messages say "the low
+/// end of the plausible range" for exactly that reason, and never call it the
+/// lowest possible.
+const C_TRACE_PF_PER_MM_LOW: f64 = 0.038;
+/// High end of the trace-capacitance range (pF/mm): `Er_eff 3.2` at 40 ohm, the
+/// widest, closest-coupled realistic case. Reported, never used to fire.
+const C_TRACE_PF_PER_MM_HIGH: f64 = 0.15;
+
+/// Render a range to whole numbers, collapsing to one when the ends round equal:
+/// "20" rather than the "20-20" a blind range would print.
+fn range_0dp(low: f64, high: f64) -> String {
+    if low.round() == high.round() {
+        format!("{low:.0}")
+    } else {
+        format!("{low:.0}-{high:.0}")
+    }
+}
+
+/// Trace capacitance per mm computed from the board's own geometry, when the
+/// layout declares enough to do it: `C' = sqrt(Er_eff) / (c0 * Z0)`, with `Z0`
+/// from the same microstrip model the controlled-impedance check uses and
+/// `Er_eff` from the standard Hammerstad approximation.
+///
+/// This is what turns the capacitance from an assumed range into a measurement,
+/// so a declared stackup plus a routed track width settles the question rather
+/// than merely narrowing it. `None` when the board declares no stackup or the net
+/// has no discrete track to measure, which is when the range is still all there is.
+fn trace_capacitance_pf_per_mm(w_mm: f64, stack: &impedance::Stackup) -> Option<f64> {
+    if w_mm <= 0.0 || stack.source != impedance::StackupSource::Board {
+        return None;
+    }
+    let (h, t, er) = (stack.h_microstrip_mm, stack.t_cu_mm, stack.er);
+    let z0 = impedance::microstrip_z0(w_mm, h, t, er)?;
+    if z0 <= 0.0 {
+        return None;
+    }
+    // Hammerstad's effective permittivity for a microstrip.
+    let er_eff = (er + 1.0) / 2.0 + ((er - 1.0) / 2.0) / (1.0 + 10.0 * h / w_mm).sqrt();
+    // c0 in mm/s, so the result is F/mm; scale to pF.
+    const C0_MM_PER_S: f64 = 2.998e11;
+    let c_pf_per_mm = 1e12 * er_eff.sqrt() / (C0_MM_PER_S * z0);
+    c_pf_per_mm.is_finite().then_some(c_pf_per_mm)
+}
+
+/// The bus-capacitance estimate. A range when the trace's impedance is unknown,
+/// collapsed to a single computed value when the board declares enough geometry.
+#[derive(Debug, Clone, Copy)]
+struct BusCapacitance {
+    /// Pin capacitance plus the low-end trace term (pF). Gates findings.
+    low_pf: f64,
+    /// Pin capacitance plus the high-end trace term (pF). Reported only.
+    high_pf: f64,
+    devices: usize,
+    /// Routed length actually measured (mm), or `None` with no layout.
+    trace_len_mm: Option<f64>,
+    /// Set when the trace term was COMPUTED from the board's stackup and the net's
+    /// track width rather than assumed from a range. Carries that pF/mm figure.
+    measured_pf_per_mm: Option<f64>,
+}
 
 /// Rise time (ns) for a pull-up R (ohms) charging a bus capacitance C (pF).
 pub fn i2c_rise_time_ns(r_ohm: f64, c_pf: f64) -> f64 {
@@ -871,12 +960,14 @@ fn pullup_ohms(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
 
 /// Estimate bus capacitance (pF) on an I2C net from device count plus optional
 /// routed trace length. Devices = non-resistor, non-connector parts with a pin
-/// on the net (each ~C_PIN_PF). Trace length, when known, adds 1.0 pF/mm.
+/// on the net (each ~C_PIN_PF). Trace length, when known, adds
+/// [`C_TRACE_PF_PER_MM`].
 fn bus_capacitance_pf(
     board: &ExtractedBoard,
     net_id: i64,
     trace_len_mm: Option<f64>,
-) -> (f64, usize) {
+    measured_pf_per_mm: Option<f64>,
+) -> BusCapacitance {
     // Dedup by (reference, pad number): an IPC-356 both-sided through-hole access
     // record lists the same pad twice, and counting raw net_members double-counts
     // its pin capacitance (8 devices / 80 pF instead of 4 / 40 pF), inflating the
@@ -895,11 +986,23 @@ fn bus_capacitance_pf(
         }
     }
     let c_dev = devices as f64 * C_PIN_PF;
-    let c_trace = trace_len_mm.unwrap_or(0.0) * 1.0; // 1.0 pF/mm, documented.
-    (c_dev + c_trace, devices)
+    let len = trace_len_mm.unwrap_or(0.0);
+    // A computed figure replaces both ends of the range: there is nothing left to
+    // bracket once the geometry is known.
+    let (low, high) = match measured_pf_per_mm {
+        Some(c) => (c, c),
+        None => (C_TRACE_PF_PER_MM_LOW, C_TRACE_PF_PER_MM_HIGH),
+    };
+    BusCapacitance {
+        low_pf: c_dev + len * low,
+        high_pf: c_dev + len * high,
+        devices,
+        trace_len_mm,
+        measured_pf_per_mm,
+    }
 }
 
-fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
+fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut SiReport) {
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
             continue;
@@ -916,14 +1019,52 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
         let Some(r) = pullup_ohms(board, net.id) else {
             continue;
         };
-        // Trace length is not parsed here (it needs the geometry root); the
-        // device-count model is the conservative floor. Geometry refinement is a
-        // documented future improvement.
-        let (c_bus, devices) = bus_capacitance_pf(board, net.id, None);
-        if c_bus <= 0.0 {
+        // Routed trace copper is real bus capacitance, so fold it in whenever the
+        // layout is available. Without a layout the device-count model is all we
+        // have; the message says so rather than passing it off as complete.
+        let trace_len_mm = root.map(|r| routed_length_mm(r, net.id));
+        // With a stackup and a routed track width, the trace capacitance is
+        // computable rather than assumed, which is what actually settles the
+        // range. Falls back to the range when either is missing.
+        // Only when the net's copper is entirely on F.Cu, because that is the only
+        // layer `read_stackup` describes: it returns F.Cu's thickness and the first
+        // dielectric below it. Applying those to a B.Cu route on an asymmetric
+        // stackup, or to any inner layer, would compute a number for geometry the
+        // board never stated and then call it measured.
+        let measured = root.and_then(|r| {
+            let layers = net_copper_layers(r, net.id);
+            if layers.len() != 1 || !layers.contains("F.Cu") {
+                return None;
+            }
+            // A microstrip needs a reference PLANE under the trace, which a stackup
+            // does not establish: it lists dielectric thicknesses, not which copper
+            // is poured solid. Every routed segment of this net must actually sit
+            // over a filled lower-layer pour; a pour existing SOMEWHERE on the
+            // board says nothing about the copper beneath this bus.
+            if !net_is_over_a_plane(r, net.id) {
+                return None;
+            }
+            let stack = impedance::read_stackup(r)?;
+            let (w_min, _) = track_width_range(r, net.id)?;
+            trace_capacitance_pf_per_mm(w_min, &stack)
+        });
+        let c = bus_capacitance_pf(board, net.id, trace_len_mm, measured);
+        if c.low_pf <= 0.0 {
             continue;
         }
-        let t_r = i2c_rise_time_ns(r, c_bus);
+        // Fire on the LOW end of the capacitance range: a bus is never failed on
+        // an assumed trace impedance it may not have. The high end is reported so
+        // the reader still sees the worst case the geometry permits.
+        let t_r = i2c_rise_time_ns(r, c.low_pf);
+        let t_r_high = i2c_rise_time_ns(r, c.high_pf);
+        // Rise time from the DEVICE PINS alone, with no trace term at all.
+        //
+        // This is NOT an assumption-free number: the pin count and pull-up value
+        // come from the netlist, but C_PIN_PF is a datasheet-typical 10 pF, and a
+        // part with 3 pF pins would sit far below it. What it is free of is the
+        // GEOMETRIC assumption, the trace impedance hauksbee cannot see, which is
+        // the one the trace term rests on and the one the caveat distinguishes.
+        let t_r_pins = i2c_rise_time_ns(r, c.devices as f64 * C_PIN_PF);
 
         // Conservative: judge against STANDARD mode unless the name says fast.
         // Whole-token match, not raw `contains`: a bare substring test fires on
@@ -934,23 +1075,88 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
         let fast = is_fast_mode_name(&net.name);
         let limit = if fast { T_R_FAST_NS } else { T_R_STANDARD_NS };
 
+        // How the capacitance was arrived at, so a reader can tell a
+        // geometry-backed number from a pin-count-only floor, and can see that
+        // the trace term is a range rather than a measurement.
+        let devices = c.devices;
+        let basis = match (c.trace_len_mm, c.measured_pf_per_mm) {
+            (Some(len), Some(cpm)) => format!(
+                "{devices} devices + {len:.0} mm routing at {cpm:.3} pF/mm, computed from the \
+                 board stackup and the net's track width"
+            ),
+            (Some(len), None) => format!(
+                "{devices} devices + {len:.0} mm routing at an ASSUMED \
+                 {C_TRACE_PF_PER_MM_LOW}-{C_TRACE_PF_PER_MM_HIGH} pF/mm; declare the stackup to \
+                 compute it from the real geometry"
+            ),
+            (None, _) => format!(
+                "{devices} devices, routing capacitance NOT counted - \
+                 upload the .kicad_pcb layout to include trace copper"
+            ),
+        };
+
         if t_r > limit {
-            // Even the assumed (lenient) mode fails: a real finding.
-            let sev = if t_r > limit * 1.5 {
+            // Even the assumed (lenient) mode fails. How hard we say it depends on
+            // what the verdict rests on: the pin-only figure needs no geometric
+            // assumption, so it carries full severity, while a shortfall that only
+            // appears once trace capacitance is added is true for the impedance
+            // range we assumed and false above it. That one is capped at Medium
+            // and says so, rather than presenting an assumption as a defect.
+            let rests_on_trace = t_r_pins <= limit;
+            let sev = if rests_on_trace {
+                SiSeverity::Medium
+            } else if t_r > limit * 1.5 {
                 SiSeverity::High
             } else {
                 SiSeverity::Medium
             };
+            let caveat = if rests_on_trace && c.measured_pf_per_mm.is_none() {
+                " This shortfall depends on the ASSUMED trace capacitance: the device pins \
+                 alone are within the limit, so a higher-impedance route than assumed would \
+                 pass. Declare the board's stackup and this shortfall is recomputed from the \
+                 real trace geometry instead of a range."
+            } else if rests_on_trace {
+                " The device pins alone are within the limit, so this rests on the trace \
+                 capacitance - which was computed from the board's own stackup and track \
+                 width, not assumed."
+            } else {
+                " The device pins alone exceed the limit, so this does not rest on any routing \
+                 assumption (it does still use the datasheet-typical 10 pF per I2C pin; give \
+                 the parts models carrying their real pin capacitance to tighten it)."
+            };
             report.findings.push(SiFinding {
                 check: SiCheck::I2cRiseTime,
                 severity: sev,
-                message: format!(
-                    "I2C {role} '{}': pull-up {:.0} ohm x bus ~{:.0} pF ({} devices) gives t_r ~ {:.0} ns, \
-                     over the {} limit {:.0} ns",
-                    net.name, r, c_bus, devices, t_r,
-                    if fast { "fast-mode" } else { "standard-mode" },
-                    limit
-                ),
+                message: if c.measured_pf_per_mm.is_some() {
+                    // Computed geometry: there is no range, so no range language.
+                    format!(
+                        "I2C {role} '{}': pull-up {:.0} ohm x bus {:.0} pF ({}) gives \
+                         t_r ~ {:.0} ns, over the {} limit {:.0} ns.{}",
+                        net.name,
+                        r,
+                        c.low_pf,
+                        basis,
+                        t_r,
+                        if fast { "fast-mode" } else { "standard-mode" },
+                        limit,
+                        caveat
+                    )
+                } else {
+                    format!(
+                        "I2C {role} '{}': pull-up {:.0} ohm x bus {} pF ({}) gives t_r ~ {:.0} ns \
+                         at the LOW end of the plausible trace-capacitance range (up to {:.0} ns \
+                         at the high end), over the {} limit {:.0} ns.{}",
+                        net.name,
+                        r,
+                        range_0dp(c.low_pf, c.high_pf),
+                        basis,
+                        t_r,
+                        t_r_high,
+                        if fast { "fast-mode" } else { "standard-mode" },
+                        limit,
+                        caveat
+                    )
+                },
                 refs: mem.iter().map(|(c, _)| c.reference.clone()).collect(),
                 nets: vec![net.name.clone()],
             });
@@ -959,8 +1165,13 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
                 check: SiCheck::I2cRiseTime,
                 severity: SiSeverity::Info,
                 message: format!(
-                    "I2C {role} '{}': pull-up {:.0} ohm x ~{:.0} pF ({} dev) -> t_r ~ {:.0} ns (< {:.0} ns) - ok",
-                    net.name, r, c_bus, devices, t_r, limit
+                    "I2C {role} '{}': pull-up {:.0} ohm x {} pF ({}) -> t_r ~ {} ns (< {:.0} ns) - ok",
+                    net.name,
+                    r,
+                    range_0dp(c.low_pf, c.high_pf),
+                    basis,
+                    range_0dp(t_r, t_r_high),
+                    limit
                 ),
                 refs: vec![],
                 nets: vec![net.name.clone()],
@@ -1457,10 +1668,12 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
         let (ex, ey) = (e.arg_f64(0).unwrap_or(0.0), e.arg_f64(1).unwrap_or(0.0));
         total += ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
     }
-    // Arcs: approximate by the chord plus a small bulge is overkill; use the
-    // straight chord between start and end (KiCad arcs on a diff pair are gentle
-    // and the chord under-estimates by < a few percent, which is well inside the
-    // skew tolerance and documented).
+    // Arcs carry their true swept length, computed from KiCad's start/mid/end
+    // triple. The chord is NOT a usable approximation: it is exact only in the
+    // limit of a straight arc and under-reports a quarter turn by 10% and a
+    // semicircle by 36% (chord 2r against arc pi*r). Copper that goes missing
+    // here under-reports both I2C bus capacitance and USB intra-pair skew, so a
+    // curve-heavy route would read as shorter than it is.
     for arc in root.find_all("arc") {
         if elem_net_id(arc, &by_name) != Some(net_id) {
             continue;
@@ -1470,9 +1683,141 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
         };
         let (sx, sy) = (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0));
         let (ex, ey) = (e.arg_f64(0).unwrap_or(0.0), e.arg_f64(1).unwrap_or(0.0));
-        total += ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
+        let mid = arc
+            .find("mid")
+            .and_then(|m| Some((m.arg_f64(0)?, m.arg_f64(1)?)));
+        total += match mid {
+            Some((mx, my)) => arc_length_mm((sx, sy), (mx, my), (ex, ey)),
+            // No mid point recorded: the chord is all the file gives us. It is a
+            // floor on the real length, never an over-estimate.
+            None => ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt(),
+        };
     }
     total
+}
+
+/// True length (mm) of the circular arc through `start`, `mid`, `end`.
+///
+/// KiCad stores a track arc as those three points. The circumcentre gives the
+/// radius, and the swept angle is the sum of the two half-sweeps start->mid and
+/// mid->end, which is what makes this correct for a major arc (over 180 degrees)
+/// as well as a minor one: summing halves cannot wrap the way a single
+/// start-to-end angle does.
+///
+/// Falls back to the chord when the three points are collinear (a degenerate
+/// arc, zero curvature), where the chord IS the length.
+pub fn arc_length_mm(start: (f64, f64), mid: (f64, f64), end: (f64, f64)) -> f64 {
+    let ((sx, sy), (mx, my), (ex, ey)) = (start, mid, end);
+    let chord = |a: (f64, f64), b: (f64, f64)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+    // Twice the signed triangle area; zero when collinear.
+    let cross = (mx - sx) * (ey - sy) - (my - sy) * (ex - sx);
+    if cross.abs() < 1e-12 {
+        return chord(start, end);
+    }
+    // Circumradius R = abc / (4 * area), with area = |cross| / 2.
+    let (a, b, c) = (chord(start, mid), chord(mid, end), chord(start, end));
+    let r = (a * b * c) / (2.0 * cross.abs());
+    if !r.is_finite() || r <= 0.0 {
+        return c;
+    }
+    // Half-sweep of a sub-chord of length `l` on radius `r`: 2*asin(l / 2r),
+    // clamped because floating point can push the ratio a hair past 1.
+    let sweep = |l: f64| 2.0 * (l / (2.0 * r)).clamp(-1.0, 1.0).asin();
+    r * (sweep(a) + sweep(b))
+}
+
+/// Every filled pour polygon on a copper layer BELOW the top.
+fn lower_layer_pours(root: &List) -> Vec<Vec<(f64, f64)>> {
+    let mut out = Vec::new();
+    for z in root.find_all("zone") {
+        let layer_names = z
+            .find("layers")
+            .map(|l| (0..).map_while(|i| l.arg_value(i)).collect::<Vec<_>>())
+            .or_else(|| z.find_value("layer").map(|l| vec![l]))
+            .unwrap_or_default();
+        let on_lower_copper = layer_names
+            .iter()
+            .any(|n| n.ends_with(".Cu") && !n.eq_ignore_ascii_case("F.Cu"));
+        if !on_lower_copper {
+            continue;
+        }
+        for fill in z.find_all("filled_polygon") {
+            if let Some(pts) = fill.find("pts") {
+                let poly: Vec<(f64, f64)> = pts
+                    .find_all("xy")
+                    .filter_map(|p| Some((p.arg_f64(0)?, p.arg_f64(1)?)))
+                    .collect();
+                if poly.len() >= 3 {
+                    out.push(poly);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether **every** routed segment of a net sits over a filled lower-layer pour,
+/// i.e. whether this bus really has a reference plane beneath it.
+///
+/// A board-wide "is there a pour anywhere" test is not evidence about this net: a
+/// small polygon in a far corner would turn an unreferenced route into a
+/// supposedly geometry-computed microstrip. Each segment's midpoint is tested
+/// against the pour polygons, so a route that leaves the plane falls back to the
+/// assumed range.
+///
+/// The residual is stated plainly: a segment whose midpoint is covered but whose
+/// ends overhang the pour edge still counts as covered. That is a narrow
+/// over-reach next to the board-wide test it replaces, and shrinking it further
+/// needs real polygon clipping.
+fn net_is_over_a_plane(root: &List, net_id: i64) -> bool {
+    let pours = lower_layer_pours(root);
+    if pours.is_empty() {
+        return false;
+    }
+    let by_name = net_name_index(root);
+    let mut any_segment = false;
+    for kw in ["segment", "arc"] {
+        for elem in root.find_all(kw) {
+            if elem_net_id(elem, &by_name) != Some(net_id) {
+                continue;
+            }
+            let (Some(sp), Some(ep)) = (elem.find("start"), elem.find("end")) else {
+                continue;
+            };
+            let (sx, sy) = (sp.arg_f64(0).unwrap_or(0.0), sp.arg_f64(1).unwrap_or(0.0));
+            let (ex, ey) = (ep.arg_f64(0).unwrap_or(0.0), ep.arg_f64(1).unwrap_or(0.0));
+            let (mx, my) = ((sx + ex) / 2.0, (sy + ey) / 2.0);
+            any_segment = true;
+            if !pours.iter().any(|poly| {
+                let (x0, y0, x1, y1) = poly_bounds(poly);
+                mx >= x0 && mx <= x1 && my >= y0 && my <= y1 && point_in_poly(mx, my, poly)
+            }) {
+                return false;
+            }
+        }
+    }
+    any_segment
+}
+
+/// The distinct copper layers a net's discrete tracks are routed on.
+///
+/// Used to decide whether the stackup actually describes this net's geometry: the
+/// microstrip parameters available here are F.Cu's, so a net that leaves F.Cu is
+/// outside what they can honestly be applied to.
+fn net_copper_layers(root: &List, net_id: i64) -> std::collections::BTreeSet<String> {
+    let by_name = net_name_index(root);
+    let mut out = std::collections::BTreeSet::new();
+    for kw in ["segment", "arc"] {
+        for elem in root.find_all(kw) {
+            if elem_net_id(elem, &by_name) != Some(net_id) {
+                continue;
+            }
+            if let Some(l) = elem.find_value("layer") {
+                out.insert(l);
+            }
+        }
+    }
+    out
 }
 
 /// Narrowest and widest discrete-track width on a net (mm), for the width/gap
