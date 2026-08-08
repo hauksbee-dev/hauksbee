@@ -75,6 +75,18 @@
 //!      derived limit, set where a void is unambiguous even after clearances are
 //!      excused; see [`MIN_REFERENCE_VOID_MM`].
 //!
+//!    Two limitations are worth stating plainly. The reference layer is taken to
+//!    be the copper layer ADJACENT to the routing layer, which is the same
+//!    assumption [`read_stackup`] already makes when it reads `H` from the first
+//!    dielectric: the stackup block names no plane layer, so neither can this. On
+//!    a stack whose adjacent layer is a signal layer with routing channels and
+//!    whose real plane is one deeper, a gap in that adjacent layer is reported,
+//!    and a solid plane further down does not rescue the estimate because `H`
+//!    would be measured to the wrong layer anyway. And an unfilled or absent pour
+//!    yields `Unverified` rather than an abstention, so the estimate is still
+//!    printed with its reference declared unverified; that is a deliberate choice
+//!    to keep boards that were simply never poured reporting what they used to.
+//!
 //!    Where copper is genuinely absent over such a void, the check reports
 //!    "reference missing under trace", names it, and says what would unlock a
 //!    confident answer, instead of printing a Zdiff. Where the reference cannot be
@@ -956,6 +968,20 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
             ));
             continue;
         };
+        // A hatched / meshed pour is deliberately discontinuous copper: its fill
+        // is a lattice of strips with gaps, laid down for copper balance or flex,
+        // and it is still a perfectly good AC return path. Containment against
+        // those strips would report the gaps between them as one long void along
+        // the whole run, which is the worst false positive this check could make.
+        // There is no honest way to verify such a plane by fill polygons, so say
+        // so instead of guessing.
+        if has_hatched_pour(root, &ref_layer) {
+            reasons.push(format!(
+                "the pour on {ref_layer} is hatched, so its fill polygons cannot show whether the \
+                 return path under the pair is continuous"
+            ));
+            continue;
+        }
         let fills = plane_fills(root, &ref_layer);
         if fills.is_empty() {
             reasons.push(format!(
@@ -1086,7 +1112,13 @@ fn widest_void(uncovered: &[(f64, f64)], layer: &str, total: usize) -> Option<Mi
                 extent = extent.max(((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt());
             }
         }
-        if extent < MIN_REFERENCE_VOID_MM {
+        // The uncovered samples sit INSIDE the void, so the distance between the
+        // outermost two under-measures its true width by up to one pitch at each
+        // end. The width is therefore in [extent, extent + 2 * pitch]; take the
+        // midpoint, or a 2.4 mm moat sampled at 0.5 mm measures 1.9 mm and slips
+        // under the floor.
+        let width = extent + SAMPLE_PITCH_MM;
+        if width < MIN_REFERENCE_VOID_MM {
             continue;
         }
         let (mut min_x, mut min_y) = pts[0];
@@ -1099,13 +1131,13 @@ fn widest_void(uncovered: &[(f64, f64)], layer: &str, total: usize) -> Option<Mi
         }
         let candidate = MissingReference {
             layer: layer.to_string(),
-            extent_mm: extent,
+            extent_mm: width,
             uncovered: pts.len(),
             total,
             from: (min_x, min_y),
             to: (max_x, max_y),
         };
-        if best.as_ref().map_or(true, |b| extent > b.extent_mm) {
+        if best.as_ref().map_or(true, |b| width > b.extent_mm) {
             best = Some(candidate);
         }
     }
@@ -1175,6 +1207,16 @@ fn plane_piercings(root: &List, margin: f64) -> Vec<Piercing> {
             if extent <= 0.0 {
                 continue;
             }
+            // Circumscribe the cleared rectangle rather than inscribe it. The
+            // pour is pulled back around the pad OUTLINE, so for an elongated
+            // pad (a 4 x 1.2 mm connector pin) the clearance reaches furthest at
+            // the corners, and a disc of the pad's half-length left those corners
+            // just outside the excuse: a row of them along a fanout read as a
+            // void. Using the corner distance over-excuses a little, which only
+            // ever loses an abstention.
+            let half_diag = ((sx.max(drill) / 2.0 + margin).powi(2)
+                + (sy.max(drill) / 2.0 + margin).powi(2))
+            .sqrt();
             let mut layers: Vec<String> = pad
                 .find("layers")
                 .map(|l| (0..).map_while(|i| l.arg_value(i)).collect())
@@ -1191,7 +1233,7 @@ fn plane_piercings(root: &List, margin: f64) -> Vec<Piercing> {
             out.push(Piercing {
                 x,
                 y,
-                radius: extent / 2.0 + margin,
+                radius: half_diag.max(extent / 2.0 + margin),
                 layers,
             });
         }
@@ -1275,6 +1317,25 @@ fn plane_fills(root: &List, layer: &str) -> Vec<Vec<(f64, f64)>> {
     out
 }
 
+/// Does any pour on `layer` use a hatched / meshed fill?
+///
+/// KiCad writes this as `(fill yes (mode hatch) ...)`. Such a pour's fill is a
+/// lattice of strips, so fill-polygon containment says nothing useful about
+/// whether the return path is continuous.
+fn has_hatched_pour(root: &List, layer: &str) -> bool {
+    root.find_all("zone").any(|zone| {
+        let on_layer = zone_covers_layer(zone, layer)
+            || zone
+                .find_all("filled_polygon")
+                .any(|fp| fp.find_value("layer").as_deref() == Some(layer));
+        on_layer
+            && zone
+                .find("fill")
+                .and_then(|f| f.find_value("mode"))
+                .is_some_and(|m| m.eq_ignore_ascii_case("hatch"))
+    })
+}
+
 /// The largest copper clearance declared by any pour on `layer`.
 ///
 /// Read so the anti-pad excuse radius reflects what the board's filler actually
@@ -1324,7 +1385,9 @@ fn zone_covers_layer(zone: &List, layer: &str) -> bool {
         || zone.find_value("layer").map(|l| named(&l)).unwrap_or(false)
 }
 
-/// against.
+/// The abstention: say the reference plane is missing over the named void, and say
+/// what would turn this into a confident answer. No Zdiff is printed, because
+/// there is no reference plane for such a number to be the impedance against.
 fn emit_reference_missing(
     pname: &str,
     mname: &str,

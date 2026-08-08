@@ -500,6 +500,24 @@ impedance to report at all, only the span where the reference plane is absent.
      clearances are excused, in the same spirit as the ±15% impedance tolerance:
      whatever it lets through was never going to be a confident finding.
 
+   A hatched / meshed pour is a fourth case, and it abstains from verifying rather
+   than from the impedance: its fill is a lattice of strips with deliberate gaps,
+   still a good AC return path, so containment against those strips would report the
+   gaps as one void running the whole length of the pair. The check says the pour is
+   hatched and reports the impedance with its reference unverified.
+
+   Two limitations are worth stating plainly. **The reference layer is the copper
+   layer adjacent to the routing layer**, which is the same assumption
+   `read_stackup` already makes when it takes `H` from the first dielectric: the
+   stackup block names no plane layer, so neither can this check. On a stack whose
+   adjacent layer is a signal layer with routing channels and whose real plane is
+   one deeper, a gap in that adjacent layer is what gets reported, and a solid plane
+   further down does not rescue the estimate, because `H` would be measured to the
+   wrong layer regardless. **An absent or unfilled pour yields `unverified`, not an
+   abstention**, so the estimate is still printed with its reference declared
+   unverified; that is a deliberate choice so boards that were simply never poured
+   keep reporting what they always did.
+
    Watchy's corpus test pins the outcome from the other side: its In2.Cu plane must
    verify as *positively solid* under the USB pair, neither reported missing nor
    declared unverifiable.
