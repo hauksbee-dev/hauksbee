@@ -320,6 +320,7 @@ fn item_noun(kind: ItemKind) -> &'static str {
         ItemKind::Via => "a via (layer-to-layer hole)",
         ItemKind::Pad => "a component pad",
         ItemKind::Zone => "a copper fill area",
+        ItemKind::Graphic => "a drawn copper shape",
     }
 }
 
