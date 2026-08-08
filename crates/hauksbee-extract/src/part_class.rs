@@ -65,6 +65,11 @@
 //!    pads and `a`/`b` for everything else; `pos`/`neg` therefore rules a
 //!    resistor out. (`a`/`b` is shared by resistors, inductors, ferrites,
 //!    crystals and fuses, so it rules nothing *in*.)
+//!
+//! Rungs 2, 3 and 5 all come from one model lookup and are evaluated together,
+//! before rung 4 in program order. That does not make them outrank it: every
+//! answer either of the model rungs produces is cross-examined against rung 4's
+//! dimension, and a disagreement yields `Unknown` rather than either witness.
 //! 6. **The designator and `lib_id` strings**, exactly as before. This rung is
 //!    a last-resort hint, kept so a board with no resolvable model and a bare
 //!    magnitude for a value behaves the way it always did rather than losing a
@@ -271,19 +276,21 @@ fn has_sub_unity_multiplier(value: &str) -> bool {
     false
 }
 
-/// Rungs 2, 3 and 5: whatever the resolved model entry can say./// Rungs 2, 3 and 5: whatever the resolved model entry can say.
+/// Rungs 2, 3 and 5: whatever the resolved model entry can say.
 fn from_model(c: &Component) -> Option<PartClass> {
     let entry = resolved_shape(c)?;
+    // Whatever the model says is cross-examined against the value's dimension.
+    // Two witnesses that disagree are not a confident answer: a `Device:R` symbol
+    // valued `100nF` is a schematic error either way, and picking one of them
+    // hands a downstream check a confident wrong answer.
+    let agrees = |class: PassiveClass| match from_value_dimension(c) {
+        Some(PartClass::Passive(by_value)) => by_value == class,
+        _ => true,
+    };
     // Rung 2: the DB's declared class.
     if let Some(class) = entry.passive_class {
-        // Unless the value's dimension contradicts it. A `Device:R` symbol valued
-        // `100nF` is a schematic error either way, and this codebase would rather
-        // say "I cannot tell" than pick one of two contradicting witnesses and
-        // hand a downstream check a confident wrong answer.
-        if let Some(PartClass::Passive(by_value)) = from_value_dimension(c) {
-            if by_value != class {
-                return Some(PartClass::Unknown);
-            }
+        if !agrees(class) {
+            return Some(PartClass::Unknown);
         }
         return Some(PartClass::Passive(class));
     }
@@ -293,9 +300,13 @@ fn from_model(c: &Component) -> Option<PartClass> {
     }
     // Rung 5: capacitor-shaped pin roles. `a`/`b` is shared by resistors,
     // inductors, ferrites, crystals and fuses, so it answers nothing.
-    entry
-        .capacitor_pin_roles
-        .then_some(PartClass::Passive(PassiveClass::Capacitor))
+    if !entry.capacitor_pin_roles {
+        return None;
+    }
+    if !agrees(PassiveClass::Capacitor) {
+        return Some(PartClass::Unknown);
+    }
+    Some(PartClass::Passive(PassiveClass::Capacitor))
 }
 
 /// The part of a resolved model entry this module reads. Cached, so it must be
@@ -382,6 +393,17 @@ fn from_strings(c: &Component) -> PartClass {
         return PartClass::Passive(PassiveClass::Inductor);
     }
     let r = ref_designator(&c.reference);
+    // Inductors before capacitors and resistors: `L*` is unambiguous, and the
+    // value rung relies on this answer to tell a coil spelled `10u` from a
+    // capacitor spelled the same way.
+    if r.starts_with('L') && !r.starts_with("LED") {
+        return PartClass::Passive(PassiveClass::Inductor);
+    }
+    // Ferrite beads are conventionally `FB*`, and read ohmic, so they must not
+    // reach the resistor branch.
+    if r.starts_with("FB") {
+        return PartClass::Passive(PassiveClass::FerriteBead);
+    }
     // Capacitors first. `CN`/`CON` are connector conventions, and `CR` is the
     // MIL-STD/ANSI designator for a DIODE, which the engine's binder already
     // documents ("a `CR1` zener must never reach the C-first-letter capacitor
