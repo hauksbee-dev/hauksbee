@@ -585,10 +585,14 @@ fn analyze_normalized(
     let bound = bind_board(board, &lib);
     let bind_summary = BindSummary::from_report(&bound.report);
     let bind_web = BindSummaryWeb::from_summary(&bind_summary);
+    // Reader notes plus the binder's own coverage gaps, so an overpower check
+    // that never ran is visible on the human report, not only in CI.
+    let mut notes = norm.notes.clone();
+    notes.extend(bound.power_coverage_gaps());
     let evidence = match crate::evidence::BoardEvidence::from_bound(
         board,
         &bound.report,
-        &norm.notes,
+        &notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )
     .and_then(|evidence| evidence.with_input_artifact(file_name, &norm.raw, norm.kind))
@@ -832,10 +836,12 @@ pub fn analyze_with_firmware(
     if let Some(captured) = cosim_evidence {
         let lib = ModelLibrary::builtin();
         let bound = bind_board(&norm.board, &lib);
+        let mut notes = norm.notes.clone();
+        notes.extend(bound.power_coverage_gaps());
         let evidence_result = crate::evidence::BoardEvidence::from_bound(
             &norm.board,
             &bound.report,
-            &norm.notes,
+            &notes,
             hauksbee_ir::evidence::RunDate::from_system_clock(),
         )
         .and_then(|evidence| evidence.with_input_artifact(file_name, &norm.raw, norm.kind))

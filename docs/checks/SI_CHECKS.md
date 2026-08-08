@@ -147,17 +147,29 @@ t_r = 0.8473 * Rpull * Cbus
 limit is **1000 ns standard mode** (100 kHz) and **300 ns fast mode** (400 kHz).
 Too-weak a pull (R too high) or too much bus capacitance blows it.
 
-Bus capacitance is `Cbus = devices * 10 pF + trace_length * 1.0 pF/mm`:
+Bus capacitance is `Cbus = devices * 10 pF + trace_length * 0.15 pF/mm`:
 
 - 10 pF per I2C device pin (a common datasheet figure, refinable per part).
-- 1.0 pF/mm of routed trace (a conservative microstrip-over-plane figure),
-  summed from the layout's discrete segments and arcs via `routed_length_mm`,
-  the same geometry the USB skew check reads.
+- **0.15 pF/mm** of routed trace, summed from the layout's discrete segments and
+  arcs via `routed_length_mm`, the same geometry the USB skew check reads.
 
-Both terms are real: on a 10-device bus behind a 10 kohm pull, 100 mm of routed
-copper doubles `Cbus` and takes `t_r` from ~847 ns (in spec) to ~1695 ns (out).
-Dropping the trace term therefore under-reports rise time, so a `.kicad_pcb`
-layout is always folded in when one is uploaded. **Without a layout the routing
+The trace figure is derived, not picked: for a transmission line
+`C' = sqrt(Er_eff) / (c0 * Z0)`, which on FR4 (`Er_eff ~ 3`) is 0.116 pF/mm at
+50 ohm, 0.077 pF/mm at 75 ohm and 0.057 pF/mm at 100 ohm. An I2C trace is an
+ordinary signal-width route and usually sits at the high-impedance, low-C end;
+the widest, closest-coupled realistic case (`Er_eff 3.2`, `Z0 40 ohm`) gives
+0.149 pF/mm. 0.15 pF/mm is therefore the conservative **high-capacitance** end of
+the real range, which is the safe direction for a rise-time limit: it
+over-estimates `t_r` rather than under-estimating it. `C_TRACE_PF_PER_MM` is
+pinned against that closed form by
+`si::tests::trace_capacitance_per_mm_matches_transmission_line_physics`, so a
+units slip (a pF/inch or pF/cm figure written as pF/mm, which would inflate every
+bus by an order of magnitude) fails a test rather than shipping.
+
+Both terms are real: on a 10-device bus behind a 10 kohm pull, a 500 mm run adds
+75 pF, taking `Cbus` from 100 pF to 175 pF and `t_r` from ~847 ns (in spec) to
+~1483 ns (out). Dropping the trace term under-reports rise time, so a
+`.kicad_pcb` layout is always folded in when one is uploaded. **Without a layout the routing
 term is unavailable**, and the note says so in words (`routing capacitance NOT
 counted - upload the .kicad_pcb layout to include trace copper`): the
 device-count number is a floor, not a verdict. With a layout the note states the
@@ -180,16 +192,17 @@ Measured on the real layouts, with the routed term included:
 
 | Board / bus | Pull | Devices | Routing | `Cbus` | `t_r` | Verdict |
 |-------------|------|---------|---------|--------|-------|---------|
-| Olimex UEXT SDA (REV-L) | 2.2 kohm | 1 | 73 mm | ~83 pF | ~154 ns | ok |
-| ZSWatch RTC SDA (PCA9306+RV-8263) | 3.3 kohm | 2 | 1 mm | ~21 pF | ~60 ns | ok |
-| ZSWatch Extension SDA | 1.8 kohm | 8 | 62 mm | ~142 pF | ~216 ns | ok |
+| Olimex UEXT SDA (REV-L) | 2.2 kohm | 1 | 73 mm | ~21 pF | ~39 ns | ok |
+| ZSWatch RTC SDA (PCA9306+RV-8263) | 3.3 kohm | 2 | 1 mm | ~20 pF | ~57 ns | ok |
+| ZSWatch Extension SDA | 1.8 kohm | 8 | 62 mm | ~89 pF | ~136 ns | ok |
 
-Routed copper dominates on the sparsely-populated buses: the Olimex UEXT bus has
-one device pin and 73 mm of track, so 88% of its capacitance is trace, and a
-device-count-only model rates it ~19 ns instead of ~154 ns.
+Routed copper is a real term without being the dominant one: on the Olimex UEXT
+bus, one device pin and 73 mm of track means half the capacitance is trace
+(~11 pF of ~21 pF), so a device-count-only model rates it ~19 ns instead of
+~39 ns.
 
 The ZSWatch 8-device Extension bus is the corpus's closest-to-the-limit I2C bus
-and still sits ~4.6x under standard mode. The designers chose 1.8 kohm precisely
+and still sits ~7x under standard mode. The designers chose 1.8 kohm precisely
 because of the device count. It is the discriminating no-fire (a regression that
 mis-scaled the RC or counted the connector as a device would push it over and the
 corpus test would go red).
@@ -529,27 +542,44 @@ position in the declared top-to-bottom order. Thickness converts back to weight
 at 0.035 mm per oz; the first and last copper entries are the outer layers and
 everything between them is internal, which is what selects IPC-2221's `k`.
 
-Each net is then rated on the layer its **narrowest** segment actually sits on
-(`NetCopper::min_trace_layer`), because that is the bottleneck being rated. A net
-whose choke is on an inner layer is rated as inner copper even when the rest of
-its route is on the top.
+Each net is then rated at its **ampacity** bottleneck: the (layer, width) pair
+with the lowest IPC-2221 rating, taken over every layer the net is routed on
+(`NetCopper::min_width_by_layer`, resolved by `TraceAudit::bottleneck`).
+
+That is deliberately *not* the narrowest segment. While every net was rated as
+1 oz external, minimum width and minimum ampacity were the same thing. Once
+weight and the internal/external constant differ per layer they diverge: 0.3 mm
+of 1 oz outer copper carries ~1.0 A, while 0.5 mm of 0.5 oz inner copper carries
+only ~0.44 A. Ranking by width on such a net rates the 0.3 mm outer segment and
+passes a cited 0.8 A while the wider inner segment is the real choke. Ties
+resolve to the lower-ampacity, then internal, then lighter, then
+alphabetically-first layer, so the choice is deterministic.
+
+Outer layers are identified by **name** (`F.Cu` / `B.Cu`), not by position in the
+stackup, because position lies on a truncated declaration: a stackup listing only
+`F.Cu` and `In1.Cu` would make `In1.Cu` the last copper entry and rate inner
+copper with the external constant, doubling its apparent capacity. Positional
+first/last is the fallback only for a stackup that names no `F.Cu`/`B.Cu` at all.
 
 This matters by about 3x. On the common 4-layer build (1 oz outer, 0.5 oz inner),
 a 0.5 mm trace rates **~1.45 A as 1 oz external** copper and **~0.44 A as 0.5 oz
 internal** copper: half the `k` and half the cross-section. Rating everything as
 1 oz external therefore let genuinely undersized inner-layer traces pass, which
-is why a cited 1.0 A on that trace now fires on `In1.Cu` and stays silent on
-`F.Cu`.
+is why a cited 1.0 A on that trace fires on `In1.Cu` and stays silent on `F.Cu`.
 
 When the board declares **no stackup**, the 1 oz external default still stands
-(the verdict on such boards is unchanged), but it is no longer printed as a fact
-about the board. The finding says
-`ASSUMED 1 oz external - the layout declares no copper weight for <layer>, so
-upload a stackup declaration or fab drawing to rate the real copper`, and the
-`--ampacity` table carries the same disclosure above it plus a per-row
-`1 oz ext (assumed)` basis. A declared stackup instead reads
-`0.50 oz internal In1.Cu, per the board stackup`, so measured and assumed
-ratings are never confusable.
+(the verdict on such boards is unchanged), but it is not printed as a fact about
+the board. The two assumed cases are kept apart, because saying "declares no
+stackup" about a board that declares one is itself a false claim:
+
+| Case | `CopperSource` | Message |
+|------|----------------|---------|
+| No stackup in the layout | `AssumedNoStackup` | `ASSUMED 1 oz external - the layout declares no stackup, so upload a stackup declaration or fab drawing ...` |
+| Stackup present, this layer absent or zero-thickness | `AssumedLayerMissing` | `ASSUMED 1 oz external - the layout declares a stackup but no copper weight for In9.Cu, so upload ... that covers every layer` |
+| Layer declared with a thickness | `Stackup` | `0.50 oz internal In1.Cu, per the board stackup` |
+
+The `--ampacity` table carries the matching header and a per-row
+`1 oz ext (assumed)` basis, so measured and assumed ratings are never confusable.
 
 ### Attribution (the zero-false-positive boundary)
 

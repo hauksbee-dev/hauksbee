@@ -141,6 +141,21 @@ pub struct BoundBoard {
 }
 
 impl BoundBoard {
+    /// Every resistor whose overpower check could not run because its package was
+    /// unreadable, in message form.
+    ///
+    /// Lives here so any caller holding a `BoundBoard` can surface it, not only
+    /// the CI runner: an abstention visible on one surface and silent on the
+    /// others is still a silent abstention on those others.
+    pub fn power_coverage_gaps(&self) -> Vec<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        self.device_meta
+            .iter()
+            .filter_map(|m| m.power_coverage_gap())
+            .filter(|m| seen.insert(m.clone()))
+            .collect()
+    }
+
     /// Look up a net node by name.
     pub fn node(&self, net: &str) -> Option<NodeId> {
         self.net_nodes.get(net).copied()

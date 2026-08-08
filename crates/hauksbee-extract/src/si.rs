@@ -798,9 +798,9 @@ fn load_cap_through_resistor(board: &ExtractedBoard, net_id: i64) -> Option<f64>
 // either fails outright or only works slow.
 //
 // Bus capacitance is the sum of: per-device pin capacitance (datasheet ~10 pF
-// default per I2C pin) + trace capacitance (a microstrip over a plane is
-// ~0.3-1.0 pF/mm; we use a documented 1.0 pF/mm conservative figure times the
-// net's routed length, OR a flat per-device allowance when geometry is absent).
+// default per I2C pin) + trace capacitance (C_TRACE_PF_PER_MM times the net's
+// routed length, or nothing at all when no layout is available - and the note
+// then says the routing term is missing rather than implying it was zero).
 //
 // Mode inference is conservative: assume STANDARD mode (1000 ns) unless the net
 // name encodes fast mode. So we only ever fire when even the most lenient mode
@@ -816,6 +816,22 @@ pub const T_R_STANDARD_NS: f64 = 1000.0;
 pub const T_R_FAST_NS: f64 = 300.0;
 /// Default capacitance per I2C device pin (pF), a common datasheet figure.
 const C_PIN_PF: f64 = 10.0;
+
+/// Trace self-capacitance to the reference plane, pF per mm of routed length.
+///
+/// For a transmission line, `C' = sqrt(Er_eff) / (c0 * Z0)`. On FR4
+/// (`Er_eff ~ 3`) that is 0.116 pF/mm for a 50 ohm line, 0.077 pF/mm at
+/// 75 ohm and 0.057 pF/mm at 100 ohm. An I2C trace is an ordinary
+/// signal-width route, so it usually sits at the high-impedance / low-C end;
+/// the widest, closest-coupled realistic case (`Er_eff 3.2`, `Z0 40 ohm`) gives
+/// 0.149 pF/mm.
+///
+/// 0.15 pF/mm is therefore the conservative (highest-capacitance) end of the
+/// real range, which is the safe direction for a rise-time limit: it
+/// over-estimates `t_r` rather than under-estimating it. Equivalent to
+/// ~3.8 pF/inch, in the same family as the ~1-3 pF/inch figures the usual PCB
+/// references quote.
+const C_TRACE_PF_PER_MM: f64 = 0.15;
 
 /// Rise time (ns) for a pull-up R (ohms) charging a bus capacitance C (pF).
 pub fn i2c_rise_time_ns(r_ohm: f64, c_pf: f64) -> f64 {
@@ -902,7 +918,8 @@ fn pullup_ohms(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
 
 /// Estimate bus capacitance (pF) on an I2C net from device count plus optional
 /// routed trace length. Devices = non-resistor, non-connector parts with a pin
-/// on the net (each ~C_PIN_PF). Trace length, when known, adds 1.0 pF/mm.
+/// on the net (each ~C_PIN_PF). Trace length, when known, adds
+/// [`C_TRACE_PF_PER_MM`].
 fn bus_capacitance_pf(
     board: &ExtractedBoard,
     net_id: i64,
@@ -926,7 +943,7 @@ fn bus_capacitance_pf(
         }
     }
     let c_dev = devices as f64 * C_PIN_PF;
-    let c_trace = trace_len_mm.unwrap_or(0.0) * 1.0; // 1.0 pF/mm, documented.
+    let c_trace = trace_len_mm.unwrap_or(0.0) * C_TRACE_PF_PER_MM;
     (c_dev + c_trace, devices)
 }
 

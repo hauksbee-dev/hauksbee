@@ -152,6 +152,40 @@ impl BoardEvidence {
                 assumptions.push(Assumption::open_part(&row.reference, &row.value, reason));
             }
         }
+        // A part bound to a generic estimated-fallback model is running on
+        // invented ratings. Recorded here rather than only in the CI report's
+        // coverage_warnings, so it reaches every surface that renders evidence
+        // (`run`, `--plain`, `--json`, the TUI) and not just `hauksbee ci`.
+        for row in report.non_ignored() {
+            if row
+                .source
+                .as_ref()
+                .is_none_or(|s| s.tier() != ModelSourceTier::EstimatedFallback)
+            {
+                continue;
+            }
+            if !matches!(
+                &row.outcome,
+                BindOutcome::Analog { device } | BindOutcome::Behavioral { device }
+                    if crate::report::is_active_fallback_device(device)
+            ) {
+                continue;
+            }
+            let key = format!("model/{}", row.reference);
+            let subject_text = format!("{} ({})", row.reference, row.value);
+            assumptions.push(Assumption::reduced_fidelity(
+                AssumptionSource::Binder,
+                Subject::new(&key, &subject_text),
+                Scope::Board,
+                &format!(
+                    "the generic fallback model '{}', whose ratings and device parameters are \
+                     estimates for the package class rather than values from any datasheet",
+                    row.model_id.as_deref().unwrap_or("(unnamed)"),
+                ),
+                "add a model entry matching the part (value_re or mpn_re), or put the \
+                 manufacturer part number on the component",
+            ));
+        }
         let mut reader_contributions = Vec::new();
         let mut reader_ignored = Vec::new();
         let mut reader_cross_checks = Vec::new();

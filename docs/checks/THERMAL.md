@@ -96,10 +96,28 @@ conservative for both surface-mount and through-hole parts:
 
 | Footprint evidence | Rating | Basis |
 |--------------------|--------|-------|
-| Recognised chip size code | the table above | `ChipPackage` |
+| Recognised imperial chip size code | the table above | `ChipPackage` |
+| Metric-only chip code (`R_3216Metric` = imperial 1206) | the imperial equivalent | `ChipPackage` |
 | Through-hole axial body (`THT`, `Axial`, `DIN0…`) | 1/4 W | `ThtAxial` |
 | Surface-mount, size code unrecognised | 1/16 W | `UnknownSmdFloor` |
 | No readable package at all | none derived | `Unknown` |
+
+The metric table is consulted **only after** the imperial pass fails, which is
+what keeps the known collisions safe (imperial 0201 is metric 0603, imperial
+01005 is metric 0402). Without it a `R_3216Metric` (a 1/4 W 1206) fell to the
+1/16 W unknown-SMD floor, a 4x under-rating that invents overpower faults on
+correct designs.
+
+**Only resistors get a footprint-derived wattage.** `ComponentKind::Passive` also
+covers capacitors, inductors and ferrite beads, whose limits are current and
+voltage rather than a chip-resistor wattage; handing an
+`Inductor_SMD:L_0805_2012Metric` an 0805 resistor's 1/8 W would invent an
+overpower fault out of ordinary coil heating, and the 1/16 W floor makes that
+misfire easier to hit, not harder. `DeviceMeta::is_resistor_like` gates it on the
+footprint library/body name (`Resistor_*`, `R_*`) with the reference-designator
+prefix (`R`, `RN`, `RA`) as the fallback, and anything naming another passive
+family is excluded outright. A non-resistor passive therefore gets no derived
+rating and is not reported as an overpower coverage hole either.
 
 A flat 1/4 W for everything unrecognised would not be conservative on an SMD
 board: 1/4 W **exceeds** a real 0402 (1/16 W) by 4x and an 0603 (1/10 W) by
@@ -112,9 +130,11 @@ invent overpower faults on correct designs.
 When the footprint says neither, nothing is derived. Guessing would be wrong in
 opposite directions, so the device is reported instead: `StressMonitor::
 power_coverage_gaps` names the part and the unlock (a model with
-`ratings.max_power_w`, or a footprint / BOM line naming the package), and the CI
-report carries it in `coverage_warnings` alongside the co-sim coverage holes. An
-overpower check that did not run is a visible gap, not a pass.
+`ratings.max_power_w`, or a footprint / BOM line naming the package). The CI
+report carries it in `coverage_warnings` alongside the co-sim coverage holes, and
+`BoundBoard::power_coverage_gaps` feeds the same sentence into the evidence map
+on the `run` / `--plain` / `--json` / TUI surfaces, so the gap is not visible in
+CI alone. An overpower check that did not run is a visible gap, not a pass.
 
 `theta_jc_c_per_w` (junction-to-case) can also be carried in the model DB. It
 is informational today. The free-air estimate uses `theta_JA`. A heatsinked

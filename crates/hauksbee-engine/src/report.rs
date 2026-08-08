@@ -30,7 +30,7 @@ pub enum BindOutcome {
 /// model would carry invented breakdown/current/power ratings that a stress
 /// verdict can cite. Passives (resistor, capacitor, inductor) are excluded: their
 /// fallbacks carry no such ratings and bind on nearly every board.
-fn is_active_fallback_device(device: &str) -> bool {
+pub(crate) fn is_active_fallback_device(device: &str) -> bool {
     let d = device.to_ascii_lowercase();
     [
         "nmos",
@@ -459,6 +459,41 @@ mod resolved_count_tests {
         };
         report.push(res);
         assert!(report.estimated_fallback_warnings().is_empty());
+    }
+
+    #[test]
+    fn an_estimated_fallback_binding_reaches_the_evidence_map() {
+        // The CI report is not the only surface. A verdict resting on invented
+        // ratings must be visible on `run` / `--plain` / `--json` / the TUI too,
+        // which all render the evidence map.
+        use hauksbee_extract::ExtractedBoard;
+        let board = ExtractedBoard {
+            name: "fallback".into(),
+            nets: Vec::new(),
+            components: Vec::new(),
+        };
+        let mut report = BindReport::default();
+        report.push(sourced_row(
+            "Q3",
+            "generic_nmos_power_pkg",
+            ModelSourceTier::EstimatedFallback,
+        ));
+        let evidence = crate::evidence::BoardEvidence::from_bound(
+            &board,
+            &report,
+            &[],
+            hauksbee_ir::evidence::RunDate::from_epoch_days(20_666),
+        )
+        .expect("evidence builds");
+        let rendered = evidence.render_plain();
+        assert!(
+            rendered.contains("Q3"),
+            "the evidence map must name the part: {rendered}"
+        );
+        assert!(
+            rendered.contains("generic_nmos_power_pkg"),
+            "and the fallback model it rests on: {rendered}"
+        );
     }
 
     #[test]
