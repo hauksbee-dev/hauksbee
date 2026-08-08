@@ -968,25 +968,20 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
             ));
             continue;
         };
-        // A hatched / meshed pour is deliberately discontinuous copper: its fill
-        // is a lattice of strips with gaps, laid down for copper balance or flex,
-        // and it is still a perfectly good AC return path. Containment against
-        // those strips would report the gaps between them as one long void along
-        // the whole run, which is the worst false positive this check could make.
-        // There is no honest way to verify such a plane by fill polygons, so say
-        // so instead of guessing.
-        if has_hatched_pour(root, &ref_layer) {
-            reasons.push(format!(
-                "the pour on {ref_layer} is hatched, so its fill polygons cannot show whether the \
-                 return path under the pair is continuous"
-            ));
-            continue;
-        }
+        // Hatched pours contribute no testable fills (see `plane_fills`). When
+        // they were the ONLY pour on the layer there is nothing to verify against
+        // and the reason must say which case this is, because "no pour" and "a
+        // pour we cannot read" are different facts about the board.
         let fills = plane_fills(root, &ref_layer);
         if fills.is_empty() {
-            reasons.push(format!(
-                "no filled copper pour on {ref_layer} to reference against"
-            ));
+            reasons.push(if has_hatched_pour(root, &ref_layer) {
+                format!(
+                    "the pour on {ref_layer} is hatched, so its fill polygons cannot show whether \
+                     the return path under the pair is continuous"
+                )
+            } else {
+                format!("no filled copper pour on {ref_layer} to reference against")
+            });
             continue;
         }
         // The anti-pad margin is the board's own clearance where it declares one,
@@ -1000,25 +995,44 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
             .filter(|h| h.pierces(&ref_layer))
             .collect::<Vec<_>>();
 
-        let mut uncovered: Vec<(f64, f64)> = Vec::new();
+        // Sample and cluster ONE LEG AT A TIME. The legs of a USB pair sit about
+        // half a millimetre apart, well inside the linking distance, so pooling
+        // their samples let a sub-threshold bite under D+ and another under D-
+        // merge into a single "void" whose extent was largely the diagonal gap
+        // between the two legs. A void's extent along the leg it undermines is
+        // what the impedance of that leg responds to.
         let mut total = 0usize;
-        for s in segs.iter().filter(|s| &s.layer == layer) {
-            let len = s.length();
-            let steps = ((len / SAMPLE_PITCH_MM).ceil() as usize).clamp(2, MAX_SAMPLES_PER_SEG);
-            for i in 0..=steps {
-                let t = i as f64 / steps as f64;
-                let (x, y) = (s.ax + t * (s.bx - s.ax), s.ay + t * (s.by - s.ay));
-                // A sample inside an anti-pad carries no information about the
-                // plane, so it is neither counted nor allowed to join two voids.
-                if relevant.iter().any(|h| h.covers(x, y)) {
-                    continue;
+        for net in [pid, mid] {
+            let mut uncovered: Vec<(f64, f64)> = Vec::new();
+            let mut leg_total = 0usize;
+            for s in segs.iter().filter(|s| &s.layer == layer && s.net == net) {
+                let len = s.length();
+                let steps = ((len / SAMPLE_PITCH_MM).ceil() as usize).clamp(2, MAX_SAMPLES_PER_SEG);
+                for i in 0..=steps {
+                    let t = i as f64 / steps as f64;
+                    let (x, y) = (s.ax + t * (s.bx - s.ax), s.ay + t * (s.by - s.ay));
+                    // A sample inside an anti-pad carries no information about
+                    // the plane, so it is neither counted nor allowed to join two
+                    // voids.
+                    if relevant.iter().any(|h| h.covers(x, y)) {
+                        continue;
+                    }
+                    leg_total += 1;
+                    if !fills
+                        .iter()
+                        .any(|poly| crate::gerber::geo::point_in_polygon(x, y, poly))
+                    {
+                        uncovered.push((x, y));
+                    }
                 }
-                total += 1;
-                if !fills
-                    .iter()
-                    .any(|poly| crate::gerber::geo::point_in_polygon(x, y, poly))
+            }
+            total += leg_total;
+            if let Some(void) = widest_void(&uncovered, &ref_layer, leg_total) {
+                if worst
+                    .as_ref()
+                    .map_or(true, |w| void.extent_mm > w.extent_mm)
                 {
-                    uncovered.push((x, y));
+                    worst = Some(void);
                 }
             }
         }
@@ -1029,14 +1043,6 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
             continue;
         }
         verified.push(ref_layer.clone());
-        if let Some(void) = widest_void(&uncovered, &ref_layer, total) {
-            if worst
-                .as_ref()
-                .map_or(true, |w| void.extent_mm > w.extent_mm)
-            {
-                worst = Some(void);
-            }
-        }
     }
 
     if let Some(void) = worst {
@@ -1189,7 +1195,11 @@ fn plane_piercings(root: &List, margin: f64) -> Vec<Piercing> {
             layers: Vec::new(),
         });
     }
-    for fp in root.find_all("footprint") {
+    // Both spellings: KiCad 6+ writes `footprint`, KiCad 4/5 wrote `module`, and
+    // boards of both vintages are in the corpus. Missing the legacy one left
+    // through-hole and mounting-hole clearances unexcused on those boards, which
+    // is a false void on a continuous plane. `drc.rs` chains the same pair.
+    for fp in root.find_all("footprint").chain(root.find_all("module")) {
         let Some(at) = fp.find("at") else { continue };
         let (fx, fy) = (at.arg_f64(0).unwrap_or(0.0), at.arg_f64(1).unwrap_or(0.0));
         let frot = at.arg_f64(2).unwrap_or(0.0);
@@ -1293,6 +1303,14 @@ fn adjacent_reference_layer(stack: &[String], route_layer: &str) -> Option<Strin
 fn plane_fills(root: &List, layer: &str) -> Vec<Vec<(f64, f64)>> {
     let mut out = Vec::new();
     for zone in root.find_all("zone") {
+        // A hatched zone's fill is a lattice of strips with deliberate gaps, so
+        // its polygons cannot answer "is the return path continuous here". Drop
+        // it rather than disqualifying the layer: a board often carries a solid
+        // GND pour AND a hatched copper-balance zone on the same layer, and the
+        // solid one can still be verified against.
+        if is_hatched(zone) {
+            continue;
+        }
         for fp in zone.find_all("filled_polygon") {
             let belongs = match fp.find_value("layer") {
                 // Tagged: the tag decides, whatever the zone header says.
@@ -1328,12 +1346,15 @@ fn has_hatched_pour(root: &List, layer: &str) -> bool {
             || zone
                 .find_all("filled_polygon")
                 .any(|fp| fp.find_value("layer").as_deref() == Some(layer));
-        on_layer
-            && zone
-                .find("fill")
-                .and_then(|f| f.find_value("mode"))
-                .is_some_and(|m| m.eq_ignore_ascii_case("hatch"))
+        on_layer && is_hatched(zone)
     })
+}
+
+/// Is this zone filled as a hatch / mesh rather than solid?
+fn is_hatched(zone: &List) -> bool {
+    zone.find("fill")
+        .and_then(|f| f.find_value("mode"))
+        .is_some_and(|m| m.eq_ignore_ascii_case("hatch"))
 }
 
 /// The largest copper clearance declared by any pour on `layer`.
@@ -1416,8 +1437,9 @@ fn emit_reference_missing(
             "{} / {} ({}): reference missing under trace - {}. W~{:.3} mm, S~{:.3} mm; no Zdiff \
              reported, because the microstrip formula's H is the height to a reference plane that \
              is not there over that span. A confident answer needs reference-plane copper along \
-             the pair's routed length (route the pair over the plane, or close the void / plane \
-             split it crosses), and a stackup that declares the plane layer it references [{}]",
+             the pair's routed length: route the pair over the plane, or close the void / plane \
+             split it crosses. Note that a plane on a layer FURTHER from the trace does not \
+             substitute, because H is the height to the adjacent layer [{}]",
             pname,
             mname,
             class.label(),
@@ -1508,7 +1530,7 @@ fn pair_edge_spacing(root: &List, pid: i64, mid: i64) -> Option<f64> {
     Some(median)
 }
 
-/// A routed segment's endpoints, width and copper layer.
+/// A routed segment's endpoints, width, copper layer and net.
 struct Seg {
     ax: f64,
     ay: f64,
@@ -1516,6 +1538,7 @@ struct Seg {
     by: f64,
     w: f64,
     layer: String,
+    net: i64,
 }
 
 impl Seg {
@@ -1547,6 +1570,7 @@ fn net_segments(root: &List, net_id: i64) -> Vec<Seg> {
             by: e.arg_f64(1).unwrap_or(0.0),
             w: seg.find_f64("width").unwrap_or(0.0),
             layer,
+            net: net_id,
         });
     }
     out
