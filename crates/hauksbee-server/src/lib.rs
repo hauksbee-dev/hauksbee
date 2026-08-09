@@ -758,6 +758,13 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     if socket.send(Message::Text(info.into())).await.is_err() {
         return;
     }
+    // Subscribe BEFORE snapshotting the backlog. The other order has a hole:
+    // a terminal failure landing between the snapshot and the subscribe would
+    // be in neither (the snapshot predates it, the broadcast preceded the
+    // subscription), and this socket would never learn the session died. With
+    // the subscription first, any such event is in the snapshot, in the
+    // buffered broadcast, or both (a duplicate Error is idempotent).
+    let mut rx = shared.tx.subscribe();
     // Replay the session's server-held history right after the identity frame:
     // faults are drained into exactly one broadcast frame each, so without
     // this a client that reloads mid-session would show an empty fault log
@@ -772,7 +779,6 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     {
         return;
     }
-    let mut rx = shared.tx.subscribe();
     let mut replaced_rx = shared.replaced.subscribe();
     // A socket attached to an already-replaced session closes immediately.
     if *replaced_rx.borrow() {
@@ -1217,6 +1223,11 @@ async fn sim_loop(
 ) {
     let mut running = false;
     let mut speed = 1.0f64;
+    // Latched once the analog solve is declared irrecoverable. While set,
+    // Play/Step refuse (re-broadcasting the reason) instead of launching
+    // another unbounded solve of a circuit already known to be dead; Reset
+    // clears it together with the engine's own failure streak.
+    let mut fatal: Option<String> = None;
     // Last simulation time seen from the engine, so the Status broadcast after
     // a command reports the real clock instead of resetting the UI to 0.0.
     let mut sim_time = 0.0f64;
@@ -1297,14 +1308,12 @@ async fn sim_loop(
                     if let Some(reason) = engine.analog_failure() {
                         running = false;
                         meter.clear();
-                        end_session_fatally(
-                            &shared,
-                            &broadcast_msg,
-                            &format!(
-                                "live simulation stopped: {reason}. Press reset to \
-                                 retry, or fix the board/model and relaunch."
-                            ),
+                        let message = format!(
+                            "live simulation stopped: {reason}. Press reset to \
+                             retry, or fix the board/model and relaunch."
                         );
+                        fatal = Some(message.clone());
+                        end_session_fatally(&shared, &broadcast_msg, &message);
                     }
                     broadcast_msg(&ServerMessage::Status(Status {
                         running, sim_time, requested_factor: speed,
@@ -1320,14 +1329,20 @@ async fn sim_loop(
                     // and stale pre-pause samples must not shape the first
                     // post-resume ceiling.
                     ClientMessage::Play => {
-                        running = true;
-                        meter.clear();
+                        if let Some(reason) = &fatal {
+                            broadcast_msg(&ServerMessage::Error {
+                                message: reason.clone(),
+                            });
+                        } else {
+                            running = true;
+                            meter.clear();
+                        }
                     }
                     ClientMessage::Pause => {
                         running = false;
                         meter.clear();
                     }
-                    ClientMessage::Step { dt } => {
+                    ClientMessage::Step { dt } if fatal.is_none() => {
                         // Clamp the client-supplied step like SetSpeed clamps
                         // factor: an unbounded dt (e.g. `1e9`) is ~1e13 chunks
                         // that the single sim_loop task runs synchronously,
@@ -1364,14 +1379,21 @@ async fn sim_loop(
                         if let Some(reason) = engine.analog_failure() {
                             running = false;
                             meter.clear();
-                            end_session_fatally(
-                                &shared,
-                                &broadcast_msg,
-                                &format!(
-                                    "live simulation stopped: {reason}. Press reset to \
-                                     retry, or fix the board/model and relaunch."
-                                ),
+                            let message = format!(
+                                "live simulation stopped: {reason}. Press reset to \
+                                 retry, or fix the board/model and relaunch."
                             );
+                            fatal = Some(message.clone());
+                            end_session_fatally(&shared, &broadcast_msg, &message);
+                        }
+                    }
+                    ClientMessage::Step { .. } => {
+                        // Fatal latch: stepping a solve already declared dead
+                        // just re-grinds it; repeat the reason instead.
+                        if let Some(reason) = &fatal {
+                            broadcast_msg(&ServerMessage::Error {
+                                message: reason.clone(),
+                            });
                         }
                     }
                     ClientMessage::Reset => {
@@ -1379,6 +1401,9 @@ async fn sim_loop(
                         running = false;
                         sim_time = 0.0;
                         meter.clear();
+                        // The engine's failure streak was cleared by reset();
+                        // clear the session's latch with it so Play works.
+                        fatal = None;
                         // A reset starts the fault story over server-side too,
                         // or the next subscriber would replay pre-reset faults
                         // as if they belonged to the fresh run. Same for the

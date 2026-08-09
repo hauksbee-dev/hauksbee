@@ -283,6 +283,15 @@ enum LawStamp {
 /// is the transient's chunk-local clock (restarting at 0 every chunk), so a
 /// time-varying law cannot be expressed implicitly without changing what it
 /// computes.
+/// The canonical expression grammar's documented function vocabulary (see
+/// `hauksbee_ir::bexpr`'s module doc), accepted bare or `math::`-prefixed.
+/// Everything else refuses the implicit path.
+const KNOWN_EXPR_FUNCTIONS: &[&str] = &[
+    "ln", "log10", "log2", "exp", "pow", "sqrt", "cbrt", "abs", "sin", "cos", "tan", "asin",
+    "acos", "atan", "atan2", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "hypot", "floor",
+    "ceil", "round", "min", "max", "if",
+];
+
 fn compile_law_implicit(
     expr: &str,
     role_nodes: &BTreeMap<String, NodeId>,
@@ -337,19 +346,32 @@ fn compile_law_implicit(
         }
         let token = &expr[start..i];
         // A function name (namespaced, or followed by an open paren) passes
-        // through: the canonical grammar owns the function vocabulary and
-        // `CompiledExpr::compile` is the final validity gate either way.
+        // through ONLY when it is in the canonical grammar's documented
+        // vocabulary. `CompiledExpr::compile` validates variable identifiers
+        // but not function names, so an unknown function would compile fine
+        // and then FAULT inside Newton at every stamp, failing the analog
+        // session; the runtime form evaluates the same law to a guarded 0 A.
+        // Refusing here keeps a malformed model on that graceful path.
         let next_nonspace = bytes[i..].iter().find(|b| !b.is_ascii_whitespace());
         if token.contains("::") || next_nonspace == Some(&b'(') {
-            out.push_str(token);
-            continue;
+            let bare = token.strip_prefix("math::").unwrap_or(token);
+            if !bare.contains("::") && KNOWN_EXPR_FUNCTIONS.contains(&bare) {
+                out.push_str(token);
+                continue;
+            }
+            return None;
         }
         // Params FIRST: the runtime context sets them after pin voltages, so
         // a param named like a `v_<role>` shadows the pin there and must fold
-        // to its literal here too. (Exception: the runtime sets `t` after
-        // params, so a param named `t` never wins; `t` refuses below either
-        // way, so the shadowing question does not arise.)
-        if token != "t" {
+        // to its literal here too. The runtime-owned names are the exception:
+        // `t`, `t_in_state` and `state_<name>` are set AFTER params in
+        // `build_context`, so a param spelled like one of them never wins at
+        // runtime and must not fold here; those tokens fall through to the
+        // refusal below, keeping such a law on the runtime path it actually
+        // depends on.
+        let runtime_owned =
+            token == "t" || token == "time" || token == "t_in_state" || token.starts_with("state_");
+        if !runtime_owned {
             if let Some(v) = params.0.get(token).and_then(|v| v.as_f64()) {
                 // Round-trip-exact literal, parenthesised so `1/x` stays `1/(v)`.
                 out.push_str(&format!("({v:?})"));
@@ -1375,5 +1397,32 @@ mod tests {
             compile_law_implicit("v_nc / 2.0", &roles(), &params()).is_none(),
             "an unconnected pin's voltage must refuse, not read as 0"
         );
+    }
+
+    /// Runtime-owned names refuse even when a numeric param shares the name:
+    /// `build_context` sets `t`/`t_in_state`/`state_<name>` AFTER params, so
+    /// the FSM value (not the param) wins at runtime, and folding the param
+    /// would silently change what the law computes.
+    #[test]
+    fn runtime_owned_names_never_fold_from_params() {
+        let mut p = params();
+        p.set_f64("state_on", 2.0);
+        p.set_f64("t_in_state", 7.0);
+        p.set_f64("t", 3.0);
+        assert!(compile_law_implicit("v_io * state_on", &roles(), &p).is_none());
+        assert!(compile_law_implicit("v_io + t_in_state", &roles(), &p).is_none());
+        assert!(compile_law_implicit("v_io * t", &roles(), &p).is_none());
+    }
+
+    /// Unknown functions refuse the implicit path: compiled, they would fault
+    /// inside Newton at every stamp (killing the analog session), where the
+    /// runtime form evaluates the same law to a guarded 0 A. Known functions
+    /// pass, bare or math::-prefixed.
+    #[test]
+    fn unknown_functions_refuse_known_ones_pass() {
+        assert!(compile_law_implicit("bogus(v_io)", &roles(), &params()).is_none());
+        assert!(compile_law_implicit("math::bogus(v_io)", &roles(), &params()).is_none());
+        assert!(compile_law_implicit("max(0.0, v_io)", &roles(), &params()).is_some());
+        assert!(compile_law_implicit("math::exp(v_io)", &roles(), &params()).is_some());
     }
 }
