@@ -560,11 +560,13 @@ layers. On F.Cu both pours hold `isolate="0.3048"` and the shipped \
 copper_top.gbr keeps them as two distinct filled regions. On B.Cu the AGND pour \
 carries `isolate="0.00030625"` and copper_bottom.gbr merges the pair into one \
 6378-vertex region: three tenths of a micrometre is not a gap, so the copper is \
-joined. That join is deliberate (a hand-set near-zero on exactly one of the \
-file's nine ground pours, in the one place a single-supply ADC front end needs \
-its analogue return tied back) and the board shipped in volume, but it is still \
-two named nets in contact, so the finding stands and the directory stays out of \
-the silence set.
+joined. The file proves the join is deliberate: the near-zero is a hand-set \
+override on one of nine ground pours, where six ask for 0.3048 mm and two set \
+nothing. WHY it is there is inference (an analogue return has to reach digital \
+ground somewhere, and this is where the layout does it), and the finding does \
+not rest on it: two named nets are in contact, which is what the check reports. \
+Hence known_good = false, which says the gate cannot grade its silence on this \
+directory, not that the board is defective.
 """
 expect = [
   "hardware/V3.4.5/emonTx V3.4.5.brd",
