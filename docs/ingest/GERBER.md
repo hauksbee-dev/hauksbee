@@ -111,10 +111,9 @@ unioned (disjoint-set). Connected components become the nets, named
   correctness rule in the module. It is exact **for the keyholed
   single-region pour** KiCad and Allegro emit (the antipad is part of the
   region winding, so even-odd puts a pocketed pad outside). It does *not*
-  hold if a fab emits the pour as a dark region plus a *separate* clear
-  (LPC) antipad; we skip clear polarity (see Limitations), so such a pad
-  would read as inside the fill and could false-short. KiCad/Allegro do not
-  do that; some tools can.
+  hold on its own if a fab emits the pour as a dark region plus *separate*
+  clear (LPC) antipads, which is Altium's default; those voids are cut out
+  of the pour first, see [Negative-drawn pours](#negative-drawn-pours-lpc).
 - **GND heuristic**: the largest pour-touching net is labelled `GND`. This
   is a **label only** (connectivity is unaffected), and it is a guess: a
   board with a power plane larger than its ground plane, or a split ground,
@@ -543,10 +542,43 @@ This makes the IPC-2221 trace-current surface runnable on a gerber-only
 board. Its reach stays honest: it needs a *cited current attributed to a
 net*, and gerber reconstruction recovers no net names or BOM-bound
 identity, so it runs but finds nothing unless a current can be tied to a
-specific reconstructed net. And a board whose fab draws traces as G36/G37
-filled regions (some Altium exports, e.g. the Inkplate 6) reads every net
-as `Poured`, so the check goes inert there, the safe failure direction (a
+specific reconstructed net. And a board whose fab draws its traces as
+G36/G37 filled regions rather than with draw apertures reads those nets as
+`Poured`, so the check goes inert on them, the safe failure direction (a
 `Poured` net is never flagged). See docs/evidence/FAMOUS_SWEEP.md Round 5.
+That was once read as a property of the Inkplate 6 export, but it was the
+negative-pour defect below: the board-sized dark region landed on every net,
+so every net looked poured. With the voids cut, the Inkplate's routed nets
+carry discrete widths and the check runs on them.
+
+## Negative-drawn pours (LPC)
+
+Altium plots a plane *negatively*: one `G36/G37` dark region covering the
+whole board, then `%LPC*%` and a few hundred clear regions, one per
+clearance, antipad and thermal gap, then `%LPD*%` for whatever islands are
+added back. The voids are not decoration. They are the only thing that makes
+the film anything other than a solid sheet of copper.
+
+Reading the darks and discarding the clears therefore produced a board-sized
+slab on every signal layer, and the union-find had nothing to separate: an
+Altium four-layer STM32 CAN devboard (ARDEP mainboard rev 1.1, 1924 flashes,
+574 plated hits) reconstructed to **exactly one net**, and the corpus
+Inkplate 6 to 18. Cutting the voids gives 284 and 181.
+
+A void becomes an extra contour on the pour it sits inside, which is what
+`Shape::MultiPolygon` already means: even-odd containment reads the void's
+interior as empty and the copper around it as copper. That is not a general
+polygon boolean and does not need to be. A void is cut only from a `Region`
+primitive that **encloses it entirely** and was painted **before** it
+(gerber is a painter's model), and only from the innermost such region.
+Even-odd handles the rest: a void inside a void is copper again, and a
+thermal relief's separate arc-shaped voids leave the spokes standing, so the
+pad stays on the pour exactly as fabricated. Clear *flashes* (the classic
+negative-plane antipad) and clear *draws* are banked the same way.
+
+Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
+pour with two ringed pads must reconstruct to three conductors, and its
+lookalike, whose right-hand pad the voids leave bridged, to two.
 
 ## Excellon dialects
 
@@ -644,11 +676,11 @@ is the all-pairs touch sweep on the densest signal layers.
   `ReconStats::refused_plating_files` and named in a note. Guessing plated
   invents a net; guessing mechanical deletes one; there is no safe default,
   only a visible refusal.
-- **Clear polarity (LPC)** is skipped for connectivity: a thermal relief or
-  antipad clearing copper inside a pour does not disconnect a net the way
-  it changes a rendered image, so treating the board as additive is correct
-  for connectivity but means a net split *only* by a clear cut-out would be
-  missed.
+- **Clear polarity (LPC)** is cut, not skipped. See [Negative-drawn
+  pours](#negative-drawn-pours-lpc). What is not cut is a void that straddles
+  a pour's edge, or one laid over a track or a pad rather than over a pour:
+  those leave the copper standing, which errs toward over-connection rather
+  than erasing copper on a guess.
 - **Inner-layer order: the `.gbrjob` manifest is read when the job ships
   one**, and it is authoritative: each copper film's `Copper,L<n>` entry
   places it in the stack, so an Allegro-style plane named without a stack

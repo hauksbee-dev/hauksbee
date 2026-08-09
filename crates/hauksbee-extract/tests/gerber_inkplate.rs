@@ -100,16 +100,13 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
     // Connectivity reconstructs from copper alone; a dominant ground net exists.
     assert!(s.gnd_detected, "a GND-class net should be labelled");
 
-    // Per-net copper is available (the gerber trace-current surface), and it
-    // pins a genuine honest limit: Altium's gerber export for this board draws
-    // ALL copper - traces included - as G36/G37 filled REGIONS, not as draw-
-    // aperture tracks. So every net reconstructs as `Poured` (or `None` for a
-    // net with only pad flashes), and the discrete-track-width check has no
-    // discrete width to measure on this board. That is the SAFE failure
-    // direction (a Poured net is never flagged, so there is no false positive),
-    // and it is the documented reason the trace-current surface is inert here
-    // while it runs on the Allegro uConsole (whose traces are draw-aperture
-    // tracks). Asserted so the characteristic is on the record, not a surprise.
+    // Per-net copper is available, and the trace-current surface has real
+    // widths to work with here: this Altium export draws its planes as G36/G37
+    // filled regions and routes its signals with draw apertures, so `Poured`
+    // and discrete-`Traces` nets both exist. (Both counts read differently
+    // while the negative-pour bug stood: the board-sized dark region was on
+    // every net, so every net came back `Poured` and none had a discrete width
+    // to measure. That reading was a symptom, not a property of the export.)
     let gnd = s
         .net_copper
         .iter()
@@ -125,9 +122,19 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
         .iter()
         .filter(|c| c.kind == GerberCopperKind::Traces)
         .count();
-    assert_eq!(
-        traces, 0,
-        "this Altium export draws traces as regions, so no net is discrete-Traces"
+    let poured = s
+        .net_copper
+        .iter()
+        .filter(|c| c.kind == GerberCopperKind::Poured)
+        .count();
+    assert!(
+        traces > 50,
+        "the routed nets carry a measurable discrete width, got {traces}"
+    );
+    assert!(
+        (2..traces).contains(&poured),
+        "a handful of planes are poured and the rest are routed, got {poured} poured \
+         against {traces} routed"
     );
 
     // No P&P in the published set, so no components are bound. This is the
@@ -138,26 +145,18 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
     );
 }
 
-/// The net count this board should reconstruct to, which it currently does not.
+/// The net count this board reconstructs to.
 ///
-/// Reverse extraction collapses the Inkplate to 18 connected components where a
-/// board with 634 plated holes and 492 filled regions on the top layer alone
-/// should yield well over a hundred. Copper that should stay apart is being
-/// unioned.
-///
-/// Ruled out by measurement, so nobody repeats the work: the layer count (2),
-/// the plated-hole count (634) and the hole positions are all correct, and
-/// units are handled (both readers scale inches to mm, and the drill's
-/// coordinate range, X 0.000 to 5.835 in, sits inside the copper's X 0.000 to
-/// 5.945 in). Clear-polarity handling exists and this file carries only one
-/// LPC/LPD pair. The 18 is the true union-find component count, not a filtered
-/// view of it.
-///
-/// Ignored rather than loosened: lowering the threshold to 18 would assert that
-/// the current wrong answer is the right one. The assertion stays at what the
-/// board actually has, so fixing the extraction turns this green on its own.
+/// This was a standing known gap: the Inkplate collapsed to 18 connected
+/// components where a board with 634 plated holes and 492 filled regions on the
+/// top layer alone has well over a hundred. The single `%LPC*%` pair was the
+/// whole story. Altium plots the plane negatively, one board-sized dark region
+/// followed by 491 clear regions, and clear geometry was discarded rather than
+/// cut, so both copper films were solid sheets and every net was unioned into
+/// its plane. The mechanism is gated in isolation by
+/// `tests/gerber_negative_pour.rs`; this is the same fix measured on a real
+/// Altium board.
 #[test]
-#[ignore = "known gap: copper over-merges to 18 nets, see the doc comment"]
 fn inkplate6_net_count_matches_the_board() {
     let Some(dir) = inkplate_dir() else {
         return;
@@ -167,17 +166,5 @@ fn inkplate6_net_count_matches_the_board() {
         g.stats.n_nets > 100,
         "nets reconstructed: {}",
         g.stats.n_nets
-    );
-    // Downstream of the same gap: at most one Poured row exists per net, so a
-    // board collapsed to 18 nets cannot show more than 18 of them.
-    let poured = g
-        .stats
-        .net_copper
-        .iter()
-        .filter(|c| c.kind == GerberCopperKind::Poured)
-        .count();
-    assert!(
-        poured > 100,
-        "copper should be region-dominated, got {poured} poured"
     );
 }
