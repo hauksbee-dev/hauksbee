@@ -1377,11 +1377,16 @@ async fn sim_loop(
                         return;
                     };
                     engine = stepped;
+                    // Account the DELIVERED sim time, not the requested step:
+                    // a live step that ended early at the dead-solve abort
+                    // streak delivered a fraction of `step_dt`, and crediting
+                    // the request would overstate the terminal frame's rate.
+                    let delivered_dt = (frame.t - sim_time).max(0.0);
                     meter.record(
                         loop_started.elapsed().as_secs_f64(),
                         frame.t,
                         step_started.elapsed().as_secs_f64(),
-                        step_dt,
+                        delivered_dt,
                     );
                     // The wire carries BOTH numbers: the measured achieved
                     // rate (clamped to the paced factor: tick pacing bounds
@@ -1461,11 +1466,14 @@ async fn sim_loop(
                         engine = stepped;
                         // A manual step has no continuous rate to report; the
                         // honest per-step number is what THIS step delivered
-                        // (sim seconds per wall second of the solve). It does
-                        // not feed the pacing meter: the sim is paused.
+                        // (sim seconds per wall second of the solve), which is
+                        // NOT the requested dt when the step ended early at
+                        // the dead-solve abort streak. It does not feed the
+                        // pacing meter: the sim is paused.
                         let step_wall = step_started.elapsed().as_secs_f64();
+                        let delivered_dt = (frame.t - sim_time).max(0.0);
                         frame.realtime_factor = if step_wall > 0.0 {
-                            step_dt / step_wall
+                            delivered_dt / step_wall
                         } else {
                             0.0
                         };
