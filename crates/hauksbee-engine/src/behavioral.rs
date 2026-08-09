@@ -283,15 +283,6 @@ enum LawStamp {
 /// is the transient's chunk-local clock (restarting at 0 every chunk), so a
 /// time-varying law cannot be expressed implicitly without changing what it
 /// computes.
-/// The canonical expression grammar's documented function vocabulary (see
-/// `hauksbee_ir::bexpr`'s module doc), accepted bare or `math::`-prefixed.
-/// Everything else refuses the implicit path.
-const KNOWN_EXPR_FUNCTIONS: &[&str] = &[
-    "ln", "log10", "log2", "exp", "pow", "sqrt", "cbrt", "abs", "sin", "cos", "tan", "asin",
-    "acos", "atan", "atan2", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "hypot", "floor",
-    "ceil", "round", "min", "max", "if",
-];
-
 fn compile_law_implicit(
     expr: &str,
     role_nodes: &BTreeMap<String, NodeId>,
@@ -346,20 +337,15 @@ fn compile_law_implicit(
         }
         let token = &expr[start..i];
         // A function name (namespaced, or followed by an open paren) passes
-        // through ONLY when it is in the canonical grammar's documented
-        // vocabulary. `CompiledExpr::compile` validates variable identifiers
-        // but not function names, so an unknown function would compile fine
-        // and then FAULT inside Newton at every stamp, failing the analog
-        // session; the runtime form evaluates the same law to a guarded 0 A.
-        // Refusing here keeps a malformed model on that graceful path.
+        // through: which functions exist is evalexpr's business, and the
+        // probe evaluation below is the gate that actually decides. A
+        // hand-maintained allowlist was tried and got the vocabulary wrong in
+        // both directions (rejecting valid `math::` builtins, admitting
+        // misspelled namespaces).
         let next_nonspace = bytes[i..].iter().find(|b| !b.is_ascii_whitespace());
         if token.contains("::") || next_nonspace == Some(&b'(') {
-            let bare = token.strip_prefix("math::").unwrap_or(token);
-            if !bare.contains("::") && KNOWN_EXPR_FUNCTIONS.contains(&bare) {
-                out.push_str(token);
-                continue;
-            }
-            return None;
+            out.push_str(token);
+            continue;
         }
         // Params FIRST: the runtime context sets them after pin voltages, so
         // a param named like a `v_<role>` shadows the pin there and must fold
@@ -400,6 +386,17 @@ fn compile_law_implicit(
         return None;
     }
     let compiled = hauksbee_ir::CompiledExpr::compile(&out).ok()?;
+    // PROVE the expression evaluates before choosing the implicit path.
+    // `CompiledExpr::compile` validates variable identifiers but not function
+    // names, so an unknown/misnamespaced function (`bogus(x)`, bare `exp`
+    // where evalexpr wants `math::exp`) compiles fine and would then FAULT
+    // inside Newton at every stamp, failing the analog session; the runtime
+    // form evaluates the same malformed law to a guarded 0 A. One probe at
+    // the all-zero dependency point catches exactly the structural faults
+    // (a non-finite VALUE at the probe point is fine: `ln(0)` is a property
+    // of the probe, not of the expression, and Newton's own FD guard already
+    // owns non-finite iterates).
+    compiled.eval(&vec![0.0; deps.len()], 0.0).ok()?;
     Some((compiled, deps))
 }
 
@@ -1414,15 +1411,24 @@ mod tests {
         assert!(compile_law_implicit("v_io * t", &roles(), &p).is_none());
     }
 
-    /// Unknown functions refuse the implicit path: compiled, they would fault
-    /// inside Newton at every stamp (killing the analog session), where the
-    /// runtime form evaluates the same law to a guarded 0 A. Known functions
-    /// pass, bare or math::-prefixed.
+    /// The probe evaluation gates the function vocabulary: an unknown or
+    /// misnamespaced function refuses the implicit path (compiled, it would
+    /// fault inside Newton at every stamp, killing the analog session, where
+    /// the runtime form evaluates the same law to a guarded 0 A), while
+    /// everything evalexpr genuinely evaluates passes, with no allowlist to
+    /// drift out of date.
     #[test]
     fn unknown_functions_refuse_known_ones_pass() {
         assert!(compile_law_implicit("bogus(v_io)", &roles(), &params()).is_none());
         assert!(compile_law_implicit("math::bogus(v_io)", &roles(), &params()).is_none());
-        assert!(compile_law_implicit("max(0.0, v_io)", &roles(), &params()).is_some());
+        // evalexpr's vocabulary is namespaced for math functions: bare `exp`
+        // does not exist and must refuse, `math::exp` must pass.
+        assert!(compile_law_implicit("exp(v_io)", &roles(), &params()).is_none());
         assert!(compile_law_implicit("math::exp(v_io)", &roles(), &params()).is_some());
+        assert!(compile_law_implicit("max(0.0, v_io)", &roles(), &params()).is_some());
+        assert!(compile_law_implicit("min(v_io, v_vbus)", &roles(), &params()).is_some());
+        // A non-finite VALUE at the zero probe point is not a structural
+        // fault: the law is still implicit-eligible.
+        assert!(compile_law_implicit("math::ln(v_io + 0.0)", &roles(), &params()).is_some());
     }
 }

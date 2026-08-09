@@ -83,9 +83,10 @@ export function useLiveSimulation(): SimulationState {
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg))
-      // Reset restarts the failure story server-side (the backlog's fatal
-      // marker is cleared there); mirror it so the banner lifts immediately.
-      if (msg.type === 'Reset') setServerError(null)
+      // Deliberately NO optimistic clear on Reset: the server broadcasts its
+      // refreshed backlog when it actually processes one, and that is what
+      // lifts the banner. Clearing on send would hide the only explanation
+      // of a session whose loop is dead and can never process the Reset.
     }
   }, [])
 
