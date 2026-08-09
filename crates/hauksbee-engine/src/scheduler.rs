@@ -345,6 +345,13 @@ pub struct Scheduler {
     faults_pending: Vec<FaultEvent>,
     pub chunk_s: f64,
     pub opts: SolverOptions,
+    /// Stop a multi-chunk [`Scheduler::step`] early once the strict-abort
+    /// streak trips. Live sessions set this (the server ends the session on
+    /// the failure; grinding out the rest of the frame's chunks would only
+    /// delay that answer and block Pause/Reset); headless/CI runs keep the
+    /// default `false` so their failed-window record covers the whole
+    /// requested span.
+    pub stop_when_dead: bool,
     pub sim_time: f64,
     /// Sub-microsecond remainder carried between chunks. `run_micros` takes an
     /// integer microsecond count, so a chunk whose duration is not a whole
@@ -1035,6 +1042,7 @@ impl Scheduler {
             },
             faults_pending: Vec::new(),
             chunk_s: DEFAULT_CHUNK_S,
+            stop_when_dead: false,
             opts,
             sim_time: 0.0,
             micros_carry: 0.0,
@@ -2420,6 +2428,16 @@ impl Scheduler {
 
         for _ in 0..chunks {
             self.run_chunk(chunk, &mut uart);
+            // Live sessions opt in to stopping a DEAD solve mid-step: once
+            // the strict-abort streak trips, every further chunk is another
+            // full rescue ladder ground for nothing (a 30 Hz frame is ~334
+            // chunks; a manual 1 s step is 10,000), and the session cannot
+            // even process its Pause/Reset until the step returns. Headless
+            // and CI runs keep the complete march: their failed-window
+            // record over the WHOLE requested span is the product.
+            if self.stop_when_dead && self.analog_abort_tripped() {
+                break;
+            }
         }
 
         StepResult {

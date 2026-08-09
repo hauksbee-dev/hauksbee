@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use hauksbee_engine::behavioral::BehavioralDevice;
 use hauksbee_engine::binder::BoundBoard;
 use hauksbee_engine::report::BindReport;
-use hauksbee_engine::scheduler::Scheduler;
+use hauksbee_engine::scheduler::{Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_models::behavioral::Behavioral;
 use hauksbee_models::Params;
@@ -269,4 +269,50 @@ fn lily58_pro_v2_marches_past_one_millisecond_with_sane_voltages() {
             "lily58 net '{net}' at {v:.3e} V is not board reality"
         );
     }
+}
+
+/// A live engine's step must return promptly once the solve is declared
+/// dead: the blast fixture fails every chunk, so a step spanning many chunks
+/// would grind a full rescue ladder per chunk for the whole span. With
+/// `stop_when_dead` (set by the live engine), the step ends at the abort
+/// streak instead: the session can only be ended honestly if the step that
+/// discovered the death actually returns.
+#[test]
+fn a_dead_solve_ends_a_multi_chunk_step_at_the_abort_streak() {
+    let mut c = Circuit::new();
+    let io = c.node("IO");
+    let toml = r#"
+[[laws]]
+name = "blast"
+kind = "current"
+a = "gnd"
+b = "io"
+expr = "2.0 + 0.0 * t_in_state"
+"#;
+    let model: Behavioral = toml::from_str(toml).unwrap();
+    let mut roles = BTreeMap::new();
+    roles.insert("io".to_string(), io);
+    roles.insert("gnd".to_string(), NodeId::GROUND);
+    let dev = BehavioralDevice::stamp(&mut c, "U9", &model, &Params::default(), &roles, &|_| None)
+        .expect("blast law stamps a device");
+    let mut net_nodes = HashMap::new();
+    net_nodes.insert("IO".to_string(), io);
+    let mut sched = Scheduler::new(board_with(c, net_nodes, vec![dev]), None, {
+        SolverOptions::default()
+    })
+    .expect("scheduler builds");
+    sched.stop_when_dead = true;
+
+    // One step spanning 100 chunks of a solve that fails every chunk.
+    let _ = sched.step(1e-2);
+    assert!(
+        sched.analog_abort_tripped(),
+        "the blast fixture must trip the abort streak"
+    );
+    assert!(
+        sched.failed_chunk_count() <= u64::from(STRICT_CONSECUTIVE_FAILED_ABORT) + 1,
+        "a dead live step must stop at the abort streak, not grind all 100 chunks \
+         (failed {})",
+        sched.failed_chunk_count()
+    );
 }

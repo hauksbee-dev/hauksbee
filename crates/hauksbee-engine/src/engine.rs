@@ -69,6 +69,12 @@ impl HauksbeeEngine {
         let controls = SolverControls::default();
         let opts = controls_to_options(&controls);
         let mut sched = Scheduler::new(bound, firmware, opts)?;
+        // This engine is the LIVE surface (the web server steps it frame by
+        // frame): once the strict-abort streak trips, finish the step early
+        // instead of grinding the rest of the frame's chunks; the session is
+        // about to end on the failure either way, and the sooner the step
+        // returns the sooner the session can say so and take Reset.
+        sched.stop_when_dead = true;
         // Coarsen the analog chunk for external emulators, the way every
         // deliberate caller already does (the CLI co-sim report, the CI runner,
         // the proven QEMU integration tests). Renode and QEMU advance the guest
@@ -372,12 +378,19 @@ impl Engine for HauksbeeEngine {
         if !self.sched.analog_abort_tripped() {
             return None;
         }
+        // The most recent failed-window reason is the current story (it
+        // carries an MCU-refused-to-advance failure too, which trips the
+        // same streak); `last_solve_error` only remembers the latest ANALOG
+        // refusal and can be stale across an MCU death.
         let reason = self
             .sched
-            .last_solve_error()
-            .unwrap_or("the analog march did not advance");
+            .failed_window_reasons()
+            .last()
+            .map(String::as_str)
+            .or_else(|| self.sched.last_solve_error())
+            .unwrap_or("the march did not advance");
         Some(format!(
-            "the analog solve failed {} chunks in a row and cannot recover: {reason}",
+            "the co-simulation failed {} chunks in a row and cannot recover: {reason}",
             crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT
         ))
     }
