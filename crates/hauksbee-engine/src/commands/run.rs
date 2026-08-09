@@ -1564,7 +1564,19 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             }
             std::process::exit(2);
         }
-        if cfg.strict && run_evidence.is_undermined() {
+        // Mirror of the co-sim JSON verdict: the bind contract (unbound
+        // verdict-critical parts) and undermined run-level simulation maps
+        // exit 3; a per-fault map is that finding's badge and does not, the
+        // same exemption the verdict field applies through the matching
+        // fault-finding messages.
+        let strict_blockers = crate::result::unmodelled_critical_refs(
+            &crate::result::BindSummary::from_report(engine.report()),
+        );
+        let strict_invalid = !strict_blockers.is_empty()
+            || crate::result::run_level_undermined(run_evidence.maps(), |a| {
+                fault_findings.iter().any(|f| f.message == a)
+            });
+        if cfg.strict && strict_invalid {
             std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
         }
         return Ok(());
