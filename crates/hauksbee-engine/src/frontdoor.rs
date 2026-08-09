@@ -989,9 +989,15 @@ pub fn analyze_with_firmware(
         let gained_serious = serious > report.serious;
         report.total = total;
         // Serious beats invalid beats warning: new serious faults own the
-        // headline; a warning-only fold keeps the run-level invalid headline
-        // when the evidence pass set one.
-        if gained_serious || !evidence_invalid {
+        // headline; a warning-only fold keeps an invalid-class headline in
+        // place, whether it came from undermined run-level evidence or from
+        // the bind contract (an unmodelled active part on the live path whose
+        // INCONCLUSIVE refusal the static pass already printed).
+        let bind_invalid = report
+            .bind
+            .as_ref()
+            .is_some_and(|b| !b.active_path_unresolved.is_empty());
+        if gained_serious || !(evidence_invalid || report.run_level_undermined || bind_invalid) {
             report.headline = headline;
         }
         report.serious = serious;
