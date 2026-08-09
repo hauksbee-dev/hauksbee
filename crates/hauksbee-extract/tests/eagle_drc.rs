@@ -1126,6 +1126,10 @@ fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
 
 #[test]
 fn overlapping_same_rank_pours_of_different_nets_are_a_short() {
+    // The B pour carries no `isolate` attribute, which is Eagle's zero: against
+    // another pour that means no gap is held, so the overlap is copper. (Against
+    // a foreign track or pad, zero means the design rules govern instead, and
+    // `foreign_copper_inside_a_pour_outline_stays_silent` below is that case.)
     let signals = format!(
         r#"
 <signal name="A">{}</signal>
