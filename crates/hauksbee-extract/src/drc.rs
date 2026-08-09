@@ -2799,6 +2799,26 @@ pub mod eagle_drc {
     use quick_xml::Reader;
     use std::collections::HashMap;
 
+    /// The `isolate` below which a pour keeps no separation at all, so a
+    /// same-rank overlap with another signal's pour reaches copper as a short.
+    ///
+    /// One micrometre. Measured, not chosen: the emonTx V3.4.5 sets `isolate`
+    /// to 0.00030625 mm on exactly one of its nine ground pours (six of the
+    /// others ask for 0.3048 mm and the rest carry no isolate attribute), and
+    /// the fabrication gerbers the upstream ships beside the `.brd` show that
+    /// pour merged with the GND pour into a single filled region, while the same
+    /// net pouring at 0.3048 mm on the other layer stays a separate copper body.
+    /// The threshold has to sit between those two values, and one micrometre is
+    /// where nothing real lives: 3x above that deliberately-zeroed isolate,
+    /// 25x below one mil (the tightest separation any board house quotes), and
+    /// ten orders above the f64 noise floor of the geometry it is compared
+    /// against.
+    ///
+    /// An `isolate` between this and the design rules leaves a gap that is real
+    /// but too tight, which is a clearance question about a fill Eagle recomputes
+    /// and does not store. This module does not answer it; Eagle's own DRC does.
+    const POUR_MERGE_ISOLATE_MM: f64 = 1e-3;
+
     type Attrs = HashMap<String, String>;
 
     /// A `<polygon>` (signal pour) being streamed: which signal owns it, its
@@ -3815,11 +3835,10 @@ pub mod eagle_drc {
                         // unchecked, not checked-and-clean), while treating the drawn
                         // outline as solid copper would turn every legitimate
                         // crossing track and every isolated foreign pad into a
-                        // false short. The one construct the settings CANNOT
-                        // make safe is two overlapping same-rank pours of
-                        // different signals: Eagle pours both and flags the
-                        // overlap as a DRC error, so the rank check below does
-                        // the same.
+                        // false short. Two overlapping same-rank pours of
+                        // different signals are the one pair the settings can
+                        // leave touching, but only when a pour's own `isolate`
+                        // is zero; see the rank check below.
                         if !cutout {
                             pours.push(Pour {
                                 net,
@@ -4004,11 +4023,26 @@ pub mod eagle_drc {
         let mut report = sweep_buckets(buckets, &rules, &no_net, &net_ties, &name_of);
 
         // ── Pour-to-pour rank arbitration ────────────────────────────────────
-        // Two overlapping pours of different signals with the SAME rank have no
-        // arbitration: Eagle pours both (a physical short on the fabricated
-        // board) and its own DRC reports the overlap. Differing ranks are
-        // arbitrated (the higher-numbered pour carves around the lower), so
-        // they stay silent.
+        // Differing ranks are arbitrated (the higher-numbered pour carves
+        // around the lower), so they stay silent. Same-rank pours of different
+        // signals whose OUTLINES overlap are not, on their own, a short: the
+        // yielding pour is still carved back by its own `isolate`, and the
+        // outline says nothing about where the fill lands. The overlap only
+        // survives into copper when a pour's `isolate` is zero, because then
+        // the fill is allowed to run right up to the foreign pour.
+        //
+        // The emonTx V3.4.5 (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`) is the
+        // measurement behind that: GND and AGND carry same-rank pours whose
+        // outlines overlap in an identical 0.349 mm band on BOTH copper layers,
+        // and the fabrication gerbers the upstream ships beside the `.brd`
+        // disagree between the two. On the top layer, where AGND pours with
+        // `isolate="0.3048"`, the two pours are separate copper bodies (a
+        // flood-fill of `copper_top.gbr` from inside the AGND pour never
+        // reaches the GND pour). On the bottom, where the same AGND net pours
+        // with `isolate="0.00030625"`, they are one contiguous body. Same file,
+        // same nets, same overlap, same rank: `isolate` is the whole
+        // difference, so it, not the outline overlap, is what this test keys
+        // on.
         for (i, a) in pours.iter().enumerate() {
             for b in pours.iter().skip(i + 1) {
                 if a.layer != b.layer
@@ -4017,6 +4051,14 @@ pub mod eagle_drc {
                     || no_net.contains(&a.net)
                     || no_net.contains(&b.net)
                 {
+                    continue;
+                }
+                // Either pour may be the one that yields, and with equal rank
+                // the file does not say which, so the smaller `isolate` is the
+                // smallest gap the overlap can resolve to. An isolate wide
+                // enough to survive fabrication leaves separate copper, however
+                // far the outlines overlap.
+                if a.isolate.min(b.isolate) >= POUR_MERGE_ISOLATE_MM {
                     continue;
                 }
                 // Overlap means the vertex rings themselves cross or one
