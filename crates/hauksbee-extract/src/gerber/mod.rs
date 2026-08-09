@@ -179,7 +179,14 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             _ => None,
         })
         .collect();
-    job_copper.sort_by_key(|(_, n, side)| (*side, *n));
+    // File name breaks the tie. `gbrjob` is a HashMap, so the vector above
+    // arrives in whatever order the map hashed into, and a stable sort on
+    // (side, number) alone would carry that order through wherever two films
+    // declare the same side and number. The rank IS the provisional stack
+    // index, so a tie resolved by hash order would move a film up or down the
+    // stack between two runs of the same job and change which layers a blind
+    // via stitches.
+    job_copper.sort_by(|a, b| (a.2, a.1, &a.0).cmp(&(b.2, b.1, &b.0)));
     let gbrjob_numbers_physical = job_copper
         .iter()
         .map(|(_, n, _)| *n)
@@ -1400,14 +1407,29 @@ fn warn_if_nets_are_fragmented(board: &ExtractedBoard) {
 /// JSON differed run to run. The archive's stem is a property of the input, so
 /// it holds across runs.
 pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError> {
-    let bytes = std::fs::read(zip_path)
-        .map_err(|e| ExtractError::Xml(format!("read zip {}: {e}", zip_path.display())))?;
     let name = zip_path
         .file_stem()
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
         .unwrap_or("gerber")
         .to_string();
+    from_gerber_zip_named(zip_path, &name)
+}
+
+/// [`from_gerber_zip`] with the board name supplied rather than taken from the
+/// archive's own path.
+///
+/// A web upload arrives as bytes and has to be parked on disk before the reader
+/// can see it, and the name it is parked under is a staging detail, not the
+/// board's identity. Passing the name here keeps the two apart: the caller can
+/// stage the bytes under whatever the filesystem will accept and still report
+/// the board under the name the user uploaded.
+pub fn from_gerber_zip_named(
+    zip_path: &Path,
+    board_name: &str,
+) -> Result<GerberExtraction, ExtractError> {
+    let bytes = std::fs::read(zip_path)
+        .map_err(|e| ExtractError::Xml(format!("read zip {}: {e}", zip_path.display())))?;
     // Uniqueness only, and nothing here reaches the report: pid plus a
     // process-local counter plus the clock, because a bare clock reading can
     // repeat across two calls in the same nanosecond and two jobs unzipping
@@ -1424,12 +1446,23 @@ pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError
             .unwrap_or(0)
     ));
     std::fs::create_dir_all(&tmp).map_err(|e| ExtractError::Xml(format!("mktemp: {e}")))?;
-    unzip_into(&bytes, &tmp)?;
+    // From here every exit removes the directory, including the early return on
+    // a corrupt archive: a service fed malformed zips used to accumulate
+    // half-unpacked jobs under the system temp directory forever.
+    let scratch = TempTree(tmp);
+    unzip_into(&bytes, &scratch.0)?;
     // The zip may wrap a single sub-directory; descend if so.
-    let root = single_subdir(&tmp).unwrap_or(tmp.clone());
-    let res = from_gerber_dir_named(&root, &name);
-    let _ = std::fs::remove_dir_all(&tmp);
-    res
+    let root = single_subdir(&scratch.0).unwrap_or_else(|| scratch.0.clone());
+    from_gerber_dir_named(&root, board_name)
+}
+
+/// A directory removed when it goes out of scope, however the scope is left.
+struct TempTree(std::path::PathBuf);
+
+impl Drop for TempTree {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// If `dir` contains exactly one entry and it's a directory, return it.
@@ -1482,40 +1515,51 @@ impl ExtractedBoard {
     pub fn from_gerber_with_stats(path: &Path) -> Result<GerberExtraction, ExtractError> {
         if path.is_dir() {
             from_gerber_dir(path)
-        } else if path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("zip"))
-            .unwrap_or(false)
-        {
+        } else if is_zip_path(path) {
             from_gerber_zip(path)
         } else {
-            Err(ExtractError::Gerber(
-                "not a gerber job: expected a directory of gerber files, or a .zip of one"
-                    .to_string(),
-            ))
+            Err(not_a_gerber_job())
+        }
+    }
+
+    /// [`from_gerber_with_stats`](Self::from_gerber_with_stats) with the board
+    /// name supplied rather than taken from the path.
+    ///
+    /// For a caller that has parked bytes in a temp file: the staging name is
+    /// the filesystem's business, the board name is the user's, and reading the
+    /// second off the first put staging details (a process id, a counter) into
+    /// every report.
+    pub fn from_gerber_with_stats_named(
+        path: &Path,
+        board_name: &str,
+    ) -> Result<GerberExtraction, ExtractError> {
+        if path.is_dir() {
+            from_gerber_dir_named(path, board_name)
+        } else if is_zip_path(path) {
+            from_gerber_zip_named(path, board_name)
+        } else {
+            Err(not_a_gerber_job())
         }
     }
 
     /// Reverse-extract from a gerber job directory or a gerber `.zip`. The
     /// universal "hand us only the fab files" entry point.
     pub fn from_gerber(path: &Path) -> Result<Self, ExtractError> {
-        if path.is_dir() {
-            from_gerber_dir(path).map(|g| g.board)
-        } else if path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("zip"))
-            .unwrap_or(false)
-        {
-            from_gerber_zip(path).map(|g| g.board)
-        } else {
-            Err(ExtractError::Gerber(
-                "not a gerber job: expected a directory of gerber files, or a .zip of one"
-                    .to_string(),
-            ))
-        }
+        Self::from_gerber_with_stats(path).map(|g| g.board)
     }
+}
+
+/// Whether `path` names a `.zip`, case-insensitively.
+fn is_zip_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case("zip"))
+}
+
+fn not_a_gerber_job() -> ExtractError {
+    ExtractError::Gerber(
+        "not a gerber job: expected a directory of gerber files, or a .zip of one".to_string(),
+    )
 }
 
 #[cfg(test)]
