@@ -1,6 +1,6 @@
 //! The verdict contract: vacuous passes must die.
 //!
-//! Two coupled promises, both two-sided here:
+//! Three coupled promises, all two-sided here:
 //!
 //! 1. **Strict thermal is the default.** A PARTIAL-coverage `--thermal` result
 //!    (real rows while an active power IC on the live circuit is
@@ -16,8 +16,17 @@
 //!    The same board with the part bound gets the normal verdict. The prose
 //!    never changes the exit code on its own (docs/ci/CI.md states the
 //!    boundary).
+//!
+//! 3. **Cross-surface parity.** Each surface's `--strict` exit code says the
+//!    same thing as that surface's own JSON verdict, on the same board:
+//!    `invalid` exits 3, `fail` exits 2, `pass` exits 0. The gate is per
+//!    surface, so the bind gate that invalidates `--lint`/`--si`/`--check`/
+//!    `--usb-c` leaves the copper (`--drc`) and descriptive (`--report`)
+//!    surfaces alone, on both the exit code and the verdict field. The CI
+//!    artifacts (JUnit, SARIF, GitHub annotations) carry the same verdict,
+//!    including through the co-sim rewrite and its refusal rewrite.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn bin() -> &'static str {
@@ -38,9 +47,26 @@ fn fully_covered_board() -> PathBuf {
         .join("../hauksbee-ci/examples/boards/power_resistor.kicad_pcb")
 }
 
+/// A board carrying two real copper shorts, so the copper surface has a
+/// verdict of its own to agree with.
+fn shorted_board() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb")
+}
+
 fn run(args: &[&str]) -> Output {
     Command::new(bin())
         .args(args)
+        .output()
+        .expect("hauksbee binary runs")
+}
+
+/// Run with `GITHUB_ACTIONS` set, the only condition under which the CLI emits
+/// workflow-command annotations.
+fn run_in_actions(args: &[&str]) -> Output {
+    Command::new(bin())
+        .args(args)
+        .env("GITHUB_ACTIONS", "true")
         .output()
         .expect("hauksbee binary runs")
 }
@@ -529,5 +555,395 @@ fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
     assert!(
         !root.contains("failures=\"0\"") || !root.contains("errors=\"0\""),
         "the JUnit root must not read all-green beside an invalid JSON verdict: {root}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Strict-exit parity, one surface at a time. `--strict` is the CI gate and
+// `verdict` is the machine claim; a surface whose gate and verdict disagree
+// hands a pipeline a green build beside a red document (or the reverse). Each
+// test below reads BOTH from the same surface on the same board, on both sides
+// of whatever makes that surface refuse.
+// ---------------------------------------------------------------------------
+
+/// The `(verdict, ok)` pair a machine surface printed.
+fn json_verdict(out: &Output) -> (String, bool) {
+    let doc = stdout(out);
+    let v: serde_json::Value =
+        serde_json::from_str(&doc).unwrap_or_else(|e| panic!("one JSON document ({e}):\n{doc}"));
+    (
+        v["verdict"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a verdict field:\n{v}"))
+            .to_string(),
+        v["ok"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("an ok field:\n{v}")),
+    )
+}
+
+/// Assert one surface's strict exit code and its own JSON verdict tell the
+/// same story on one board: `invalid` gates with [`EXIT_INVALID`], `fail` with
+/// the findings code 2, `pass` with 0.
+fn assert_gate_matches_verdict(surface: &str, board: &Path, want_verdict: &str) {
+    let b = board.to_str().unwrap();
+    let json = run(&["run", b, surface, "--json"]);
+    let (verdict, ok) = json_verdict(&json);
+    assert_eq!(
+        verdict,
+        want_verdict,
+        "{surface} on {b} must read {want_verdict}; stderr: {}",
+        stderr(&json)
+    );
+    assert_eq!(ok, verdict == "pass", "ok must mirror the verdict word");
+    // Without --strict every surface stays exit 0: the verdict is a document
+    // field, and turning it into an exit code is what --strict is for.
+    assert_eq!(
+        json.status.code(),
+        Some(0),
+        "{surface} must not gate without --strict; stderr: {}",
+        stderr(&json)
+    );
+    let want_code = match want_verdict {
+        "invalid" => 3,
+        "fail" => 2,
+        _ => 0,
+    };
+    let strict = run(&["run", b, surface, "--strict"]);
+    assert_eq!(
+        strict.status.code(),
+        Some(want_code),
+        "{surface} --strict must exit {want_code} to match its own '{want_verdict}' verdict; \
+         stderr: {}",
+        stderr(&strict)
+    );
+}
+
+#[test]
+fn lint_strict_exit_agrees_with_the_lint_verdict_on_both_sides_of_the_bind_gate() {
+    assert_gate_matches_verdict(
+        "--lint",
+        &fixture("verdict_fet_unbound.kicad_pcb"),
+        "invalid",
+    );
+    assert_gate_matches_verdict("--lint", &fixture("verdict_fet_bound.kicad_pcb"), "pass");
+}
+
+#[test]
+fn si_strict_exit_agrees_with_the_si_verdict_on_both_sides_of_the_bind_gate() {
+    assert_gate_matches_verdict("--si", &fixture("verdict_fet_unbound.kicad_pcb"), "invalid");
+    assert_gate_matches_verdict("--si", &fixture("verdict_fet_bound.kicad_pcb"), "pass");
+}
+
+#[test]
+fn check_strict_exit_agrees_with_the_check_verdict_on_both_sides_of_the_bind_gate() {
+    assert_gate_matches_verdict(
+        "--check",
+        &fixture("verdict_fet_unbound.kicad_pcb"),
+        "invalid",
+    );
+    assert_gate_matches_verdict("--check", &fixture("verdict_fet_bound.kicad_pcb"), "pass");
+}
+
+#[test]
+fn drc_strict_exit_agrees_with_the_copper_verdict_the_bind_gate_never_touches() {
+    // The exemption, both halves: the unbound FET that invalidates --lint/--si
+    // above leaves --drc at `pass` AND at exit 0 under --strict, because copper
+    // spacing owes nothing to device models...
+    assert_gate_matches_verdict("--drc", &fixture("verdict_fet_unbound.kicad_pcb"), "pass");
+    // ...and that exit 0 is not a dead gate: a board with real shorts reads
+    // `fail` and exits 2 on the same surface.
+    assert_gate_matches_verdict("--drc", &shorted_board(), "fail");
+}
+
+#[test]
+fn usb_c_strict_exit_agrees_with_its_cc_scoped_verdict() {
+    // The CC verdict rests on the identity of the parts on the receptacle's CC
+    // nets, so the bind gate is scoped to them. An unbound FET sitting on CC1
+    // invalidates the surface and exits 3 under --strict...
+    assert_gate_matches_verdict(
+        "--usb-c",
+        &fixture("verdict_usb_c_cc_fet_unbound.kicad_pcb"),
+        "invalid",
+    );
+    // ...while the same unbound FET class on a board with no receptacle at all
+    // leaves nothing for the CC claim to be inconclusive about: `pass`, exit 0.
+    assert_gate_matches_verdict("--usb-c", &fixture("verdict_fet_unbound.kicad_pcb"), "pass");
+}
+
+#[test]
+fn the_report_surface_describes_the_binding_and_never_gates_on_it() {
+    // `--report` is a description of what was modelled, not a pass/fail check,
+    // so --strict does not apply to it (reports/bind.rs). Its document still
+    // carries the honest `invalid` when binding is incomplete, because
+    // incomplete binding is precisely this report's subject; what it must never
+    // do is turn that into a failing build.
+    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
+    let out = run(&["run", unbound.to_str().unwrap(), "--report", "--json"]);
+    let (verdict, ok) = json_verdict(&out);
+    assert_eq!(verdict, "invalid", "stderr: {}", stderr(&out));
+    assert!(!ok);
+    // The route matters: `--report` keeps the per-net binding-completeness maps
+    // the specialist surfaces trim, and those are what make it inconclusive.
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert!(
+        v["evidence"].as_array().expect("evidence").iter().any(|m| {
+            m["status"] == "undermined"
+                && m["assertion"]
+                    .as_str()
+                    .is_some_and(|a| a.starts_with("Binding completeness"))
+        }),
+        "the descriptive report says which net it could not bind:\n{v}"
+    );
+    for extra in [None, Some("--strict")] {
+        let mut args = vec!["run", unbound.to_str().unwrap(), "--report"];
+        if let Some(f) = extra {
+            args.push(f);
+        }
+        let out = run(&args);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "--report never gates ({extra:?}); stderr: {}",
+            stderr(&out)
+        );
+    }
+    // Bound twin: the description has nothing left to qualify.
+    let bound = fixture("verdict_fet_bound.kicad_pcb");
+    let out = run(&[
+        "run",
+        bound.to_str().unwrap(),
+        "--report",
+        "--json",
+        "--strict",
+    ]);
+    assert_eq!(json_verdict(&out).0, "pass", "stderr: {}", stderr(&out));
+    assert_eq!(out.status.code(), Some(0));
+}
+
+// ---------------------------------------------------------------------------
+// The CI artifact surfaces (JUnit, SARIF, GitHub annotations) carry the same
+// verdict. The JUnit agreement test above covers `--check`; these extend it to
+// a specialist surface and to the co-sim path, whose artifacts are rewritten
+// after the run.
+// ---------------------------------------------------------------------------
+
+/// The `<testsuites …>` root line of a JUnit document.
+fn junit_root(xml: &str) -> String {
+    xml.lines()
+        .find(|l| l.trim_start().starts_with("<testsuites"))
+        .unwrap_or_else(|| panic!("a JUnit root element in:\n{xml}"))
+        .to_string()
+}
+
+fn junit_all_green(xml: &str) -> bool {
+    let root = junit_root(xml);
+    root.contains("failures=\"0\"") && root.contains("errors=\"0\"")
+}
+
+/// Every `<testcase name="…">` in a JUnit document.
+fn junit_testcases(xml: &str) -> Vec<String> {
+    xml.split("<testcase name=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn junit_and_sarif_agree_with_a_specialist_surfaces_verdict() {
+    // --junit/--sarif are written from the full static suite whatever selector
+    // asked for them, so a specialist surface must not be able to hand CI a
+    // green artifact beside its own invalid JSON verdict.
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (name, want_invalid) in [
+        ("verdict_fet_unbound.kicad_pcb", true),
+        ("verdict_fet_bound.kicad_pcb", false),
+    ] {
+        let b = fixture(name);
+        let junit = dir.path().join(format!("{name}.xml"));
+        let sarif = dir.path().join(format!("{name}.sarif"));
+        let out = run(&[
+            "run",
+            b.to_str().unwrap(),
+            "--lint",
+            "--json",
+            "--junit",
+            junit.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+        ]);
+        assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+        let (verdict, _) = json_verdict(&out);
+        assert_eq!(
+            verdict == "invalid",
+            want_invalid,
+            "--lint --json verdict on {name}"
+        );
+
+        let xml = std::fs::read_to_string(&junit).expect("junit written");
+        assert_eq!(
+            xml.contains("INVALID evidence:"),
+            want_invalid,
+            "the JUnit file must carry the bind blocker exactly when the verdict is \
+             invalid ({name}):\n{xml}"
+        );
+        assert_eq!(
+            !junit_all_green(&xml),
+            want_invalid,
+            "the JUnit root must be red exactly when the JSON verdict is invalid ({name}): {}",
+            junit_root(&xml)
+        );
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
+                .expect("valid SARIF JSON");
+        let results = doc["runs"][0]["results"].as_array().expect("results array");
+        assert_eq!(
+            results
+                .iter()
+                .any(|r| r["ruleId"] == "evidence/undermined" && r["level"] == "error"),
+            want_invalid,
+            "SARIF must raise an error-level evidence result exactly when the verdict is \
+             invalid ({name}):\n{results:?}"
+        );
+    }
+}
+
+#[test]
+fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
+    // The third artifact surface, same rule: an error annotation appears with
+    // the invalid verdict and nowhere else, so a pull request's checks tab
+    // cannot read clean beside a refused document.
+    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("out.xml");
+    let out = run_in_actions(&[
+        "run",
+        unbound.to_str().unwrap(),
+        "--lint",
+        "--json",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+    let err = stderr(&out);
+    assert!(
+        err.lines()
+            .any(|l| l.starts_with("::error ") && l.contains("Q1") && l.contains("INCONCLUSIVE:")),
+        "an error annotation names the bind blocker in the shared sentence:\n{err}"
+    );
+
+    let bound = fixture("verdict_fet_bound.kicad_pcb");
+    let junit = dir.path().join("bound.xml");
+    let out = run_in_actions(&[
+        "run",
+        bound.to_str().unwrap(),
+        "--lint",
+        "--json",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+    let err = stderr(&out);
+    assert!(
+        !err.lines().any(|l| l.starts_with("::error ")),
+        "no error annotation on the bound twin:\n{err}"
+    );
+}
+
+#[test]
+fn cosim_junit_agrees_with_the_cosim_json_verdict_about_bind_blockers() {
+    // The co-sim machine report is bind-gated like the static ones, and its CI
+    // artifacts are REWRITTEN after the run; the rewrite must not lose the
+    // blocker and leave a green test report beside an invalid verdict.
+    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("cosim.xml");
+    let out = run(&[
+        "run",
+        unbound.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--json",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    assert_eq!(
+        json_verdict(&out).0,
+        "invalid",
+        "an unbound verdict-critical part gates the co-sim JSON verdict too"
+    );
+    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    assert!(
+        xml.contains("INVALID evidence:") && xml.contains("Q1"),
+        "the rewritten co-sim artifact keeps the bind blocker:\n{xml}"
+    );
+    assert!(
+        !junit_all_green(&xml),
+        "the co-sim JUnit root must be red beside an invalid verdict: {}",
+        junit_root(&xml)
+    );
+}
+
+#[test]
+fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried() {
+    // A strict co-sim that refuses (zero activity here) rewrites the artifacts
+    // with the refusal attached. That rewrite is the dangerous one: writing the
+    // refusal alone would erase real electrical faults from the test report a
+    // pipeline archives. The refusing run's artifact must be a SUPERSET of the
+    // complete run's.
+    let board =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cosim_fault_led.kicad_pcb");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let complete = dir.path().join("complete.xml");
+    let out = run(&[
+        "run",
+        board.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--junit",
+        complete.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let complete_cases = junit_testcases(&std::fs::read_to_string(&complete).expect("junit"));
+    assert!(
+        complete_cases.iter().any(|c| c == "overpower R1"),
+        "the complete artifact carries the stress faults: {complete_cases:?}"
+    );
+
+    let refused = dir.path().join("refused.xml");
+    let out = run(&[
+        "run",
+        board.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--strict",
+        "--junit",
+        refused.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a strict co-sim that saw zero activity refuses with the invalid code; stderr: {}",
+        stderr(&out)
+    );
+    let xml = std::fs::read_to_string(&refused).expect("junit");
+    let refused_cases = junit_testcases(&xml);
+    for case in &complete_cases {
+        assert!(
+            refused_cases.contains(case),
+            "the refusal rewrite dropped '{case}' from the archived report:\n{xml}"
+        );
+    }
+    assert!(
+        xml.contains("requested claim is answerable"),
+        "the refusal itself is in the artifact too:\n{xml}"
+    );
+    assert!(
+        !junit_all_green(&xml),
+        "a refused run is not an all-green test report: {}",
+        junit_root(&xml)
     );
 }
