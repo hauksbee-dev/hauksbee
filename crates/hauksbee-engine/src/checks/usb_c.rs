@@ -472,17 +472,31 @@ fn ground_net_ids(board: &ExtractedBoard) -> std::collections::HashSet<i64> {
 
 /// Resolve the receptacle's CC1 and CC2 net ids, preferring the USB-C connector
 /// over any downstream CC controller / PMIC that also carries CC pin functions.
-/// The names of the primary receptacle's CC nets, for scoping which unbound
-/// parts can make the CC verdict inconclusive. `None` when the board carries
-/// no identifiable USB-C receptacle CC termination.
+/// The names of every net the CC audit actually walks, for scoping which
+/// unbound parts can make the CC verdict inconclusive: every receptacle's CC
+/// nets (not just the primary's), each expanded across the same 0 ohm /
+/// ferrite bridges `audit_one_cc` follows to reach a controller's internal
+/// Rd. Built from the audit's own helpers (`all_receptacle_cc_nets`,
+/// `receptacle_cc_nets`, `nets_bridged_to`) so the scope cannot drift from
+/// the walk. `None` when the board carries no identifiable USB-C receptacle
+/// CC termination.
 pub fn receptacle_cc_net_names(
     board: &ExtractedBoard,
 ) -> Option<std::collections::HashSet<String>> {
-    let (cc1, cc2) = receptacle_cc_nets(board)?;
+    let mut cc_ids: Vec<i64> = all_receptacle_cc_nets(board)
+        .into_iter()
+        .flat_map(|r| [r.cc1_net, r.cc2_net])
+        .collect();
+    if cc_ids.is_empty() {
+        let (cc1, cc2) = receptacle_cc_nets(board)?;
+        cc_ids = vec![cc1, cc2];
+    }
     let mut names = std::collections::HashSet::new();
-    for id in [cc1, cc2] {
-        if let Some(net) = board.net(id) {
-            names.insert(net.name.clone());
+    for id in cc_ids {
+        for reachable in nets_bridged_to(board, id) {
+            if let Some(net) = board.net(reachable) {
+                names.insert(net.name.clone());
+            }
         }
     }
     Some(names)
