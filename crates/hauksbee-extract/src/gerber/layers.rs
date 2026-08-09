@@ -548,6 +548,17 @@ fn protel_inner_index(n: &Name) -> Option<usize> {
 /// KiCad inner-copper name: `*-In1_Cu.gbr`, `*-In2_Cu.gbr`, … or
 /// `inner1`, `signal2`, `Copper_Signal_1`, etc.
 fn kicad_inner_index(n: &Name) -> Option<usize> {
+    // Only a plotted film can be copper. The `signal`/`inner` markers below do
+    // not require a `cu` token (Altium and Protel-lineage exporters omit it), so
+    // without this gate a `signal_1.csv` pick-and-place or an `inner_2.pdf`
+    // drawing classified as a copper layer, and the directory scan claims
+    // copper before it looks for placement data: the CSV was swallowed as an
+    // empty copper film and the components never bound. Every inner-copper film
+    // in the corpus (KiCad `-In1_Cu.gbr`, Altium `_Copper_Signal_1.gbr`,
+    // Protel-lineage `-Inner1.gbr`) carries a film extension or none at all.
+    if !is_gerber_film_ext(n) && n.ext.is_some() {
+        return None;
+    }
     /// The layer index that follows a marker, allowing ONE separator between
     /// the word and the number. Altium 24 plots its inner copper as
     /// `<board>_Copper_Signal_1.gbr`; requiring the digit to butt straight up
@@ -713,6 +724,14 @@ mod tests {
             role("board-signal-2.gbr"),
             LayerRole::Copper { index: 2, .. }
         ));
+        // And only a plotted FILM can be copper. The signal/inner markers need
+        // no `cu` token, so without an extension gate a placement CSV or a
+        // drawing whose name happens to carry one became a copper layer; the
+        // directory scan claims copper before it looks for placement data, so
+        // the CSV was swallowed as an empty copper film and no component bound.
+        assert!(!role("signal_1.csv").is_copper());
+        assert!(!role("inner_2.pdf").is_copper());
+        assert!(!role("board-Inner1.xlsx").is_copper());
     }
 
     #[test]
