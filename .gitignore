@@ -1,5 +1,13 @@
 target/
 node_modules/
+# Both forms: the trailing slash matches directories only, so a node_modules
+# SYMLINK is not ignored by it, and one carrying an absolute local path was staged
+# by accident before this line existed.
+node_modules
+# Python coverage databases carry absolute local paths.
+.coverage
+.coverage.*
+htmlcov/
 dist/
 
 # Intermediate firmware artifacts (the .elf is committed for testing on hosts
