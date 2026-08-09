@@ -360,6 +360,28 @@ impl Engine for HauksbeeEngine {
         self.sched.set_peripheral(id, value)
     }
 
+    /// The strict-abort streak, surfaced to the live server: once
+    /// [`crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT`] chunks in a row
+    /// have failed every rescue rung, no further stepping will produce a real
+    /// answer, and the sim loop must end the session with this reason instead
+    /// of grinding the dead solve forever. Same threshold the headless
+    /// `--strict` / CI abort uses: one rule for "this run is unrecoverable".
+    /// A `reset()` clears the streak (see `reset_run_state`), so a relaunch
+    /// or reset starts clean.
+    fn analog_failure(&self) -> Option<String> {
+        if !self.sched.analog_abort_tripped() {
+            return None;
+        }
+        let reason = self
+            .sched
+            .last_solve_error()
+            .unwrap_or("the analog march did not advance");
+        Some(format!(
+            "the analog solve failed {} chunks in a row and cannot recover: {reason}",
+            crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT
+        ))
+    }
+
     /// One analog chunk, for a board on an external emulator: a step smaller
     /// than that still pays a full control-socket round-trip and simply buys
     /// less guest time for it. In-process cores (the AVR backend) report no
