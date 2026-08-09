@@ -66,6 +66,10 @@ pub fn emit(
                     });
                     let mut value = evidence.enrich_json(value);
                     value["inputs"] = serde_json::to_value(inputs)?;
+                    // No receptacle: nothing to fail, and the CC blockers are
+                    // scoped to audited nets, so none exist here either.
+                    value["verdict"] = serde_json::Value::from("pass");
+                    value["ok"] = serde_json::Value::from(true);
                     if let Some(note) = &inconclusive {
                         value["verdict"] = serde_json::Value::from("invalid");
                         value["ok"] = serde_json::Value::from(false);
@@ -86,13 +90,18 @@ pub fn emit(
                 let value: serde_json::Value = serde_json::from_str(&report.to_json())?;
                 let mut value = evidence.enrich_json(value);
                 value["inputs"] = serde_json::to_value(inputs)?;
+                // The machine contract, unconditionally: fail beats invalid
+                // beats pass, and a consumer can always gate on these fields
+                // instead of re-deriving severity from the level.
+                value["verdict"] = serde_json::Value::from(if serious {
+                    "fail"
+                } else if inconclusive.is_some() {
+                    "invalid"
+                } else {
+                    "pass"
+                });
+                value["ok"] = serde_json::Value::from(!serious && inconclusive.is_none());
                 if let Some(note) = &inconclusive {
-                    // Fail beats invalid, and either way the document carries
-                    // a machine verdict: a serious CC fault with blockers
-                    // beside it must not read as no verdict at all.
-                    value["verdict"] =
-                        serde_json::Value::from(if serious { "fail" } else { "invalid" });
-                    value["ok"] = serde_json::Value::from(false);
                     value["coverage_note"] = serde_json::Value::from(note.clone());
                 }
                 println!("{}", serde_json::to_string(&value)?);
