@@ -869,6 +869,10 @@ pub fn analyze_with_firmware(
         &resolved.bytes,
         &drc,
     );
+    // Whether the evidence pass below parked the headline on run-level
+    // invalidity; the fault fold must not demote that to a warning headline
+    // (serious beats invalid beats warning).
+    let mut evidence_invalid = false;
     if let Some(captured) = cosim_evidence {
         let lib = ModelLibrary::builtin();
         let bound = bind_board(&norm.board, &lib);
@@ -946,6 +950,7 @@ pub fn analyze_with_firmware(
                     .any(hauksbee_ir::evidence::EvidenceMap::is_undermined);
                 if report.serious == 0 && (report.run_level_undermined || sim_undermined) {
                     report.headline = "Firmware evidence is undermined; substituted or unresolved inputs invalidate affected co-sim assertions.".to_string();
+                    evidence_invalid = true;
                 } else if report.total == 0 && evidence.has_caveats() {
                     report.headline = "No blocking findings, but firmware evidence is qualified; see the evidence limitations below.".to_string();
                 }
@@ -981,9 +986,15 @@ pub fn analyze_with_firmware(
     if let Some((total, serious, headline)) =
         fold_cosim_faults(report.total, report.serious, &cosim)
     {
+        let gained_serious = serious > report.serious;
         report.total = total;
+        // Serious beats invalid beats warning: new serious faults own the
+        // headline; a warning-only fold keeps the run-level invalid headline
+        // when the evidence pass set one.
+        if gained_serious || !evidence_invalid {
+            report.headline = headline;
+        }
         report.serious = serious;
-        report.headline = headline;
     } else if report.total == 0 {
         // No fault escalation and the static board is clean, but a co-sim that
         // proved nothing must not leave a bare "Looks healthy" headline.
