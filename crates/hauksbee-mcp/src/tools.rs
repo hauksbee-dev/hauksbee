@@ -480,6 +480,15 @@ fn board_to_code(args: &Value) -> ToolResult {
         Ok(b) => b,
         Err(e) => return ToolResult::err(format!("could not read board file '{board_path}': {e}")),
     };
+    // A format hauksbee recognises and deliberately does not read gets named,
+    // with the action that unlocks it. The catch-all below cannot do that: it
+    // guessed "e.g. Altium .PcbDoc" at every binary file, which is the wrong
+    // vendor for a pre-Eagle-6 board and gives its owner nothing to act on.
+    if let Some(message) =
+        hauksbee_engine::board_input::unsupported_format_refusal(&display_name(board_path), &bytes)
+    {
+        return ToolResult::err(message);
+    }
     let text = match String::from_utf8(bytes) {
         Ok(t) => t,
         Err(_) => {

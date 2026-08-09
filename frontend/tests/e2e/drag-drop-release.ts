@@ -6,14 +6,22 @@
  * file enters through an actual DataTransfer drop (not setInputFiles on the
  * app's picker), then has to produce a useful report, a matching independent
  * JSON export, and a live session whose pause/step/play controls advance the
- * engine clock without browser errors. Redacted wire evidence and screenshots
- * are retained under `HB_E2E_OUT`.
+ * engine clock without browser errors.
+ *
+ * The exception is an input the corpus declares `unreadable-by-design`, named
+ * in `HB_REFUSAL_FILES`: it has to produce the opposite, an honest refusal, and
+ * the two expectations fail equally loudly when inverted. Redacted wire evidence
+ * and screenshots are retained under `HB_E2E_OUT`.
  */
 
 import { chromium } from 'playwright'
 import type { ConsoleMessage, Page } from 'playwright'
 import { basename, isAbsolute, join } from 'node:path'
 import { mkdirSync, realpathSync } from 'node:fs'
+// The app's own strip of the engine's trailing "Supported: ..." clause. The
+// refusal card renders the diagnostic through it, so the journey has to compare
+// against the same transform rather than a second copy of the rule.
+import { withoutEngineFormatList } from '../../src/lib/board-formats'
 
 interface WebReport {
   ok: boolean
@@ -42,6 +50,13 @@ interface BoardResult {
   response_capture_error: string | null
   report: WebReport | null
   exported: boolean
+  /** The corpus declared this input a format hauksbee does not read, so the
+   * journey demands an honest refusal from it instead of a report. */
+  expected_refusal: boolean
+  /** The front door refused this input: no report, no export, and a rendered
+   * message carrying what the server said. */
+  refused: boolean
+  refusal_message: string | null
   live_started: boolean
   sim_time_before_s: number | null
   sim_time_after_s: number | null
@@ -61,6 +76,13 @@ interface WireEvent {
 
 const base = process.env.HB_E2E_BASE
 const rawFiles = process.env.HB_BOARD_FILES
+// Inputs the corpus declares hauksbee does not read (`unreadable-by-design`).
+// They are staged deliberately: the only way to know a refusal is honest on a
+// real file is to drop a real file and watch what the front door says. The
+// journey holds them to the OPPOSITE contract from every other input, and
+// holds it in both directions, so neither a refusal that should have been a
+// report nor a report that should have been a refusal can pass.
+const rawRefusals = process.env.HB_REFUSAL_FILES ?? '[]'
 const cohort = process.env.HB_RELEASE_COHORT ?? 'external'
 const output = process.env.HB_E2E_OUT ?? join(import.meta.dir, '../../output/playwright/drag-drop')
 
@@ -96,6 +118,18 @@ const fileDigests = await Promise.all(resolvedFiles.map(async path => (
 )))
 if (new Set(fileDigests).size !== fileDigests.length) {
   throw new Error('HB_BOARD_FILES must contain distinct board contents')
+}
+const refusalInput = JSON.parse(rawRefusals) as unknown
+if (!Array.isArray(refusalInput) || !refusalInput.every(path => typeof path === 'string' && isAbsolute(path))) {
+  throw new Error('HB_REFUSAL_FILES must be a JSON array of absolute paths')
+}
+const expectedRefusals = new Set((refusalInput as string[]).map(path => realpathSync(path)))
+// A refusal expectation that names a file the gate is not dropping would sit
+// there unexercised and read as coverage. Every entry must be one of the boards
+// this run actually drops.
+const unstagedRefusal = [...expectedRefusals].find(path => !resolvedFiles.includes(path))
+if (unstagedRefusal !== undefined) {
+  throw new Error(`HB_REFUSAL_FILES names a file this run does not drop: ${unstagedRefusal}`)
 }
 
 mkdirSync(output, { recursive: true })
@@ -253,6 +287,73 @@ async function exerciseLiveSimulation(page: Page, expectedFile: string, failures
   return { liveStarted, before, after }
 }
 
+/** Audit the refusal an `unreadable-by-design` input must produce.
+ *
+ * The corpus stages these formats precisely because a refusal is only known to
+ * be honest on a real file. Honest here means four things at once: the front
+ * door says the input was not read, it says it in words that came from the
+ * server rather than from a client-side guess, it offers the way forward, and
+ * it offers NONE of the affordances that would imply it had analysed something
+ * (a JSON export, a board inventory, a live launch). A refusal that quietly
+ * hands back an exportable empty report is the failure this guards.
+ *
+ * Returns the rendered refusal text and the refusal payload to retain. Like the
+ * readable path, the independent repeat analysis stands in when Chromium evicted
+ * the drop's own response body, so a retained refusal row always carries the
+ * server's words and the release validator can insist on them instead of
+ * trusting a journey-authored boolean.
+ */
+async function auditRefusal(
+  page: Page,
+  path: string,
+  captured: WebReport | null,
+  failures: string[],
+): Promise<{ shown: string | null; report: WebReport | null }> {
+  for (const [testid, complaint] of [
+    ['export-open', 'a refused input still offered a JSON export'],
+    ['report-inventory', 'a refused input still claimed a parts/nets inventory'],
+    ['run-it', 'a refused input still offered a live simulation action'],
+  ] as const) {
+    if (await page.locator(`[data-testid="${testid}"]`).count() !== 0) failures.push(complaint)
+  }
+  // Visible, not merely present: an inert or hidden retry element is the same
+  // dead end as no retry element.
+  if (!await page.locator('[data-testid="try-another-file"]').isVisible().catch(() => false)) {
+    failures.push('the refusal is a dead end: no visible way to try another file')
+  }
+
+  // Server-derived and repeatable, not a one-off client-side verdict.
+  const independent = await independentAnalysis(path)
+  const serverError = independent.error?.trim() ?? ''
+  if (independent.ok !== false || serverError === '') {
+    failures.push('an independent repeat analysis of a refused input did not refuse')
+  }
+  if (captured?.ok === true) {
+    failures.push('an input the corpus declares unreadable produced a board report')
+  } else if (captured !== null && (captured.error?.trim() ?? '') !== serverError) {
+    failures.push('the rendered refusal disagrees with an independent repeat analysis')
+  }
+  const report = captured ?? independent
+  // A refusal must be empty of board content. An "unreadable" payload that
+  // still carries parts, nets or check sections is a partial read wearing a
+  // refusal's clothes, and it is exactly what a permissive reader claiming
+  // binary noise produces.
+  if (report.num_components > 0 || report.num_nets > 0 || (report.sections?.length ?? 0) > 0) {
+    failures.push('a refused input still came back carrying board content')
+  }
+
+  const verdict = page.locator('[data-testid="report-verdict"]')
+  if (await verdict.count() !== 1) {
+    failures.push('a refused input explained nothing about why')
+    return { shown: null, report }
+  }
+  const shown = (await verdict.innerText()).trim()
+  if (serverError !== '' && !shown.includes(withoutEngineFormatList(serverError))) {
+    failures.push('the rendered refusal does not carry what the server said')
+  }
+  return { shown, report }
+}
+
 async function prepareDrop(page: Page, path: string) {
   await page.evaluate(() => {
     const old = document.querySelector<HTMLInputElement>('[data-hb-release-file]')
@@ -303,6 +404,7 @@ async function finishDrop(page: Page) {
 async function runBoard(page: Page, path: string, index: number): Promise<BoardResult> {
   const file = basename(path)
   const inputSha256 = fileDigests[resolvedFiles.indexOf(path)]
+  const expectedRefusal = expectedRefusals.has(path)
   const failures: string[] = []
   const consoleErrors: string[] = []
   const wireEvents: WireEvent[] = []
@@ -343,7 +445,20 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
   if (!response.ok()) failures.push(`analysis returned HTTP ${response.status()}`)
 
   let exported = false
-  if (await page.locator('[data-testid="report-verdict"]').count() === 1
+  let refused = false
+  let refusalMessage: string | null = null
+  let live = { liveStarted: false, before: null as number | null, after: null as number | null }
+  if (expectedRefusal) {
+    // The other side of the same contract: this input must NOT analyse. The
+    // audit fails just as loudly when the front door hands back a report as
+    // when a readable board is refused, so the expectation cannot be satisfied
+    // by inverting the behaviour.
+    const before = failures.length
+    const audit = await auditRefusal(page, path, report, failures)
+    refusalMessage = audit.shown
+    report = audit.report
+    refused = failures.length === before
+  } else if (await page.locator('[data-testid="report-verdict"]').count() === 1
       && await page.locator('[data-testid="export-open"]').count() === 1) {
     await page.click('[data-testid="export-open"]')
     const [download] = await Promise.all([
@@ -397,24 +512,29 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     failures.push('JSON export is unavailable after a successful drop')
   }
 
-  if (!report?.ok) failures.push(`analysis refused: ${report?.error ?? 'no report'}`)
-  if (report && report.num_components <= 0 && report.num_nets <= 0) {
-    failures.push('report recovered neither components nor nets')
-  }
-  if (!report?.headline?.trim()) failures.push('report has no useful headline')
-  if (!Array.isArray(report?.sections) || report.sections.length === 0) {
-    failures.push('report has no check sections')
+  if (!expectedRefusal) {
+    if (!report?.ok) failures.push(`analysis refused: ${report?.error ?? 'no report'}`)
+    if (report && report.num_components <= 0 && report.num_nets <= 0) {
+      failures.push('report recovered neither components nor nets')
+    }
+    if (!report?.headline?.trim()) failures.push('report has no useful headline')
+    if (!Array.isArray(report?.sections) || report.sections.length === 0) {
+      failures.push('report has no check sections')
+    }
   }
 
   await page.screenshot({
     path: join(output, `${String(index + 1).padStart(2, '0')}-${file}-report.png`),
     fullPage: false,
   })
-  let live = { liveStarted: false, before: null as number | null, after: null as number | null }
-  try {
-    live = await exerciseLiveSimulation(page, file, failures)
-  } catch (error) {
-    failures.push(`live simulation journey failed: ${error instanceof Error ? error.message : String(error)}`)
+  // A refused input has no session to drive: there is nothing to launch, and
+  // `auditRefusal` has already established that the app offers no launch.
+  if (!expectedRefusal) {
+    try {
+      live = await exerciseLiveSimulation(page, file, failures)
+    } catch (error) {
+      failures.push(`live simulation journey failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   if (consoleErrors.length > 0) failures.push(`${consoleErrors.length} browser console error(s)`)
@@ -435,6 +555,9 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     response_capture_error: responseCaptureError,
     report,
     exported,
+    expected_refusal: expectedRefusal,
+    refused,
+    refusal_message: refusalMessage,
     live_started: live.liveStarted,
     sim_time_before_s: live.before,
     sim_time_after_s: live.after,
@@ -471,6 +594,9 @@ try {
         response_capture_error: null,
         report: null,
         exported: false,
+        expected_refusal: expectedRefusals.has(path),
+        refused: false,
+        refusal_message: null,
         live_started: false,
         sim_time_before_s: null,
         sim_time_after_s: null,
@@ -482,8 +608,10 @@ try {
     results.push(result)
     console.log(
       `${result.failures.length === 0 ? 'PASS' : 'FAIL'} ${result.file} `
-      + `${result.elapsed_ms}ms ${result.report?.num_components ?? 0} parts/`
-      + `${result.report?.num_nets ?? 0} nets`,
+      + `${result.elapsed_ms}ms `
+      + (result.expected_refusal
+        ? `refused honestly=${result.refused}`
+        : `${result.report?.num_components ?? 0} parts/${result.report?.num_nets ?? 0} nets`),
     )
     for (const failure of result.failures) console.log(`  - ${failure}`)
     await context.close()

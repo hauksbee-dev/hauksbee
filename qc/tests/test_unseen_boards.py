@@ -115,6 +115,7 @@ def manifest_pool(
     *,
     cohort: str,
     duplicate_payload: bytes | None = None,
+    refusal_numbers: frozenset[int] = frozenset(),
 ) -> tuple[Path, Path]:
     root = base / name
     root.mkdir()
@@ -179,7 +180,9 @@ def manifest_pool(
                 f'rev = "{revision}"',
                 'license = "MIT"',
                 "license_confirmed = true",
-                'axes = ["kicad", "dev-board"]',
+                'axes = ["kicad", "dev-board"]'
+                if number not in refusal_numbers
+                else f'axes = ["kicad", "{release_gates.REFUSAL_AXIS}"]',
                 'expect = ["board.kicad_pcb"]',
                 "",
             ]
@@ -189,13 +192,32 @@ def manifest_pool(
     return root, manifest
 
 
+# What the engine returns for a pre-Eagle-6 binary board, in the shape the
+# validator checks: the page renders this text, so a stub whose rendered message
+# does not carry the server's diagnostic must fail the same way a real journey
+# would.
+REFUSAL_ERROR = (
+    "Could not read this board file: this is an Eagle drawing in the pre-Eagle-6 "
+    "BINARY format, which hauksbee does not read. Open it in Eagle 6 or later and "
+    "re-save it."
+)
+
+
 def successful_browser_runner(captured: list[Path] | None = None):
-    def run(paths: list[Path], output: Path, base_url: str, cohort: str) -> int:
+    def run(
+        paths: list[Path],
+        output: Path,
+        base_url: str,
+        cohort: str,
+        refusals: list[Path],
+    ) -> int:
         if captured is not None:
             captured.extend(paths)
         output.mkdir(parents=True, exist_ok=True)
+        expected_refusals = {path.resolve() for path in refusals}
         results = []
         for path in paths:
+            refused = path.resolve() in expected_refusals
             results.append(
                 {
                     "path": str(path.resolve()),
@@ -204,6 +226,16 @@ def successful_browser_runner(captured: list[Path] | None = None):
                     "response_status": 200,
                     "response_capture_error": None,
                     "report": {
+                        "ok": False,
+                        "file_name": path.name,
+                        "error": REFUSAL_ERROR,
+                        "num_components": 0,
+                        "num_nets": 0,
+                        "headline": "Could not read the file.",
+                        "sections": [],
+                    }
+                    if refused
+                    else {
                         "ok": True,
                         "file_name": path.name,
                         "num_components": 2,
@@ -211,7 +243,11 @@ def successful_browser_runner(captured: list[Path] | None = None):
                         "headline": "Useful report",
                         "sections": [{"name": "connectivity"}],
                     },
-                    "exported": True,
+                    "exported": not refused,
+                    "expected_refusal": refused,
+                    "refused": refused,
+                    "refusal_message": REFUSAL_ERROR if refused else None,
+                    "live_started": not refused,
                     "console_errors": [],
                     "failures": [],
                 }
@@ -1141,9 +1177,9 @@ class CommandTests(unittest.TestCase):
             evidence_dir = base / "evidence"
 
             def failing(
-                paths: list[Path], output: Path, base_url: str, cohort: str
+                paths: list[Path], output: Path, base_url: str, cohort: str, refusals: list[Path]
             ) -> int:
-                successful_browser_runner()(paths, output, base_url, cohort)
+                successful_browser_runner()(paths, output, base_url, cohort, refusals)
                 artifact = json.loads((output / "results.json").read_text())
                 artifact["results"][0]["failures"] = ["report was not useful"]
                 (output / "results.json").write_text(json.dumps(artifact))
@@ -1186,7 +1222,7 @@ class CommandTests(unittest.TestCase):
             history = base / "history.jsonl"
 
             def unavailable(
-                paths: list[Path], output: Path, base_url: str, cohort: str
+                paths: list[Path], output: Path, base_url: str, cohort: str, refusals: list[Path]
             ) -> int:
                 raise OSError("browser executable is unavailable")
 
@@ -1254,9 +1290,9 @@ class CommandTests(unittest.TestCase):
             history = base / "history.jsonl"
 
             def mismatched(
-                paths: list[Path], output: Path, base_url: str, cohort: str
+                paths: list[Path], output: Path, base_url: str, cohort: str, refusals: list[Path]
             ) -> int:
-                successful_browser_runner()(paths, output, base_url, cohort)
+                successful_browser_runner()(paths, output, base_url, cohort, refusals)
                 artifact = json.loads((output / "results.json").read_text())
                 artifact["results"][0]["path"] = str(base / "different.kicad_pcb")
                 (output / "results.json").write_text(json.dumps(artifact))
@@ -1295,9 +1331,9 @@ class CommandTests(unittest.TestCase):
             history = base / "history.jsonl"
 
             def mutating(
-                paths: list[Path], output: Path, base_url: str, cohort: str
+                paths: list[Path], output: Path, base_url: str, cohort: str, refusals: list[Path]
             ) -> int:
-                code = successful_browser_runner()(paths, output, base_url, cohort)
+                code = successful_browser_runner()(paths, output, base_url, cohort, refusals)
                 paths[0].write_text("changed during run")
                 return code
 
@@ -1332,9 +1368,9 @@ class CommandTests(unittest.TestCase):
             )
 
             def path_leaking(
-                paths: list[Path], output: Path, base_url: str, cohort: str
+                paths: list[Path], output: Path, base_url: str, cohort: str, refusals: list[Path]
             ) -> int:
-                successful_browser_runner()(paths, output, base_url, cohort)
+                successful_browser_runner()(paths, output, base_url, cohort, refusals)
                 artifact = json.loads((output / "results.json").read_text())
                 artifact["results"][0]["report"]["diagnostic"] = {
                     "detail": f"reader opened {paths[0].resolve()}",
@@ -1391,6 +1427,184 @@ class CommandTests(unittest.TestCase):
             self.assertNotIn(
                 str(base), (base / "evidence" / "corpus-01.json").read_text()
             )
+
+    def test_corpus_gate_demands_an_honest_refusal_from_an_unreadable_by_design_input(
+        self,
+    ) -> None:
+        # The corpus carries formats hauksbee deliberately does not read (a
+        # pre-Eagle-6 binary Eagle drawing) so the refusal is held to its word
+        # on real files. The gate used to demand a report and a JSON export from
+        # every staged input without exception, so those boards failed five
+        # journey checks each for behaving exactly as documented, and the
+        # corpus-exhaustive gate could never go green.
+        #
+        # Both directions, because either one alone is a hole: a readable board
+        # must still produce its export, and a declared-unreadable input must
+        # still be refused rather than quietly analysed.
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            corpus_root, corpus_manifest = manifest_pool(
+                base, "corpus", 3, cohort="corpus", refusal_numbers=frozenset({1})
+            )
+            handed_refusals: list[list[Path]] = []
+
+            def recording(
+                paths: list[Path],
+                output: Path,
+                base_url: str,
+                cohort: str,
+                refusals: list[Path],
+            ) -> int:
+                handed_refusals.append(list(refusals))
+                return successful_browser_runner()(
+                    paths, output, base_url, cohort, refusals
+                )
+
+            evidence = release_gates.run_corpus_gate(
+                corpus_root=corpus_root,
+                corpus_manifest=corpus_manifest,
+                evidence_dir=base / "evidence",
+                scratch_root=base / "scratch",
+                run_id="corpus-refusal",
+                base_url="http://127.0.0.1:37651",
+                tool_commit="e" * 40,
+                runner=recording,
+            )
+
+            # The axis, not a filename, decides which inputs carry the refusal
+            # contract, and exactly the declared one does.
+            self.assertEqual(1, len(handed_refusals[0]))
+            rows = evidence["browser"]["results"]
+            self.assertEqual([False, True, False], [row["expected_refusal"] for row in rows])
+            self.assertEqual([True, False, True], [row["exported"] for row in rows])
+
+            # A refusal that turns into a report is a failure, not a bonus.
+            def analysing_the_unreadable(
+                paths: list[Path],
+                output: Path,
+                base_url: str,
+                cohort: str,
+                refusals: list[Path],
+            ) -> int:
+                successful_browser_runner()(paths, output, base_url, cohort, [])
+                artifact = json.loads((output / "results.json").read_text())
+                for row in artifact["results"]:
+                    row["expected_refusal"] = Path(row["path"]).resolve() in {
+                        path.resolve() for path in refusals
+                    }
+                (output / "results.json").write_text(json.dumps(artifact))
+                return 0
+
+            with self.assertRaisesRegex(SelectionError, r"did not refuse"):
+                release_gates.run_corpus_gate(
+                    corpus_root=corpus_root,
+                    corpus_manifest=corpus_manifest,
+                    evidence_dir=base / "evidence",
+                    scratch_root=base / "scratch",
+                    run_id="corpus-refusal-inverted",
+                    base_url="http://127.0.0.1:37651",
+                    tool_commit="e" * 40,
+                    runner=analysing_the_unreadable,
+                )
+
+            # Nor can a journey pass by asserting `refused` over an empty row.
+            # The refusal has to be backed by the server's payload and the
+            # message the page rendered, or the gate is recording a board
+            # nothing was ever dropped on.
+            for stripped in ("report", "refusal_message"):
+
+                def hollow(
+                    paths: list[Path],
+                    output: Path,
+                    base_url: str,
+                    cohort: str,
+                    refusals: list[Path],
+                    field: str = stripped,
+                ) -> int:
+                    successful_browser_runner()(
+                        paths, output, base_url, cohort, refusals
+                    )
+                    artifact = json.loads((output / "results.json").read_text())
+                    for row in artifact["results"]:
+                        if row["expected_refusal"]:
+                            row[field] = None
+                    (output / "results.json").write_text(json.dumps(artifact))
+                    return 0
+
+                with self.assertRaisesRegex(SelectionError, r"retained no|no reason"):
+                    release_gates.run_corpus_gate(
+                        corpus_root=corpus_root,
+                        corpus_manifest=corpus_manifest,
+                        evidence_dir=base / "evidence",
+                        scratch_root=base / "scratch",
+                        run_id=f"corpus-refusal-hollow-{stripped}",
+                        base_url="http://127.0.0.1:37651",
+                        tool_commit="e" * 40,
+                        runner=hollow,
+                    )
+
+            # And a journey that never applied the contract at all cannot pass
+            # by simply omitting the field.
+            def contract_never_applied(
+                paths: list[Path],
+                output: Path,
+                base_url: str,
+                cohort: str,
+                refusals: list[Path],
+            ) -> int:
+                return successful_browser_runner()(paths, output, base_url, cohort, [])
+
+            with self.assertRaisesRegex(SelectionError, r"did not apply the"):
+                release_gates.run_corpus_gate(
+                    corpus_root=corpus_root,
+                    corpus_manifest=corpus_manifest,
+                    evidence_dir=base / "evidence",
+                    scratch_root=base / "scratch",
+                    run_id="corpus-refusal-ignored",
+                    base_url="http://127.0.0.1:37651",
+                    tool_commit="e" * 40,
+                    runner=contract_never_applied,
+                )
+
+    def test_external_five_gate_will_not_spend_a_slot_on_an_unreadable_by_design_input(
+        self,
+    ) -> None:
+        # The external gate asks one question: do five previously-unseen real
+        # boards analyse in a browser? A file hauksbee refuses by design answers
+        # nothing about that, so an external pool that tagged its entries
+        # `unreadable-by-design` could otherwise satisfy a completed iteration
+        # with five refusals and no analysed board at all.
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            external_root, external_manifest = manifest_pool(
+                base,
+                "external",
+                6,
+                cohort="external",
+                refusal_numbers=frozenset({0, 1}),
+            )
+            corpus_root, corpus_manifest = manifest_pool(
+                base, "corpus", 1, cohort="corpus"
+            )
+            captured: list[Path] = []
+
+            with self.assertRaisesRegex(SelectionError, r"only 4 remain"):
+                release_gates.run_external_gate(
+                    external_root=external_root,
+                    external_manifest=external_manifest,
+                    corpus_root=corpus_root,
+                    corpus_manifest=corpus_manifest,
+                    history_path=base / "history.jsonl",
+                    evidence_dir=base / "evidence",
+                    scratch_root=base / "scratch",
+                    iteration_id="external-refusals",
+                    planned_at="2026-08-06T12:00:00Z",
+                    base_url="http://127.0.0.1:37651",
+                    entropy="a" * 64,
+                    tool_commit="e" * 40,
+                    runner=successful_browser_runner(captured),
+                )
+            self.assertEqual([], captured, "no journey may run on a refusal input")
 
     def test_release_cli_uses_the_canonical_ledger_and_has_a_distinct_corpus_mode(
         self,
@@ -1675,6 +1889,9 @@ expect = ["board-{number}.kicad_pcb"]
             "report",
             "failures",
             "exported",
+            "expected_refusal",
+            "refused",
+            "refusal_message",
             "response_status",
             "live_started",
         ):
@@ -1684,6 +1901,15 @@ expect = ["board-{number}.kicad_pcb"]
                 f"BoardResult must declare {field!r}; the release validator "
                 "refuses results without it",
             )
+        # The refusal expectations reach the harness over one env var, and a
+        # rename on either side would silently drop the contract: the journey
+        # would demand a report from every input again and the gate would fail
+        # after a green run, which is the same drift this test exists for.
+        self.assertIn("HB_REFUSAL_FILES", source)
+        self.assertIn(
+            "HB_REFUSAL_FILES",
+            inspect.getsource(release_gates._playwright_runner),
+        )
 
     def test_module_execution_reports_gate_errors_without_a_traceback(self) -> None:
         # `python -m qc.unseen_boards` executes this file as `__main__`, while
