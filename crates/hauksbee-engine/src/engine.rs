@@ -118,6 +118,17 @@ impl HauksbeeEngine {
     pub fn scheduler(&self) -> &Scheduler {
         &self.sched
     }
+    /// Arm the LIVE-session behaviour: once the strict-abort streak trips,
+    /// a multi-chunk step returns early instead of grinding the rest of the
+    /// frame's chunks; the session is about to end on the failure either
+    /// way, and the sooner the step returns the sooner the session can say
+    /// so and take Reset. Only the serving surfaces call this: headless,
+    /// CI and report co-sims keep the complete march, because their
+    /// failed-window record over the WHOLE requested span is the product.
+    pub fn arm_live_abort(&mut self) {
+        self.sched.stop_when_dead = true;
+    }
+
     pub fn scheduler_mut(&mut self) -> &mut Scheduler {
         &mut self.sched
     }
@@ -358,6 +369,35 @@ impl Engine for HauksbeeEngine {
 
     fn set_peripheral(&mut self, id: &str, value: f64) -> bool {
         self.sched.set_peripheral(id, value)
+    }
+
+    /// The strict-abort streak, surfaced to the live server: once
+    /// [`crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT`] chunks in a row
+    /// have failed every rescue rung, no further stepping will produce a real
+    /// answer, and the sim loop must end the session with this reason instead
+    /// of grinding the dead solve forever. Same threshold the headless
+    /// `--strict` / CI abort uses: one rule for "this run is unrecoverable".
+    /// A `reset()` clears the streak (see `reset_run_state`), so a relaunch
+    /// or reset starts clean.
+    fn analog_failure(&self) -> Option<String> {
+        if !self.sched.analog_abort_tripped() {
+            return None;
+        }
+        // The most recent failed-window reason is the current story (it
+        // carries an MCU-refused-to-advance failure too, which trips the
+        // same streak); `last_solve_error` only remembers the latest ANALOG
+        // refusal and can be stale across an MCU death.
+        let reason = self
+            .sched
+            .failed_window_reasons()
+            .last()
+            .map(String::as_str)
+            .or_else(|| self.sched.last_solve_error())
+            .unwrap_or("the march did not advance");
+        Some(format!(
+            "the co-simulation failed {} chunks in a row and cannot recover: {reason}",
+            crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT
+        ))
     }
 
     /// One analog chunk, for a board on an external emulator: a step smaller
