@@ -552,7 +552,9 @@ subdir = "hardware/V3.4.5"
 known_good = false
 known_good_note = """
 Adjudicated, not pending: one real copper join, GND <-> AGND on B.Cu. The two \
-nets are separate in the schematic with no bridging component, and their pours \
+nets are separate in the schematic, with no discrete part bridging them (the \
+only element with pads on both is U1 itself, the ATmega328P, whose GND and AGND \
+pins are internally common), and their pours \
 are same-rank with outlines that overlap in the same 0.349 mm band on both \
 layers. On F.Cu both pours hold `isolate="0.3048"` and the shipped \
 copper_top.gbr keeps them as two distinct filled regions. On B.Cu the AGND pour \
@@ -682,8 +684,8 @@ expect = [
 ]
 
 # A 10 MHz-to-6 GHz signal generator: three PLLs, a TCXO, an OCXO reference
-# input, RF shield cans, and 373 parts on four layers. It reached the corpus the
-# way the ODrive attempt layout did, by being flagged: the external-pool
+# input, RF shield cans, and 373 footprints on four layers. It reached the corpus
+# the way the ODrive attempt layout did, by being flagged: the external-pool
 # iteration `qc/evidence/runs/2026-08-09-external-01.json` drew it, hauksbee
 # reported six copper shorts, and the adjudication (see the gold row in
 # `docs/evidence/KNOWN_FAULTS_VALIDATION.md`) found all six real. It is pinned
@@ -709,7 +711,7 @@ own `kicad-cli pcb drc` on the same file reports the same six shorting_items \
 violations, the same net pairs and the same pad anchors, and the project's \
 MWGEN-G1.kicad_pro sets `shorting_items` and `clearance` to `error` with an \
 empty drc_exclusions list, so the design's own rule set forbids every one of \
-them. The entry earns its place regardless: an RF instrument at 373 parts, with \
+them. The entry earns its place regardless: an RF instrument at 373 footprints, \
 shield cans and three PLL sections, is coverage nothing else here supplies.
 """
 expect = [

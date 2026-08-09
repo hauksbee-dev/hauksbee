@@ -258,8 +258,8 @@ fn odrive_v2_attempt_ground_short_flagged_and_final_is_clean() {
 
 // ---------------------------------------------------------------------------
 // MWGEN-G1 pad-overlap gold row. A shipped 10 MHz-to-6 GHz signal generator,
-// 373 parts, drawn in KiCad 6. Its reference-input corner puts an SMAJ48CA TVS
-// in an SMA body (D503, 2.5 x 1.8 mm pads) on top of two SOT-23 diodes and two
+// 373 footprints, drawn in KiCad 6. Its reference-input corner puts an SMAJ48CA
+// TVS in an SMA body (D503, 2.5 x 1.8 mm pads) on top of two SOT-23 diodes and two
 // hand-solder 0603s, and its Laird BMI-S-205-F shield-can fence pad on J206 on
 // top of a 0603 ferrite bead. Six pads of different nets overlap as a result.
 //
@@ -363,7 +363,7 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
 // emonTx V3.4.5 pour-overlap row: one file, one net pair, two layers, opposite
 // verdicts, and the fabrication output to settle which is which.
 //
-// GND and AGND are separate nets with no bridging component, and their
+// GND and AGND are separate nets with no discrete part bridging them, and their
 // same-rank pours overlap in an identical 0.349 mm band on both copper layers
 // (GND's outline runs along y=43.205 with fill below; AGND's runs along
 // y=42.856 with fill above). Reading that outline overlap as copper reported a
