@@ -55,12 +55,21 @@ pub struct GerberExtraction {
 /// Recursively collect every file under `dir` (fab jobs sometimes nest the
 /// copper / drill / assembly films in sub-directories, e.g. Allegro's
 /// `*_CAM` / `*_SMT` / `*_ASM` split).
+///
+/// Sorted by path within each directory, and directories descended in that same
+/// sorted order, because `read_dir` yields whatever order the filesystem
+/// happens to hold. Downstream this list decides which copper film gets which
+/// provisional stack index when a job's names tie, so readdir order would leak
+/// into the reconstruction. Two analyses of one archive extracted into two
+/// different temp directories must not diverge on the order the kernel handed
+/// the entries back.
 fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    for e in entries.flatten() {
-        let p = e.path();
+    let mut here: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    here.sort();
+    for p in here {
         if p.is_dir() {
             collect_files(&p, out);
         } else if p.is_file() {
@@ -91,6 +100,22 @@ fn drill_is_gerber_format(head: &str, ext: Option<&str>) -> bool {
 /// name is the directory's file name. The pick-and-place is picked up from a
 /// `.csv`/`.pos` that parses as one, or an Allegro `smt_loc.txt`.
 pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
+    let name = dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("gerber")
+        .to_string();
+    from_gerber_dir_named(dir, &name)
+}
+
+/// [`from_gerber_dir`] with the board name supplied rather than taken from the
+/// directory.
+///
+/// The zip path needs this: it extracts into a throwaway directory whose name
+/// exists only to be unique, so naming the board after it put a nanosecond
+/// clock reading in every report and broke the "same board twice, same JSON"
+/// contract. The archive names the board instead.
+fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtraction, ExtractError> {
     let mut all_files = Vec::new();
     collect_files(dir, &mut all_files);
 
@@ -742,11 +767,7 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         }
     }
 
-    let name = dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("gerber")
-        .to_string();
+    let name = board_name.to_string();
 
     let n_castellations = count_castellations(&holes, &outline_prims);
     let (mut board, mut stats) = connect::reconstruct(&name, layer_prims, holes, placements);
@@ -1368,12 +1389,35 @@ fn warn_if_nets_are_fragmented(board: &ExtractedBoard) {
 }
 
 /// Reverse-extract from a gerber job `.zip`. Extracts to a temp dir and
-/// delegates to [`from_gerber_dir`].
+/// delegates to [`from_gerber_dir_named`].
+///
+/// The board is named after the ARCHIVE, never after the extraction directory.
+/// The extraction directory has to be unique per call (two concurrent analyses
+/// of different jobs must not tread on each other), which used to mean a
+/// nanosecond clock reading in its name, and [`from_gerber_dir`] took the board
+/// name from the directory it was handed: so a single byte-identical upload
+/// analysed twice produced two different `board_name` values, and the exported
+/// JSON differed run to run. The archive's stem is a property of the input, so
+/// it holds across runs.
 pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError> {
     let bytes = std::fs::read(zip_path)
         .map_err(|e| ExtractError::Xml(format!("read zip {}: {e}", zip_path.display())))?;
+    let name = zip_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("gerber")
+        .to_string();
+    // Uniqueness only, and nothing here reaches the report: pid plus a
+    // process-local counter plus the clock, because a bare clock reading can
+    // repeat across two calls in the same nanosecond and two jobs unzipping
+    // into one directory would mix their films.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
     let tmp = std::env::temp_dir().join(format!(
-        "hauksbee_gerber_{}",
+        "hauksbee_gerber_{}_{}_{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -1383,7 +1427,7 @@ pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError
     unzip_into(&bytes, &tmp)?;
     // The zip may wrap a single sub-directory; descend if so.
     let root = single_subdir(&tmp).unwrap_or(tmp.clone());
-    let res = from_gerber_dir(&root);
+    let res = from_gerber_dir_named(&root, &name);
     let _ = std::fs::remove_dir_all(&tmp);
     res
 }
