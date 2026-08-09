@@ -572,10 +572,18 @@ pub fn reconstruct(
         })
     };
 
-    // Build the Net table with names.
-    let mut nets: Vec<Net> = root_to_net
-        .values()
-        .copied()
+    // Build the Net table with names, in net-id order.
+    //
+    // Sorted BEFORE the walk, not after: the walk pushes an X2-disagreement
+    // note per conflicting net, and `root_to_net` is a HashMap, so walking it
+    // raw emitted those notes (and the evidence assumptions built from them) in
+    // hash order. Sorting the finished `nets` afterwards fixed the net table
+    // and left the notes shuffled, which is enough to make two analyses of one
+    // archive export different JSON.
+    let mut net_ids: Vec<i64> = root_to_net.values().copied().collect();
+    net_ids.sort_unstable();
+    let nets: Vec<Net> = net_ids
+        .into_iter()
         .map(|id| {
             let name = match net_x2_names.get(&id) {
                 Some(names) => {
@@ -611,7 +619,6 @@ pub fn reconstruct(
             Net { id, name }
         })
         .collect();
-    nets.sort_by_key(|n| n.id);
 
     // ── 5. Assign flashes to placed components ──────────────────────────────
     // Flash-centric assignment: each flash goes to the *nearest* placed
