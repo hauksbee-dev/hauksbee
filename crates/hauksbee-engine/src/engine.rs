@@ -69,12 +69,6 @@ impl HauksbeeEngine {
         let controls = SolverControls::default();
         let opts = controls_to_options(&controls);
         let mut sched = Scheduler::new(bound, firmware, opts)?;
-        // This engine is the LIVE surface (the web server steps it frame by
-        // frame): once the strict-abort streak trips, finish the step early
-        // instead of grinding the rest of the frame's chunks; the session is
-        // about to end on the failure either way, and the sooner the step
-        // returns the sooner the session can say so and take Reset.
-        sched.stop_when_dead = true;
         // Coarsen the analog chunk for external emulators, the way every
         // deliberate caller already does (the CLI co-sim report, the CI runner,
         // the proven QEMU integration tests). Renode and QEMU advance the guest
@@ -124,6 +118,17 @@ impl HauksbeeEngine {
     pub fn scheduler(&self) -> &Scheduler {
         &self.sched
     }
+    /// Arm the LIVE-session behaviour: once the strict-abort streak trips,
+    /// a multi-chunk step returns early instead of grinding the rest of the
+    /// frame's chunks; the session is about to end on the failure either
+    /// way, and the sooner the step returns the sooner the session can say
+    /// so and take Reset. Only the serving surfaces call this: headless,
+    /// CI and report co-sims keep the complete march, because their
+    /// failed-window record over the WHOLE requested span is the product.
+    pub fn arm_live_abort(&mut self) {
+        self.sched.stop_when_dead = true;
+    }
+
     pub fn scheduler_mut(&mut self) -> &mut Scheduler {
         &mut self.sched
     }

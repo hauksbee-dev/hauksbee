@@ -168,6 +168,9 @@ pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
             let board_url = format!("/boards/{name}");
             let mut engine = HauksbeeEngine::from_bound(bound, fw_path.as_deref(), &board_url)
                 .map_err(|e| e.to_string())?;
+            // This engine is a live web session: end a dead solve's step at
+            // the abort streak (see `arm_live_abort`).
+            engine.arm_live_abort();
             // Same bridge-or-refuse policy as the web co-sim (validated shorts
             // bridged, KiCad-10 `version_warning` shorts left alone), recorded
             // on the engine so the sim view can disclose it.
@@ -183,7 +186,7 @@ pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
 }
 
 pub fn serve(
-    engine: HauksbeeEngine,
+    mut engine: HauksbeeEngine,
     port: u16,
     board_file: Option<(String, String)>,
     startup_json: String,
@@ -191,6 +194,9 @@ pub fn serve(
     no_open: bool,
 ) -> anyhow::Result<()> {
     use std::sync::Arc;
+    // The preloaded engine is about to become the live session behind /ws:
+    // same live-only dead-solve behaviour as an uploaded board's engine.
+    engine.arm_live_abort();
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         // Name the preloaded session by its board FILE name (the board_file

@@ -148,19 +148,11 @@ fn usblc6_clamp_on_floating_net_is_implicit_and_stays_sane() {
     }
 }
 
-/// The pathological side: a law the implicit form cannot express (it reads
-/// FSM context) blasting a constant 2 A into the same floating net. The old
-/// behaviour was FAKE QUIET: the solve "converged" at I/gmin = 2e12 V (KCL
-/// balances exactly there) and the run reported clean chunks. Now the
-/// insane state is refused: failed chunks are recorded with the net named,
-/// nothing insane is ever published, and the strict-abort streak trips, which
-/// is what ends a live session honestly.
-#[test]
-fn constant_blast_into_floating_net_refuses_honestly_not_fake_quiet() {
+/// A law the implicit form cannot express (it reads FSM context) blasting a
+/// constant 2 A into a floating net: fails every chunk, honestly.
+fn blast_fixture() -> BoundBoard {
     let mut c = Circuit::new();
     let io = c.node("IO");
-    // `t_in_state` forces the runtime (chunk-updated) law form: the implicit
-    // compiler must refuse FSM context, which this test also pins.
     let toml = r#"
 [[laws]]
 name = "blast"
@@ -175,19 +167,35 @@ expr = "2.0 + 0.0 * t_in_state"
     roles.insert("gnd".to_string(), NodeId::GROUND);
     let dev = BehavioralDevice::stamp(&mut c, "U9", &model, &Params::default(), &roles, &|_| None)
         .expect("blast law stamps a device");
+    let mut net_nodes = HashMap::new();
+    net_nodes.insert("IO".to_string(), io);
+    board_with(c, net_nodes, vec![dev])
+}
+
+/// The pathological side: a law the implicit form cannot express (it reads
+/// FSM context) blasting a constant 2 A into the same floating net. The old
+/// behaviour was FAKE QUIET: the solve "converged" at I/gmin = 2e12 V (KCL
+/// balances exactly there) and the run reported clean chunks. Now the
+/// insane state is refused: failed chunks are recorded with the net named,
+/// nothing insane is ever published, and the strict-abort streak trips, which
+/// is what ends a live session honestly.
+#[test]
+fn constant_blast_into_floating_net_refuses_honestly_not_fake_quiet() {
+    // `t_in_state` in the fixture's expr forces the runtime (chunk-updated)
+    // law form: the implicit compiler must refuse FSM context, which this
+    // test also pins.
+    let bound = blast_fixture();
     assert!(
-        c.devices
+        bound
+            .circuit
+            .devices
             .iter()
             .any(|d| matches!(d, Device::Isource { name, .. } if name == "Ibeh_U9_blast")),
         "an FSM-context law must keep the chunk-updated Isource form"
     );
-    let mut net_nodes = HashMap::new();
-    net_nodes.insert("IO".to_string(), io);
 
-    let mut sched = Scheduler::new(board_with(c, net_nodes, vec![dev]), None, {
-        SolverOptions::default()
-    })
-    .expect("scheduler builds");
+    let mut sched =
+        Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler builds");
     for _ in 0..10 {
         let _ = sched.step(1e-4);
     }
@@ -279,31 +287,30 @@ fn lily58_pro_v2_marches_past_one_millisecond_with_sane_voltages() {
 /// discovered the death actually returns.
 #[test]
 fn a_dead_solve_ends_a_multi_chunk_step_at_the_abort_streak() {
-    let mut c = Circuit::new();
-    let io = c.node("IO");
-    let toml = r#"
-[[laws]]
-name = "blast"
-kind = "current"
-a = "gnd"
-b = "io"
-expr = "2.0 + 0.0 * t_in_state"
-"#;
-    let model: Behavioral = toml::from_str(toml).unwrap();
-    let mut roles = BTreeMap::new();
-    roles.insert("io".to_string(), io);
-    roles.insert("gnd".to_string(), NodeId::GROUND);
-    let dev = BehavioralDevice::stamp(&mut c, "U9", &model, &Params::default(), &roles, &|_| None)
-        .expect("blast law stamps a device");
-    let mut net_nodes = HashMap::new();
-    net_nodes.insert("IO".to_string(), io);
-    let mut sched = Scheduler::new(board_with(c, net_nodes, vec![dev]), None, {
-        SolverOptions::default()
-    })
-    .expect("scheduler builds");
-    sched.stop_when_dead = true;
+    // TWO-SIDED. Default (headless/CI shape): the flag is OFF and a step
+    // spanning 100 chunks marches all of them, because the offline product
+    // is the failed-window record over the WHOLE requested span.
+    let mut sched =
+        Scheduler::new(blast_fixture(), None, SolverOptions::default()).expect("scheduler builds");
+    assert!(
+        !sched.stop_when_dead,
+        "offline schedulers must default to the complete march"
+    );
+    let _ = sched.step(1e-2);
+    assert!(
+        sched.analog_abort_tripped(),
+        "the blast fixture must trip the abort streak"
+    );
+    assert!(
+        sched.failed_chunk_count() >= 90,
+        "an offline step must keep marching past the abort streak, got {} failed chunks",
+        sched.failed_chunk_count()
+    );
 
-    // One step spanning 100 chunks of a solve that fails every chunk.
+    // Live shape: the armed flag ends the same step at the abort streak.
+    let mut sched =
+        Scheduler::new(blast_fixture(), None, SolverOptions::default()).expect("scheduler builds");
+    sched.stop_when_dead = true;
     let _ = sched.step(1e-2);
     assert!(
         sched.analog_abort_tripped(),
