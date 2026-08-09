@@ -27,6 +27,11 @@ pub fn emit(
     // under --strict.
     let inconclusive =
         (!blockers.is_empty()).then(|| crate::result::inconclusive_verdict(blockers));
+    // Failure beats inconclusiveness, same precedence as JsonReport::verdict:
+    // a serious CC fault stays verdict "fail"-shaped (and exits 2 under
+    // --strict) even when bind blockers also exist; the INCONCLUSIVE sentence
+    // still prints beside it.
+    let serious = report.as_ref().is_some_and(|report| report.is_serious());
     match &report {
         None => {
             match mode {
@@ -59,8 +64,10 @@ pub fn emit(
                 let mut value = evidence.enrich_json(value);
                 value["inputs"] = serde_json::to_value(inputs)?;
                 if let Some(note) = &inconclusive {
-                    value["verdict"] = serde_json::Value::from("invalid");
-                    value["ok"] = serde_json::Value::from(false);
+                    if !serious {
+                        value["verdict"] = serde_json::Value::from("invalid");
+                        value["ok"] = serde_json::Value::from(false);
+                    }
                     value["coverage_note"] = serde_json::Value::from(note.clone());
                 }
                 println!("{}", serde_json::to_string(&value)?);
@@ -82,7 +89,6 @@ pub fn emit(
     if !matches!(mode, OutputMode::Json) {
         print!("{}", evidence.render_plain());
     }
-    let serious = report.as_ref().is_some_and(|report| report.is_serious());
     super::note_ungated_findings(strict, serious);
     if strict && serious {
         let headline = &report.as_ref().expect("serious report exists").headline;
