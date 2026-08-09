@@ -57,6 +57,19 @@ use hauksbee_models::schema::{ComponentKind, Ratings};
 /// reported as a fault (filters switching-edge transients).
 pub const SUSTAIN_CHUNKS: u32 = 4;
 
+/// Relative margin below which an over-limit excursion is numerical noise,
+/// not evidence. A converged solve knows a node voltage no better than its
+/// own acceptance band (reltol 1e-3, vntol 1e-6 V), so a device sitting
+/// EXACTLY at its rating (the MNT Reform mb3.0 charger rail rides Q15 at
+/// its 30.0 V abs-max by design) reads as `limit * (1 +/- 1e-10)` depending
+/// on which side the transient settles from, and which side that is moves
+/// with any picoamp-scale change anywhere in the matrix. Counting such an
+/// excursion toward a fault manufactures a finding out of float noise. One
+/// part per million is far below anything the solve can resolve and far
+/// below any physically meaningful margin, so no real overstress is masked:
+/// a device 0.01% over its rating still trips exactly as before.
+const OVER_LIMIT_NOISE_MARGIN: f64 = 1e-6;
+
 /// What kind of limit a fault tripped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultKind {
@@ -965,7 +978,7 @@ impl StressMonitor {
 
                 if chk.surge {
                     // Surge ceiling: trips instantly.
-                    if frac > 1.0
+                    if frac > 1.0 + OVER_LIMIT_NOISE_MARGIN
                         && !self.tracks[i]
                             .raised
                             .get(chk.kind.as_str())
@@ -994,7 +1007,7 @@ impl StressMonitor {
                     .over_chunks
                     .entry(chk.kind.as_str())
                     .or_insert(0);
-                if frac > 1.0 {
+                if frac > 1.0 + OVER_LIMIT_NOISE_MARGIN {
                     *counter += 1;
                 } else {
                     *counter = 0;
@@ -1049,7 +1062,7 @@ impl StressMonitor {
             let entry = self.stress_by_ref.entry(w.reference.clone()).or_insert(0.0);
             *entry = entry.max(frac.min(1.0));
             let track = &mut self.watch_tracks[i];
-            if frac > 1.0 {
+            if frac > 1.0 + OVER_LIMIT_NOISE_MARGIN {
                 track.over_chunks += 1;
             } else {
                 track.over_chunks = 0;
@@ -2083,6 +2096,48 @@ mod monitor_temp_tests {
                 .len();
         }
         assert_eq!(re_raised, 1, "watch re-raises after reset_tracks");
+    }
+
+    /// Two-sided pin for [`OVER_LIMIT_NOISE_MARGIN`]: a rail sitting at its
+    /// limit plus FLOAT NOISE (the MNT Reform mb3.0 shape: the charger rail
+    /// rides Q15 at exactly its 30.0 V abs-max, and which side of 30.0 the
+    /// converged transient settles on moves with any picoamp change anywhere
+    /// in the matrix) raises nothing, while an excursion the solve genuinely
+    /// resolves still trips. Without the margin, the noise side flips on
+    /// unrelated numerics changes; that is a manufactured fault.
+    #[test]
+    fn over_limit_noise_is_not_a_fault_but_a_real_excursion_is() {
+        let mut c = Circuit::new();
+        let vcc = c.node("CHG");
+        let mut mon = StressMonitor::new(Vec::new());
+        mon.set_supply_watches(vec![SupplyWatch {
+            reference: "Q15".into(),
+            node: vcc,
+            max_v: 30.0,
+        }]);
+        let no_branch = |_: DeviceId| None;
+
+        // Nanovolt-scale over the limit (measured on the mb3.0 fuzz:
+        // +1.8e-9 V on 30 V, 6e-11 relative): numerical noise, no fault.
+        let noise = 30.0 * (1.0 + 1e-10);
+        let node_noise = |n: NodeId| if n == vcc { noise } else { 0.0 };
+        for k in 0..(SUSTAIN_CHUNKS + 2) {
+            let faults = mon.evaluate(&mut c, &node_noise, &no_branch, k as f64 * 1e-3);
+            assert!(
+                faults.is_empty(),
+                "an over-limit excursion below the solve's resolution must not fault"
+            );
+        }
+
+        // 0.01% over (30.003 V): a resolvable excursion, faults as before.
+        let real = 30.0 * 1.0001;
+        let node_real = |n: NodeId| if n == vcc { real } else { 0.0 };
+        let mut raised = Vec::new();
+        for k in 0..(SUSTAIN_CHUNKS + 2) {
+            raised.extend(mon.evaluate(&mut c, &node_real, &no_branch, k as f64 * 1e-3));
+        }
+        assert_eq!(raised.len(), 1, "a real excursion still trips exactly once");
+        assert_eq!(raised[0].component, "Q15");
     }
 
     #[test]

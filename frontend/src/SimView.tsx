@@ -174,7 +174,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   /** Replace the running session with the analyzed board (label says so). */
   onRelaunch?: () => void
 } = {}) {
-  const { connected, boardInfo, frame: liveFrame, status, send, replay, backlog } = useSimulation()
+  const { connected, boardInfo, frame: liveFrame, status, send, replay, backlog, serverError } = useSimulation()
 
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
@@ -363,26 +363,24 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   // reset above so a replaced session's backlog seeds the already-cleared log.
   useEffect(() => {
     if (!backlog) return
+    // The backlog is AUTHORITATIVE per delivery, not additive. It arrives on
+    // every (re)connect and as the server's Reset acknowledgement; the server
+    // records every fault before broadcasting it, so replacing loses nothing
+    // a merge would have kept, while a merge cannot process the one thing an
+    // EMPTY backlog means: Reset cleared the fault story, and a tab that did
+    // not send the Reset must drop its pre-reset faults too.
     const heldFaults = backlog.faults ?? []
-    if (heldFaults.length > 0) {
-      setFaultLog(prev => {
-        const merged = [...prev]
-        for (const f of heldFaults) {
-          if (!merged.some(e => e.component === f.component && e.kind === f.kind)) {
-            merged.push({ ...f, restored: true })
-          }
-        }
-        return merged.length === prev.length ? prev : merged
-      })
-    }
+    setFaultLog(prev => {
+      if (prev.length === 0 && heldFaults.length === 0) return prev
+      return heldFaults.map(f => ({ ...f, restored: true }))
+    })
     const heldProbes = backlog.probes ?? []
-    if (heldProbes.length > 0) {
-      setProbes(prev => {
-        const merged = [...prev]
-        for (const p of heldProbes) if (!merged.includes(p)) merged.push(p)
-        return merged.length === prev.length ? prev : merged
-      })
-    }
+    setProbes(prev => {
+      if (prev.length === heldProbes.length && heldProbes.every(p => prev.includes(p))) {
+        return prev
+      }
+      return [...heldProbes]
+    })
   }, [backlog])
 
   // Reset also starts the fault story over: a log of faults from the previous
@@ -574,6 +572,24 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
               Relaunch with {expectedBoard}
             </button>
           )}
+        </div>
+      )}
+
+      {/* Terminal-failure banner: the server stopped this session (a dead
+          analog solve, an engine crash) and said why. The reason must be ON
+          the surface: a stop message that only reaches the devtools console
+          leaves the user watching a frozen clock with no explanation. */}
+      {serverError && (
+        <div
+          data-testid="sim-server-error"
+          className="px-4 py-2.5 text-[12px] shrink-0"
+          style={{
+            background: 'var(--warn-bg)',
+            borderBottom: '1px solid var(--warn-border)',
+            color: 'var(--silk)',
+          }}
+        >
+          {serverError}
         </div>
       )}
 
