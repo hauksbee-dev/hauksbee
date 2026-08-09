@@ -568,13 +568,23 @@ Inkplate 6 to 18. Cutting the voids gives 284 and 181.
 A void becomes an extra contour on the pour it sits inside, which is what
 `Shape::MultiPolygon` already means: even-odd containment reads the void's
 interior as empty and the copper around it as copper. That is not a general
-polygon boolean and does not need to be. A void is cut only from a `Region`
-primitive that **encloses it entirely** and was painted **before** it
-(gerber is a painter's model), and only from the innermost such region.
-Even-odd handles the rest: a void inside a void is copper again, and a
-thermal relief's separate arc-shaped voids leave the spokes standing, so the
-pad stays on the pour exactly as fabricated. Clear *flashes* (the classic
-negative-plane antipad) and clear *draws* are banked the same way.
+polygon boolean and does not need to be. A void is cut from every `Region`
+primitive that **encloses it entirely** (judged against that pour's own
+contours as drawn) and was painted **before** it, gerber being a painter's
+model. A void already covered whole by an earlier void is skipped, because
+that copper is gone and re-cutting it would flip it back to copper under
+even-odd. Even-odd handles the rest: a thermal relief's separate arc-shaped
+voids leave the spokes standing, so the pad stays on the pour exactly as
+fabricated, and an annular void's inner rim leaves its copper island
+standing. Clear *flashes* (the classic negative-plane antipad) and clear
+*draws* are banked the same way, and a `%SR%` cell carries its voids into
+every repeat.
+
+Where this stops short it stops short in one direction, leaving copper
+standing, which reads as over-connection rather than as a fabricated split:
+a void straddling a pour's edge, a void laid over a track or a pad rather
+than over a pour, and the intersection of two voids that only partially
+overlap.
 
 Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
 pour with two ringed pads must reconstruct to three conductors, and its
