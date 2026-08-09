@@ -17,7 +17,7 @@
   "next_action": "inspect INVALID assertion 'no stress faults raised' and its failed-window detail, fix the first named net/device, then rerun the same spec"
  },
  "seeds": 1,
- "elapsed_s": 0.160652792,
+ "elapsed_s": 0.319000083,
  "coverage": null,
  "substitutions": [],
  "coverage_warnings": [
@@ -29,7 +29,7 @@
  "waiver_notes": [],
  "inventory": [
   {
-   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmpxqFpfD/watchy.kicad_pcb",
+   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmp4xMwZu/watchy.kicad_pcb",
    "kind": "ki_cad_pcb",
    "role": "layout",
    "sha256": "d7f8eb56613968aa061cd612a8679a034430fd9a1fcb08f83690b92c167db217",
@@ -45,7 +45,7 @@
    ]
   },
   {
-   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmpxqFpfD/spec.toml",
+   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmp4xMwZu/spec.toml",
    "kind": "toml",
    "role": "spec",
    "sha256": "3fa3a2b1ba2d237f2977bfb9c21251ae707b720d175ffed02e4b52ceb075872a",
@@ -3882,7 +3882,7 @@
      }
     ],
     "residual": {
-     "max_abs": 1.1108128306069887e-12,
+     "max_abs": 1.1091266793883392e-12,
      "at": "VBUS"
     },
     "event_time_error_s": 0.001
@@ -7540,7 +7540,7 @@
       }
      ],
      "residual": {
-      "max_abs": 1.1108128306069887e-12,
+      "max_abs": 1.1091266793883392e-12,
       "at": "VBUS"
      },
      "event_time_error_s": 0.001

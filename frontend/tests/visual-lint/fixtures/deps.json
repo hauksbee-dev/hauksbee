@@ -71,7 +71,7 @@
    "present": true,
    "sends_data_offhost": "Using this sends the datasheet's text to OpenAI. Nothing is sent unless you ask for an extraction, and hauksbee never runs it on its own.",
    "unlocks": "drafting a device model from a datasheet, for a part with no model (you review it before it is saved)",
-   "version": "codex-cli 0.146.1"
+   "version": "codex-cli 0.147.0"
   }
  ]
 }
