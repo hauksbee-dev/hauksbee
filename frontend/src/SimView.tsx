@@ -174,7 +174,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   /** Replace the running session with the analyzed board (label says so). */
   onRelaunch?: () => void
 } = {}) {
-  const { connected, boardInfo, frame: liveFrame, status, send, replay, backlog } = useSimulation()
+  const { connected, boardInfo, frame: liveFrame, status, send, replay, backlog, serverError } = useSimulation()
 
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
@@ -574,6 +574,24 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
               Relaunch with {expectedBoard}
             </button>
           )}
+        </div>
+      )}
+
+      {/* Terminal-failure banner: the server stopped this session (a dead
+          analog solve, an engine crash) and said why. The reason must be ON
+          the surface: a stop message that only reaches the devtools console
+          leaves the user watching a frozen clock with no explanation. */}
+      {serverError && (
+        <div
+          data-testid="sim-server-error"
+          className="px-4 py-2.5 text-[12px] shrink-0"
+          style={{
+            background: 'var(--warn-bg)',
+            borderBottom: '1px solid var(--warn-border)',
+            color: 'var(--silk)',
+          }}
+        >
+          {serverError}
         </div>
       )}
 

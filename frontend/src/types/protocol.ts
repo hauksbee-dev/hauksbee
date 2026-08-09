@@ -186,6 +186,10 @@ export interface BacklogMsg {
   faults?: SimFault[]
   /** Nets with an active probe; omitted when empty. */
   probes?: string[]
+  /** The session's terminal failure (dead analog solve, engine crash),
+   *  replayed so a late/reloading client learns why the sim is stopped.
+   *  Cleared by Reset; omitted while healthy. */
+  fatal?: string | null
 }
 
 export type ServerMessage = BoardInfoMsg | SimFrame | StatusMsg | ProbeDataMsg | ErrorMsg | BacklogMsg

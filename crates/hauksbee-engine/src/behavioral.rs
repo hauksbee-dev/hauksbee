@@ -25,8 +25,8 @@
 //!   on the input pin that draws the reflected input current
 //!   `Vout*Iout/(eff*Vin)`. Regulation, output-current foldback and the
 //!   programmable input-current limit are recomputed each chunk.
-//! - a **law** whose expression is a pure function of pin voltages, params and
-//!   time (a current law with no `only_in_state` gate) is stamped as a
+//! - a **law** whose expression is a pure function of pin voltages and params
+//!   (a current law with no `only_in_state` gate) is stamped as a
 //!   solver-implicit `Device::Behavioral`: Newton evaluates it at every
 //!   iterate, so the law's conductance is in the Jacobian and a clamp on a
 //!   floating net cannot blow the chunk-to-chunk relaxation up (see
@@ -250,8 +250,8 @@ struct LawLeg {
 enum LawStamp {
     /// Stamped as a solver-implicit [`Device::Behavioral`]: Newton evaluates
     /// the expression at every iterate, nothing to update per chunk. Taken by
-    /// every current law whose expression is a pure function of pin voltages,
-    /// params and time (no FSM state, no `only_in_state` gating).
+    /// every current law whose expression is a pure function of pin voltages
+    /// and params (no FSM state, no time, no `only_in_state` gating).
     Implicit,
     /// A chunk-updated controllable source (Isource for current, Vsource for
     /// voltage): the value is re-evaluated between chunks from the previous
@@ -271,12 +271,18 @@ enum LawStamp {
 }
 
 /// Try to compile a law expression into the solver's canonical behavioral
-/// form: every `v_<role>` becomes a `__d{k}` voltage dependency, every numeric
-/// param folds to a literal, `t` maps to `time`. Returns `None` when the
-/// expression reaches outside that vocabulary (FSM state booleans,
-/// `t_in_state`, an unconnected pin's voltage), in which case the caller keeps
-/// the chunk-updated runtime form, which is the only form that can read FSM
-/// context.
+/// form: every numeric param folds to a literal and every `v_<role>` becomes
+/// a `__d{k}` voltage dependency, in THAT order, because the runtime context
+/// sets params after pin voltages so a param sharing a `v_<role>` name shadows
+/// the pin (see `build_context`); the two forms must resolve one identifier
+/// the same way. Returns `None` when the expression reaches outside that
+/// vocabulary (FSM state booleans, `t_in_state`, an unconnected pin's
+/// voltage), in which case the caller keeps the chunk-updated runtime form,
+/// which is the only form that can read FSM context. `t` also refuses: the
+/// runtime evaluates it against the GLOBAL sim clock, while a B-source `time`
+/// is the transient's chunk-local clock (restarting at 0 every chunk), so a
+/// time-varying law cannot be expressed implicitly without changing what it
+/// computes.
 fn compile_law_implicit(
     expr: &str,
     role_nodes: &BTreeMap<String, NodeId>,
@@ -338,6 +344,18 @@ fn compile_law_implicit(
             out.push_str(token);
             continue;
         }
+        // Params FIRST: the runtime context sets them after pin voltages, so
+        // a param named like a `v_<role>` shadows the pin there and must fold
+        // to its literal here too. (Exception: the runtime sets `t` after
+        // params, so a param named `t` never wins; `t` refuses below either
+        // way, so the shadowing question does not arise.)
+        if token != "t" {
+            if let Some(v) = params.0.get(token).and_then(|v| v.as_f64()) {
+                // Round-trip-exact literal, parenthesised so `1/x` stays `1/(v)`.
+                out.push_str(&format!("({v:?})"));
+                continue;
+            }
+        }
         if let Some(role) = token.strip_prefix("v_") {
             if let Some(&node) = role_nodes.get(role) {
                 let k = *slots.entry(role.to_string()).or_insert_with(|| {
@@ -352,21 +370,11 @@ fn compile_law_implicit(
             // honest way rather than substituting a made-up 0.
             return None;
         }
-        if let Some(v) = params.0.get(token).and_then(|v| v.as_f64()) {
-            // Round-trip-exact literal, parenthesised so `1/x` stays `1/(v)`.
-            out.push_str(&format!("({v:?})"));
-            continue;
-        }
-        if token == "t" {
-            out.push_str("time");
-            continue;
-        }
-        if token == "time" {
-            out.push_str(token);
-            continue;
-        }
-        // Anything else (state_<name>, t_in_state, an unknown name) needs the
-        // FSM context only the runtime form has.
+        // Anything else refuses. FSM context (state_<name>, t_in_state) exists
+        // only in the runtime form; `t`/`time` refuse because the runtime's
+        // clock is the GLOBAL sim time while a B-source `time` is the chunk's
+        // LOCAL transient clock, and silently swapping one for the other would
+        // change what a time-varying law computes.
         return None;
     }
     let compiled = hauksbee_ir::CompiledExpr::compile(&out).ok()?;
@@ -715,7 +723,7 @@ impl BehavioralDevice {
                 }
             };
             // Prefer the solver-implicit form for a current law that is a pure
-            // function of pin voltages / params / time: Newton then owns the
+            // function of pin voltages / params: Newton then owns the
             // law (its conductance is in the Jacobian), where the chunk-updated
             // constant-source form is an explicit relaxation that diverges on
             // high-impedance nets (see [`LawStamp`]). State-gated laws and
@@ -1330,11 +1338,30 @@ mod tests {
         assert!(expr.src().contains("1e-6") && expr.src().contains("2.5E+2"));
     }
 
-    /// `t` maps to the solver's `time`.
+    /// Time-varying laws refuse the implicit form: the runtime's `t` is the
+    /// GLOBAL sim clock, a B-source `time` is the transient's chunk-local
+    /// clock (restarting at 0 every chunk), and swapping one for the other
+    /// would silently change what the law computes.
     #[test]
-    fn t_maps_to_time() {
-        let (expr, _) = compile_law_implicit("v_io * t", &roles(), &params()).expect("compiles");
-        assert!(expr.src().contains("time"));
+    fn time_varying_laws_refuse_implicit() {
+        assert!(compile_law_implicit("v_io * t", &roles(), &params()).is_none());
+        assert!(compile_law_implicit("v_io * time", &roles(), &params()).is_none());
+    }
+
+    /// A param sharing a `v_<role>` name shadows the pin voltage, exactly as
+    /// the runtime context resolves it (params are set after pin voltages).
+    #[test]
+    fn param_shadows_same_named_pin_voltage() {
+        let mut p = params();
+        p.set_f64("v_io", 42.0);
+        let (expr, deps) = compile_law_implicit("v_io + v_vbus", &roles(), &p).expect("compiles");
+        assert_eq!(deps.len(), 1, "the shadowed pin must not become a dep");
+        assert!(matches!(deps[0], hauksbee_ir::BDep::Volt(NodeId(2))));
+        assert!(
+            expr.src().contains("(42.0)"),
+            "the param value must fold, got: {}",
+            expr.src()
+        );
     }
 
     /// FSM context (state booleans, `t_in_state`) and unconnected pins cannot
