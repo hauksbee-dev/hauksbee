@@ -50,7 +50,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use hauksbee_extract::ExtractedBoard;
+use hauksbee_extract::{ExtractError, ExtractedBoard};
 
 /// What kind of input the normalizer recognised. Call sites use this where
 /// they would otherwise keep `is_binary` / `is_gerber` flags; the
@@ -204,6 +204,14 @@ pub enum BoardInputError {
     /// declined, or the matched reader failed to parse).
     #[error("{0}")]
     Extract(String),
+    /// The content was RECOGNISED as a format hauksbee deliberately does not
+    /// read, and the message already names it and the action that unlocks the
+    /// file. Distinct from [`BoardInputError::Extract`] purely so the web
+    /// wording does not append the accepted-format list to it: that list is the
+    /// answer for a file nobody could identify, and beside a refusal that has
+    /// just said "re-save this in Eagle 6" it reads as a contradiction.
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 /// The one supported-formats list every refusal quotes, so the set can never
@@ -230,6 +238,51 @@ impl BoardInputError {
     }
 }
 
+/// Refuse a pre-Eagle-6 binary drawing, on the RAW bytes, before anything
+/// decodes or sniffs them.
+///
+/// Both entry points hand the text sniffer `String::from_utf8_lossy`, which is
+/// lossless for every text format and destructive here: the header is
+/// `10 80 64 00`, and that `0x80` becomes U+FFFD before any detector sees it.
+/// Two things go wrong downstream if this check is not made first.
+///
+/// * The refusal loses its diagnosis. A file that is one re-save away from
+///   being readable gets the generic accepted-formats recital, which sends its
+///   owner looking for a tool that does not exist.
+/// * Worse, the file can be CLAIMED. The IPC-D-356 reader is detected by any
+///   line beginning `317`/`327`/`367` anywhere in the input, and binary board
+///   records can contain those three bytes after a newline. Such a file parsed
+///   as a fab netlist and came back as a board report with invented parts —
+///   confident nonsense over a file nothing opened, which is the one outcome
+///   this format's refusal exists to prevent.
+///
+/// So it runs ahead of reader selection rather than as a nicer message for an
+/// `Unrecognized` result.
+fn refuse_eagle_binary(file_name: &str, raw: &[u8]) -> Result<(), BoardInputError> {
+    match unsupported_format_refusal(file_name, raw) {
+        Some(message) => Err(BoardInputError::Unsupported(message)),
+        None => Ok(()),
+    }
+}
+
+/// The refusal for a format hauksbee RECOGNISES and deliberately does not read,
+/// when `raw` is one of them.
+///
+/// Exposed because two surfaces read a board's text for themselves rather than
+/// through [`from_path`]: `hauksbee to-code` and the MCP `board_to_code` tool.
+/// Both decode UTF-8 directly, so without this they answered a pre-Eagle-6
+/// board with "stream did not contain valid UTF-8" and "this board file is
+/// binary (e.g. Altium .PcbDoc)" respectively — one meaningless, one naming the
+/// wrong vendor, and neither telling the user the one thing that would work.
+pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String> {
+    hauksbee_extract::looks_like_eagle_binary(raw).then(|| {
+        format!(
+            "'{file_name}': {}",
+            hauksbee_extract::eagle_binary_message()
+        )
+    })
+}
+
 /// Normalize an uploaded board from its raw bytes: the web path.
 ///
 /// The loading head behind `frontdoor::analyze`. `file_name` is
@@ -241,6 +294,8 @@ impl BoardInputError {
 /// titleless board keeps its empty name so the web report's `board_name` does
 /// not change under the normalizer.
 pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, BoardInputError> {
+    refuse_eagle_binary(file_name, contents)?;
+
     // An ODB++ archive, checked before anything else because its container is a
     // zip or a gzipped tar and BOTH of those would otherwise be classified as
     // something they are not (the zip branch below treats every zip as gerbers
@@ -482,6 +537,8 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         }
     })?;
 
+    refuse_eagle_binary(&file_name, &raw)?;
+
     // An ODB++ ARCHIVE (`.tgz`, `.tar.gz`, `.tar` or `.zip`), before the zip
     // branch below claims every zip as gerbers. Content-sniffed, so a job saved
     // under any extension still reads.
@@ -637,7 +694,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         // reader is refusing content it cannot analyse truthfully. Its message
         // already explains what is wrong and what to do, so wrapping it in "did
         // not parse" would state the opposite of what happened.
-        if let hauksbee_extract::ExtractError::Corrupt(msg) = &e {
+        if let ExtractError::Corrupt(msg) = &e {
             return BoardInputError::Extract(format!("'{file_name}': {msg}"));
         }
         // When the EXTENSION already names a format we support, the problem is
