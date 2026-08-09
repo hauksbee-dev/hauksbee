@@ -47,6 +47,22 @@ class Candidate:
     cohort: str = "unspecified"
     source_url: str = ""
     license: str = ""
+    # An optional firmware image the manifest pairs with this board, so a
+    # journey can exercise the firmware-hardware interaction the board gates
+    # otherwise never touch. Empty means the entry declares no firmware and the
+    # journey drops the board alone, exactly as before.
+    firmware_relative_path: str = ""
+    firmware_absolute_path: Path | None = None
+    firmware_expect: str = ""
+
+
+#: What a manifest may demand of a paired firmware image.
+#:
+#: ``cosim``      the report must co-simulate it on the board's MCU.
+#: ``load-only``  the image is expected to be identified but not co-simulated
+#:                (an MCU this build has no target for); the report must still
+#:                say what it is and why.
+FIRMWARE_EXPECTATIONS = ("cosim", "load-only")
 
 
 @dataclass(frozen=True)
@@ -57,6 +73,8 @@ class _DiscoveredPath:
     axes: tuple[str, ...]
     input_format: str
     bundle_members: tuple[str, ...] = ()
+    firmware_path: Path | None = None
+    firmware_expect: str = ""
 
 
 @dataclass(frozen=True)
@@ -372,6 +390,57 @@ def _manifest_candidates(root: Path, manifest_path: Path) -> list[_DiscoveredPat
             entry,
             strict_external=cohort == "external",
         )
+        # An optional firmware image paired with this board entry. It is not a
+        # board input and never becomes a candidate of its own: it rides along
+        # with every board this entry contributes, so the journey can drop the
+        # board and the firmware together and hold the co-simulation to a
+        # stated expectation.
+        firmware_path: Path | None = None
+        firmware_expect = ""
+        raw_firmware = entry.get("firmware")
+        if raw_firmware is None and entry.get("firmware_expect") is not None:
+            # An expectation with nothing to expect it of. Left to pass, an entry
+            # that lost its firmware path would keep a `firmware_expect = "cosim"`
+            # line, produce no firmware plan, and quietly stop exercising the
+            # co-simulation it still claims to demand.
+            raise SelectionError(
+                f"{manifest_id}: firmware_expect is declared without a firmware path"
+            )
+        if raw_firmware is not None and "unreadable-by-design" in axes:
+            # Caught here rather than in the browser journey, which would throw
+            # before any board ran and surface as a bare non-zero runner exit.
+            raise SelectionError(
+                f"{manifest_id}: an unreadable-by-design entry cannot carry "
+                "firmware, because nothing will read the board to co-simulate on"
+            )
+        if raw_firmware is not None:
+            if not isinstance(raw_firmware, str) or not raw_firmware:
+                raise SelectionError(
+                    f"{manifest_id}: firmware must be a non-empty relative path"
+                )
+            firmware_expect = entry.get("firmware_expect", "cosim")
+            if firmware_expect not in FIRMWARE_EXPECTATIONS:
+                raise SelectionError(
+                    f"{manifest_id}: firmware_expect must be one of "
+                    + ", ".join(FIRMWARE_EXPECTATIONS)
+                )
+            declared_firmware = root / destination / raw_firmware
+            resolved_firmware = declared_firmware.resolve()
+            if (
+                resolved_firmware != source_root
+                and source_root not in resolved_firmware.parents
+            ):
+                raise SelectionError(
+                    f"corpus manifest firmware escapes declared source: "
+                    f"{destination}/{raw_firmware}"
+                )
+            if declared_firmware.is_symlink() or not declared_firmware.is_file():
+                raise SelectionError(
+                    f"corpus is incomplete: firmware is missing: "
+                    f"{destination}/{raw_firmware}"
+                )
+            firmware_path = resolved_firmware
+
         entry_start = len(paths)
         gerber_members: list[str] = []
         for relative in expected:
@@ -403,6 +472,9 @@ def _manifest_candidates(root: Path, manifest_path: Path) -> list[_DiscoveredPat
                         revision,
                         tuple(axes),
                         input_format,
+                        (),
+                        firmware_path,
+                        firmware_expect,
                     )
                 )
             elif path.suffix.casefold() in _GERBER_MEMBER_EXTENSIONS:
@@ -416,6 +488,8 @@ def _manifest_candidates(root: Path, manifest_path: Path) -> list[_DiscoveredPat
                     tuple(axes),
                     "gerber_bundle",
                     tuple(sorted(gerber_members)),
+                    firmware_path,
+                    firmware_expect,
                 )
             )
         if len(paths) == entry_start:
@@ -480,6 +554,29 @@ def discover_candidates(
 
         digest = _content_digest(path, item.bundle_members)
         if digest in by_digest:
+            # Content dedup keeps the first path-ordered candidate. A later entry
+            # naming byte-identical bytes with a DIFFERENT firmware pairing is a
+            # manifest error rather than a silent loss, whether the first entry
+            # carries no firmware or carries another image: the same board with
+            # two firmwares is two trials, and keeping whichever sorted first
+            # would drop one of them without a word.
+            kept = by_digest[digest]
+            if item.firmware_path is not None and (
+                kept.firmware_absolute_path is None
+                or _bytes_digest(kept.firmware_absolute_path)
+                != _bytes_digest(item.firmware_path)
+            ):
+                carries = (
+                    "without it"
+                    if kept.firmware_absolute_path is None
+                    else "with different firmware"
+                )
+                raise SelectionError(
+                    f"{item.source_id}: declares firmware for board content that "
+                    f"another entry already contributes {carries} "
+                    f"({kept.source_id}); give the two entries "
+                    "distinct board content or move the firmware to the first"
+                )
             continue
         relative_path = path.relative_to(root).as_posix()
         if item.bundle_members:
@@ -523,6 +620,13 @@ def discover_candidates(
                     "",
                 )
             ),
+            firmware_relative_path=(
+                item.firmware_path.relative_to(root).as_posix()
+                if item.firmware_path is not None
+                else ""
+            ),
+            firmware_absolute_path=item.firmware_path,
+            firmware_expect=item.firmware_expect,
         )
 
     return sorted(by_digest.values(), key=lambda item: item.relative_path.casefold())
@@ -594,6 +698,60 @@ def materialize_candidate(candidate: Candidate, destination: Path) -> Path:
     return archive_path
 
 
+def materialize_firmware(
+    candidate: Candidate,
+    destination: Path,
+    *,
+    reserved_sha256: str | None = None,
+) -> Path | None:
+    """Stage the firmware paired with a board, or None where none is declared.
+
+    The staged name is derived from the board it belongs to, so two entries
+    shipping a file called ``firmware.elf`` cannot collide, and a second run
+    over the same destination reuses an identical copy rather than failing.
+
+    ``reserved_sha256`` is the digest the reservation recorded. Staging bytes that
+    no longer match it is refused: otherwise a swap between reservation and
+    staging would let the journey co-simulate an image the ledger never named.
+    """
+
+    source = candidate.firmware_absolute_path
+    if source is None:
+        return None
+    destination.mkdir(parents=True, exist_ok=True)
+    safe_source = (
+        re.sub(r"[^a-zA-Z0-9._-]+", "-", candidate.source_id).strip("-") or "board"
+    )
+    # A suffix-less image is staged as `.elf` rather than `.bin`, because `.elf`
+    # is one of the three forms the app's own picker lists
+    # (`accept=".elf,.hex,.zip"`, frontend/src/App.tsx) and `.bin` is not. This
+    # only chooses a name where the manifest gave none; an image the manifest
+    # calls `firmware.bin` keeps its own suffix, and Playwright's `setInputFiles`
+    # ignores `accept` in any case, so this is about the staged name being one a
+    # person could also have picked by hand.
+    suffix = source.suffix or ".elf"
+    staged_path = (
+        destination / f"{safe_source}-{candidate.board_id[6:14]}-firmware{suffix}"
+    )
+    payload = source.read_bytes()
+    if reserved_sha256:
+        actual = hashlib.sha256(payload).hexdigest()
+        if actual != reserved_sha256:
+            raise SelectionError(
+                f"paired firmware changed after reservation: "
+                f"{candidate.firmware_relative_path}"
+            )
+    if staged_path.exists():
+        if staged_path.is_symlink() or staged_path.read_bytes() != payload:
+            raise SelectionError(f"staging collision: {staged_path.name}")
+        return staged_path
+    with staged_path.open("xb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return staged_path
+
+
 def _rank(seed: str, *parts: str) -> bytes:
     material = "\0".join((seed, *parts)).encode("utf-8")
     return hashlib.sha256(material).digest()
@@ -628,6 +786,23 @@ def candidate_pool_digest(candidates: Iterable[Candidate]) -> str:
             "cohort": item.cohort,
             "source_url": item.source_url,
             "license": item.license,
+            # Paired firmware changes what the run exercises, so it belongs in the
+            # reproducibility fingerprint even though it never changes the board's
+            # own identity or content digest.
+            #
+            # Added ONLY when firmware is declared. Emitting empty keys for every
+            # board would have changed the digest of every pool that has no
+            # firmware, making the `candidate_pool_sha256` in already-retained
+            # evidence unreproducible under this code for no gain.
+            **(
+                {
+                    "firmware_relative_path": item.firmware_relative_path,
+                    "firmware_expect": item.firmware_expect,
+                    "firmware_sha256": _firmware_digest(item),
+                }
+                if item.firmware_absolute_path is not None
+                else {}
+            ),
         }
         for item in unique.values()
     ]
@@ -947,6 +1122,39 @@ def load_history(path: Path) -> History:
     return _parse_history(text, path)
 
 
+def _bytes_digest(path: Path) -> str:
+    """A file's content digest, or "" where it cannot be read.
+
+    Used while deduplicating manifest entries, which happens before any Candidate
+    exists. An unreadable image is not decided here: it is caught by the staging
+    guard, whose error names the path.
+    """
+
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _firmware_digest(item: Candidate) -> str:
+    """The paired image's content digest, or "" where none is declared.
+
+    Raises `SelectionError` rather than `OSError`, because both callers run inside
+    the handler whose whole job is to write a reserved iteration's terminal ledger
+    record. An `OSError` escaping there leaves the reservation with no terminal
+    result at all, which the append-only ledger can never be corrected for.
+    """
+
+    if item.firmware_absolute_path is None:
+        return ""
+    try:
+        return hashlib.sha256(item.firmware_absolute_path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise SelectionError(
+            f"paired firmware is unreadable: {item.firmware_relative_path}: {error}"
+        ) from error
+
+
 def _board_record(item: Candidate) -> dict:
     return {
         "board_id": item.board_id,
@@ -960,6 +1168,13 @@ def _board_record(item: Candidate) -> dict:
         "cohort": item.cohort,
         "source_url": item.source_url,
         "license": item.license,
+        "firmware_relative_path": item.firmware_relative_path,
+        "firmware_expect": item.firmware_expect,
+        # The image's digest AT RESERVATION. Without it the ledger line would
+        # name a firmware path but not the bytes behind it, and a swap between
+        # reservation and staging would run under a reservation for a different
+        # image.
+        "firmware_sha256": _firmware_digest(item),
     }
 
 
@@ -1018,6 +1233,13 @@ def reserve_iteration(
             raise SelectionError(
                 f"candidate changed after discovery: {item.relative_path}"
             )
+        if item.firmware_absolute_path is not None:
+            firmware_path = item.firmware_absolute_path
+            if firmware_path.is_symlink() or not firmware_path.is_file():
+                raise SelectionError(
+                    f"paired firmware changed after discovery: "
+                    f"{item.firmware_relative_path}"
+                )
 
     history_path.parent.mkdir(parents=True, exist_ok=True)
     # Opening once in append/read mode keeps the validation and append on one

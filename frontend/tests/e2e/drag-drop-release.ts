@@ -12,6 +12,13 @@
  * in `HB_REFUSAL_FILES`: it has to produce the opposite, an honest refusal, and
  * the two expectations fail equally loudly when inverted. Redacted wire evidence
  * and screenshots are retained under `HB_E2E_OUT`.
+ *
+ * A board named in `HB_FIRMWARE_FILES` additionally carries a firmware image.
+ * It is staged into the app's firmware slot BEFORE the board drop, so the
+ * analysis runs through `/api/analyze-with-firmware` exactly as a user's would,
+ * and the journey then holds the report to the co-simulation the manifest asked
+ * for. What the run did or did not observe on the pins is recorded here and
+ * graded by qc/value_grading.py rather than judged in the browser.
  */
 
 import { chromium } from 'playwright'
@@ -22,6 +29,16 @@ import { mkdirSync, realpathSync } from 'node:fs'
 // refusal card renders the diagnostic through it, so the journey has to compare
 // against the same transform rather than a second copy of the rule.
 import { withoutEngineFormatList } from '../../src/lib/board-formats'
+import {
+  canonicalJson,
+  cosimDrovePin,
+  cosimFailures,
+  cosimPrinted,
+  parseFirmwarePlan,
+  parseSimTime,
+  type CosimSectionLike,
+  type FirmwarePlan,
+} from './value-signals'
 
 interface WebReport {
   ok: boolean
@@ -36,6 +53,31 @@ interface WebReport {
   sections: unknown[]
   notes?: unknown[]
   bind?: unknown
+  cosim?: CosimSectionLike | null
+}
+
+/** What the journey observed about a board's paired firmware. The value
+ *  contract in qc/value_grading.py grades these; the journey only records
+ *  them, plus the few that are outright contract violations. */
+interface FirmwareResult {
+  staged: boolean
+  /** The app's firmware slot accepted the image and named it back. */
+  loaded: boolean
+  expect: FirmwarePlan['expect']
+  file: string
+  /** What the inspect panel said the bytes are; the load-only evidence. */
+  detail: string | null
+  cosim_ran: boolean
+  cosim_seconds: number | null
+  /** The co-sim reported at least one DRIVEN gpio net. Serial output is a
+   *  separate observation and is not folded in here. */
+  pin_activity: boolean
+  serial_activity: boolean
+  /** Null when there was no pin activity to render. False means the co-sim
+   *  claimed driven pins and the page showed none, which is a result nobody
+   *  can see. */
+  pin_activity_rendered: boolean | null
+  analog_valid: boolean | null
 }
 
 interface BoardResult {
@@ -60,6 +102,8 @@ interface BoardResult {
   live_started: boolean
   sim_time_before_s: number | null
   sim_time_after_s: number | null
+  /** Null where the manifest paired no firmware with this board. */
+  firmware: FirmwareResult | null
   wire_events: WireEvent[]
   console_errors: string[]
   failures: string[]
@@ -132,6 +176,18 @@ if (unstagedRefusal !== undefined) {
   throw new Error(`HB_REFUSAL_FILES names a file this run does not drop: ${unstagedRefusal}`)
 }
 
+// Optional, and parallel to HB_BOARD_FILES. A board with a plan is dropped
+// WITH its firmware, so the journey exercises the firmware-hardware
+// interaction the board gates otherwise never touch. Absent or `[]` means no
+// board in this run carries firmware and every journey behaves exactly as it
+// did before.
+const firmwarePlans = parseFirmwarePlan(process.env.HB_FIRMWARE_FILES ?? '[]', files.length)
+for (const [index, plan] of firmwarePlans.entries()) {
+  if (plan !== null && expectedRefusals.has(resolvedFiles[index])) {
+    throw new Error('HB_FIRMWARE_FILES pairs firmware with a board expected to be refused')
+  }
+}
+
 mkdirSync(output, { recursive: true })
 
 function watchConsole(page: Page, errors: string[]) {
@@ -164,35 +220,36 @@ function watchWire(page: Page, events: WireEvent[]) {
   })
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (value !== null && typeof value === 'object') {
-    const object = value as Record<string, unknown>
-    return `{${Object.keys(object).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(',')}}`
+/** Repeat the analysis outside the browser, through the same endpoint the app
+ *  itself would have used for this board: raw bytes when it carries no
+ *  firmware, multipart when it does. Comparing a bare repeat against a
+ *  firmware run would always differ and would say nothing. */
+async function independentAnalysis(path: string, plan: FirmwarePlan | null): Promise<WebReport> {
+  let response: Response
+  if (plan === null) {
+    response = await fetch(new URL('/api/analyze', base!), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Board-Filename': basename(path),
+      },
+      body: Bun.file(path),
+    })
+  } else {
+    const form = new FormData()
+    form.append('board', await Bun.file(path).arrayBuffer().then(b => new Blob([b])), basename(path))
+    form.append(
+      'firmware',
+      await Bun.file(plan.path).arrayBuffer().then(b => new Blob([b])),
+      basename(plan.path),
+    )
+    response = await fetch(new URL('/api/analyze-with-firmware', base!), {
+      method: 'POST',
+      body: form,
+    })
   }
-  return JSON.stringify(value)
-}
-
-async function independentAnalysis(path: string): Promise<WebReport> {
-  const response = await fetch(new URL('/api/analyze', base!), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      'X-Board-Filename': basename(path),
-    },
-    body: Bun.file(path),
-  })
   if (!response.ok) throw new Error(`independent analysis returned HTTP ${response.status}`)
   return await response.json() as WebReport
-}
-
-function parseSimTime(text: string): number {
-  const match = text.trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(µs|ms|s)$/)
-  if (!match) throw new Error(`unrecognised simulation time: ${JSON.stringify(text)}`)
-  const value = Number(match[1])
-  if (match[2] === 'µs') return value / 1_000_000
-  if (match[2] === 'ms') return value / 1_000
-  return value
 }
 
 async function waitForSimTimeAbove(page: Page, floor: number, timeoutMs = 10_000) {
@@ -323,7 +380,7 @@ async function auditRefusal(
   }
 
   // Server-derived and repeatable, not a one-off client-side verdict.
-  const independent = await independentAnalysis(path)
+  const independent = await independentAnalysis(path, null)
   const serverError = independent.error?.trim() ?? ''
   if (independent.ok !== false || serverError === '') {
     failures.push('an independent repeat analysis of a refused input did not refuse')
@@ -352,6 +409,53 @@ async function auditRefusal(
     failures.push('the rendered refusal does not carry what the server said')
   }
   return { shown, report }
+}
+
+/** Stage the paired firmware BEFORE the board is dropped.
+ *
+ * Order matters and is the whole reason this is its own step: the app runs the
+ * analysis on the board drop, carrying whatever firmware is staged at that
+ * instant. Staging afterwards would re-run the board and leave the journey
+ * auditing the second run while holding the first run's response.
+ *
+ * Returns what the app then showed about the image, which is the evidence the
+ * `load-only` expectation rests on.
+ */
+async function stageFirmware(
+  page: Page,
+  plan: FirmwarePlan,
+  failures: string[],
+): Promise<{ loaded: boolean; detail: string | null }> {
+  const zone = page.locator('[data-testid="firmware-zone"]')
+  if (await zone.count() !== 1) {
+    failures.push('the intake offered no firmware slot')
+    return { loaded: false, detail: null }
+  }
+  await page.locator('#firmware-file').setInputFiles(plan.path)
+  try {
+    await zone.locator('[data-testid="firmware-inspect"]').waitFor({ state: 'visible', timeout: 30_000 })
+  } catch {
+    failures.push('the staged firmware never filled the firmware slot')
+    return { loaded: false, detail: null }
+  }
+  const named = await zone.innerText()
+  if (!named.includes(basename(plan.path))) {
+    failures.push('the firmware slot does not name the image that was staged')
+  }
+  // Inspecting is how a user confirms the right bytes landed, and for a
+  // `load-only` image it is the only place the app says what it is. The panel
+  // only carries this test id once the read finishes, so waiting for it is
+  // also waiting out the "reading the image…" placeholder.
+  await zone.locator('[data-testid="firmware-inspect"]').click()
+  const panel = page.locator('[data-testid="firmware-detail"]')
+  let detail: string | null = null
+  try {
+    await panel.waitFor({ state: 'visible', timeout: 30_000 })
+    detail = (await panel.innerText()).trim()
+  } catch {
+    failures.push('the firmware slot would not say what the image is')
+  }
+  return { loaded: true, detail }
 }
 
 async function prepareDrop(page: Page, path: string) {
@@ -410,8 +514,27 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
   const wireEvents: WireEvent[] = []
   watchConsole(page, consoleErrors)
   watchWire(page, wireEvents)
+  const plan = firmwarePlans[index]
   await page.goto(base!, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
+
+  let firmware: FirmwareResult | null = null
+  if (plan !== null) {
+    const staged = await stageFirmware(page, plan, failures)
+    firmware = {
+      staged: true,
+      loaded: staged.loaded,
+      expect: plan.expect,
+      file: basename(plan.path),
+      detail: staged.detail,
+      cosim_ran: false,
+      cosim_seconds: null,
+      pin_activity: false,
+      serial_activity: false,
+      pin_activity_rendered: null,
+      analog_valid: null,
+    }
+  }
 
   await prepareDrop(page, path)
   const zone = page.locator('[data-testid="drop-zone"]')
@@ -420,8 +543,10 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
   if (armed !== 'true') failures.push(`drag target did not arm (data-active=${armed})`)
   if (!armedText.includes('Drop to analyze')) failures.push('drag target gave no drop feedback')
 
+  // A board carrying firmware goes through the multipart endpoint instead.
+  const analyzeEndpoint = plan === null ? '/api/analyze' : '/api/analyze-with-firmware'
   const responsePromise = page.waitForResponse(
-    response => response.request().method() === 'POST' && response.url().endsWith('/api/analyze'),
+    response => response.request().method() === 'POST' && response.url().endsWith(analyzeEndpoint),
     { timeout: 180_000 },
   )
   const started = performance.now()
@@ -468,7 +593,7 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     const exportPath = join(output, `${String(index + 1).padStart(2, '0')}-${file}.json`)
     await download.saveAs(exportPath)
     const exportedReport = await Bun.file(exportPath).json() as WebReport
-    const independentReport = await independentAnalysis(path)
+    const independentReport = await independentAnalysis(path, plan)
     if (report !== null && canonicalJson(exportedReport) !== canonicalJson(report)) {
       failures.push('JSON export differs from the captured /api/analyze response')
     }
@@ -523,6 +648,36 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     }
   }
 
+  if (firmware !== null && firmware.loaded) {
+    // The report has to have co-simulated the image, and the page has to show
+    // it: a `cosim` payload with no rendered section is a co-sim the user
+    // never sees, which is worth nothing at a bench.
+    const cosim = report?.cosim ?? null
+    for (const complaint of cosimFailures(cosim, firmware.expect)) failures.push(complaint)
+    const section = page.locator('[data-testid="cosim-section"]')
+    if (cosim?.ran === true && await section.count() !== 1) {
+      failures.push('the report co-simulated firmware but rendered no co-sim section')
+    }
+    firmware.cosim_ran = cosim?.ran === true
+    firmware.cosim_seconds = typeof cosim?.seconds_simulated === 'number'
+      ? cosim.seconds_simulated
+      : null
+    firmware.pin_activity = cosim !== null && cosimDrovePin(cosim)
+    firmware.serial_activity = cosim !== null && cosimPrinted(cosim)
+    firmware.analog_valid = typeof cosim?.analog_valid === 'boolean' ? cosim.analog_valid : null
+    // Driven pins are the observable half of firmware-hardware interaction, so
+    // a driven row has to be on screen and legible as driven. Visibility, not
+    // presence: a collapsed, hidden or zero-height row is in the DOM and cannot
+    // be read, which is the same dead end as no row at all.
+    firmware.pin_activity_rendered = firmware.pin_activity
+      ? await section
+          .getByText('driven', { exact: true })
+          .first()
+          .isVisible()
+          .catch(() => false)
+      : null
+  }
+
   await page.screenshot({
     path: join(output, `${String(index + 1).padStart(2, '0')}-${file}-report.png`),
     fullPage: false,
@@ -561,6 +716,7 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     live_started: live.liveStarted,
     sim_time_before_s: live.before,
     sim_time_after_s: live.after,
+    firmware,
     wire_events: wireEvents,
     console_errors: consoleErrors,
     failures,
@@ -600,6 +756,19 @@ try {
         live_started: false,
         sim_time_before_s: null,
         sim_time_after_s: null,
+        firmware: firmwarePlans[index] === null ? null : {
+          staged: true,
+          loaded: false,
+          expect: firmwarePlans[index]!.expect,
+          file: basename(firmwarePlans[index]!.path),
+          detail: null,
+          cosim_ran: false,
+          cosim_seconds: null,
+          pin_activity: false,
+          serial_activity: false,
+          pin_activity_rendered: null,
+          analog_valid: null,
+        },
         wire_events: [],
         console_errors: [],
         failures: [`journey crashed: ${error instanceof Error ? error.message : String(error)}`],
@@ -611,7 +780,12 @@ try {
       + `${result.elapsed_ms}ms `
       + (result.expected_refusal
         ? `refused honestly=${result.refused}`
-        : `${result.report?.num_components ?? 0} parts/${result.report?.num_nets ?? 0} nets`),
+        : `${result.report?.num_components ?? 0} parts/${result.report?.num_nets ?? 0} nets`)
+      + (result.firmware === null
+        ? ''
+        : ` firmware=${result.firmware.file} cosim=${result.firmware.cosim_ran}`
+          + ` pins=${result.firmware.pin_activity}`
+          + ` serial=${result.firmware.serial_activity}`),
     )
     for (const failure of result.failures) console.log(`  - ${failure}`)
     await context.close()

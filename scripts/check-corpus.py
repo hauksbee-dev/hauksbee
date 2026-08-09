@@ -51,6 +51,28 @@ HONOURED_FIELDS = {
 }
 # Fields this script itself honours, rather than the fetch.
 CHECKED_HERE = {"expect", "axes", "license_note"}
+# The MCU-family axes, kept in step with the `# mcu family` line of AXES below by
+# _check_release_gate_axes, which refuses any name this vocabulary does not
+# define. It gates a manifest consistency warning only, never a grade: the
+# release gate's own exemption is a single `no-mcu` axis precisely so that no
+# allowlist can go stale and quietly switch a rule off.
+MCU_FAMILY_AXES = {
+    "avr", "stm32", "esp32", "nrf", "rp2040", "riscv", "samd", "imx",
+}
+NO_MCU_AXIS_LOCAL = "no-mcu"
+
+# Fields the RELEASE GATE honours, rather than the fetch or this script. The
+# fetch has nothing to do for them: the file they name is already in the tree it
+# pulled, and the gate resolves it at discovery time. Verified against the
+# gate's source the same way HONOURED_FIELDS is verified against the fetch, so a
+# rename there cannot leave a field here that only looks load-bearing.
+# Needles chosen so a mere mention in a comment cannot satisfy them: each is the
+# exact expression the gate uses to READ the field.
+HONOURED_BY_RELEASE_GATE = {
+    "firmware": 'entry.get("firmware")',
+    "firmware_expect": 'entry.get("firmware_expect")',
+}
+RELEASE_GATE_SOURCE = "qc/unseen_boards.py"
 NOT_KNOWN_GOOD_MARKER = ".hauksbee-not-known-good"
 # Every axis an entry may claim. Spelling is fixed so coverage can be counted
 # rather than guessed at, and a typo cannot quietly invent a new axis.
@@ -87,6 +109,51 @@ def landed_design_files(path):
     return n
 
 
+def _check_release_gate_axes(bad):
+    """The release gate keys a rule off one axis; keep the two in step.
+
+    `qc/value_grading.NO_MCU_AXIS` is the only axis that exempts a Gerber package
+    from the reconstruction floor. Renaming it here without renaming it there
+    would leave an exemption nothing can trigger, or worse, a spelling that no
+    longer exempts the passive boards it exists for.
+    """
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, root)
+    try:
+        from qc.value_grading import NO_MCU_AXIS
+    except Exception as error:
+        # Fail CLOSED. Silently passing when the gate cannot be imported is the
+        # opposite of what this check is for.
+        bad.append(f"cannot read the release gate to cross-check its axes: {error}")
+        return
+    finally:
+        sys.path.remove(root)
+    if NO_MCU_AXIS not in AXES:
+        bad.append(
+            f"qc/value_grading.py exempts the reconstruction floor on axis "
+            f"`{NO_MCU_AXIS}`, which this manifest vocabulary does not define"
+        )
+    stale = sorted(MCU_FAMILY_AXES - AXES)
+    if stale:
+        bad.append(
+            "MCU_FAMILY_AXES names axes this vocabulary does not define: "
+            + ", ".join(stale)
+        )
+
+
+def _release_gate_source():
+    """The release gate's source, or None when it is not beside this script."""
+
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        RELEASE_GATE_SOURCE)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
 def check_manifest(doc, script_src):
     bad = []
     seen_ids, seen_dests = {}, {}
@@ -98,18 +165,54 @@ def check_manifest(doc, script_src):
                 f"scripts/fetch-corpus.sh does not read it ({needle!r} absent)"
             )
 
+    _check_release_gate_axes(bad)
+
+    gate_source = _release_gate_source()
+    if gate_source is None:
+        bad.append(
+            f"cannot read {RELEASE_GATE_SOURCE} to cross-check the fields it honours"
+        )
+    for field, needle in HONOURED_BY_RELEASE_GATE.items():
+        if gate_source is not None and needle not in gate_source:
+            bad.append(
+                f"corpus.toml field `{field}` is documented as honoured by the "
+                f"release gate but {RELEASE_GATE_SOURCE} does not read it "
+                f"({needle!r} absent)"
+            )
+
     for i, b in enumerate(doc.get("board", [])):
         if "id" not in b:
             bad.append(f"board #{i} has no id")
             continue
         bid = b["id"]
         for field in b:
-            if field not in HONOURED_FIELDS and field not in CHECKED_HERE:
+            if (
+                field not in HONOURED_FIELDS
+                and field not in CHECKED_HERE
+                and field not in HONOURED_BY_RELEASE_GATE
+            ):
                 bad.append(
                     f"{bid}: field `{field}` is declared and nothing honours it. "
                     f"Either act on it or delete it; a field that only looks "
                     f"load-bearing is how the KiCad qa/ tree got into the gate"
                 )
+        # An entry covering many boards may legitimately declare both (the CATs
+        # Eurosynth entry is 88 modules, a few with an AVR and most purely
+        # analogue), so the pair is only ambiguous where the release gate actually
+        # READS the exemption: a Gerber entry, whose reconstruction floor it
+        # switches off.
+        axes = set(b.get("axes", []))
+        if (
+            "gerber-only" in axes
+            and NO_MCU_AXIS_LOCAL in axes
+            and (axes & MCU_FAMILY_AXES)
+        ):
+            bad.append(
+                f"{bid}: a gerber-only entry declares both `{NO_MCU_AXIS_LOCAL}` "
+                f"and an MCU family ({', '.join(sorted(axes & MCU_FAMILY_AXES))}); "
+                "the release gate reads the first as an exemption from the "
+                "reconstruction floor, so the pair is ambiguous"
+            )
         if bid in seen_ids:
             bad.append(f"{bid}: duplicate id (also board #{seen_ids[bid]})")
         seen_ids[bid] = i
@@ -180,6 +283,39 @@ def check_manifest(doc, script_src):
     return bad
 
 
+def _would_be_floored(path):
+    """`(floor, facts)` if the gate would hold this package to a net floor.
+
+    The gate's own two functions, imported rather than reimplemented: asking
+    `expected_min_nets` directly means this lint fires on exactly the packages the
+    floor would reach, including the ones whose copper cannot be classified and
+    which are floored from a lower-bound estimate. A hand-written `>= 2 films and
+    >= 500 flashes` copy missed those. Returns None when the package is
+    unreadable, carries no Gerber film, or would receive no floor anyway.
+    """
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, root)
+    try:
+        from qc.value_grading import expected_min_nets, gerber_input_facts
+    except Exception:
+        return None
+    finally:
+        sys.path.remove(root)
+    try:
+        import pathlib
+
+        facts = gerber_input_facts(pathlib.Path(path))
+    except Exception:
+        return None
+    if not facts.get("gerber_layers"):
+        return None
+    # Asked WITHOUT the exemption: the question is what the floor would be if the
+    # axis were not there.
+    floor = expected_min_nets(facts, ())
+    return None if floor is None else (floor, facts)
+
+
 def check_landed(doc, root, include_unconfirmed):
     bad = []
     for b in doc.get("board", []):
@@ -207,6 +343,33 @@ def check_landed(doc, root, include_unconfirmed):
                     f"{bid}: expected {dest_rel}/{e} and it is not there. This is "
                     f"the path a gate resolves, so the gate would match nothing "
                     f"and report the empty match as a pass"
+                )
+
+        # The exemption is a manifest CLAIM, and it is the one claim that can
+        # switch the reconstruction floor off entirely. Where the package it names
+        # is readable, measure it: a board dense enough to receive a floor is not
+        # the passive low-net board the exemption was written for, and the two
+        # uConsole entries showed how easily a socketed compute module gets
+        # written down as `no-mcu` on a full mainboard. Unreadable packages (a
+        # `.7z`, say) cannot be measured, so that residual stays open and is
+        # stated in docs/ci/RELEASE_BOARD_GATES.md rather than implied closed.
+        if NO_MCU_AXIS_LOCAL in set(b.get("axes", [])):
+            for e in b.get("expect", []):
+                target = os.path.join(dest, e)
+                if not os.path.exists(target):
+                    continue
+                measured = _would_be_floored(target)
+                if measured is None:
+                    continue
+                floor, facts = measured
+                bad.append(
+                    f"{bid}: declares `{NO_MCU_AXIS_LOCAL}`, which exempts {e} "
+                    f"from the release gate's reconstruction floor, but that "
+                    f"package would otherwise be held to {floor} nets on "
+                    f"{facts['aperture_flashes']} aperture flashes across "
+                    f"{facts['copper_layers']} copper film(s). The exemption is "
+                    f"for passive low-net boards; on a package this dense it "
+                    f"would hide a connectivity collapse"
                 )
 
         # The transforms have to have happened, not merely been declared.
