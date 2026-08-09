@@ -623,7 +623,7 @@ impl BoardEvidence {
                             | "controlled_impedance"
                     ));
             maps.push(if geometry_class {
-                self.geometry_map_for_check(&finding.check, finding.message.clone(), &nets)?
+                self.value_claim_map(&finding.check, finding.message.clone(), &nets)?
             } else {
                 self.map_for_nets(finding.message.clone(), nets)?
             });
@@ -660,6 +660,32 @@ impl BoardEvidence {
         nets: &[String],
     ) -> Result<EvidenceMap, EvidenceError> {
         self.geometry_map_for_check("drc", assertion, nets)
+    }
+
+    /// A geometry-and-stated-value claim over real board incidence: the
+    /// model-class part assumptions are dropped by the IR's value-claim
+    /// traversal, while presence-class part assumptions (a part only assumed
+    /// fitted, whose value this claim read) and every net/board/check-scoped
+    /// limitation stay on the causal path. Used for the extract-computed SI
+    /// finding kinds, where "open" (no simulation model) is irrelevant but
+    /// "possibly not fitted" is not.
+    pub fn value_claim_map(
+        &self,
+        check: &str,
+        assertion: impl Into<String>,
+        nets: &[String],
+    ) -> Result<EvidenceMap, EvidenceError> {
+        let assertion = assertion.into();
+        let scope = NetScope::new(nets.iter().map(String::as_str), None)?;
+        let traversal =
+            self.index
+                .traverse_value_claim(&scope, check, &assertion, &self.registry)?;
+        let mut map =
+            EvidenceMap::from_traversal(assertion, traversal, &self.registry, self.today)?;
+        if let Some(artifact) = self.board_artifact {
+            map = map.with_artifacts(&self.registry, [artifact])?;
+        }
+        Ok(map)
     }
 
     /// As [`Self::geometry_map`], for a named check: the same no-component
