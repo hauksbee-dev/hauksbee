@@ -2610,6 +2610,41 @@ impl CausalPathIndex {
         self.traverse_inner(subject, Some((check, assertion_key)), registry)
     }
 
+    /// Traversal for a geometry-and-stated-value claim: one computed from
+    /// copper, stackup, and the value fields of the parts on its nets, never
+    /// from a bound simulation model. Model-class part assumptions
+    /// (`OpenPart`, `SubstituteModel`) are off such a claim's causal path: a
+    /// part being open means it has no simulation model, and nothing here was
+    /// simulated. Everything else stays on: presence-class part assumptions
+    /// (`FittedByDefault`; the claim read the part's value, so whether the
+    /// part is really fitted IS its evidence), every net-scoped and
+    /// board-scoped limitation, and the check's own scoped assumptions.
+    pub fn traverse_value_claim(
+        &self,
+        subject: &NetScope,
+        check: &str,
+        assertion_key: &str,
+        registry: &EvidenceRegistry,
+    ) -> Result<TraversalResult, EvidenceError> {
+        let mut result = self.traverse_inner(subject, Some((check, assertion_key)), registry)?;
+        result.on_path.retain(|a| {
+            let part_scoped = match a.scope() {
+                Scope::Subjects(subjects) => subjects
+                    .as_slice()
+                    .iter()
+                    .any(|entity| entity.kind() == EntityKind::Part),
+                Scope::Parameter(parameter) => parameter.subject().kind() == EntityKind::Part,
+                Scope::Board | Scope::Nets(_) | Scope::Check { .. } => false,
+            };
+            !(part_scoped
+                && matches!(
+                    a.kind,
+                    AssumptionKind::OpenPart | AssumptionKind::SubstituteModel
+                ))
+        });
+        Ok(result)
+    }
+
     fn traverse_inner(
         &self,
         subject: &NetScope,

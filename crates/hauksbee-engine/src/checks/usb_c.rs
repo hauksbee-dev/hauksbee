@@ -472,6 +472,22 @@ fn ground_net_ids(board: &ExtractedBoard) -> std::collections::HashSet<i64> {
 
 /// Resolve the receptacle's CC1 and CC2 net ids, preferring the USB-C connector
 /// over any downstream CC controller / PMIC that also carries CC pin functions.
+/// The names of the primary receptacle's CC nets, for scoping which unbound
+/// parts can make the CC verdict inconclusive. `None` when the board carries
+/// no identifiable USB-C receptacle CC termination.
+pub fn receptacle_cc_net_names(
+    board: &ExtractedBoard,
+) -> Option<std::collections::HashSet<String>> {
+    let (cc1, cc2) = receptacle_cc_nets(board)?;
+    let mut names = std::collections::HashSet::new();
+    for id in [cc1, cc2] {
+        if let Some(net) = board.net(id) {
+            names.insert(net.name.clone());
+        }
+    }
+    Some(names)
+}
+
 fn receptacle_cc_nets(board: &ExtractedBoard) -> Option<(i64, i64)> {
     // The receptacle's CC1/CC2 nets. A CC pin function (or the A5/B5 pad numbers)
     // can appear on *several* components: the USB-C connector itself, AND any CC
