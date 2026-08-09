@@ -86,12 +86,16 @@ if (!files.every(isAbsolute)) throw new Error('every HB_BOARD_FILES entry must b
 // journey functions below; carry the proven type explicitly.
 const boardFilePaths = files as string[]
 const resolvedFiles = boardFilePaths.map(path => realpathSync(path))
-if (new Set(resolvedFiles).size !== 5) throw new Error('HB_BOARD_FILES must contain five distinct files')
+// Distinctness, not a count: the external cohort's exactly-five contract is
+// enforced by the guard above; the corpus cohort passes every discovered
+// input, so these two checks only refuse duplicates smuggled via symlinks or
+// identical file contents.
+if (new Set(resolvedFiles).size !== resolvedFiles.length) throw new Error('HB_BOARD_FILES must contain distinct files')
 const fileDigests = await Promise.all(resolvedFiles.map(async path => (
   new Bun.CryptoHasher('sha256').update(await Bun.file(path).arrayBuffer()).digest('hex')
 )))
-if (new Set(fileDigests).size !== 5) {
-  throw new Error('HB_BOARD_FILES must contain five distinct board contents')
+if (new Set(fileDigests).size !== fileDigests.length) {
+  throw new Error('HB_BOARD_FILES must contain distinct board contents')
 }
 
 mkdirSync(output, { recursive: true })
