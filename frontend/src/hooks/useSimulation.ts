@@ -16,6 +16,12 @@ export interface SimulationState {
   frame: SimFrame | null
   status: StatusMsg | null
   probeData: ProbeDataMsg[]
+  /** The server's last Error for this session (a dead analog solve, an engine
+   *  crash, a replaced session), for a visible banner; null while healthy.
+   *  Sticky until a Reset is sent or the session recovers (a new SimFrame
+   *  after a plain informational error). Optional so replay/demo sources
+   *  without an error channel need not provide it. */
+  serverError?: string | null
   /** The session's server-held history (fault log, probe set), replayed once
    *  per (re)connect so a reload rejoins with everything that already fired.
    *  A fresh object per connect; absent on sources without one (the demo). */
@@ -53,6 +59,7 @@ export function useLiveSimulation(): SimulationState {
   const [status, setStatus] = useState<StatusMsg | null>(null)
   const [probeData, setProbeData] = useState<ProbeDataMsg[]>([])
   const [backlog, setBacklog] = useState<BacklogMsg | null>(null)
+  const [serverError, setServerError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
   // Coalesce high-rate messages to one React commit per animation frame. At
@@ -76,6 +83,9 @@ export function useLiveSimulation(): SimulationState {
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg))
+      // Reset restarts the failure story server-side (the backlog's fatal
+      // marker is cleared there); mirror it so the banner lifts immediately.
+      if (msg.type === 'Reset') setServerError(null)
     }
   }, [])
 
@@ -104,7 +114,12 @@ export function useLiveSimulation(): SimulationState {
           case 'BoardInfo': setBoardInfo(msg); break
           // Always a fresh object (even when empty) so the consumer's
           // seed-from-backlog effect re-fires per (re)connect.
-          case 'Backlog': setBacklog({ ...msg }); break
+          case 'Backlog':
+            setBacklog({ ...msg })
+            // A replayed terminal failure: a client that connected after the
+            // session died still learns why the sim is stopped.
+            if (msg.fatal) setServerError(msg.fatal)
+            break
           case 'SimFrame': pendingFrame.current = msg; scheduleFlush(); break
           case 'Status': pendingStatus.current = msg; scheduleFlush(); break
           case 'ProbeData':
@@ -115,6 +130,9 @@ export function useLiveSimulation(): SimulationState {
             break
           case 'Error':
             console.warn('[hauksbee] server error:', msg.message)
+            // Surface it: a session-stopping failure the user only ever sees
+            // in the devtools console is not an honest abort.
+            setServerError(msg.message)
             break
         }
       }
@@ -146,5 +164,5 @@ export function useLiveSimulation(): SimulationState {
     }
   }, [])
 
-  return { connected, boardInfo, frame, status, probeData, backlog, send }
+  return { connected, boardInfo, frame, status, probeData, backlog, serverError, send }
 }

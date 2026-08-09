@@ -1077,7 +1077,7 @@ mod rate_honesty_tests {
             "dead".into(),
             tx,
             cmd_rx,
-            shared,
+            shared.clone(),
         ));
         cmd_tx.send(ClientMessage::Play).await.unwrap();
         // Expect the honest stop: an Error naming the failure, then silence
@@ -1115,6 +1115,15 @@ mod rate_honesty_tests {
         assert_eq!(
             frames_after_error, 0,
             "the session must stop stepping once the solve is declared dead"
+        );
+        // Late-subscriber honesty: the reason is also in the backlog, so a
+        // client that connects (or reloads) AFTER the failure still learns
+        // why the sim is stopped; the broadcast alone is dropped when nobody
+        // is subscribed at that instant.
+        let fatal = shared.backlog.lock().expect("backlog lock").fatal.clone();
+        assert!(
+            fatal.is_some_and(|f| f.contains("Newton failed at t=0")),
+            "the terminal failure must be recorded for replay to late subscribers"
         );
     }
 
@@ -1161,7 +1170,12 @@ fn named_board_info(engine: &dyn Engine, wire_name: &str) -> protocol::BoardInfo
 /// (measured on the lily58 corpus board: every page load and websocket timed
 /// out while 7 of 8 workers sat idle). The blocking pool is where this work
 /// belongs; it also puts an await point under the step, so a session
-/// replacement's `task.abort()` lands mid-step instead of after it.
+/// replacement's `task.abort()` ENDS THE SESSION mid-step (sockets close, the
+/// new session takes over) instead of waiting the step out. The orphaned
+/// blocking task itself cannot be interrupted: it runs its current step to
+/// completion in the background and drops the engine when it returns, so a
+/// replaced diverging solve costs at most one in-flight step of background
+/// CPU, exactly the bound the old inline form had, without its wedge.
 ///
 /// Returns `None` when the step panicked (the engine is gone); the caller
 /// must end the session honestly.
@@ -1178,14 +1192,20 @@ async fn step_on_blocking_pool(
     .ok()
 }
 
-/// The honest end of a session whose engine panicked mid-step: tell every
-/// subscriber why the stream stops, instead of a silent close.
-fn engine_panic_message() -> ServerMessage {
-    ServerMessage::Error {
-        message: "the simulation engine crashed while stepping; this session has ended \
-                  (relaunch the board to start a new one)"
-            .to_string(),
-    }
+/// The honest end of a session whose engine panicked mid-step.
+const ENGINE_PANIC_REASON: &str = "the simulation engine crashed while stepping; this session \
+     has ended (relaunch the board to start a new one)";
+
+/// Terminal-failure bookkeeping: put the reason on the wire for anyone
+/// listening NOW, and into the session backlog for anyone who connects (or
+/// reloads) LATER; the broadcast alone is dropped when no receiver is
+/// subscribed at that instant, which is exactly when a page reload is in
+/// flight.
+fn end_session_fatally(shared: &Shared, broadcast: &impl Fn(&ServerMessage), reason: &str) {
+    shared.backlog.lock().expect("backlog lock").fatal = Some(reason.to_string());
+    broadcast(&ServerMessage::Error {
+        message: reason.to_string(),
+    });
 }
 
 async fn sim_loop(
@@ -1243,7 +1263,7 @@ async fn sim_loop(
                     let Some((stepped, mut frame)) =
                         step_on_blocking_pool(engine, step_dt).await
                     else {
-                        broadcast_msg(&engine_panic_message());
+                        end_session_fatally(&shared, &broadcast_msg, ENGINE_PANIC_REASON);
                         return;
                     };
                     engine = stepped;
@@ -1277,12 +1297,14 @@ async fn sim_loop(
                     if let Some(reason) = engine.analog_failure() {
                         running = false;
                         meter.clear();
-                        broadcast_msg(&ServerMessage::Error {
-                            message: format!(
+                        end_session_fatally(
+                            &shared,
+                            &broadcast_msg,
+                            &format!(
                                 "live simulation stopped: {reason}. Press reset to \
                                  retry, or fix the board/model and relaunch."
                             ),
-                        });
+                        );
                     }
                     broadcast_msg(&ServerMessage::Status(Status {
                         running, sim_time, requested_factor: speed,
@@ -1319,7 +1341,7 @@ async fn sim_loop(
                         let Some((stepped, mut frame)) =
                             step_on_blocking_pool(engine, step_dt).await
                         else {
-                            broadcast_msg(&engine_panic_message());
+                            end_session_fatally(&shared, &broadcast_msg, ENGINE_PANIC_REASON);
                             return;
                         };
                         engine = stepped;
@@ -1342,12 +1364,14 @@ async fn sim_loop(
                         if let Some(reason) = engine.analog_failure() {
                             running = false;
                             meter.clear();
-                            broadcast_msg(&ServerMessage::Error {
-                                message: format!(
+                            end_session_fatally(
+                                &shared,
+                                &broadcast_msg,
+                                &format!(
                                     "live simulation stopped: {reason}. Press reset to \
                                      retry, or fix the board/model and relaunch."
                                 ),
-                            });
+                            );
                         }
                     }
                     ClientMessage::Reset => {
@@ -1357,8 +1381,14 @@ async fn sim_loop(
                         meter.clear();
                         // A reset starts the fault story over server-side too,
                         // or the next subscriber would replay pre-reset faults
-                        // as if they belonged to the fresh run.
-                        shared.backlog.lock().expect("backlog lock").faults.clear();
+                        // as if they belonged to the fresh run. Same for the
+                        // terminal-failure marker: `engine.reset()` cleared the
+                        // abort streak, so the failure story starts over.
+                        {
+                            let mut backlog = shared.backlog.lock().expect("backlog lock");
+                            backlog.faults.clear();
+                            backlog.fatal = None;
+                        }
                     }
                     ClientMessage::SetSpeed { factor } => {
                         speed = factor.clamp(0.001, 1000.0);

@@ -3214,13 +3214,22 @@ impl Scheduler {
         // so every rung runs exactly as before).
         let min_rung = self.debug_force_fallback_rung.map(|m| m as u8).unwrap_or(0);
 
+        // A rung that "converged" onto a non-physical state (a node beyond the
+        // voltage sanity bound) has not rescued anything: it must not be
+        // adopted, AND it must not end the ladder, because a later, more
+        // robust rung can still produce the real answer. Checked per rung,
+        // not on the ladder's result, for exactly that reason.
+        let sane = |x: &[f64]| self.insane_node_state(x).is_none();
+
         // Rung 1: the primary integration at a bounded step.
         if min_rung <= ChunkFallbackMethod::ReducedStep as u8 {
             thermal.clear();
             if let Ok((x, diagnostics)) = self.march_chunk(chunk, reduced, seed, thermal) {
-                let method = ChunkFallbackMethod::ReducedStep;
-                let err = self.fallback_error_estimate(chunk, 1, reduced, seed, &x);
-                return Some((method, x, diagnostics, err));
+                if sane(&x) {
+                    let method = ChunkFallbackMethod::ReducedStep;
+                    let err = self.fallback_error_estimate(chunk, 1, reduced, seed, &x);
+                    return Some((method, x, diagnostics, err));
+                }
             }
         }
 
@@ -3232,9 +3241,11 @@ impl Scheduler {
         if min_rung <= ChunkFallbackMethod::BackwardEuler as u8 {
             thermal.clear();
             if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, seed, thermal) {
-                let method = ChunkFallbackMethod::BackwardEuler;
-                let err = self.fallback_error_estimate(chunk, 1, be, seed, &x);
-                return Some((method, x, diagnostics, err));
+                if sane(&x) {
+                    let method = ChunkFallbackMethod::BackwardEuler;
+                    let err = self.fallback_error_estimate(chunk, 1, be, seed, &x);
+                    return Some((method, x, diagnostics, err));
+                }
             }
         }
 
@@ -3246,9 +3257,11 @@ impl Scheduler {
         if min_rung <= ChunkFallbackMethod::ColdStartBackwardEuler as u8 {
             thermal.clear();
             if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, None, thermal) {
-                let method = ChunkFallbackMethod::ColdStartBackwardEuler;
-                let err = self.fallback_error_estimate(chunk, 1, be, None, &x);
-                return Some((method, x, diagnostics, err));
+                if sane(&x) {
+                    let method = ChunkFallbackMethod::ColdStartBackwardEuler;
+                    let err = self.fallback_error_estimate(chunk, 1, be, None, &x);
+                    return Some((method, x, diagnostics, err));
+                }
             }
         }
 
@@ -3275,6 +3288,9 @@ impl Scheduler {
         thermal.clear();
         let (x, diagnostics) =
             self.march_chunk_subdivided(chunk, 4, be, self.last_dc_seed.clone(), thermal)?;
+        if !sane(&x) {
+            return None;
+        }
         let method = ChunkFallbackMethod::SubdividedBackwardEuler;
         let err = self.fallback_error_estimate(chunk, 4, be, self.last_dc_seed.as_deref(), &x);
         Some((method, x, diagnostics, err))
@@ -3584,13 +3600,12 @@ impl Scheduler {
                 // window. Only when every rung also fails does the refusal
                 // path below run, unchanged: this feature shrinks the set of
                 // windows the run cannot vouch for, it never papers over one.
-                if let Some((method, x, diagnostics, error_estimate_v)) = self
-                    .fallback_ladder(chunk, &mut thermal)
-                    // Same sanity bar as the primary path: a rescue rung that
-                    // "converged" onto a non-physical state has not rescued
-                    // anything, and adopting it would poison the run the same
-                    // way. Refusing it lets the honest-failure path below run.
-                    .filter(|(_, x, _, _)| self.insane_node_state(x).is_none())
+                // Every ladder rung applies the same sanity bar internally
+                // (an insane "rescue" neither ends the ladder nor gets
+                // adopted), so a `Some` here is a converged AND physical
+                // answer.
+                if let Some((method, x, diagnostics, error_estimate_v)) =
+                    self.fallback_ladder(chunk, &mut thermal)
                 {
                     self.adopt_chunk_state(x);
                     self.record_residual(diagnostics);
@@ -3768,6 +3783,22 @@ impl Scheduler {
         t_start: f64,
         t_end: f64,
     ) -> bool {
+        // A forced level bypasses the solver AND the converged-state sanity
+        // guard (it is written into `node_volts` after every solve), so it
+        // must clear the same bar here: a NaN/inf/absurd force would be the
+        // one remaining door for a non-physical published voltage.
+        if !high_volts.is_finite()
+            || !low_volts.is_finite()
+            || high_volts.abs() > Self::NODE_VOLTAGE_SANITY_V
+            || low_volts.abs() > Self::NODE_VOLTAGE_SANITY_V
+        {
+            eprintln!(
+                "refusing to force net '{net}' to {high_volts:.3e}/{low_volts:.3e} V: \
+                 not board reality (beyond the {:.0e} V sanity bound)",
+                Self::NODE_VOLTAGE_SANITY_V
+            );
+            return false;
+        }
         match self.net_nodes.get(net) {
             Some(&node) => {
                 self.forced_node_volts
