@@ -578,13 +578,24 @@ voids leave the spokes standing, so the pad stays on the pour exactly as
 fabricated, and an annular void's inner rim leaves its copper island
 standing. Clear *flashes* (the classic negative-plane antipad) and clear
 *draws* are banked the same way, and a `%SR%` cell carries its voids into
-every repeat.
+every repeat, even a cell that is nothing but voids.
+
+**Only exactly-reproduced geometry may erase copper.** Several aperture
+images are deliberate over-approximations: a macro flash becomes the convex
+hull of its primitives (a fixed disc when it cannot be evaluated at all), a
+draw with an aperture that declares no width takes a 0.1 mm hairline, and a
+circular draw flattens into inscribed chords. Each is correct while it only
+*adds* copper, since a flash that claims a little too much never invents a
+gap, and destructive the moment it subtracts, since it would erase copper the
+film never cleared and split a conductor that is really whole. So those
+clears are refused outright. Standard apertures are polygonized *inscribed*,
+so they under-remove, which is the safe side.
 
 Where this stops short it stops short in one direction, leaving copper
 standing, which reads as over-connection rather than as a fabricated split:
-a void straddling a pour's edge, a void laid over a track or a pad rather
-than over a pour, and the intersection of two voids that only partially
-overlap.
+the refusals above, a void straddling a pour's edge, a void laid over a track
+or a pad rather than over a pour, and the intersection of two voids that only
+partially overlap.
 
 Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
 pour with two ringed pads must reconstruct to three conductors, and its

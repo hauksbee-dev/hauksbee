@@ -275,9 +275,11 @@ fn apply_clears(out: &mut [CopperPrim], clears: &[Clear]) {
         })
         .collect();
     let bounds: Vec<[f64; 4]> = regions.iter().map(|&i| out[i].shape.bounds()).collect();
-    // Bounds of the void contours already cut from each pour, for the
-    // already-void test below.
-    let mut applied: Vec<Vec<(usize, [f64; 4])>> = vec![Vec::new(); regions.len()];
+    // The void contours already cut from each pour, bucketed spatially so the
+    // already-void probe below is not a scan of every earlier void. Without the
+    // grid a plane carrying tens of thousands of antipads paid O(voids^2) bound
+    // comparisons for an answer that is "no" almost every time.
+    let mut applied: Vec<VoidIndex> = bounds.iter().map(|&b| VoidIndex::new(b)).collect();
 
     for clear in clears {
         let cb = contour_bounds(&clear.contours.concat());
@@ -296,22 +298,17 @@ fn apply_clears(out: &mut [CopperPrim], clears: &[Clear]) {
                 continue;
             }
             let shape = &mut out[i].shape;
-            let base = match shape {
-                Shape::Polygon { pts, .. } => {
-                    let outer = std::mem::take(pts);
-                    *shape = Shape::MultiPolygon {
-                        contours: vec![outer],
-                    };
-                    1
-                }
-                Shape::MultiPolygon { contours } => contours.len(),
-                Shape::Capsule(_) => continue,
-            };
+            if let Shape::Polygon { pts, .. } = shape {
+                let outer = std::mem::take(pts);
+                *shape = Shape::MultiPolygon {
+                    contours: vec![outer],
+                };
+            }
             let Shape::MultiPolygon { contours } = shape else {
                 continue;
             };
-            for (k, c) in clear.contours.iter().enumerate() {
-                applied[slot].push((base + k, contour_bounds(c)));
+            for c in &clear.contours {
+                applied[slot].insert(contours.len(), contour_bounds(c));
                 contours.push(c.clone());
             }
         }
@@ -333,19 +330,82 @@ fn contours_enclose(outer: &[Vec<(f64, f64)>], inner: &[Vec<(f64, f64)>]) -> boo
     })
 }
 
+/// A uniform grid over one pour's bounds holding the voids already cut from it,
+/// keyed by contour index into the pour's contour list.
+///
+/// A void can only be swallowed by an earlier void that overlaps it, so the
+/// already-void probe only has to look in the cells the candidate covers. Cells
+/// hold indices in insertion order and are visited in a fixed cell order, so the
+/// answer does not depend on anything but the film.
+struct VoidIndex {
+    origin: (f64, f64),
+    cell: (f64, f64),
+    /// `RES * RES` buckets of `(contour index, contour bounds)`.
+    cells: Vec<Vec<(usize, [f64; 4])>>,
+}
+
+impl VoidIndex {
+    const RES: usize = 48;
+
+    fn new(bounds: [f64; 4]) -> Self {
+        let w = (bounds[2] - bounds[0]).max(f64::MIN_POSITIVE);
+        let h = (bounds[3] - bounds[1]).max(f64::MIN_POSITIVE);
+        VoidIndex {
+            origin: (bounds[0], bounds[1]),
+            cell: (w / Self::RES as f64, h / Self::RES as f64),
+            cells: Vec::new(),
+        }
+    }
+
+    /// The inclusive cell range a bounding box covers, clamped to the grid.
+    fn span(&self, b: [f64; 4]) -> (usize, usize, usize, usize) {
+        let ix =
+            |v: f64, o: f64, c: f64| (((v - o) / c).floor().max(0.0) as usize).min(Self::RES - 1);
+        (
+            ix(b[0], self.origin.0, self.cell.0),
+            ix(b[1], self.origin.1, self.cell.1),
+            ix(b[2], self.origin.0, self.cell.0),
+            ix(b[3], self.origin.1, self.cell.1),
+        )
+    }
+
+    fn insert(&mut self, idx: usize, b: [f64; 4]) {
+        if self.cells.is_empty() {
+            self.cells = vec![Vec::new(); Self::RES * Self::RES];
+        }
+        let (x0, y0, x1, y1) = self.span(b);
+        for cy in y0..=y1 {
+            for cx in x0..=x1 {
+                self.cells[cy * Self::RES + cx].push((idx, b));
+            }
+        }
+    }
+
+    /// Every void whose bounds could contain `b`, without duplicates.
+    fn candidates(&self, b: [f64; 4]) -> Vec<(usize, [f64; 4])> {
+        if self.cells.is_empty() {
+            return Vec::new();
+        }
+        // A void containing `b` covers b's own min-corner cell, so that single
+        // cell holds every candidate.
+        let (x0, y0, ..) = self.span(b);
+        self.cells[y0 * Self::RES + x0].clone()
+    }
+}
+
 /// Is this void already covered whole by ONE void cut earlier from the same
 /// pour? Then there is no copper left to remove, and appending it again would
 /// flip the overlap back to copper under even-odd.
 fn already_void(
     shape: &Shape,
-    applied: &[(usize, [f64; 4])],
+    applied: &VoidIndex,
     contours: &[Vec<(f64, f64)>],
     bounds: [f64; 4],
 ) -> bool {
     let Shape::MultiPolygon { contours: all } = shape else {
         return false;
     };
-    applied.iter().any(|&(idx, ab)| {
+    applied.candidates(bounds).into_iter().any(|(idx, ab)| {
         bounds[0] >= ab[0]
             && bounds[1] >= ab[1]
             && bounds[2] <= ab[2]
@@ -733,9 +793,6 @@ impl<'a> Plotter<'a> {
             return;
         }
         let base: Vec<CopperPrim> = self.out[block.start..].to_vec();
-        if base.is_empty() {
-            return;
-        }
         // The base cell's voids, if it was drawn negatively. Each replica needs
         // its own translated copies, and their painter-order index has to point
         // at the REPLICA's copper: a void carrying the base cell's index would
@@ -745,6 +802,12 @@ impl<'a> Plotter<'a> {
             .filter(|c| c.painted_before >= block.start)
             .cloned()
             .collect();
+        // A cell may be voids ALONE: a pour painted before the block, then an
+        // arrayed set of clear antipads over it. Returning on empty base copper
+        // replicated none of them and left every repeat but the first solid.
+        if base.is_empty() && base_clears.is_empty() {
+            return;
+        }
         for iy in 0..block.repeat_y {
             for ix in 0..block.repeat_x {
                 if ix == 0 && iy == 0 {
@@ -817,39 +880,47 @@ impl<'a> Plotter<'a> {
                         contour.push((sx, sy));
                     }
                     contour.extend(seg);
-                } else {
-                    // A routed segment of the current aperture's width. Under
-                    // clear polarity the same stroke is a void scraped out of
-                    // the copper beneath it (how some exporters draw a plane's
-                    // splits), so it is banked rather than painted.
+                } else if self.dark {
+                    // A routed segment of the current aperture's width.
                     let width = self.aperture_line_width();
-                    // The stroke's centreline, one entry per straight segment
-                    // (an arc contributes its flattened samples).
-                    let mut centreline: Vec<(f64, f64)> = vec![(sx, sy)];
                     match self.interp {
-                        InterpolationMode::Linear => centreline.push((ex, ey)),
+                        InterpolationMode::Linear => {
+                            self.push_capsule(sx, sy, ex, ey, width / 2.0);
+                        }
                         InterpolationMode::ClockwiseCircular
                         | InterpolationMode::CounterclockwiseCircular => {
                             let (ox, oy) = self.offset_mm(offset);
                             let ccw =
                                 matches!(self.interp, InterpolationMode::CounterclockwiseCircular);
-                            centreline.extend(self.arc_samples(sx, sy, ex, ey, ox, oy, ccw));
+                            let mut prev = (sx, sy);
+                            for p in self.arc_samples(sx, sy, ex, ey, ox, oy, ccw) {
+                                self.push_capsule(prev.0, prev.1, p.0, p.1, width / 2.0);
+                                prev = p;
+                            }
                         }
                     }
-                    for w in centreline.windows(2) {
-                        let (a, b) = (w[0], w[1]);
-                        if self.dark {
-                            self.push_capsule(a.0, a.1, b.0, b.1, width / 2.0);
-                        } else {
-                            self.add_clear(&Shape::Capsule(Capsule {
-                                ax: a.0,
-                                ay: a.1,
-                                bx: b.0,
-                                by: b.1,
-                                r: width / 2.0,
-                            }));
-                        }
-                    }
+                } else if let (InterpolationMode::Linear, Some(width)) =
+                    (self.interp, self.declared_line_width())
+                {
+                    // Under clear polarity the same stroke SCRAPES copper out of
+                    // whatever is beneath it (how some exporters draw a plane's
+                    // splits), so it is banked as a void rather than painted.
+                    //
+                    // Only a straight stroke of a DECLARED width is banked. A
+                    // circular D01 flattens into inscribed chords, and an
+                    // aperture with no width takes the 0.1 mm hairline: both are
+                    // conservative when they ADD copper, and both erase copper
+                    // the film never cleared when they SUBTRACT it, which
+                    // fabricates an open in a conductor that is really whole.
+                    // Refusing leaves the copper standing, the same direction
+                    // every other limit in `apply_clears` fails in.
+                    self.add_clear(&Shape::Capsule(Capsule {
+                        ax: sx,
+                        ay: sy,
+                        bx: ex,
+                        by: ey,
+                        r: width / 2.0,
+                    }));
                 }
                 self.x = ex;
                 self.y = ey;
@@ -862,10 +933,15 @@ impl<'a> Plotter<'a> {
                 }
                 if self.dark {
                     self.flash();
-                } else if let Some(shape) = self.flash_shape() {
+                } else if self.aperture_image_is_exact() {
                     // A clear flash is an antipad: the classic way a negative
-                    // plane film states "no copper here". Banked as a void.
-                    self.add_clear(&shape);
+                    // plane film states "no copper here". Banked as a void, but
+                    // only when the aperture's image is reproduced exactly (see
+                    // `aperture_image_is_exact`); an over-approximated image may
+                    // add copper, never erase it.
+                    if let Some(shape) = self.flash_shape() {
+                        self.add_clear(&shape);
+                    }
                 }
             }
         }
@@ -887,6 +963,40 @@ impl<'a> Plotter<'a> {
             // MACRO_FALLBACK_DISC_MM constant is documented to avoid).
             _ => 0.1,
         }
+    }
+
+    /// The draw width the FILE states, or `None` when the aperture gives none
+    /// and [`Self::aperture_line_width`] would substitute its hairline. A
+    /// substituted width may only ever add copper; see the clear-draw branch.
+    /// The circle is exact, and the rect/obround min-dimension under-covers the
+    /// true swept image, so both under-remove: the safe direction.
+    fn declared_line_width(&self) -> Option<f64> {
+        match self.aperture.and_then(|a| self.doc.apertures.get(&a)) {
+            Some(Aperture::Circle(Circle { diameter, .. })) => Some(diameter * self.to_mm),
+            Some(Aperture::Rectangle(Rectangular { x, y, .. }))
+            | Some(Aperture::Obround(Rectangular { x, y, .. })) => Some(x.min(*y) * self.to_mm),
+            _ => None,
+        }
+    }
+
+    /// Is the current aperture's image reproduced EXACTLY enough to erase copper
+    /// with?
+    ///
+    /// A macro is not. [`instantiate_macro`] returns the convex HULL of the
+    /// macro's primitives and drops voids it cannot represent, and an
+    /// unevaluable macro falls back to a fixed disc. Every one of those is a
+    /// deliberate over-approximation, correct while it only ADDS copper (a
+    /// flash that claims slightly too much never invents a gap) and destructive
+    /// the moment it subtracts: the hull between two disjoint macro elements,
+    /// or a whole fallback disc, would erase pour copper the film never cleared
+    /// and split a conductor that is really whole. Standard apertures are
+    /// polygonized INSCRIBED, so they under-remove, which is the safe
+    /// direction.
+    fn aperture_image_is_exact(&self) -> bool {
+        !matches!(
+            self.aperture.and_then(|a| self.doc.apertures.get(&a)),
+            None | Some(Aperture::Macro(..))
+        )
     }
 
     /// The image the current aperture paints at the current point, independent
@@ -1568,6 +1678,58 @@ G37*
     }
 
     #[test]
+    fn an_over_approximated_clear_image_erases_nothing() {
+        // The whole class: geometry we only approximate is safe while it ADDS
+        // copper (a flash that claims a little too much never invents a gap) and
+        // destructive the moment it subtracts, because it erases copper the film
+        // never cleared and splits a conductor that is really whole. Three
+        // approximations reach the clear path, and none may cut:
+        //
+        //   - a macro flash (the hull of its primitives, or a fallback disc when
+        //     it cannot be evaluated),
+        //   - a stroke whose aperture declares no width (the 0.1 mm hairline),
+        //   - a circular stroke (inscribed chords, which bite into the inside of
+        //     the curve by up to ~1.9% of the radius).
+        //
+        // Each must leave the pour whole: one contour, still solid.
+        let refused = [
+            // An unevaluable macro: `flash_shape` would hand back a 0.25 mm disc.
+            (
+                "%AMWEIRD*\n1,1,$1,0,0*\n%\n%ADD10WEIRD*%\n",
+                "D10*\nX10000000Y10000000D03*\n",
+            ),
+            // A polygon aperture stroke: `aperture_line_width` substitutes its
+            // hairline because a draw has no defined width for one.
+            (
+                "%ADD10P,3.000000X6*%\n",
+                "D10*\nX4000000Y10000000D02*\nX16000000Y10000000D01*\n",
+            ),
+            // A circular stroke under G03: a real width, flattened boundary.
+            (
+                "%ADD10C,1.000000*%\n",
+                "G75*\nG03*\nD10*\nX14000000Y10000000D02*\nX6000000Y10000000I-4000000J0D01*\n",
+            ),
+        ];
+        for (apertures, body) in refused {
+            let (n_contours, is_copper) = pour_of(&negative_pour(apertures, body));
+            assert_eq!(
+                n_contours, 1,
+                "an approximated clear image must not cut the pour: {body}"
+            );
+            assert!(is_copper(10.0, 10.0), "the pour stays whole: {body}");
+        }
+        // The counter-side: a straight stroke of a DECLARED width is exact, so
+        // it does cut, and the slit it scrapes is where the copper goes.
+        let (n_contours, is_copper) = pour_of(&negative_pour(
+            "%ADD10C,2.000000*%\n",
+            "D10*\nX10000000Y4000000D02*\nX10000000Y16000000D01*\n",
+        ));
+        assert_eq!(n_contours, 2, "an exact clear stroke cuts");
+        assert!(!is_copper(10.0, 10.0), "the stroke's path is void");
+        assert!(is_copper(4.0, 10.0), "the copper either side stands");
+    }
+
+    #[test]
     fn a_step_and_repeat_cell_carries_its_voids_into_every_copy() {
         // A negatively-drawn cell inside `%SRX2Y1I25.0J0*%`. The replica gets a
         // translated copy of the pour, so it must get translated copies of the
@@ -1617,6 +1779,50 @@ M02*
                 10.0,
                 contours
             ));
+        }
+    }
+
+    #[test]
+    fn a_step_and_repeat_cell_of_voids_alone_is_still_repeated() {
+        // The cell need not contain copper. A pour painted before the block, then
+        // an arrayed set of clear antipads over it, is a legal way to write a
+        // plane's via clearances once. Bailing out on an empty base CELL
+        // replicated none of the voids, so every repeat but the first kept its
+        // copper and the merge survived exactly where the file said it must not.
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,4.000000*%
+G36*
+X0Y0D02*
+X40000000Y0D01*
+X40000000Y20000000D01*
+X0Y20000000D01*
+X0Y0D01*
+G37*
+%LPC*%
+%SRX3Y1I10.000000J0.000000*%
+D10*
+X10000000Y10000000D03*
+%SR*%
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let pours: Vec<&CopperPrim> = prims
+            .iter()
+            .filter(|p| p.kind == PrimKind::Region)
+            .collect();
+        assert_eq!(pours.len(), 1, "the copper was painted before the block");
+        let Shape::MultiPolygon { contours } = &pours[0].shape else {
+            panic!("no void was cut at all");
+        };
+        assert_eq!(contours.len(), 4, "one boundary plus all three antipads");
+        for k in 0..3 {
+            let x = 10.0 + 10.0 * k as f64;
+            assert!(
+                !super::super::geo::point_in_contours(x, 10.0, contours),
+                "antipad {k} at x={x} must be void"
+            );
         }
     }
 
