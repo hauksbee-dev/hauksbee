@@ -3048,10 +3048,13 @@ impl Scheduler {
     }
 
     /// Read the current value (A) of a named current-law on a behavioural device
-    /// (e.g. the LTC6803 balancer-leak current). `None` if absent.
+    /// (e.g. the LTC6803 balancer-leak current). `None` if absent. An implicit
+    /// law is evaluated at the last solved node voltages, which is the current
+    /// the solver stamped there.
     pub fn behavioral_law_value(&self, reference: &str, law: &str) -> Option<f64> {
         let d = self.behavioral.iter().find(|d| d.reference == reference)?;
-        d.law_value(&self.circuit, law)
+        let node_v = |n: NodeId| self.node_volts.get(n.0 as usize).copied().unwrap_or(0.0);
+        d.law_value(&self.circuit, law, &node_v, self.sim_time)
     }
 
     /// Evaluate the stress monitor over the chunk just solved.
@@ -3477,6 +3480,39 @@ impl Scheduler {
         Some(2.0 * richardson * diff + floor)
     }
 
+    /// A node-voltage magnitude no physical board reaches. A converged solve
+    /// whose state exceeds this is a numerically consistent answer to a
+    /// question the board never asked (measured: a chunk-updated clamp law on
+    /// a floating USB net "converged" at 9.86e11 V, because 1.97 A into a
+    /// gmin-only node balances KCL exactly at I/gmin volts), and adopting it
+    /// poisons every later chunk's seed. Kilovolt-class inductive spikes and
+    /// HV supplies sit orders of magnitude below this bound, so it never bites
+    /// a real answer.
+    const NODE_VOLTAGE_SANITY_V: f64 = 1e9;
+
+    /// The first node whose solved voltage is non-finite or beyond
+    /// [`Self::NODE_VOLTAGE_SANITY_V`], with that voltage. `None` for a sane
+    /// state. Only the node block is judged: the branch entries are currents.
+    fn insane_node_state(&self, x: &[f64]) -> Option<(usize, f64)> {
+        x.iter()
+            .take(self.layout.n_nodes.min(x.len()))
+            .enumerate()
+            .find(|(_, v)| !v.is_finite() || v.abs() > Self::NODE_VOLTAGE_SANITY_V)
+            .map(|(i, &v)| (i, v))
+    }
+
+    /// The honest refusal for an insane converged state: name the worst net
+    /// and the voltage, so the failure reads as the modelling problem it is
+    /// rather than a bare "did not converge".
+    fn insane_state_reason(&self, unknown: usize, volts: f64) -> String {
+        format!(
+            "converged state is not board reality: {} at {volts:.3e} V \
+             (beyond the {:.0e} V sanity bound); refusing to adopt it",
+            hauksbee_solve::blame::name_node_unknown(&self.circuit, unknown),
+            Self::NODE_VOLTAGE_SANITY_V
+        )
+    }
+
     /// Adopt a converged end state: publish node voltages and branch currents,
     /// and seed the next chunk's DC solve from it.
     fn adopt_chunk_state(&mut self, final_x: Vec<f64>) {
@@ -3518,6 +3554,20 @@ impl Scheduler {
         } else {
             self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref(), &mut thermal)
         };
+        // A "converged" state that is not board reality (a net at 1e12 V, an
+        // inf/NaN) must never be adopted: it would seed every later chunk and
+        // turn one bad answer into a diverged run. Demote it to the failure
+        // path with the net named, where the ladder/refusal machinery already
+        // tells the truth about unsolved windows.
+        let primary = match primary {
+            Ok((x, diagnostics)) => match self.insane_node_state(&x) {
+                None => Ok((x, diagnostics)),
+                Some((unknown, volts)) => {
+                    Err((self.insane_state_reason(unknown, volts), Vec::new()))
+                }
+            },
+            err => err,
+        };
         let mut failure_reason: Option<String> = None;
         let converged = match primary {
             Ok((x, diagnostics)) => {
@@ -3534,8 +3584,13 @@ impl Scheduler {
                 // window. Only when every rung also fails does the refusal
                 // path below run, unchanged: this feature shrinks the set of
                 // windows the run cannot vouch for, it never papers over one.
-                if let Some((method, x, diagnostics, error_estimate_v)) =
-                    self.fallback_ladder(chunk, &mut thermal)
+                if let Some((method, x, diagnostics, error_estimate_v)) = self
+                    .fallback_ladder(chunk, &mut thermal)
+                    // Same sanity bar as the primary path: a rescue rung that
+                    // "converged" onto a non-physical state has not rescued
+                    // anything, and adopting it would poison the run the same
+                    // way. Refusing it lets the honest-failure path below run.
+                    .filter(|(_, x, _, _)| self.insane_node_state(x).is_none())
                 {
                     self.adopt_chunk_state(x);
                     self.record_residual(diagnostics);
@@ -3559,6 +3614,14 @@ impl Scheduler {
                     }
                     failure_reason = Some(err.clone());
                     self.last_solve_error = Some(err);
+                    // A recovered DC bias is only usable if it is itself sane;
+                    // a poisoned bias would re-seed the very state this guard
+                    // exists to keep out.
+                    let recovered = if self.insane_node_state(&recovered).is_some() {
+                        Vec::new()
+                    } else {
+                        recovered
+                    };
                     if !recovered.is_empty() {
                         // If the DC operating point at t=0 was still captured
                         // (the streaming sink fires once before the march loop),
