@@ -2802,17 +2802,27 @@ pub mod eagle_drc {
     /// The `isolate` below which a pour keeps no separation at all, so a
     /// same-rank overlap with another signal's pour reaches copper as a short.
     ///
-    /// One micrometre. Measured, not chosen: the emonTx V3.4.5 sets `isolate`
-    /// to 0.00030625 mm on exactly one of its nine ground pours (six of the
-    /// others ask for 0.3048 mm and the rest carry no isolate attribute), and
-    /// the fabrication gerbers the upstream ships beside the `.brd` show that
-    /// pour merged with the GND pour into a single filled region, while the same
-    /// net pouring at 0.3048 mm on the other layer stays a separate copper body.
-    /// The threshold has to sit between those two values, and one micrometre is
-    /// where nothing real lives: 3x above that deliberately-zeroed isolate,
-    /// 25x below one mil (the tightest separation any board house quotes), and
-    /// ten orders above the f64 noise floor of the geometry it is compared
-    /// against.
+    /// One micrometre, and it is a choice inside measured bounds rather than a
+    /// boundary Eagle documents. Being straight about which:
+    ///
+    /// **Measured.** The emonTx V3.4.5 sets `isolate` to 0.00030625 mm on
+    /// exactly one of its nine ground pours (six of the others ask for
+    /// 0.3048 mm and the rest carry no isolate attribute), and the fabrication
+    /// gerbers the upstream ships beside the `.brd` show that pour merged with
+    /// the GND pour into a single filled region, while the same net pouring at
+    /// 0.3048 mm on the other layer stays a separate copper body. So 0.00030625
+    /// merges and 0.3048 does not: the threshold belongs strictly between them,
+    /// which is the only part of this the evidence fixes.
+    ///
+    /// **Chosen.** Those two observations leave three orders of magnitude of
+    /// room, and nothing in the file says where inside it Eagle switches. One
+    /// micrometre is picked on a manufacturing argument rather than a
+    /// file-format one: it is 25x below one mil, the tightest separation a board
+    /// house will quote, so no `isolate` below it can survive etching whatever
+    /// the CAD does with it, and it is ten orders above the f64 noise floor of
+    /// the geometry it is compared against. A second board that merges at, say,
+    /// 0.01 mm would narrow the band and move this number; that measurement has
+    /// not been made.
     ///
     /// An `isolate` between this and the design rules leaves a gap that is real
     /// but too tight, which is a clearance question about a fill Eagle recomputes
@@ -2988,13 +2998,21 @@ pub mod eagle_drc {
         Polygon {
             width: f64,
             layer: i64,
-            /// Antipad gap the pour keeps around foreign copper (mm). Eagle
-            /// applies max(isolate, design-rule / class clearance); 0 means
-            /// "rules only".
+            /// Antipad gap the pour keeps around foreign copper (mm).
+            ///
+            /// Against foreign TRACKS, PADS and VIAS, Eagle applies
+            /// max(isolate, design-rule / class clearance), so 0 means "rules
+            /// only" and the fill can never crowd them. Against another POUR it
+            /// does not: the emonTx V3.4.5 pours at `isolate="0.00030625"`
+            /// against a GND pour under an 8 mil `mdWireWire` rule, and its own
+            /// CAM output emits the two as one filled region. So here the raw
+            /// value governs, and `POUR_MERGE_ISOLATE_MM` is the band in which
+            /// it means "no gap at all".
             isolate: f64,
-            /// Pour priority. Overlapping same-rank pours of different
-            /// signals are an Eagle DRC error (both get poured: a real short);
-            /// with differing ranks the higher-numbered pour yields.
+            /// Pour priority. With differing ranks the higher-numbered pour
+            /// yields; same-rank pours of different signals get no arbitration
+            /// from the rank, and whether their overlap becomes copper is then
+            /// down to `isolate` (see the pour-to-pour pass in `run`).
             rank: i64,
             /// Thermal-relief spokes on same-net pads (copper removal only).
             thermals: bool,

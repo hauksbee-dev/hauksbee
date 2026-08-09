@@ -1,0 +1,162 @@
+{
+  "$schema": "https://schemas.kicad.org/drc.v1.json",
+  "coordinate_units": "mm",
+  "date": "2026-08-09T23:09:09+0100",
+  "kicad_version": "9.0.3",
+  "source": "MWGEN-G1.kicad_pcb",
+  "unconnected_items_count": 499,
+  "violation_counts_by_type": {
+    "clearance": 503,
+    "copper_edge_clearance": 45,
+    "courtyards_overlap": 32,
+    "drill_out_of_range": 9,
+    "footprint_type_mismatch": 1,
+    "hole_to_hole": 199,
+    "malformed_courtyard": 6,
+    "padstack": 15,
+    "shorting_items": 6,
+    "silk_over_copper": 113,
+    "silk_overlap": 199,
+    "solder_mask_bridge": 16
+  },
+  "violations": [
+    {
+      "description": "Items shorting two nets (nets /Clock reference/Input Clocks/REFIN_GND and /Clock reference/Input Clocks/REFIN)",
+      "items": [
+        {
+          "description": "Pad 1 [/Clock reference/Input Clocks/REFIN_GND] of D503 on F.Cu",
+          "pos": {
+            "x": 141.3445,
+            "y": 90.6395
+          },
+          "uuid": "3773d2e3-d3ec-49d0-991a-2690d20c1cf9"
+        },
+        {
+          "description": "Pad 2 [/Clock reference/Input Clocks/REFIN] of R204 on F.Cu",
+          "pos": {
+            "x": 139.86,
+            "y": 91.999114
+          },
+          "uuid": "6d576819-e873-4ce5-ac4b-9aa9982e76b8"
+        }
+      ],
+      "severity": "error",
+      "type": "shorting_items"
+    },
+    {
+      "description": "Items shorting two nets (nets /Clock reference/Input Clocks/REFIN_GND and /Clock reference/Input Clocks/REFIN)",
+      "items": [
+        {
+          "description": "Pad 1 [/Clock reference/Input Clocks/REFIN_GND] of D503 on F.Cu",
+          "pos": {
+            "x": 141.3445,
+            "y": 90.6395
+          },
+          "uuid": "3773d2e3-d3ec-49d0-991a-2690d20c1cf9"
+        },
+        {
+          "description": "Pad 2 [/Clock reference/Input Clocks/REFIN] of C205 on F.Cu",
+          "pos": {
+            "x": 141.45,
+            "y": 91.999114
+          },
+          "uuid": "72424159-2b6c-4548-a14c-2460a4162b38"
+        }
+      ],
+      "severity": "error",
+      "type": "shorting_items"
+    },
+    {
+      "description": "Items shorting two nets (nets /Clock reference/Input Clocks/REFIN_GND and Net-(D202-Pad3))",
+      "items": [
+        {
+          "description": "Pad 1 [/Clock reference/Input Clocks/REFIN_GND] of D503 on F.Cu",
+          "pos": {
+            "x": 141.3445,
+            "y": 90.6395
+          },
+          "uuid": "3773d2e3-d3ec-49d0-991a-2690d20c1cf9"
+        },
+        {
+          "description": "Pad 3 [Net-(D202-Pad3)] of D203 on F.Cu",
+          "pos": {
+            "x": 141.7725,
+            "y": 89.499114
+          },
+          "uuid": "f459bda9-d5c6-4c9e-8ce6-fbafac92f9e2"
+        }
+      ],
+      "severity": "error",
+      "type": "shorting_items"
+    },
+    {
+      "description": "Items shorting two nets (nets /Clock reference/Input Clocks/REFIN_GND and Net-(D202-Pad3))",
+      "items": [
+        {
+          "description": "Pad 1 [/Clock reference/Input Clocks/REFIN_GND] of D503 on F.Cu",
+          "pos": {
+            "x": 141.3445,
+            "y": 90.6395
+          },
+          "uuid": "3773d2e3-d3ec-49d0-991a-2690d20c1cf9"
+        },
+        {
+          "description": "Pad 3 [Net-(D202-Pad3)] of D202 on F.Cu",
+          "pos": {
+            "x": 139.7975,
+            "y": 89.499114
+          },
+          "uuid": "50d46e95-213a-4658-bc47-8cc7a92b70aa"
+        }
+      ],
+      "severity": "error",
+      "type": "shorting_items"
+    },
+    {
+      "description": "Items shorting two nets (nets GND and /Clock reference/REFOUT_SEC)",
+      "items": [
+        {
+          "description": "Pad 2 [GND] of D503 on F.Cu",
+          "pos": {
+            "x": 145.3445,
+            "y": 90.6395
+          },
+          "uuid": "84a5631a-b0e9-46da-ba84-f25329ac322d"
+        },
+        {
+          "description": "Pad 1 [/Clock reference/REFOUT_SEC] of D203 on F.Cu",
+          "pos": {
+            "x": 143.6475,
+            "y": 90.449114
+          },
+          "uuid": "59b6fa9c-575a-474e-a476-444b67bbadc3"
+        }
+      ],
+      "severity": "error",
+      "type": "shorting_items"
+    },
+    {
+      "description": "Items shorting two nets (nets GND and Net-(FB204-Pad1))",
+      "items": [
+        {
+          "description": "Pad 1 [GND] of J206 on F.Cu",
+          "pos": {
+            "x": 162.55,
+            "y": 79.1
+          },
+          "uuid": "70525157-be73-4201-b4a5-9e9f3638f374"
+        },
+        {
+          "description": "Pad 1 [Net-(FB204-Pad1)] of FB204 on F.Cu",
+          "pos": {
+            "x": 161.675,
+            "y": 79.1
+          },
+          "uuid": "ca223351-ad32-4410-a510-f510e257222c"
+        }
+      ],
+      "severity": "error",
+      "type": "shorting_items"
+    }
+  ]
+}
