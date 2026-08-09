@@ -758,6 +758,13 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     if socket.send(Message::Text(info.into())).await.is_err() {
         return;
     }
+    // Subscribe BEFORE snapshotting the backlog. The other order has a hole:
+    // a terminal failure landing between the snapshot and the subscribe would
+    // be in neither (the snapshot predates it, the broadcast preceded the
+    // subscription), and this socket would never learn the session died. With
+    // the subscription first, any such event is in the snapshot, in the
+    // buffered broadcast, or both (a duplicate Error is idempotent).
+    let mut rx = shared.tx.subscribe();
     // Replay the session's server-held history right after the identity frame:
     // faults are drained into exactly one broadcast frame each, so without
     // this a client that reloads mid-session would show an empty fault log
@@ -772,7 +779,6 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     {
         return;
     }
-    let mut rx = shared.tx.subscribe();
     let mut replaced_rx = shared.replaced.subscribe();
     // A socket attached to an already-replaced session closes immediately.
     if *replaced_rx.borrow() {
@@ -838,6 +844,10 @@ mod rate_honesty_tests {
         sim_time: f64,
         cost: f64,
         controls: SolverControls,
+        /// Steps actually taken, observable from the test after the engine
+        /// moves into the loop; proves a "responsiveness while grinding"
+        /// window really contained a grinding step.
+        stepped: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl Engine for SlowEngine {
@@ -858,6 +868,8 @@ mod rate_honesty_tests {
         fn step(&mut self, dt: f64) -> SimFrame {
             std::thread::sleep(std::time::Duration::from_secs_f64(dt * self.cost));
             self.sim_time += dt;
+            self.stepped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             SimFrame {
                 t: self.sim_time,
                 ..Default::default()
@@ -930,6 +942,7 @@ mod rate_honesty_tests {
                 sim_time: 0.0,
                 cost: 5.0,
                 controls: SolverControls::default(),
+                stepped: Default::default(),
             },
             2.0,
         )
@@ -950,6 +963,274 @@ mod rate_honesty_tests {
         );
     }
 
+    /// Wedge regression (the lily58 corpus hang, defect 2): one session whose
+    /// step grinds for a second at a time must not stall the rest of the
+    /// runtime. The CURRENT-THREAD flavor is deliberate: it is the
+    /// deterministic stand-in for the production failure, where the runtime
+    /// worker stuck inside `engine.step` was the one holding tokio's I/O +
+    /// timer driver, so every page load and websocket on the whole server
+    /// timed out. With the step inlined on the runtime (the old code), this
+    /// test's timers freeze for the full step and the asserted latency blows
+    /// past the bound (measured pre-fix: ~1 s); with the step on the blocking
+    /// pool they keep firing on time.
+    #[tokio::test]
+    async fn a_grinding_step_does_not_stall_the_runtime() {
+        let (tx, _rx) = broadcast::channel::<String>(1024);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ClientMessage>(8);
+        let shared = Arc::new(Shared {
+            tx: tx.clone(),
+            cmd: cmd_tx.clone(),
+            board_info_json: Mutex::new(String::new()),
+            replaced: tokio::sync::watch::channel(false).0,
+            backlog: std::sync::Mutex::new(SessionBacklog::default()),
+        });
+        // Each ~33 ms frame step burns ~1 s of wall time (cost 30x): the
+        // shape of a solver grinding its retry ladder.
+        let stepped: Arc<std::sync::atomic::AtomicUsize> = Default::default();
+        let task = tokio::spawn(sim_loop(
+            Box::new(SlowEngine {
+                sim_time: 0.0,
+                cost: 30.0,
+                controls: SolverControls::default(),
+                stepped: stepped.clone(),
+            }),
+            "grind".into(),
+            tx,
+            cmd_rx,
+            shared,
+        ));
+        cmd_tx.send(ClientMessage::Play).await.unwrap();
+        // While the engine grinds, short timers on the same runtime must keep
+        // firing on schedule. Track the worst observed latency of a 20 ms
+        // sleep over ~1.5 s of wall time (covering at least one full step).
+        let mut worst = std::time::Duration::ZERO;
+        let t_end = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        while std::time::Instant::now() < t_end {
+            let t0 = std::time::Instant::now();
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            worst = worst.max(t0.elapsed());
+        }
+        task.abort();
+        // The latency bound is only evidence if a grinding step actually ran
+        // inside the window; a loop that never stepped would pass vacuously.
+        assert!(
+            stepped.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+            "the engine never stepped: this run measured nothing"
+        );
+        assert!(
+            worst < std::time::Duration::from_millis(400),
+            "a 20 ms timer stalled {worst:?} while the engine stepped: the sim loop is \
+             blocking the runtime again"
+        );
+    }
+
+    /// An engine whose analog solve dies permanently after the first step,
+    /// reporting it the way [`Engine::analog_failure`] contracts.
+    struct DeadSolveEngine {
+        sim_time: f64,
+        steps: u32,
+        controls: SolverControls,
+        /// Flipped by `reset()`: the engine is healthy afterwards, so the
+        /// test can prove Reset actually reopens the session (the latch
+        /// lifecycle), not just that the failure fired once.
+        healed: bool,
+    }
+
+    impl Engine for DeadSolveEngine {
+        fn board_info(&self) -> BoardInfo {
+            BoardInfo {
+                name: "dead".into(),
+                board_url: String::new(),
+                num_components: 0,
+                num_nets: 0,
+                nets: Vec::new(),
+                component_kinds: Default::default(),
+                mcus: Vec::new(),
+                power_supplies: Default::default(),
+                peripherals: Default::default(),
+                shorts: None,
+            }
+        }
+        fn step(&mut self, dt: f64) -> SimFrame {
+            self.steps += 1;
+            self.sim_time += dt;
+            SimFrame {
+                t: self.sim_time,
+                ..Default::default()
+            }
+        }
+        fn reset(&mut self) {
+            self.steps = 0;
+            self.sim_time = 0.0;
+            self.healed = true;
+        }
+        fn set_controls(&mut self, controls: SolverControls) {
+            self.controls = controls;
+        }
+        fn controls(&self) -> SolverControls {
+            self.controls.clone()
+        }
+        fn serial(&mut self, _mcu: &str, _data: &[u8]) {}
+        fn set_input(&mut self, _source: &str, _value: f64) {}
+        fn analog_failure(&self) -> Option<String> {
+            (!self.healed && self.steps >= 1)
+                .then(|| "Newton failed at t=0 even at dt_min".to_string())
+        }
+    }
+
+    /// Session-lifecycle regression (defect 2's second half): a live session
+    /// whose analog solve is irrecoverably failing must stop stepping and put
+    /// the reason on the wire, instead of grinding the dead solve forever
+    /// while clients watch a frozen clock. Two-sided: without the
+    /// `analog_failure` check in the sim loop, no Error arrives and frames
+    /// keep flowing, so both assertions fail.
+    #[tokio::test]
+    async fn a_dead_analog_solve_stops_the_session_with_the_reason() {
+        let (tx, mut rx) = broadcast::channel::<String>(1024);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ClientMessage>(8);
+        let shared = Arc::new(Shared {
+            tx: tx.clone(),
+            cmd: cmd_tx.clone(),
+            board_info_json: Mutex::new(String::new()),
+            replaced: tokio::sync::watch::channel(false).0,
+            backlog: std::sync::Mutex::new(SessionBacklog::default()),
+        });
+        let task = tokio::spawn(sim_loop(
+            Box::new(DeadSolveEngine {
+                sim_time: 0.0,
+                steps: 0,
+                controls: SolverControls::default(),
+                healed: false,
+            }),
+            "dead".into(),
+            tx,
+            cmd_rx,
+            shared.clone(),
+        ));
+        cmd_tx.send(ClientMessage::Play).await.unwrap();
+        // Expect the honest stop: an Error naming the failure, then silence
+        // on the frame stream (running was forced false).
+        let mut saw_error = false;
+        let mut frames_after_error = 0u32;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            let timeout = tokio::time::sleep_until(deadline);
+            tokio::select! {
+                _ = timeout => break,
+                msg = rx.recv() => match msg {
+                    Ok(json) => match serde_json::from_str::<ServerMessage>(&json) {
+                        Ok(ServerMessage::Error { message }) => {
+                            assert!(
+                                message.contains("live simulation stopped")
+                                    && message.contains("Newton failed at t=0"),
+                                "the stop must carry the engine's own reason, got: {message}"
+                            );
+                            saw_error = true;
+                        }
+                        Ok(ServerMessage::SimFrame(_)) if saw_error => frames_after_error += 1,
+                        _ => {}
+                    },
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+            }
+        }
+        assert!(
+            saw_error,
+            "a permanently failing analog solve must put an Error on the wire"
+        );
+        assert_eq!(
+            frames_after_error, 0,
+            "the session must stop stepping once the solve is declared dead"
+        );
+        // Late-subscriber honesty: the reason is also in the backlog, so a
+        // client that connects (or reloads) AFTER the failure still learns
+        // why the sim is stopped; the broadcast alone is dropped when nobody
+        // is subscribed at that instant.
+        let fatal = shared.backlog.lock().expect("backlog lock").fatal.clone();
+        assert!(
+            fatal.is_some_and(|f| f.contains("Newton failed at t=0")),
+            "the terminal failure must be recorded for replay to late subscribers"
+        );
+
+        // The fatal latch: Play on a dead session must NOT step again (it
+        // re-broadcasts the reason instead of re-grinding the dead solve).
+        cmd_tx.send(ClientMessage::Play).await.unwrap();
+        let mut errors_after_replay = 0u32;
+        let mut frames_after_replay = 0u32;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        while tokio::time::Instant::now() < deadline {
+            let timeout = tokio::time::sleep_until(deadline);
+            tokio::select! {
+                _ = timeout => break,
+                msg = rx.recv() => match msg {
+                    Ok(json) => match serde_json::from_str::<ServerMessage>(&json) {
+                        Ok(ServerMessage::Error { .. }) => errors_after_replay += 1,
+                        Ok(ServerMessage::SimFrame(_)) => frames_after_replay += 1,
+                        _ => {}
+                    },
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+            }
+        }
+        assert!(
+            errors_after_replay >= 1,
+            "Play on a fatal session must re-broadcast the reason \
+             (frames_after_replay={frames_after_replay})"
+        );
+        assert_eq!(
+            frames_after_replay, 0,
+            "Play on a fatal session must not step the dead solve again"
+        );
+
+        // Reset clears the latch (the engine heals in this fixture): the
+        // refreshed backlog is broadcast as the acknowledgement that lifts
+        // the banner, and Play flows frames again.
+        cmd_tx.send(ClientMessage::Reset).await.unwrap();
+        cmd_tx.send(ClientMessage::Play).await.unwrap();
+        let mut saw_cleared_backlog = false;
+        let mut frames_after_reset = 0u32;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            let timeout = tokio::time::sleep_until(deadline);
+            tokio::select! {
+                _ = timeout => break,
+                msg = rx.recv() => match msg {
+                    Ok(json) => match serde_json::from_str::<ServerMessage>(&json) {
+                        Ok(ServerMessage::Backlog(b)) => {
+                            if b.fatal.is_none() {
+                                saw_cleared_backlog = true;
+                            }
+                        }
+                        Ok(ServerMessage::SimFrame(_)) => {
+                            frames_after_reset += 1;
+                            if frames_after_reset >= 2 && saw_cleared_backlog {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    },
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+            }
+        }
+        assert!(
+            saw_cleared_backlog,
+            "Reset must broadcast the refreshed backlog (the banner-lift acknowledgement)"
+        );
+        assert!(
+            frames_after_reset >= 1,
+            "after Reset heals the engine, Play must step again"
+        );
+        assert!(
+            shared.backlog.lock().expect("backlog lock").fatal.is_none(),
+            "Reset must clear the recorded terminal failure"
+        );
+        task.abort();
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn fast_engine_is_not_capped_and_reports_near_requested() {
         // Near-zero cost: the loop holds the requested 1.0x, and the reported
@@ -959,6 +1240,7 @@ mod rate_honesty_tests {
                 sim_time: 0.0,
                 cost: 0.01,
                 controls: SolverControls::default(),
+                stepped: Default::default(),
             },
             1.5,
         )
@@ -983,6 +1265,54 @@ fn named_board_info(engine: &dyn Engine, wire_name: &str) -> protocol::BoardInfo
     info
 }
 
+/// One engine step, run on the blocking pool.
+///
+/// `Engine::step` is CPU-bound solver work of UNBOUNDED duration: a board
+/// whose analog solve is struggling grinds the retry ladder for minutes per
+/// step. Run inline on a runtime worker, such a step doesn't just occupy one
+/// worker: the worker that currently holds tokio's I/O + timer driver never
+/// parks, so no thread polls the reactor and the WHOLE server stops answering
+/// (measured on the lily58 corpus board: every page load and websocket timed
+/// out while 7 of 8 workers sat idle). The blocking pool is where this work
+/// belongs; it also puts an await point under the step, so a session
+/// replacement's `task.abort()` ENDS THE SESSION mid-step (sockets close, the
+/// new session takes over) instead of waiting the step out. The orphaned
+/// blocking task itself cannot be interrupted: it runs its current step to
+/// completion in the background and drops the engine when it returns, so a
+/// replaced diverging solve costs at most one in-flight step of background
+/// CPU, exactly the bound the old inline form had, without its wedge.
+///
+/// Returns `None` when the step panicked (the engine is gone); the caller
+/// must end the session honestly.
+async fn step_on_blocking_pool(
+    engine: Box<dyn Engine>,
+    dt: f64,
+) -> Option<(Box<dyn Engine>, SimFrame)> {
+    tokio::task::spawn_blocking(move || {
+        let mut engine = engine;
+        let frame = engine.step(dt);
+        (engine, frame)
+    })
+    .await
+    .ok()
+}
+
+/// The honest end of a session whose engine panicked mid-step.
+const ENGINE_PANIC_REASON: &str = "the simulation engine crashed while stepping; this session \
+     has ended (relaunch the board to start a new one)";
+
+/// Terminal-failure bookkeeping: put the reason on the wire for anyone
+/// listening NOW, and into the session backlog for anyone who connects (or
+/// reloads) LATER; the broadcast alone is dropped when no receiver is
+/// subscribed at that instant, which is exactly when a page reload is in
+/// flight.
+fn end_session_fatally(shared: &Shared, broadcast: &impl Fn(&ServerMessage), reason: &str) {
+    shared.backlog.lock().expect("backlog lock").fatal = Some(reason.to_string());
+    broadcast(&ServerMessage::Error {
+        message: reason.to_string(),
+    });
+}
+
 async fn sim_loop(
     mut engine: Box<dyn Engine>,
     wire_name: String,
@@ -992,6 +1322,11 @@ async fn sim_loop(
 ) {
     let mut running = false;
     let mut speed = 1.0f64;
+    // Latched once the analog solve is declared irrecoverable. While set,
+    // Play/Step refuse (re-broadcasting the reason) instead of launching
+    // another unbounded solve of a circuit already known to be dead; Reset
+    // clears it together with the engine's own failure streak.
+    let mut fatal: Option<String> = None;
     // Last simulation time seen from the engine, so the Status broadcast after
     // a command reports the real clock instead of resetting the UI to 0.0.
     let mut sim_time = 0.0f64;
@@ -1032,12 +1367,26 @@ async fn sim_loop(
                     // slower, and each one carries real simulated time.
                     let step_dt = (frame_dt * paced).max(engine.min_step_dt());
                     let step_started = std::time::Instant::now();
-                    let mut frame = engine.step(step_dt);
+                    // On the blocking pool, never inline: an inline step of
+                    // unbounded solve time wedges the runtime's I/O driver and
+                    // with it the whole server (see `step_on_blocking_pool`).
+                    let Some((stepped, mut frame)) =
+                        step_on_blocking_pool(engine, step_dt).await
+                    else {
+                        end_session_fatally(&shared, &broadcast_msg, ENGINE_PANIC_REASON);
+                        return;
+                    };
+                    engine = stepped;
+                    // Account the DELIVERED sim time, not the requested step:
+                    // a live step that ended early at the dead-solve abort
+                    // streak delivered a fraction of `step_dt`, and crediting
+                    // the request would overstate the terminal frame's rate.
+                    let delivered_dt = (frame.t - sim_time).max(0.0);
                     meter.record(
                         loop_started.elapsed().as_secs_f64(),
                         frame.t,
                         step_started.elapsed().as_secs_f64(),
-                        step_dt,
+                        delivered_dt,
                     );
                     // The wire carries BOTH numbers: the measured achieved
                     // rate (clamped to the paced factor: tick pacing bounds
@@ -1054,6 +1403,22 @@ async fn sim_loop(
                     // still be in the backlog a later subscriber replays.
                     shared.record_faults(&frame);
                     broadcast_msg(&ServerMessage::SimFrame(frame));
+                    // An irrecoverably failing analog solve must STOP this
+                    // session with the reason on the wire. Left running, it
+                    // grinds the dead solve at 100% CPU forever while the
+                    // client watches a clock that never advances; that is the
+                    // dishonest outcome. Pause (Reset clears the streak, a
+                    // relaunch replaces the session), and say why.
+                    if let Some(reason) = engine.analog_failure() {
+                        running = false;
+                        meter.clear();
+                        let message = format!(
+                            "live simulation stopped: {reason}. Press reset to \
+                             retry, or fix the board/model and relaunch."
+                        );
+                        fatal = Some(message.clone());
+                        end_session_fatally(&shared, &broadcast_msg, &message);
+                    }
                     broadcast_msg(&ServerMessage::Status(Status {
                         running, sim_time, requested_factor: speed,
                         options: engine.controls(),
@@ -1068,14 +1433,20 @@ async fn sim_loop(
                     // and stale pre-pause samples must not shape the first
                     // post-resume ceiling.
                     ClientMessage::Play => {
-                        running = true;
-                        meter.clear();
+                        if let Some(reason) = &fatal {
+                            broadcast_msg(&ServerMessage::Error {
+                                message: reason.clone(),
+                            });
+                        } else {
+                            running = true;
+                            meter.clear();
+                        }
                     }
                     ClientMessage::Pause => {
                         running = false;
                         meter.clear();
                     }
-                    ClientMessage::Step { dt } => {
+                    ClientMessage::Step { dt } if fatal.is_none() => {
                         // Clamp the client-supplied step like SetSpeed clamps
                         // factor: an unbounded dt (e.g. `1e9`) is ~1e13 chunks
                         // that the single sim_loop task runs synchronously,
@@ -1083,14 +1454,26 @@ async fn sim_loop(
                         // milliseconds; 1 s is already a generous ceiling.
                         let step_dt = if dt > 0.0 { dt.min(1.0) } else { frame_dt };
                         let step_started = std::time::Instant::now();
-                        let mut frame = engine.step(step_dt);
+                        // Blocking pool for the same reason as the ticker's
+                        // step: solve time is unbounded and must never sit on
+                        // a runtime worker (see `step_on_blocking_pool`).
+                        let Some((stepped, mut frame)) =
+                            step_on_blocking_pool(engine, step_dt).await
+                        else {
+                            end_session_fatally(&shared, &broadcast_msg, ENGINE_PANIC_REASON);
+                            return;
+                        };
+                        engine = stepped;
                         // A manual step has no continuous rate to report; the
                         // honest per-step number is what THIS step delivered
-                        // (sim seconds per wall second of the solve). It does
-                        // not feed the pacing meter: the sim is paused.
+                        // (sim seconds per wall second of the solve), which is
+                        // NOT the requested dt when the step ended early at
+                        // the dead-solve abort streak. It does not feed the
+                        // pacing meter: the sim is paused.
                         let step_wall = step_started.elapsed().as_secs_f64();
+                        let delivered_dt = (frame.t - sim_time).max(0.0);
                         frame.realtime_factor = if step_wall > 0.0 {
-                            step_dt / step_wall
+                            delivered_dt / step_wall
                         } else {
                             0.0
                         };
@@ -1098,16 +1481,52 @@ async fn sim_loop(
                         sim_time = frame.t;
                         shared.record_faults(&frame);
                         broadcast_msg(&ServerMessage::SimFrame(frame));
+                        // Same honesty as the ticker path: a manual step of a
+                        // dead solve reports why nothing will ever advance.
+                        if let Some(reason) = engine.analog_failure() {
+                            running = false;
+                            meter.clear();
+                            let message = format!(
+                                "live simulation stopped: {reason}. Press reset to \
+                                 retry, or fix the board/model and relaunch."
+                            );
+                            fatal = Some(message.clone());
+                            end_session_fatally(&shared, &broadcast_msg, &message);
+                        }
+                    }
+                    ClientMessage::Step { .. } => {
+                        // Fatal latch: stepping a solve already declared dead
+                        // just re-grinds it; repeat the reason instead.
+                        if let Some(reason) = &fatal {
+                            broadcast_msg(&ServerMessage::Error {
+                                message: reason.clone(),
+                            });
+                        }
                     }
                     ClientMessage::Reset => {
                         engine.reset();
                         running = false;
                         sim_time = 0.0;
                         meter.clear();
+                        // The engine's failure streak was cleared by reset();
+                        // clear the session's latch with it so Play works.
+                        fatal = None;
                         // A reset starts the fault story over server-side too,
                         // or the next subscriber would replay pre-reset faults
-                        // as if they belonged to the fresh run.
-                        shared.backlog.lock().expect("backlog lock").faults.clear();
+                        // as if they belonged to the fresh run. Same for the
+                        // terminal-failure marker: `engine.reset()` cleared the
+                        // abort streak, so the failure story starts over.
+                        let cleared = {
+                            let mut backlog = shared.backlog.lock().expect("backlog lock");
+                            backlog.faults.clear();
+                            backlog.fatal = None;
+                            backlog.clone()
+                        };
+                        // Broadcast the refreshed (empty) backlog: every
+                        // connected client lifts its failure banner on THIS
+                        // acknowledgement, not on optimistically having sent
+                        // a Reset a dead loop may never process.
+                        broadcast_msg(&ServerMessage::Backlog(cleared));
                     }
                     ClientMessage::SetSpeed { factor } => {
                         speed = factor.clamp(0.001, 1000.0);

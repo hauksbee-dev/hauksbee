@@ -7,9 +7,10 @@
 //! sense resistors into the [`Circuit`] once, and the scheduler calls
 //! [`BehavioralDevice::update`] between solver chunks to recompute each leg's
 //! source value from the previous chunk's solved node voltages and branch
-//! currents. It does NOT add new device kinds to the inner Newton loop, every
+//! currents. It adds no new device kinds to the inner Newton loop: every
 //! behaviour is expressed in terms of the existing `Vsource` / `Isource` /
-//! `Resistor` primitives, so the partitioned solver is untouched.
+//! `Resistor` / `Behavioral` (B-source) primitives the solver already stamps,
+//! so the partitioned solver is untouched.
 //!
 //! What each declarative fact becomes:
 //!
@@ -24,9 +25,15 @@
 //!   on the input pin that draws the reflected input current
 //!   `Vout*Iout/(eff*Vin)`. Regulation, output-current foldback and the
 //!   programmable input-current limit are recomputed each chunk.
-//! - a **law** is a controllable `Isource` (current law) or `Vsource`+R
-//!   (voltage law) whose value is the `evalexpr` expression evaluated against
-//!   the bound pin voltages / state / params each chunk.
+//! - a **law** whose expression is a pure function of pin voltages and params
+//!   (a current law with no `only_in_state` gate) is stamped as a
+//!   solver-implicit `Device::Behavioral`: Newton evaluates it at every
+//!   iterate, so the law's conductance is in the Jacobian and a clamp on a
+//!   floating net cannot blow the chunk-to-chunk relaxation up (see
+//!   [`LawStamp`]). Every other law (voltage laws, state-gated laws,
+//!   FSM-context expressions) is a controllable `Isource` (current law) or
+//!   `Vsource`+R (voltage law) whose value is the `evalexpr` expression
+//!   evaluated against the bound pin voltages / state / params each chunk.
 //!
 //! The FSM advances once per chunk: its guards are `evalexpr` booleans over the
 //! same context. Per-state pin overrides retune the open-drain / drive legs.
@@ -219,15 +226,185 @@ struct LawLeg {
     law: Law,
     /// Compiled expression (parsed once at stamp time).
     program: EvalNode<DefaultNumericTypes>,
-    /// The controllable source device (Isource for current, Vsource for voltage).
-    source: DeviceId,
-    /// For a Voltage law, its series output resistor and that resistor's
-    /// on-resistance (ohms). Deactivating an `only_in_state` voltage law must
-    /// tri-state this resistor (OFF_OHMS) to RELEASE the pin, zeroing the
-    /// Vsource alone would clamp the pin to 0 V through the stiff series R (a
-    /// near-short). A Current law releases correctly by zeroing its Isource, so
-    /// it carries `None` here.
-    series_r: Option<(DeviceId, f64)>,
+    /// How the law reached the circuit (implicit B-source vs chunk-updated
+    /// source); see [`LawStamp`].
+    stamp: LawStamp,
+}
+
+/// How a law is realised in the circuit.
+///
+/// The IMPLICIT form exists because the chunk-updated form is an explicit
+/// relaxation with no feedback inside the solve, and that loop is unstable on
+/// a high-impedance net. Measured on the lily58 Pro V2 corpus board: the
+/// USBLC6-2 steering-diode clamp laws sit on the USB data nets, which float
+/// (connector skipped, no MCU on them). Chunk n's constant `Isource` drives
+/// the gmin-anchored net to `I/gmin` volts, chunk n+1 evaluates the clamp law
+/// AT that voltage and writes a current ~1e12x larger, alternating sign each
+/// chunk (1.97 A -> 1.97e12 -> 1.98e24 -> ... -> inf), and every later Newton
+/// solve fails on the poisoned state. Stamping the SAME expression as a
+/// solver-side behavioral device closes the loop inside Newton (the law's
+/// conductance is in the Jacobian), which is unconditionally stable here and
+/// is simply the correct physics: the clamp conducts exactly when the solved
+/// voltages say it conducts.
+#[derive(Debug, Clone)]
+enum LawStamp {
+    /// Stamped as a solver-implicit [`Device::Behavioral`]: Newton evaluates
+    /// the expression at every iterate, nothing to update per chunk. Taken by
+    /// every current law whose expression is a pure function of pin voltages
+    /// and params (no FSM state, no time, no `only_in_state` gating).
+    Implicit,
+    /// A chunk-updated controllable source (Isource for current, Vsource for
+    /// voltage): the value is re-evaluated between chunks from the previous
+    /// chunk's solved voltages. Kept for laws the implicit form cannot
+    /// express (state-gated laws, FSM-context expressions).
+    Runtime {
+        /// The controllable source device.
+        source: DeviceId,
+        /// For a Voltage law, its series output resistor and that resistor's
+        /// on-resistance (ohms). Deactivating an `only_in_state` voltage law
+        /// must tri-state this resistor (OFF_OHMS) to RELEASE the pin,
+        /// zeroing the Vsource alone would clamp the pin to 0 V through the
+        /// stiff series R (a near-short). A Current law releases correctly by
+        /// zeroing its Isource, so it carries `None` here.
+        series_r: Option<(DeviceId, f64)>,
+    },
+}
+
+/// Try to compile a law expression into the solver's canonical behavioral
+/// form: every numeric param folds to a literal and every `v_<role>` becomes
+/// a `__d{k}` voltage dependency, in THAT order, because the runtime context
+/// sets params after pin voltages so a param sharing a `v_<role>` name shadows
+/// the pin (see `build_context`); the two forms must resolve one identifier
+/// the same way. Returns `None` when the expression reaches outside that
+/// vocabulary (FSM state booleans, `t_in_state`, an unconnected pin's
+/// voltage), in which case the caller keeps the chunk-updated runtime form,
+/// which is the only form that can read FSM context. `t` also refuses: the
+/// runtime evaluates it against the GLOBAL sim clock, while a B-source `time`
+/// is the transient's chunk-local clock (restarting at 0 every chunk), so a
+/// time-varying law cannot be expressed implicitly without changing what it
+/// computes.
+fn compile_law_implicit(
+    expr: &str,
+    role_nodes: &BTreeMap<String, NodeId>,
+    params: &Params,
+) -> Option<(hauksbee_ir::CompiledExpr, Vec<hauksbee_ir::BDep>)> {
+    let mut out = String::with_capacity(expr.len());
+    let mut deps: Vec<hauksbee_ir::BDep> = Vec::new();
+    // role -> already-assigned dependency slot, so one pin read twice shares
+    // a slot (the FD Jacobian probes each slot; duplicates would double work
+    // and, worse, decouple the two reads of the same voltage).
+    let mut slots: BTreeMap<String, usize> = BTreeMap::new();
+    let bytes = expr.as_bytes();
+    let is_ident_start = |c: u8| c.is_ascii_alphabetic() || c == b'_';
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if !is_ident_start(c) {
+            out.push(c as char);
+            i += 1;
+            continue;
+        }
+        // An `e`/`E` directly after a digit or '.' is a numeric exponent
+        // (`1e-6`), not an identifier: copy the exponent through verbatim.
+        if (c == b'e' || c == b'E')
+            && i > 0
+            && (bytes[i - 1].is_ascii_digit() || bytes[i - 1] == b'.')
+        {
+            let mut j = i + 1;
+            if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j].is_ascii_digit() {
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                out.push_str(&expr[i..j]);
+                i = j;
+                continue;
+            }
+        }
+        // Read a (possibly namespaced) identifier: `ident(::ident)*`.
+        let start = i;
+        while i < bytes.len() && is_ident(bytes[i]) {
+            i += 1;
+        }
+        while i + 1 < bytes.len() && bytes[i] == b':' && bytes[i + 1] == b':' {
+            i += 2;
+            while i < bytes.len() && is_ident(bytes[i]) {
+                i += 1;
+            }
+        }
+        let token = &expr[start..i];
+        // A function name (namespaced, or followed by an open paren) passes
+        // through: which functions exist is evalexpr's business, and the
+        // probe evaluation below is the gate that actually decides. A
+        // hand-maintained allowlist was tried and got the vocabulary wrong in
+        // both directions (rejecting valid `math::` builtins, admitting
+        // misspelled namespaces).
+        let next_nonspace = bytes[i..].iter().find(|b| !b.is_ascii_whitespace());
+        if token.contains("::") || next_nonspace == Some(&b'(') {
+            out.push_str(token);
+            continue;
+        }
+        // Params FIRST: the runtime context sets them after pin voltages, so
+        // a param named like a `v_<role>` shadows the pin there and must fold
+        // to its literal here too. The runtime-owned names are the exception:
+        // `t`, `t_in_state` and `state_<name>` are set AFTER params in
+        // `build_context`, so a param spelled like one of them never wins at
+        // runtime and must not fold here; those tokens fall through to the
+        // refusal below, keeping such a law on the runtime path it actually
+        // depends on.
+        let runtime_owned =
+            token == "t" || token == "time" || token == "t_in_state" || token.starts_with("state_");
+        if !runtime_owned {
+            if let Some(v) = params.0.get(token).and_then(|v| v.as_f64()) {
+                // Round-trip-exact literal, parenthesised so `1/x` stays `1/(v)`.
+                out.push_str(&format!("({v:?})"));
+                continue;
+            }
+        }
+        if let Some(role) = token.strip_prefix("v_") {
+            if let Some(&node) = role_nodes.get(role) {
+                let k = *slots.entry(role.to_string()).or_insert_with(|| {
+                    deps.push(hauksbee_ir::BDep::Volt(node));
+                    deps.len() - 1
+                });
+                out.push_str(&format!("__d{k}"));
+                continue;
+            }
+            // A voltage the binder did not connect: the runtime form treats it
+            // as an eval error (law inert); refuse the implicit form the same
+            // honest way rather than substituting a made-up 0.
+            return None;
+        }
+        // Anything else refuses. FSM context (state_<name>, t_in_state) exists
+        // only in the runtime form; `t`/`time` refuse because the runtime's
+        // clock is the GLOBAL sim time while a B-source `time` is the chunk's
+        // LOCAL transient clock, and silently swapping one for the other would
+        // change what a time-varying law computes.
+        return None;
+    }
+    let compiled = hauksbee_ir::CompiledExpr::compile(&out).ok()?;
+    // PROVE the expression evaluates FINITE before choosing the implicit
+    // path. `CompiledExpr::compile` validates variable identifiers but not
+    // function names, so an unknown/misnamespaced function (`bogus(x)`, bare
+    // `exp` where evalexpr wants `math::exp`) compiles fine and would then
+    // FAULT inside Newton at every stamp, failing the analog session; the
+    // runtime form evaluates the same malformed law to a guarded 0 A, a
+    // contract the CI gate pins (`hauksbee-ci exit3_reachability`: a
+    // `v_in / sense_ohms` law with a 0-ohm sense resistor folds to a
+    // division by zero and must contribute 0 A, never an aborted run). A
+    // non-finite probe VALUE is the same hazard as a structural fault, so
+    // both refuse: `0.0 / (0.0)` is NaN at the probe exactly because it is
+    // NaN at every iterate. The probe point (all dependencies 0, t=0) cannot
+    // certify every iterate Newton will visit, but it catches the whole
+    // folded-constant class, which is what the contract covers.
+    compiled
+        .eval(&vec![0.0; deps.len()], 0.0)
+        .ok()
+        .filter(|v| v.is_finite())?;
+    Some((compiled, deps))
 }
 
 /// One FSM transition with its guard compiled once at stamp time. Re-parsing the
@@ -571,6 +748,31 @@ impl BehavioralDevice {
                     continue;
                 }
             };
+            // Prefer the solver-implicit form for a current law that is a pure
+            // function of pin voltages / params: Newton then owns the
+            // law (its conductance is in the Jacobian), where the chunk-updated
+            // constant-source form is an explicit relaxation that diverges on
+            // high-impedance nets (see [`LawStamp`]). State-gated laws and
+            // FSM-context expressions cannot be expressed implicitly and keep
+            // the runtime form.
+            if matches!(law.kind, LawKind::Current) && law.only_in_state.is_none() {
+                if let Some((expr, deps)) = compile_law_implicit(&law.expr, role_nodes, params) {
+                    circuit.add(Device::Behavioral {
+                        name: format!("Bbeh_{reference}_{}", law.name),
+                        p: a_node,
+                        n: b_node,
+                        output: hauksbee_ir::BOutput::Current,
+                        expr,
+                        deps,
+                    });
+                    dev.laws.push(LawLeg {
+                        law: law.clone(),
+                        program,
+                        stamp: LawStamp::Implicit,
+                    });
+                    continue;
+                }
+            }
             let (source, series_r): (DeviceId, Option<(DeviceId, f64)>) = match law.kind {
                 LawKind::Current => (
                     circuit.add(Device::Isource {
@@ -603,8 +805,7 @@ impl BehavioralDevice {
             dev.laws.push(LawLeg {
                 law: law.clone(),
                 program,
-                source,
-                series_r,
+                stamp: LawStamp::Runtime { source, series_r },
             });
         }
 
@@ -660,21 +861,35 @@ impl BehavioralDevice {
         self.converter.as_ref().map(|c| c.last_iin_a)
     }
 
-    /// The current value (A) of a named current-law source, read from the
-    /// circuit (the value the runtime last wrote). `None` if no such law. Used by
-    /// the balancer-leak validation to read the leak magnitude directly.
-    pub fn law_value(&self, circuit: &Circuit, name: &str) -> Option<f64> {
+    /// The current value (A) of a named current-law source. A runtime law is
+    /// read from the circuit (the value the runtime last wrote); an implicit
+    /// law is its expression evaluated at the solved voltages `node_v`, which
+    /// is exactly the current the solver stamped. `None` if no such law. Used
+    /// by the balancer-leak validation to read the leak magnitude directly.
+    pub fn law_value(
+        &self,
+        circuit: &Circuit,
+        name: &str,
+        node_v: &dyn Fn(NodeId) -> f64,
+        t: f64,
+    ) -> Option<f64> {
         let leg = self.laws.iter().find(|l| l.law.name == name)?;
-        match circuit.devices.get(leg.source.0 as usize) {
-            Some(Device::Isource {
-                kind: SourceKind::Dc(v),
-                ..
-            })
-            | Some(Device::Vsource {
-                kind: SourceKind::Dc(v),
-                ..
-            }) => Some(*v),
-            _ => None,
+        match leg.stamp {
+            LawStamp::Implicit => {
+                let ctx = self.build_context(node_v, t);
+                eval_number(&leg.program, &ctx)
+            }
+            LawStamp::Runtime { source, .. } => match circuit.devices.get(source.0 as usize) {
+                Some(Device::Isource {
+                    kind: SourceKind::Dc(v),
+                    ..
+                })
+                | Some(Device::Vsource {
+                    kind: SourceKind::Dc(v),
+                    ..
+                }) => Some(*v),
+                _ => None,
+            },
         }
     }
 
@@ -724,6 +939,11 @@ impl BehavioralDevice {
         let ctx = self.build_context(node_v, t);
         let active = self.state().to_string();
         for leg in &self.laws {
+            // An implicit law lives inside the Newton loop as a behavioral
+            // device; there is no per-chunk source to retune.
+            let LawStamp::Runtime { source, series_r } = leg.stamp else {
+                continue;
+            };
             if let Some(req) = &leg.law.only_in_state {
                 if req != &active {
                     // Deactivate: RELEASE the pin. A voltage law tri-states its
@@ -731,16 +951,16 @@ impl BehavioralDevice {
                     // resistor on while zeroing the Vsource would clamp the pin to
                     // 0 V through the stiff series R (a near-short). A current law
                     // releases by zeroing its Isource.
-                    if let Some((r, _)) = leg.series_r {
+                    if let Some((r, _)) = series_r {
                         set_resistor_ohms(circuit, r, OFF_OHMS);
                     }
-                    set_source_dc(circuit, leg.source, 0.0);
+                    set_source_dc(circuit, source, 0.0);
                     continue;
                 }
             }
             // Active: restore the series resistor's on-resistance in case a prior
             // chunk tri-stated it.
-            if let Some((r, on)) = leg.series_r {
+            if let Some((r, on)) = series_r {
                 set_resistor_ohms(circuit, r, on);
             }
             // Guard against a non-finite law value (e.g. a divide-by-zero when a
@@ -748,7 +968,7 @@ impl BehavioralDevice {
             // blow up the solve. Clamp to 0 rather than poison the matrix.
             let val = eval_number(&leg.program, &ctx).unwrap_or(0.0);
             let val = if val.is_finite() { val } else { 0.0 };
-            set_source_dc(circuit, leg.source, val);
+            set_source_dc(circuit, source, val);
         }
 
         // 6. Input-power budget check (raises an overpower fault on overdraw).
@@ -1082,5 +1302,149 @@ fn guard_true(
         Ok(Value::Float(f)) => f != 0.0,
         Ok(Value::Int(i)) => i != 0,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roles() -> BTreeMap<String, NodeId> {
+        let mut r = BTreeMap::new();
+        r.insert("io".to_string(), NodeId(1));
+        r.insert("vbus".to_string(), NodeId(2));
+        r.insert("gnd".to_string(), NodeId::GROUND);
+        r
+    }
+
+    fn params() -> Params {
+        let mut p = Params::default();
+        p.set_f64("vt_clamp", 1.1);
+        p.set_f64("rd_clamp", 0.5);
+        p
+    }
+
+    /// The USBLC6 clamp shape compiles: pin voltages become dependency slots
+    /// (one per distinct pin), params fold to literals, and the canonical text
+    /// carries no law-local identifiers.
+    #[test]
+    fn clamp_law_compiles_to_canonical_form() {
+        let (expr, deps) = compile_law_implicit(
+            "max(0.0, (v_io - v_vbus - vt_clamp) / rd_clamp)",
+            &roles(),
+            &params(),
+        )
+        .expect("pure pin-voltage law must compile");
+        assert_eq!(deps.len(), 2, "one slot per distinct pin voltage");
+        assert!(matches!(deps[0], hauksbee_ir::BDep::Volt(NodeId(1))));
+        assert!(matches!(deps[1], hauksbee_ir::BDep::Volt(NodeId(2))));
+        assert!(expr.src().contains("__d0") && expr.src().contains("__d1"));
+        assert!(
+            expr.src().contains("(1.1)") && expr.src().contains("(0.5)"),
+            "params must fold to literals, got: {}",
+            expr.src()
+        );
+    }
+
+    /// A pin read twice shares one dependency slot.
+    #[test]
+    fn repeated_pin_reads_share_a_slot() {
+        let (_, deps) = compile_law_implicit("v_io + max(0.0, v_io - v_vbus)", &roles(), &params())
+            .expect("compiles");
+        assert_eq!(deps.len(), 2);
+    }
+
+    /// Scientific-notation literals are numbers, not identifiers: the law
+    /// stays implicit rather than silently downgrading to the runtime form.
+    #[test]
+    fn scientific_notation_is_not_an_identifier() {
+        let (expr, deps) =
+            compile_law_implicit("1e-6 * v_io + 2.5E+2", &roles(), &params()).expect("compiles");
+        assert_eq!(deps.len(), 1);
+        assert!(expr.src().contains("1e-6") && expr.src().contains("2.5E+2"));
+    }
+
+    /// Time-varying laws refuse the implicit form: the runtime's `t` is the
+    /// GLOBAL sim clock, a B-source `time` is the transient's chunk-local
+    /// clock (restarting at 0 every chunk), and swapping one for the other
+    /// would silently change what the law computes.
+    #[test]
+    fn time_varying_laws_refuse_implicit() {
+        assert!(compile_law_implicit("v_io * t", &roles(), &params()).is_none());
+        assert!(compile_law_implicit("v_io * time", &roles(), &params()).is_none());
+    }
+
+    /// A param sharing a `v_<role>` name shadows the pin voltage, exactly as
+    /// the runtime context resolves it (params are set after pin voltages).
+    #[test]
+    fn param_shadows_same_named_pin_voltage() {
+        let mut p = params();
+        p.set_f64("v_io", 42.0);
+        let (expr, deps) = compile_law_implicit("v_io + v_vbus", &roles(), &p).expect("compiles");
+        assert_eq!(deps.len(), 1, "the shadowed pin must not become a dep");
+        assert!(matches!(deps[0], hauksbee_ir::BDep::Volt(NodeId(2))));
+        assert!(
+            expr.src().contains("(42.0)"),
+            "the param value must fold, got: {}",
+            expr.src()
+        );
+    }
+
+    /// FSM context (state booleans, `t_in_state`) and unconnected pins cannot
+    /// be expressed implicitly: the compiler must refuse so the runtime form
+    /// (the only one with that context) is kept.
+    #[test]
+    fn fsm_context_and_unconnected_pins_refuse() {
+        assert!(compile_law_implicit("v_io * state_on", &roles(), &params()).is_none());
+        assert!(compile_law_implicit("v_io + t_in_state", &roles(), &params()).is_none());
+        assert!(
+            compile_law_implicit("v_nc / 2.0", &roles(), &params()).is_none(),
+            "an unconnected pin's voltage must refuse, not read as 0"
+        );
+    }
+
+    /// Runtime-owned names refuse even when a numeric param shares the name:
+    /// `build_context` sets `t`/`t_in_state`/`state_<name>` AFTER params, so
+    /// the FSM value (not the param) wins at runtime, and folding the param
+    /// would silently change what the law computes.
+    #[test]
+    fn runtime_owned_names_never_fold_from_params() {
+        let mut p = params();
+        p.set_f64("state_on", 2.0);
+        p.set_f64("t_in_state", 7.0);
+        p.set_f64("t", 3.0);
+        assert!(compile_law_implicit("v_io * state_on", &roles(), &p).is_none());
+        assert!(compile_law_implicit("v_io + t_in_state", &roles(), &p).is_none());
+        assert!(compile_law_implicit("v_io * t", &roles(), &p).is_none());
+    }
+
+    /// The probe evaluation gates the function vocabulary: an unknown or
+    /// misnamespaced function refuses the implicit path (compiled, it would
+    /// fault inside Newton at every stamp, killing the analog session, where
+    /// the runtime form evaluates the same law to a guarded 0 A), while
+    /// everything evalexpr genuinely evaluates passes, with no allowlist to
+    /// drift out of date.
+    #[test]
+    fn unknown_functions_refuse_known_ones_pass() {
+        assert!(compile_law_implicit("bogus(v_io)", &roles(), &params()).is_none());
+        assert!(compile_law_implicit("math::bogus(v_io)", &roles(), &params()).is_none());
+        // evalexpr's vocabulary is namespaced for math functions: bare `exp`
+        // does not exist and must refuse, `math::exp` must pass.
+        assert!(compile_law_implicit("exp(v_io)", &roles(), &params()).is_none());
+        assert!(compile_law_implicit("math::exp(v_io)", &roles(), &params()).is_some());
+        assert!(compile_law_implicit("max(0.0, v_io)", &roles(), &params()).is_some());
+        assert!(compile_law_implicit("min(v_io, v_vbus)", &roles(), &params()).is_some());
+    }
+
+    /// A law that probes non-finite refuses the implicit path and keeps the
+    /// runtime form's clamp-to-0-A contract (pinned by hauksbee-ci's
+    /// `an_unevaluable_behavioural_law_is_clamped_rather_than_poisoning_the_solve`):
+    /// the canonical case is a division by a parameter that folded to zero.
+    #[test]
+    fn non_finite_probe_refuses_and_keeps_the_clamp_contract() {
+        let mut p = params();
+        p.set_f64("sense_ohms", 0.0);
+        assert!(compile_law_implicit("v_io / sense_ohms", &roles(), &p).is_none());
+        assert!(compile_law_implicit("math::ln(v_io + 0.0)", &roles(), &p).is_none());
     }
 }

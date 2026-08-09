@@ -345,6 +345,13 @@ pub struct Scheduler {
     faults_pending: Vec<FaultEvent>,
     pub chunk_s: f64,
     pub opts: SolverOptions,
+    /// Stop a multi-chunk [`Scheduler::step`] early once the strict-abort
+    /// streak trips. Live sessions set this (the server ends the session on
+    /// the failure; grinding out the rest of the frame's chunks would only
+    /// delay that answer and block Pause/Reset); headless/CI runs keep the
+    /// default `false` so their failed-window record covers the whole
+    /// requested span.
+    pub stop_when_dead: bool,
     pub sim_time: f64,
     /// Sub-microsecond remainder carried between chunks. `run_micros` takes an
     /// integer microsecond count, so a chunk whose duration is not a whole
@@ -1035,6 +1042,7 @@ impl Scheduler {
             },
             faults_pending: Vec::new(),
             chunk_s: DEFAULT_CHUNK_S,
+            stop_when_dead: false,
             opts,
             sim_time: 0.0,
             micros_carry: 0.0,
@@ -2420,6 +2428,16 @@ impl Scheduler {
 
         for _ in 0..chunks {
             self.run_chunk(chunk, &mut uart);
+            // Live sessions opt in to stopping a DEAD solve mid-step: once
+            // the strict-abort streak trips, every further chunk is another
+            // full rescue ladder ground for nothing (a 30 Hz frame is ~334
+            // chunks; a manual 1 s step is 10,000), and the session cannot
+            // even process its Pause/Reset until the step returns. Headless
+            // and CI runs keep the complete march: their failed-window
+            // record over the WHOLE requested span is the product.
+            if self.stop_when_dead && self.analog_abort_tripped() {
+                break;
+            }
         }
 
         StepResult {
@@ -3048,10 +3066,13 @@ impl Scheduler {
     }
 
     /// Read the current value (A) of a named current-law on a behavioural device
-    /// (e.g. the LTC6803 balancer-leak current). `None` if absent.
+    /// (e.g. the LTC6803 balancer-leak current). `None` if absent. An implicit
+    /// law is evaluated at the last solved node voltages, which is the current
+    /// the solver stamped there.
     pub fn behavioral_law_value(&self, reference: &str, law: &str) -> Option<f64> {
         let d = self.behavioral.iter().find(|d| d.reference == reference)?;
-        d.law_value(&self.circuit, law)
+        let node_v = |n: NodeId| self.node_volts.get(n.0 as usize).copied().unwrap_or(0.0);
+        d.law_value(&self.circuit, law, &node_v, self.sim_time)
     }
 
     /// Evaluate the stress monitor over the chunk just solved.
@@ -3211,13 +3232,22 @@ impl Scheduler {
         // so every rung runs exactly as before).
         let min_rung = self.debug_force_fallback_rung.map(|m| m as u8).unwrap_or(0);
 
+        // A rung that "converged" onto a non-physical state (a node beyond the
+        // voltage sanity bound) has not rescued anything: it must not be
+        // adopted, AND it must not end the ladder, because a later, more
+        // robust rung can still produce the real answer. Checked per rung,
+        // not on the ladder's result, for exactly that reason.
+        let sane = |x: &[f64]| self.insane_node_state(x).is_none();
+
         // Rung 1: the primary integration at a bounded step.
         if min_rung <= ChunkFallbackMethod::ReducedStep as u8 {
             thermal.clear();
             if let Ok((x, diagnostics)) = self.march_chunk(chunk, reduced, seed, thermal) {
-                let method = ChunkFallbackMethod::ReducedStep;
-                let err = self.fallback_error_estimate(chunk, 1, reduced, seed, &x);
-                return Some((method, x, diagnostics, err));
+                if sane(&x) {
+                    let method = ChunkFallbackMethod::ReducedStep;
+                    let err = self.fallback_error_estimate(chunk, 1, reduced, seed, &x);
+                    return Some((method, x, diagnostics, err));
+                }
             }
         }
 
@@ -3229,9 +3259,11 @@ impl Scheduler {
         if min_rung <= ChunkFallbackMethod::BackwardEuler as u8 {
             thermal.clear();
             if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, seed, thermal) {
-                let method = ChunkFallbackMethod::BackwardEuler;
-                let err = self.fallback_error_estimate(chunk, 1, be, seed, &x);
-                return Some((method, x, diagnostics, err));
+                if sane(&x) {
+                    let method = ChunkFallbackMethod::BackwardEuler;
+                    let err = self.fallback_error_estimate(chunk, 1, be, seed, &x);
+                    return Some((method, x, diagnostics, err));
+                }
             }
         }
 
@@ -3243,9 +3275,11 @@ impl Scheduler {
         if min_rung <= ChunkFallbackMethod::ColdStartBackwardEuler as u8 {
             thermal.clear();
             if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, None, thermal) {
-                let method = ChunkFallbackMethod::ColdStartBackwardEuler;
-                let err = self.fallback_error_estimate(chunk, 1, be, None, &x);
-                return Some((method, x, diagnostics, err));
+                if sane(&x) {
+                    let method = ChunkFallbackMethod::ColdStartBackwardEuler;
+                    let err = self.fallback_error_estimate(chunk, 1, be, None, &x);
+                    return Some((method, x, diagnostics, err));
+                }
             }
         }
 
@@ -3272,6 +3306,9 @@ impl Scheduler {
         thermal.clear();
         let (x, diagnostics) =
             self.march_chunk_subdivided(chunk, 4, be, self.last_dc_seed.clone(), thermal)?;
+        if !sane(&x) {
+            return None;
+        }
         let method = ChunkFallbackMethod::SubdividedBackwardEuler;
         let err = self.fallback_error_estimate(chunk, 4, be, self.last_dc_seed.as_deref(), &x);
         Some((method, x, diagnostics, err))
@@ -3315,6 +3352,13 @@ impl Scheduler {
         for _ in 0..n {
             match self.march_chunk(sub, opts, carry.as_deref(), thermal) {
                 Ok((x, sub_diagnostics)) => {
+                    // Every quarter must be physical, not just the final one:
+                    // an insane intermediate would seed the next quarter (and
+                    // deposit its thermal integral) and could wander back to
+                    // a sane-looking endpoint, laundering the divergence.
+                    if self.insane_node_state(&x).is_some() {
+                        return None;
+                    }
                     if let Some(candidate) = sub_diagnostics.final_residual {
                         if diagnostics
                             .final_residual
@@ -3443,6 +3487,9 @@ impl Scheduler {
                 seed.map(<[f64]>::to_vec),
                 &mut scratch,
             )
+            // A companion the sanity policy would reject as a MAIN result
+            // measures nothing as a reference either.
+            .filter(|(x_ref, _)| self.insane_node_state(x_ref).is_none())
             .map(|(x_ref, _)| (x_ref, REFINED_FACTOR, REFINED_TOL_SCALE))
         };
         let companion = companion.or_else(|| {
@@ -3454,6 +3501,7 @@ impl Scheduler {
                 seed.map(<[f64]>::to_vec),
                 &mut scratch,
             )
+            .filter(|(x_ref, _)| self.insane_node_state(x_ref).is_none())
             .map(|(x_ref, _)| (x_ref, COARSE_FACTOR, COARSE_TOL_SCALE))
         })?;
         let (x_ref, richardson, tol_scale) = companion;
@@ -3475,6 +3523,39 @@ impl Scheduler {
         // the slack into `diff`, so it must widen the floor accordingly).
         let floor = (1.0 + tol_scale) * (self.opts.reltol * v_max + self.opts.vntol);
         Some(2.0 * richardson * diff + floor)
+    }
+
+    /// A node-voltage magnitude no physical board reaches. A converged solve
+    /// whose state exceeds this is a numerically consistent answer to a
+    /// question the board never asked (measured: a chunk-updated clamp law on
+    /// a floating USB net "converged" at 9.86e11 V, because 1.97 A into a
+    /// gmin-only node balances KCL exactly at I/gmin volts), and adopting it
+    /// poisons every later chunk's seed. Kilovolt-class inductive spikes and
+    /// HV supplies sit orders of magnitude below this bound, so it never bites
+    /// a real answer.
+    const NODE_VOLTAGE_SANITY_V: f64 = 1e9;
+
+    /// The first node whose solved voltage is non-finite or beyond
+    /// [`Self::NODE_VOLTAGE_SANITY_V`], with that voltage. `None` for a sane
+    /// state. Only the node block is judged: the branch entries are currents.
+    fn insane_node_state(&self, x: &[f64]) -> Option<(usize, f64)> {
+        x.iter()
+            .take(self.layout.n_nodes.min(x.len()))
+            .enumerate()
+            .find(|(_, v)| !v.is_finite() || v.abs() > Self::NODE_VOLTAGE_SANITY_V)
+            .map(|(i, &v)| (i, v))
+    }
+
+    /// The honest refusal for an insane converged state: name the worst net
+    /// and the voltage, so the failure reads as the modelling problem it is
+    /// rather than a bare "did not converge".
+    fn insane_state_reason(&self, unknown: usize, volts: f64) -> String {
+        format!(
+            "converged state is not board reality: {} at {volts:.3e} V \
+             (beyond the {:.0e} V sanity bound); refusing to adopt it",
+            hauksbee_solve::blame::name_node_unknown(&self.circuit, unknown),
+            Self::NODE_VOLTAGE_SANITY_V
+        )
     }
 
     /// Adopt a converged end state: publish node voltages and branch currents,
@@ -3518,6 +3599,20 @@ impl Scheduler {
         } else {
             self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref(), &mut thermal)
         };
+        // A "converged" state that is not board reality (a net at 1e12 V, an
+        // inf/NaN) must never be adopted: it would seed every later chunk and
+        // turn one bad answer into a diverged run. Demote it to the failure
+        // path with the net named, where the ladder/refusal machinery already
+        // tells the truth about unsolved windows.
+        let primary = match primary {
+            Ok((x, diagnostics)) => match self.insane_node_state(&x) {
+                None => Ok((x, diagnostics)),
+                Some((unknown, volts)) => {
+                    Err((self.insane_state_reason(unknown, volts), Vec::new()))
+                }
+            },
+            err => err,
+        };
         let mut failure_reason: Option<String> = None;
         let converged = match primary {
             Ok((x, diagnostics)) => {
@@ -3534,6 +3629,10 @@ impl Scheduler {
                 // window. Only when every rung also fails does the refusal
                 // path below run, unchanged: this feature shrinks the set of
                 // windows the run cannot vouch for, it never papers over one.
+                // Every ladder rung applies the same sanity bar internally
+                // (an insane "rescue" neither ends the ladder nor gets
+                // adopted), so a `Some` here is a converged AND physical
+                // answer.
                 if let Some((method, x, diagnostics, error_estimate_v)) =
                     self.fallback_ladder(chunk, &mut thermal)
                 {
@@ -3559,6 +3658,14 @@ impl Scheduler {
                     }
                     failure_reason = Some(err.clone());
                     self.last_solve_error = Some(err);
+                    // A recovered DC bias is only usable if it is itself sane;
+                    // a poisoned bias would re-seed the very state this guard
+                    // exists to keep out.
+                    let recovered = if self.insane_node_state(&recovered).is_some() {
+                        Vec::new()
+                    } else {
+                        recovered
+                    };
                     if !recovered.is_empty() {
                         // If the DC operating point at t=0 was still captured
                         // (the streaming sink fires once before the march loop),
@@ -3705,6 +3812,22 @@ impl Scheduler {
         t_start: f64,
         t_end: f64,
     ) -> bool {
+        // A forced level bypasses the solver AND the converged-state sanity
+        // guard (it is written into `node_volts` after every solve), so it
+        // must clear the same bar here: a NaN/inf/absurd force would be the
+        // one remaining door for a non-physical published voltage.
+        if !high_volts.is_finite()
+            || !low_volts.is_finite()
+            || high_volts.abs() > Self::NODE_VOLTAGE_SANITY_V
+            || low_volts.abs() > Self::NODE_VOLTAGE_SANITY_V
+        {
+            eprintln!(
+                "refusing to force net '{net}' to {high_volts:.3e}/{low_volts:.3e} V: \
+                 not board reality (beyond the {:.0e} V sanity bound)",
+                Self::NODE_VOLTAGE_SANITY_V
+            );
+            return false;
+        }
         match self.net_nodes.get(net) {
             Some(&node) => {
                 self.forced_node_volts
