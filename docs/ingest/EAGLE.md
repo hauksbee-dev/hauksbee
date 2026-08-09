@@ -67,28 +67,53 @@ board, so the Eagle path gets the same treatment a KiCad board gets.
   unrelated `.brd`, which is a different binary format entirely and is ingested
   only through its gerbers.
 
-If hauksbee cannot read the file it says so and names every format it does read,
-rather than guessing:
+A pre-Eagle-6 `.brd` is recognised as itself rather than lumped in with files
+hauksbee has never heard of, because the difference matters: this design becomes
+readable after one re-save, and reciting the accepted-format list would send you
+looking for a tool that does not exist.
+
+The recognition is the drawing record's first two bytes, `0x10 0x00` for the
+Eagle 4.x/5.x layout and `0x10 0x80` for 3.x, checked on the file's RAW bytes
+before anything decodes them. Ahead of everything else, deliberately: the text
+readers work from a lossy UTF-8 decode that destroys the header, and the
+IPC-D-356 reader claims any input carrying a line that starts `317`, which
+binary board records sometimes do. A binary Eagle board that tripped that used
+to come back as a *report*, with parts invented out of binary noise.
+
+```
+$ hauksbee run braids_v50.brd --report
+error: 'braids_v50.brd': this is an Eagle drawing in the pre-Eagle-6 BINARY format, which hauksbee does not read. Eagle 6 moved the .brd and .sch formats to XML, and the XML form is what hauksbee reads: open this file once in Eagle 6 or later, or in Fusion 360 Electronics, re-save it, and retry with the re-saved file. Anything that opens the pre-6 binary format and writes Eagle XML or a KiCad board will do; failing that, the design's gerbers are the other way in. See https://docs.hauksbee.dev/docs/ingest/eagle
+```
+
+A file that is no board format at all gets the accepted-format list instead,
+because for that file the list is the answer:
 
 ```
 $ hauksbee run mystery.brd --report
 error: 'mystery.brd': unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or a folder or zip of gerbers
 ```
 
-That refusal is held to its word on real files rather than on a fixture.
+Both refusals are held to their word on real files rather than on a fixture.
 `corpus.toml` fetches the 35 Mutable Instruments Eurorack modules
 (`eurorack_binary_eagle`) purely for this: they are Eagle 5 and earlier, so their
-`.brd` and `.sch` are both binary, and the message above is the only correct output
-for every one of them. The entry carries the axis `unreadable-by-design` and is
-counted as a refusal, never as board coverage. A corpus sweep that reported 35 more
-boards because these landed would be reporting files it could not open.
+`.brd` and `.sch` are both binary, and the pre-Eagle-6 message above is the only
+correct output for all 70 of those drawings.
+The entry carries the axis `unreadable-by-design` and is counted as a refusal,
+never as board coverage. A corpus sweep that reported 35 more boards because these
+landed would be reporting files it could not open.
+
+Three of the boards (Braids, Clouds and Blinds) are the entry's declared inputs and
+so are the three the release browser gate drops through a real Chromium journey. It
+requires exactly what the CLI does and a little more: a refusal that names the
+re-save, no JSON export offered, no parts/nets inventory, no live-simulation action,
+and a way to try another file.
 
 The Eagle XML side of the corpus spans 6.4 to 9.6.2 across 20 layouts and 16
 schematics: the Adafruit and SparkFun boards, the official Arduino Uno Rev3 release,
 and the SparkFun MicroMod processor boards.
 
-That is what a binary pre-Eagle-6 `.brd` looks like. A Git-LFS pointer does
-*not*: it is detected as itself, because the fix is specific and worth naming:
+A Git-LFS pointer is detected as itself on the same reasoning, because its fix is
+specific too:
 
 ```
 $ hauksbee run board.brd --report
@@ -96,8 +121,8 @@ error: 'board.brd': this is a Git LFS pointer, not the board file itself: the re
 ```
 
 So if your `.brd` is a few hundred bytes of text starting `version
-https://git-lfs.github.com/spec/v1`, run `git lfs pull` first. Both messages
-exit 1, a hard input error rather than a finding.
+https://git-lfs.github.com/spec/v1`, run `git lfs pull` first. Every one of these
+messages exits 1, a hard input error rather than a finding.
 
 ## What to expect from bind rates
 

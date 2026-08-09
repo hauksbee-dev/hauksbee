@@ -35,6 +35,12 @@ pub mod bom;
 pub mod dnp;
 pub mod drc;
 mod eagle;
+/// The pre-Eagle-6 BINARY drawing detector and its refusal message. Exported
+/// because the board-input normalizer has to refuse this format on the RAW
+/// bytes, ahead of reader selection: the lossy UTF-8 decode every text reader
+/// works from destroys the header, and one of those readers will then claim the
+/// file and report invented parts from it.
+pub use eagle::{eagle_binary_message, looks_like_eagle_binary};
 pub mod gerber;
 pub mod ipc2581;
 mod ipc356;
