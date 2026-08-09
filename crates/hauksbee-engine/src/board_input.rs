@@ -889,32 +889,79 @@ fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, Bo
 
 /// Reverse-extract a gerber fab archive supplied as bytes (the web upload).
 /// `from_gerber` wants a path, so the bytes are parked in a temp file.
+///
+/// The board is named from the UPLOAD's name, passed to the reader explicitly
+/// rather than read back off the staging path. The reader names a board after
+/// the archive it was handed, so staging as `hauksbee-web-gerber-<pid>-<n>.zip`
+/// would put a process id and a call counter in `board_name`: the same upload
+/// analysed twice in one session would export two different reports, which is
+/// the scenario-08 determinism contract. Keeping the two apart also means the
+/// staged name never has to survive a round trip, so an upload name with a
+/// space, a `+`, or non-ASCII in it reaches the report intact, and matches what
+/// the CLI reports for the same archive saved under that name on disk.
+///
+/// The staging file is a [`tempfile::NamedTempFile`] so it is removed however
+/// the call leaves, including on a panic inside the reader. It keeps a `.zip`
+/// suffix because that is how the reader recognises an archive.
 fn gerber_from_zip_bytes(
     file_name: &str,
     contents: &[u8],
 ) -> Result<hauksbee_extract::gerber::GerberExtraction, BoardInputError> {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static N: AtomicU32 = AtomicU32::new(0);
-    let tmp = std::env::temp_dir().join(format!(
-        "hauksbee-web-gerber-{}-{}.zip",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::write(&tmp, contents)
+    let mut staged = tempfile::Builder::new()
+        .prefix("hauksbee-web-gerber-")
+        .suffix(".zip")
+        .tempfile()
         .map_err(|e| BoardInputError::Zip(format!("could not stage the zip: {e}")))?;
-    let result = ExtractedBoard::from_gerber_with_stats(&tmp);
-    let _ = std::fs::remove_file(&tmp);
-    result.map_err(|e| {
-        // A zip that fails the gerber read is often a FIRMWARE project zipped
-        // by mistake; point at the firmware slot instead of only rejecting.
-        if let Some(marker) = zip_firmware_marker(contents) {
-            return BoardInputError::Zip(firmware_zip_message(file_name, marker));
-        }
-        BoardInputError::Zip(format!(
-            "could not read '{file_name}' as a gerber archive: {e}. A board zip should \
+    std::io::Write::write_all(&mut staged, contents)
+        .and_then(|()| std::io::Write::flush(&mut staged))
+        .map_err(|e| BoardInputError::Zip(format!("could not stage the zip: {e}")))?;
+    ExtractedBoard::from_gerber_with_stats_named(staged.path(), &uploaded_board_name(file_name))
+        .map_err(|e| {
+            // A zip that fails the gerber read is often a FIRMWARE project zipped
+            // by mistake; point at the firmware slot instead of only rejecting.
+            if let Some(marker) = zip_firmware_marker(contents) {
+                return BoardInputError::Zip(firmware_zip_message(file_name, marker));
+            }
+            BoardInputError::Zip(format!(
+                "could not read '{file_name}' as a gerber archive: {e}. A board zip should \
              contain the gerber fab files (copper + drill), or one .board export."
-        ))
-    })
+            ))
+        })
+}
+
+/// The board name for an uploaded gerber archive: the upload's file name with
+/// any directory part and one trailing `.zip` removed.
+///
+/// A pure function of the upload name, because it is the board's identity in
+/// every report and export and must not move between two analyses of the same
+/// upload. It never reaches the filesystem (the staging path is chosen
+/// separately), so nothing here is sanitised away: the name the user gave the
+/// file is the name they see back, and for an archive named `<x>.zip` it is the
+/// same stem `hauksbee run <x>.zip` reports.
+///
+/// Backslash counts as a separator, unlike `Path` on unix, because a browser
+/// file input can still hand over a Windows-style `C:\fakepath\job.zip`.
+fn uploaded_board_name(file_name: &str) -> String {
+    let leaf = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    // Strip ONE extension, not every repetition: `board.zip.zip` keeps
+    // `board.zip`, which is what the user named it. `get` rather than an index
+    // because a name ending in a multi-byte character would otherwise panic on
+    // a slice landing mid-codepoint.
+    let base = match leaf.len().checked_sub(4) {
+        Some(cut)
+            if leaf
+                .get(cut..)
+                .is_some_and(|ext| ext.eq_ignore_ascii_case(".zip")) =>
+        {
+            &leaf[..cut]
+        }
+        _ => leaf,
+    };
+    if base.is_empty() {
+        "gerber".to_string()
+    } else {
+        base.to_string()
+    }
 }
 
 /// What marks a zip as a firmware project rather than a gerber fab archive:
@@ -979,6 +1026,41 @@ fn main {
     }
 }
 "#;
+
+    /// The uploaded board name is a pure function of the upload name, keeps
+    /// whatever characters the user chose, and agrees with the stem the CLI
+    /// derives from the same archive on disk.
+    #[test]
+    fn uploaded_board_name_matches_the_uploads_own_stem() {
+        assert_eq!(
+            uploaded_board_name("inkplate6_gerber-0915a100.zip"),
+            "inkplate6_gerber-0915a100"
+        );
+        assert_eq!(uploaded_board_name("EPD_board.ZIP"), "EPD_board");
+        assert_eq!(uploaded_board_name("board.zip.zip"), "board.zip");
+        assert_eq!(uploaded_board_name("no-extension"), "no-extension");
+        // A browser that sends a path sends only the leaf onward.
+        assert_eq!(uploaded_board_name("jobs/rev C/fab.zip"), "fab");
+        assert_eq!(uploaded_board_name("C:\\jobs\\fab.zip"), "fab");
+        // Nothing is scrubbed: spaces, `+` and non-ASCII survive, and the two
+        // names below stay distinct where a path sanitiser would merge them.
+        assert_eq!(uploaded_board_name("rev A+B.zip"), "rev A+B");
+        assert_eq!(uploaded_board_name("rev A B.zip"), "rev A B");
+        assert_eq!(uploaded_board_name("плата.zip"), "плата");
+        // Never empty, and never a slice through a multi-byte character.
+        assert_eq!(uploaded_board_name(".zip"), "gerber");
+        assert_eq!(uploaded_board_name(""), "gerber");
+        assert_eq!(uploaded_board_name("boardé"), "boardé");
+        // The stem the CLI would report for the same archive on disk.
+        for name in ["rev A+B.zip", "плата.zip", "board.zip.zip", "fab.ZIP"] {
+            let from_path = std::path::Path::new(name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap()
+                .to_string();
+            assert_eq!(uploaded_board_name(name), from_path, "disagreed on {name}");
+        }
+    }
 
     fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));

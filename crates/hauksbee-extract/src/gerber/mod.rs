@@ -52,15 +52,37 @@ pub struct GerberExtraction {
     pub stats: ReconStats,
 }
 
+/// The file's own name, for a message about it.
+///
+/// Never the full path. A web upload is read out of a throwaway directory whose
+/// name is a pid, a counter and a clock reading, so a message quoting the path
+/// both leaked a local absolute path into the report and made the FAILING report
+/// differ between two analyses of one malformed archive. The film name is also
+/// the only part the user can act on: they have the job, not our temp dir.
+fn film(path: &Path) -> std::borrow::Cow<'_, str> {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+}
+
 /// Recursively collect every file under `dir` (fab jobs sometimes nest the
 /// copper / drill / assembly films in sub-directories, e.g. Allegro's
 /// `*_CAM` / `*_SMT` / `*_ASM` split).
+///
+/// Sorted by path within each directory, and directories descended in that same
+/// sorted order, because `read_dir` yields whatever order the filesystem
+/// happens to hold. Downstream this list decides which copper film gets which
+/// provisional stack index when a job's names tie, so readdir order would leak
+/// into the reconstruction. Two analyses of one archive extracted into two
+/// different temp directories must not diverge on the order the kernel handed
+/// the entries back.
 fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    for e in entries.flatten() {
-        let p = e.path();
+    let mut here: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    here.sort();
+    for p in here {
         if p.is_dir() {
             collect_files(&p, out);
         } else if p.is_file() {
@@ -91,6 +113,22 @@ fn drill_is_gerber_format(head: &str, ext: Option<&str>) -> bool {
 /// name is the directory's file name. The pick-and-place is picked up from a
 /// `.csv`/`.pos` that parses as one, or an Allegro `smt_loc.txt`.
 pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
+    let name = dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("gerber")
+        .to_string();
+    from_gerber_dir_named(dir, &name)
+}
+
+/// [`from_gerber_dir`] with the board name supplied rather than taken from the
+/// directory.
+///
+/// The zip path needs this: it extracts into a throwaway directory whose name
+/// exists only to be unique, so naming the board after it put a nanosecond
+/// clock reading in every report and broke the "same board twice, same JSON"
+/// contract. The archive names the board instead.
+fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtraction, ExtractError> {
     let mut all_files = Vec::new();
     collect_files(dir, &mut all_files);
 
@@ -154,7 +192,14 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             _ => None,
         })
         .collect();
-    job_copper.sort_by_key(|(_, n, side)| (*side, *n));
+    // File name breaks the tie. `gbrjob` is a HashMap, so the vector above
+    // arrives in whatever order the map hashed into, and a stable sort on
+    // (side, number) alone would carry that order through wherever two films
+    // declare the same side and number. The rank IS the provisional stack
+    // index, so a tie resolved by hash order would move a film up or down the
+    // stack between two runs of the same job and change which layers a blind
+    // via stitches.
+    job_copper.sort_by(|a, b| (a.2, a.1, &a.0).cmp(&(b.2, b.1, &b.0)));
     let gbrjob_numbers_physical = job_copper
         .iter()
         .map(|(_, n, _)| *n)
@@ -268,7 +313,7 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         };
         let path = &copper[*orig_idx].1;
         let text = std::fs::read_to_string(path)
-            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
+            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", film(path))))?;
         if let Some(l) = copper_physical_layer(&text) {
             physical_to_stack.insert(l, *index);
             declared_physical_max = declared_physical_max.max(l);
@@ -291,7 +336,7 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             Err(e) => {
                 return Err(ExtractError::Xml(format!(
                     "parse copper {}: {e}",
-                    path.display()
+                    film(path)
                 )))
             }
         }
@@ -341,7 +386,7 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     let mut parsed: Vec<ParsedDrill> = Vec::new();
     for d in &drills {
         let text = std::fs::read_to_string(d)
-            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", d.display())))?;
+            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", film(d))))?;
         let n = d
             .file_name()
             .and_then(|s| s.to_str())
@@ -742,11 +787,7 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         }
     }
 
-    let name = dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("gerber")
-        .to_string();
+    let name = board_name.to_string();
 
     let n_castellations = count_castellations(&holes, &outline_prims);
     let (mut board, mut stats) = connect::reconstruct(&name, layer_prims, holes, placements);
@@ -1368,24 +1409,73 @@ fn warn_if_nets_are_fragmented(board: &ExtractedBoard) {
 }
 
 /// Reverse-extract from a gerber job `.zip`. Extracts to a temp dir and
-/// delegates to [`from_gerber_dir`].
+/// delegates to [`from_gerber_dir_named`].
+///
+/// The board is named after the ARCHIVE, never after the extraction directory.
+/// The extraction directory has to be unique per call (two concurrent analyses
+/// of different jobs must not tread on each other), which used to mean a
+/// nanosecond clock reading in its name, and [`from_gerber_dir`] took the board
+/// name from the directory it was handed: so a single byte-identical upload
+/// analysed twice produced two different `board_name` values, and the exported
+/// JSON differed run to run. The archive's stem is a property of the input, so
+/// it holds across runs.
 pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError> {
+    let name = zip_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("gerber")
+        .to_string();
+    from_gerber_zip_named(zip_path, &name)
+}
+
+/// [`from_gerber_zip`] with the board name supplied rather than taken from the
+/// archive's own path.
+///
+/// A web upload arrives as bytes and has to be parked on disk before the reader
+/// can see it, and the name it is parked under is a staging detail, not the
+/// board's identity. Passing the name here keeps the two apart: the caller can
+/// stage the bytes under whatever the filesystem will accept and still report
+/// the board under the name the user uploaded.
+pub fn from_gerber_zip_named(
+    zip_path: &Path,
+    board_name: &str,
+) -> Result<GerberExtraction, ExtractError> {
     let bytes = std::fs::read(zip_path)
-        .map_err(|e| ExtractError::Xml(format!("read zip {}: {e}", zip_path.display())))?;
+        .map_err(|e| ExtractError::Xml(format!("read zip {}: {e}", film(zip_path))))?;
+    // Uniqueness only, and nothing here reaches the report: pid plus a
+    // process-local counter plus the clock, because a bare clock reading can
+    // repeat across two calls in the same nanosecond and two jobs unzipping
+    // into one directory would mix their films.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
     let tmp = std::env::temp_dir().join(format!(
-        "hauksbee_gerber_{}",
+        "hauksbee_gerber_{}_{}_{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
     std::fs::create_dir_all(&tmp).map_err(|e| ExtractError::Xml(format!("mktemp: {e}")))?;
-    unzip_into(&bytes, &tmp)?;
+    // From here every exit removes the directory, including the early return on
+    // a corrupt archive: a service fed malformed zips used to accumulate
+    // half-unpacked jobs under the system temp directory forever.
+    let scratch = TempTree(tmp);
+    unzip_into(&bytes, &scratch.0)?;
     // The zip may wrap a single sub-directory; descend if so.
-    let root = single_subdir(&tmp).unwrap_or(tmp.clone());
-    let res = from_gerber_dir(&root);
-    let _ = std::fs::remove_dir_all(&tmp);
-    res
+    let root = single_subdir(&scratch.0).unwrap_or_else(|| scratch.0.clone());
+    from_gerber_dir_named(&root, board_name)
+}
+
+/// A directory removed when it goes out of scope, however the scope is left.
+struct TempTree(std::path::PathBuf);
+
+impl Drop for TempTree {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// If `dir` contains exactly one entry and it's a directory, return it.
@@ -1422,7 +1512,7 @@ fn unzip_into(bytes: &[u8], out: &Path) -> Result<(), ExtractError> {
         file.read_to_end(&mut buf)
             .map_err(|e| ExtractError::Xml(format!("zip read: {e}")))?;
         std::fs::write(&dest, buf)
-            .map_err(|e| ExtractError::Xml(format!("zip write {}: {e}", dest.display())))?;
+            .map_err(|e| ExtractError::Xml(format!("zip write {}: {e}", film(&dest))))?;
     }
     Ok(())
 }
@@ -1438,40 +1528,51 @@ impl ExtractedBoard {
     pub fn from_gerber_with_stats(path: &Path) -> Result<GerberExtraction, ExtractError> {
         if path.is_dir() {
             from_gerber_dir(path)
-        } else if path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("zip"))
-            .unwrap_or(false)
-        {
+        } else if is_zip_path(path) {
             from_gerber_zip(path)
         } else {
-            Err(ExtractError::Gerber(
-                "not a gerber job: expected a directory of gerber files, or a .zip of one"
-                    .to_string(),
-            ))
+            Err(not_a_gerber_job())
+        }
+    }
+
+    /// [`from_gerber_with_stats`](Self::from_gerber_with_stats) with the board
+    /// name supplied rather than taken from the path.
+    ///
+    /// For a caller that has parked bytes in a temp file: the staging name is
+    /// the filesystem's business, the board name is the user's, and reading the
+    /// second off the first put staging details (a process id, a counter) into
+    /// every report.
+    pub fn from_gerber_with_stats_named(
+        path: &Path,
+        board_name: &str,
+    ) -> Result<GerberExtraction, ExtractError> {
+        if path.is_dir() {
+            from_gerber_dir_named(path, board_name)
+        } else if is_zip_path(path) {
+            from_gerber_zip_named(path, board_name)
+        } else {
+            Err(not_a_gerber_job())
         }
     }
 
     /// Reverse-extract from a gerber job directory or a gerber `.zip`. The
     /// universal "hand us only the fab files" entry point.
     pub fn from_gerber(path: &Path) -> Result<Self, ExtractError> {
-        if path.is_dir() {
-            from_gerber_dir(path).map(|g| g.board)
-        } else if path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("zip"))
-            .unwrap_or(false)
-        {
-            from_gerber_zip(path).map(|g| g.board)
-        } else {
-            Err(ExtractError::Gerber(
-                "not a gerber job: expected a directory of gerber files, or a .zip of one"
-                    .to_string(),
-            ))
-        }
+        Self::from_gerber_with_stats(path).map(|g| g.board)
     }
+}
+
+/// Whether `path` names a `.zip`, case-insensitively.
+fn is_zip_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case("zip"))
+}
+
+fn not_a_gerber_job() -> ExtractError {
+    ExtractError::Gerber(
+        "not a gerber job: expected a directory of gerber files, or a .zip of one".to_string(),
+    )
 }
 
 #[cfg(test)]
