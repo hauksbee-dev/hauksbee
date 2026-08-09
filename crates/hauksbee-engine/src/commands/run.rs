@@ -1128,7 +1128,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         }
 
         if cfg.json {
+            // The co-sim machine report is a model-dependent-claim surface
+            // like the static one: an unbound verdict-critical part gates its
+            // verdict too, or a firmware run could read pass where the static
+            // JSON for the same board says invalid.
             let mut jr = JsonReport::new(&board_name, summary)
+                .with_bind_verdict_gate()
                 .with_inputs(&inputs)
                 .with_evidence(&run_evidence);
             // A substitution is an info-level note that must never be silently
