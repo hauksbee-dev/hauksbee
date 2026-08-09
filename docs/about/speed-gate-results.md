@@ -5,14 +5,14 @@
 
 Every number here is asserted, not observed. The gate fails the build when a startup-corrected speedup drops below its recorded floor, when an accuracy claim rises above its bound, or when a disclosed disagreement widens past its ceiling.
 
-Oracle: ngspice-45.2. ngspice process-start floor: 17.308 ms, measured as the minimum of five trivial-deck runs.
+Oracle: ngspice-45.2. ngspice process-start floor: 13.426 ms, measured as the minimum of five trivial-deck runs.
 
 `raw` divides ngspice's whole wall clock, process start included, by ours: it is what a user waiting at a shell experiences. `corrected` subtracts the process-start floor first: it is what the two solvers actually did, and it is the number the gate asserts, because it is the only one that is a claim about numerics.
 
 | case | hauksbee | steps | ngspice (raw) | ngspice (solver only) | speedup raw | speedup corrected | floor | vs ngspice | kind | bound | vs own monolith (waveform) | vs own monolith (settled) | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| half-wave rectifier, 5 ms tran | 1.654 ms | 1125 | 30.946 ms | 13.638 ms | 18.72x | 8.25x | 3.00x | 1.938e-3 | agreement | 1.000e-2 | n/a | n/a | PASS |
-| synapse array, 90 blocks, 400 us tran | 110.934 ms | 401 | 1050.625 ms | 1033.317 ms | 9.47x | 9.31x | 3.50x | 1.876e0 | disclosed drift | 1.200e1 | 6.030e-9 (bound 1.000e-2) | 9.081e-15 (bound 1.000e-5) | PASS |
+| half-wave rectifier, 5 ms tran | 1.579 ms | 1125 | 26.545 ms | 13.120 ms | 16.81x | 8.31x | 3.00x | 1.938e-3 | agreement | 1.000e-2 | n/a | n/a | PASS |
+| synapse array, 90 blocks, 400 us tran | 78.453 ms | 401 | 834.662 ms | 821.237 ms | 10.64x | 10.47x | 3.50x | 1.876e0 | disclosed drift | 1.200e1 | 6.030e-9 (bound 1.000e-2) | 9.081e-15 (bound 1.000e-5) | PASS |
 
 Accuracy against ngspice is measured on the oracle's own `.print tran` table, sampled at the oracle's time points with linear interpolation into ours, relative to `max(|oracle|, 1% of full scale)` so a zero crossing cannot manufacture an infinite error.
 
