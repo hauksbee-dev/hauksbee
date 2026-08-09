@@ -383,6 +383,14 @@ pub struct WebReport {
     pub num_nets: usize,
     /// The single overall headline across all sections.
     pub headline: String,
+    /// Whether the STATIC analysis left an undermined run-level claim (input
+    /// coverage, bind completeness), computed with the same finding-backed
+    /// exemption as the JSON verdict. Kept on the report so the firmware
+    /// pass, which folds these maps in with its own simulation maps, can
+    /// grade run-level invalidity without re-deriving the exemption from
+    /// finding texts that were readable()-transformed for display.
+    #[serde(skip)]
+    pub run_level_undermined: bool,
     /// Total serious findings across all sections.
     pub serious: usize,
     /// Total findings across all sections.
@@ -458,6 +466,7 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
         num_components: 0,
         num_nets: 0,
         headline: "Could not read the file.".to_string(),
+        run_level_undermined: false,
         serious: 0,
         total: 0,
         sections: Vec::new(),
@@ -784,6 +793,7 @@ fn analyze_normalized(
         num_components: board.components.len(),
         num_nets: bound.net_names.len(),
         headline,
+        run_level_undermined,
         serious,
         total,
         sections,
@@ -922,7 +932,15 @@ pub fn analyze_with_firmware(
                 report.inventory = evidence.inventory().to_vec();
                 report.assumptions = evidence.assumptions().to_vec();
                 report.evidence = evidence.maps().to_vec();
-                if report.serious == 0 && evidence.is_undermined() {
+                // Same run-level split as everywhere else: the static
+                // finding-backed maps folded in above must not invalidate the
+                // firmware headline; the static run-level bit travels on the
+                // report, and the simulation maps added here are all
+                // run-level claims graded directly.
+                let sim_undermined = evidence.maps()[report.evidence.len()..]
+                    .iter()
+                    .any(hauksbee_ir::evidence::EvidenceMap::is_undermined);
+                if report.serious == 0 && (report.run_level_undermined || sim_undermined) {
                     report.headline = "Firmware evidence is undermined; substituted or unresolved inputs invalidate affected co-sim assertions.".to_string();
                 } else if report.total == 0 && evidence.has_caveats() {
                     report.headline = "No blocking findings, but firmware evidence is qualified; see the evidence limitations below.".to_string();
