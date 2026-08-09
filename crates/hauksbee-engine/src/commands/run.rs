@@ -1096,6 +1096,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // Rewrite CI artifacts from the final co-sim evidence object before a
         // strict gate can exit. Invalid evidence is a failure in JUnit/SARIF and
         // a GitHub error annotation; qualified evidence remains visible.
+        let mut cosim_ci_findings: Option<Vec<crate::result::JsonFinding>> = None;
         if let Some(base) = &ci_findings {
             let mut all = base.clone();
             all.extend(fault_findings.clone());
@@ -1114,6 +1115,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 |m| !rewrite_messages.contains(m.assertion()),
             ));
             write_ci_artifacts(&cfg, &all)?;
+            cosim_ci_findings = Some(all.clone());
             crate::reports::ci_artifacts::github_evidence_annotations_with_gate(
                 run_evidence.maps(),
                 |m| !rewrite_messages.contains(m.assertion()),
@@ -1482,7 +1484,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                  firmware may not match this board)."
             );
             if cfg.strict && !analog_abort {
-                if let (Some(findings), Some(refusal)) = (&ci_findings, &strict_refusal) {
+                // The refusal rewrite must keep everything the complete
+                // co-sim artifact carried (fault findings, evidence entries),
+                // or a stalled run's refusal would erase a real power-on
+                // electrical fault from the test report.
+                if let (Some(findings), Some(refusal)) = (
+                    cosim_ci_findings.as_ref().or(ci_findings.as_ref()),
+                    &strict_refusal,
+                ) {
                     write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
                 }
                 if !cfg.json {
@@ -1523,7 +1532,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 hauksbee_ir::docs_url("docs/about/LIMITATIONS.md"),
             );
             if let Some(code) = strict_analog_exit_code(cfg.strict && analog_abort) {
-                if let (Some(findings), Some(refusal)) = (&ci_findings, &strict_refusal) {
+                // The refusal rewrite must keep everything the complete
+                // co-sim artifact carried (fault findings, evidence entries),
+                // or a stalled run's refusal would erase a real power-on
+                // electrical fault from the test report.
+                if let (Some(findings), Some(refusal)) = (
+                    cosim_ci_findings.as_ref().or(ci_findings.as_ref()),
+                    &strict_refusal,
+                ) {
                     write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
                 }
                 if !cfg.json {
