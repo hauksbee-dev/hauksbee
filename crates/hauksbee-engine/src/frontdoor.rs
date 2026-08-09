@@ -889,6 +889,7 @@ pub fn analyze_with_firmware(
             };
             if let Some(budget) = captured.error_budget.clone() {
                 let mut maps = report.evidence.clone();
+                let static_len = maps.len();
                 for fault in &captured.faults {
                     if let Ok(map) = evidence.simulation_map(
                         format!(
@@ -935,9 +936,12 @@ pub fn analyze_with_firmware(
                 // Same run-level split as everywhere else: the static
                 // finding-backed maps folded in above must not invalidate the
                 // firmware headline; the static run-level bit travels on the
-                // report, and the simulation maps added here are all
-                // run-level claims graded directly.
-                let sim_undermined = evidence.maps()[report.evidence.len()..]
+                // report, and the simulation maps appended after the static
+                // prefix are all run-level claims graded directly.
+                let sim_undermined = evidence
+                    .maps()
+                    .get(static_len..)
+                    .unwrap_or_default()
                     .iter()
                     .any(hauksbee_ir::evidence::EvidenceMap::is_undermined);
                 if report.serious == 0 && (report.run_level_undermined || sim_undermined) {
