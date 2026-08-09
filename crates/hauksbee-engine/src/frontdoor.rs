@@ -893,7 +893,6 @@ pub fn analyze_with_firmware(
             };
             if let Some(budget) = captured.error_budget.clone() {
                 let mut maps = report.evidence.clone();
-                let static_len = maps.len();
                 for fault in &captured.faults {
                     if let Ok(map) = evidence.simulation_map(
                         format!(
@@ -910,6 +909,7 @@ pub fn analyze_with_firmware(
                         maps.push(map);
                     }
                 }
+                let fault_maps_end = maps.len();
                 for substitution in &captured.substitutions {
                     if let Ok(map) = evidence.simulation_map(
                         format!(
@@ -942,9 +942,15 @@ pub fn analyze_with_firmware(
                 // firmware headline; the static run-level bit travels on the
                 // report, and the simulation maps appended after the static
                 // prefix are all run-level claims graded directly.
+                // The per-fault maps are finding-backed (each fault is a
+                // finding on this surface, wearing its own badge), so only
+                // the substitution and activity maps after them are run-level
+                // simulation claims. everything before
+                // `fault_maps_end` is the static prefix plus the fault
+                // segment; grade what follows it.
                 let sim_undermined = evidence
                     .maps()
-                    .get(static_len..)
+                    .get(fault_maps_end..)
                     .unwrap_or_default()
                     .iter()
                     .any(hauksbee_ir::evidence::EvidenceMap::is_undermined);
