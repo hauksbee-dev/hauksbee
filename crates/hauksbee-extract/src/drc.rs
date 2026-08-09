@@ -4033,7 +4033,9 @@ pub mod eagle_drc {
         //
         // The emonTx V3.4.5 (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`) is the
         // measurement behind that: GND and AGND carry same-rank pours whose
-        // outlines overlap in an identical 0.349 mm band on BOTH copper layers,
+        // outlines overlap in the same 0.349 mm band on BOTH copper layers at
+        // the corner where the finding sits (the B.Cu AGND edge then slopes
+        // away, narrowing the band to 0.222 mm at the far end),
         // and the fabrication gerbers the upstream ships beside the `.brd`
         // disagree between the two. On the top layer, where AGND pours with
         // `isolate="0.3048"`, the two pours are separate copper bodies (a
