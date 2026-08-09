@@ -17,17 +17,19 @@
   "next_action": "inspect INVALID assertion 'no stress faults raised' and its failed-window detail, fix the first named net/device, then rerun the same spec"
  },
  "seeds": 1,
- "elapsed_s": 0.1799845,
+ "elapsed_s": 0.160652792,
  "coverage": null,
  "substitutions": [],
- "coverage_warnings": [],
+ "coverage_warnings": [
+  "models: 4 part(s) (D1, D3, D4, D5) are bound to the generic fallback model 'signal_diode_1n4148_fallback', whose ratings and device parameters are estimates for the package class, not values from any datasheet. Any verdict citing them rests on invented numbers. Add a model entry matching the part (value_re or mpn_re), or put the manufacturer part number on the component, to replace them."
+ ],
  "timing_coverage": [],
  "timing_refusals": [],
  "dead_rails": [],
  "waiver_notes": [],
  "inventory": [
   {
-   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmpeV4NAq/watchy.kicad_pcb",
+   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmpxqFpfD/watchy.kicad_pcb",
    "kind": "ki_cad_pcb",
    "role": "layout",
    "sha256": "d7f8eb56613968aa061cd612a8679a034430fd9a1fcb08f83690b92c167db217",
@@ -43,7 +45,7 @@
    ]
   },
   {
-   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmpeV4NAq/spec.toml",
+   "path": "/var/folders/j3/xn6wn94d0d95bz16jz5j9gpw0000gn/T/.tmpxqFpfD/spec.toml",
    "kind": "toml",
    "role": "spec",
    "sha256": "3fa3a2b1ba2d237f2977bfb9c21251ae707b720d175ffed02e4b52ceb075872a",
@@ -199,6 +201,54 @@
    "because": "Unparseable value '32.768KHz'.",
    "consequence": "Nets through Y1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
    "replacement": "Add a model for Y1 to your models directory, or mark it DNP if the board does not fit it."
+  },
+  {
+   "id": "reduced-fidelity:model/D5",
+   "kind": "reduced_fidelity",
+   "source": "binder",
+   "scope": {
+    "type": "board"
+   },
+   "statement": "D5 (MBR0530) was produced at reduced fidelity.",
+   "because": "It came from the generic fallback model 'signal_diode_1n4148_fallback', whose ratings and device parameters are estimates for the package class rather than values from any datasheet, not from the primary path.",
+   "consequence": "Numbers for D5 (MBR0530) are indicative: the mechanism that produced them is documented as less accurate than the primary path.",
+   "replacement": "Add a model entry matching the part (value_re or mpn_re), or put the manufacturer part number on the component."
+  },
+  {
+   "id": "reduced-fidelity:model/D4",
+   "kind": "reduced_fidelity",
+   "source": "binder",
+   "scope": {
+    "type": "board"
+   },
+   "statement": "D4 (MBR0530) was produced at reduced fidelity.",
+   "because": "It came from the generic fallback model 'signal_diode_1n4148_fallback', whose ratings and device parameters are estimates for the package class rather than values from any datasheet, not from the primary path.",
+   "consequence": "Numbers for D4 (MBR0530) are indicative: the mechanism that produced them is documented as less accurate than the primary path.",
+   "replacement": "Add a model entry matching the part (value_re or mpn_re), or put the manufacturer part number on the component."
+  },
+  {
+   "id": "reduced-fidelity:model/D3",
+   "kind": "reduced_fidelity",
+   "source": "binder",
+   "scope": {
+    "type": "board"
+   },
+   "statement": "D3 (MBR0530) was produced at reduced fidelity.",
+   "because": "It came from the generic fallback model 'signal_diode_1n4148_fallback', whose ratings and device parameters are estimates for the package class rather than values from any datasheet, not from the primary path.",
+   "consequence": "Numbers for D3 (MBR0530) are indicative: the mechanism that produced them is documented as less accurate than the primary path.",
+   "replacement": "Add a model entry matching the part (value_re or mpn_re), or put the manufacturer part number on the component."
+  },
+  {
+   "id": "reduced-fidelity:model/D1",
+   "kind": "reduced_fidelity",
+   "source": "binder",
+   "scope": {
+    "type": "board"
+   },
+   "statement": "D1 (MBR0530) was produced at reduced fidelity.",
+   "because": "It came from the generic fallback model 'signal_diode_1n4148_fallback', whose ratings and device parameters are estimates for the package class rather than values from any datasheet, not from the primary path.",
+   "consequence": "Numbers for D1 (MBR0530) are indicative: the mechanism that produced them is documented as less accurate than the primary path.",
+   "replacement": "Add a model entry matching the part (value_re or mpn_re), or put the manufacturer part number on the component."
   }
  ],
  "evidence": [
@@ -2424,7 +2474,11 @@
     "open-part:AE1",
     "open-part:C7",
     "open-part:R12",
-    "open-part:Y1"
+    "open-part:Y1",
+    "reduced-fidelity:model/D5",
+    "reduced-fidelity:model/D4",
+    "reduced-fidelity:model/D3",
+    "reduced-fidelity:model/D1"
    ],
    "status": "undermined"
   },
@@ -3805,7 +3859,11 @@
     "open-part:Y2",
     "open-part:C9",
     "open-part:AE1",
-    "open-part:C7"
+    "open-part:C7",
+    "reduced-fidelity:model/D5",
+    "reduced-fidelity:model/D4",
+    "reduced-fidelity:model/D3",
+    "reduced-fidelity:model/D1"
    ],
    "error_budget": {
     "tolerance": {
@@ -6064,7 +6122,11 @@
      "open-part:AE1",
      "open-part:C7",
      "open-part:R12",
-     "open-part:Y1"
+     "open-part:Y1",
+     "reduced-fidelity:model/D5",
+     "reduced-fidelity:model/D4",
+     "reduced-fidelity:model/D3",
+     "reduced-fidelity:model/D1"
     ],
     "status": "undermined"
    }
@@ -7455,7 +7517,11 @@
      "open-part:Y2",
      "open-part:C9",
      "open-part:AE1",
-     "open-part:C7"
+     "open-part:C7",
+     "reduced-fidelity:model/D5",
+     "reduced-fidelity:model/D4",
+     "reduced-fidelity:model/D3",
+     "reduced-fidelity:model/D1"
     ],
     "error_budget": {
      "tolerance": {

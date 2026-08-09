@@ -5,7 +5,7 @@
  "file_name": "open_active_ic.kicad_pcb",
  "num_components": 3,
  "num_nets": 3,
- "headline": "No blocking findings, but evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.",
+ "headline": "Evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.",
  "serious": 0,
  "total": 0,
  "sections": [
@@ -104,82 +104,7 @@
  ],
  "evidence": [
   {
-   "assertion": "DRC input coverage",
-   "artifacts": [
-    0
-   ],
-   "models": [
-    {
-     "reference": "R1",
-     "model_id": "r_fallback",
-     "layer": "engine-fallback",
-     "source": {
-      "tier": "estimated-fallback",
-      "layer": "engine-fallback",
-      "origin": "engine-fallback",
-      "validation": "unvalidated",
-      "uncertainty": [
-       {
-        "status": "unknown",
-        "parameter": "r_fallback.model",
-        "reason": "the engine fallback is estimated and has no validated numeric error interval"
-       }
-      ]
-     },
-     "confidence": "guessed"
-    },
-    {
-     "reference": "R2",
-     "model_id": "r_fallback",
-     "layer": "engine-fallback",
-     "source": {
-      "tier": "estimated-fallback",
-      "layer": "engine-fallback",
-      "origin": "engine-fallback",
-      "validation": "unvalidated",
-      "uncertainty": [
-       {
-        "status": "unknown",
-        "parameter": "r_fallback.model",
-        "reason": "the engine fallback is estimated and has no validated numeric error interval"
-       }
-      ]
-     },
-     "confidence": "guessed"
-    }
-   ],
-   "parameters": [
-    {
-     "parameter": "R1.model",
-     "value": "r_fallback",
-     "origin": {
-      "type": "model",
-      "model_id": "r_fallback",
-      "layer": "engine-fallback",
-      "confidence": "guessed"
-     }
-    },
-    {
-     "parameter": "R2.model",
-     "value": "r_fallback",
-     "origin": {
-      "type": "model",
-      "model_id": "r_fallback",
-      "layer": "engine-fallback",
-      "confidence": "guessed"
-     }
-    }
-   ],
-   "assumptions": [
-    "open-part:U1"
-   ],
-   "status": "undermined"
-  },
-  {
-   "assertion": "Signal-integrity input coverage",
-   "artifacts": [
-    0
-   ],
+   "assertion": "Static analysis covered 3 extracted nets",
    "models": [
     {
      "reference": "R1",

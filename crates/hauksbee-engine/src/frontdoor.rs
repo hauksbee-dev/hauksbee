@@ -736,8 +736,10 @@ fn analyze_normalized(
     let run_level_undermined = crate::result::run_level_undermined(evidence.maps(), |a| {
         actual_findings.iter().any(|f| f.message == a)
     });
-    if total == 0 && run_level_undermined {
-        headline = "No blocking findings, but evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.".to_string();
+    // Fail beats invalid, but a non-serious warning must not: an undermined
+    // run-level claim overrides the headline whenever nothing serious does.
+    if serious == 0 && run_level_undermined {
+        headline = "Evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.".to_string();
     } else if total == 0 && evidence.has_caveats() {
         headline = "No blocking findings, but some evidence is qualified; see the evidence limitations below.".to_string();
     }
@@ -920,8 +922,8 @@ pub fn analyze_with_firmware(
                 report.inventory = evidence.inventory().to_vec();
                 report.assumptions = evidence.assumptions().to_vec();
                 report.evidence = evidence.maps().to_vec();
-                if report.total == 0 && evidence.is_undermined() {
-                    report.headline = "No blocking findings, but firmware evidence is undermined; substituted or unresolved inputs invalidate affected co-sim assertions.".to_string();
+                if report.serious == 0 && evidence.is_undermined() {
+                    report.headline = "Firmware evidence is undermined; substituted or unresolved inputs invalidate affected co-sim assertions.".to_string();
                 } else if report.total == 0 && evidence.has_caveats() {
                     report.headline = "No blocking findings, but firmware evidence is qualified; see the evidence limitations below.".to_string();
                 }
