@@ -349,6 +349,19 @@ pub fn unrecognized_message(bytes: &[u8]) -> String {
     if bytes.iter().all(|b| b.is_ascii_whitespace()) {
         return "this file is empty".to_string();
     }
+    // A pre-Eagle-6 drawing. Binary, so it is checked against the raw bytes
+    // before anything looks at a decoded head. Naming it matters more than it
+    // does for most refusals: the DESIGN is one re-save away from a format
+    // hauksbee reads, and the generic list sends that user looking for a tool
+    // that will never exist instead of opening Eagle once.
+    //
+    // The board-input normalizer makes the same check FIRST, ahead of reader
+    // selection, because by the time control reaches here another reader may
+    // already have claimed the bytes. This arm covers callers that go straight
+    // to the registry.
+    if crate::eagle::looks_like_eagle_binary(bytes) {
+        return crate::eagle::eagle_binary_message();
+    }
     let head = magic_head(bytes);
     let head = head.trim_start_matches('\u{feff}').trim_start();
     if head.starts_with("version https://git-lfs") {
@@ -454,6 +467,16 @@ mod tests {
         let msg = unrecognized_message(b"|RECORD=Sheet|KIND=Protel_Schematic|X=1");
         assert!(msg.contains("ASCII Protel export"), "got: {msg}");
         assert!(msg.contains("EasyEDA"), "got: {msg}");
+        // A pre-Eagle-6 binary drawing names itself and the re-save that
+        // unlocks it, rather than falling into the accepted-format recital.
+        let msg = unrecognized_message(&[0x10, 0x80, 0x64, 0x00, 0x21, 0x13, 0x00, 0x00]);
+        assert!(msg.contains("pre-Eagle-6"), "got: {msg}");
+        assert!(msg.contains("Eagle 6 or later"), "got: {msg}");
+        assert!(msg.contains("re-save"), "got: {msg}");
+        assert!(
+            !msg.contains("unrecognized board format"),
+            "the generic recital must not win: {msg}"
+        );
         // Everything else lists the accepted formats in user words, with no
         // internal reader ids.
         let msg = unrecognized_message(b"hello world, definitely not a board");
