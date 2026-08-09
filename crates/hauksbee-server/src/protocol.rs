@@ -43,6 +43,13 @@ pub struct SessionBacklog {
     /// Nets with an active probe (`AddProbe` without a matching `RemoveProbe`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub probes: Vec<String>,
+    /// The session's terminal failure, when it has one: the analog solve died
+    /// irrecoverably or the engine panicked mid-step. Broadcast as an `Error`
+    /// when it happens AND replayed here, so a client that connects (or
+    /// reloads) afterwards still learns why the sim is stopped instead of
+    /// staring at a frozen clock. Cleared on `Reset`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fatal: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
