@@ -546,8 +546,26 @@ fn protel_inner_index(n: &Name) -> Option<usize> {
 }
 
 /// KiCad inner-copper name: `*-In1_Cu.gbr`, `*-In2_Cu.gbr`, … or
-/// `inner1`, `signal2`, etc.
+/// `inner1`, `signal2`, `Copper_Signal_1`, etc.
 fn kicad_inner_index(n: &Name) -> Option<usize> {
+    /// The layer index that follows a marker, allowing ONE separator between
+    /// the word and the number. Altium 24 plots its inner copper as
+    /// `<board>_Copper_Signal_1.gbr`; requiring the digit to butt straight up
+    /// against `signal` matched `signal1` and missed `signal_1`, so the inner
+    /// layers of every Altium four-layer job fell through to `Unknown` and
+    /// their copper was silently discarded. A single `-`, `_` or space is the
+    /// separator every exporter uses; `.` is not, because that is the
+    /// extension boundary.
+    fn index_after(tail: &str) -> Option<usize> {
+        let digits = |s: &str| -> Option<usize> {
+            let d: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+            d.parse().ok()
+        };
+        digits(tail).or_else(|| match tail.as_bytes().first() {
+            Some(b'-' | b'_' | b' ') => digits(&tail[1..]),
+            _ => None,
+        })
+    }
     // Look for "in<k>" followed by "cu", or "inner<k>", or "signal<k>".
     for marker in ["in", "inner", "signal", "layer"] {
         // Scan EVERY occurrence of the marker, not just the first: a project
@@ -558,8 +576,7 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
         // the first whose tail actually begins with a layer index.
         for (pos, _) in n.full.match_indices(marker) {
             let tail = &n.full[pos + marker.len()..];
-            let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if let Ok(k) = digits.parse::<usize>() {
+            if let Some(k) = index_after(tail) {
                 // Require it to actually be a copper layer (mask/silk also have
                 // "layer" words; those were filtered already above).
                 if k >= 1 && (n.has("cu") || marker == "signal" || marker == "inner") {
@@ -657,6 +674,45 @@ mod tests {
         assert_eq!(role("board-F_Mask.gbr"), LayerRole::Ignored);
         assert_eq!(role("board-F_Silkscreen.gbr"), LayerRole::Ignored);
         assert_eq!(role("board-F_Paste.gbr"), LayerRole::Ignored);
+    }
+
+    #[test]
+    fn altium_inner_signal_films_are_copper() {
+        // Altium 24 plots inner copper as `<board>_Copper_Signal_1.gbr`, with a
+        // separator between the word and the layer index. Requiring the digit
+        // to butt straight up against `signal` matched none of them, so both
+        // inner films of every Altium four-layer job classified Unknown and
+        // their copper never reached the reconstruction: a real four-layer
+        // board came back as two layers.
+        assert!(matches!(
+            role("ARDEP_Mainboard_Copper_Signal_1.gbr"),
+            LayerRole::Copper { index: 1, .. }
+        ));
+        assert!(matches!(
+            role("ARDEP_Mainboard_Copper_Signal_2.gbr"),
+            LayerRole::Copper { index: 2, .. }
+        ));
+        assert!(matches!(
+            role("ARDEP_Mainboard_Copper_Signal_Top.gbr"),
+            LayerRole::Copper { index: 0, .. }
+        ));
+        assert!(matches!(
+            role("ARDEP_Mainboard_Copper_Signal_Bot.gbr"),
+            LayerRole::Copper {
+                index: usize::MAX,
+                ..
+            }
+        ));
+        // The separator is one character of `-`, `_` or space, never a run and
+        // never a dot: `signal.1` is a stem/extension boundary, not an index.
+        assert!(matches!(
+            role("board Inner 3 Cu.gbr"),
+            LayerRole::Copper { index: 3, .. }
+        ));
+        assert!(matches!(
+            role("board-signal-2.gbr"),
+            LayerRole::Copper { index: 2, .. }
+        ));
     }
 
     #[test]
