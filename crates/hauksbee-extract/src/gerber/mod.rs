@@ -52,6 +52,19 @@ pub struct GerberExtraction {
     pub stats: ReconStats,
 }
 
+/// The file's own name, for a message about it.
+///
+/// Never the full path. A web upload is read out of a throwaway directory whose
+/// name is a pid, a counter and a clock reading, so a message quoting the path
+/// both leaked a local absolute path into the report and made the FAILING report
+/// differ between two analyses of one malformed archive. The film name is also
+/// the only part the user can act on: they have the job, not our temp dir.
+fn film(path: &Path) -> std::borrow::Cow<'_, str> {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+}
+
 /// Recursively collect every file under `dir` (fab jobs sometimes nest the
 /// copper / drill / assembly films in sub-directories, e.g. Allegro's
 /// `*_CAM` / `*_SMT` / `*_ASM` split).
@@ -300,7 +313,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
         };
         let path = &copper[*orig_idx].1;
         let text = std::fs::read_to_string(path)
-            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
+            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", film(path))))?;
         if let Some(l) = copper_physical_layer(&text) {
             physical_to_stack.insert(l, *index);
             declared_physical_max = declared_physical_max.max(l);
@@ -323,7 +336,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             Err(e) => {
                 return Err(ExtractError::Xml(format!(
                     "parse copper {}: {e}",
-                    path.display()
+                    film(path)
                 )))
             }
         }
@@ -373,7 +386,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     let mut parsed: Vec<ParsedDrill> = Vec::new();
     for d in &drills {
         let text = std::fs::read_to_string(d)
-            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", d.display())))?;
+            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", film(d))))?;
         let n = d
             .file_name()
             .and_then(|s| s.to_str())
@@ -1429,7 +1442,7 @@ pub fn from_gerber_zip_named(
     board_name: &str,
 ) -> Result<GerberExtraction, ExtractError> {
     let bytes = std::fs::read(zip_path)
-        .map_err(|e| ExtractError::Xml(format!("read zip {}: {e}", zip_path.display())))?;
+        .map_err(|e| ExtractError::Xml(format!("read zip {}: {e}", film(zip_path))))?;
     // Uniqueness only, and nothing here reaches the report: pid plus a
     // process-local counter plus the clock, because a bare clock reading can
     // repeat across two calls in the same nanosecond and two jobs unzipping
@@ -1499,7 +1512,7 @@ fn unzip_into(bytes: &[u8], out: &Path) -> Result<(), ExtractError> {
         file.read_to_end(&mut buf)
             .map_err(|e| ExtractError::Xml(format!("zip read: {e}")))?;
         std::fs::write(&dest, buf)
-            .map_err(|e| ExtractError::Xml(format!("zip write {}: {e}", dest.display())))?;
+            .map_err(|e| ExtractError::Xml(format!("zip write {}: {e}", film(&dest))))?;
     }
     Ok(())
 }
