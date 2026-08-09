@@ -612,17 +612,21 @@ impl BoardEvidence {
             // so an open part on their nets is exactly the kind of gap that
             // must undermine them. Any kind not named here, including a future
             // one, takes the full model-aware traversal (fail closed).
-            let geometry_class = finding.check == "drc"
-                || (finding.check == "si"
-                    && matches!(
-                        finding.kind.as_str(),
-                        "crystal_load_cap"
-                            | "i2c_rise_time"
-                            | "antenna_keepout"
-                            | "usb_diff_pair"
-                            | "controlled_impedance"
-                    ));
-            maps.push(if geometry_class {
+            let value_claim = finding.check == "si"
+                && matches!(
+                    finding.kind.as_str(),
+                    "crystal_load_cap"
+                        | "i2c_rise_time"
+                        | "antenna_keepout"
+                        | "usb_diff_pair"
+                        | "controlled_impedance"
+                );
+            maps.push(if finding.check == "drc" {
+                // Copper is copper whether or not a part is fitted: DRC stays
+                // on the pure geometry traversal, where even presence-class
+                // part assumptions are off the causal path.
+                self.geometry_map_for_check("drc", finding.message.clone(), &nets)?
+            } else if value_claim {
                 self.value_claim_map(&finding.check, finding.message.clone(), &nets)?
             } else {
                 self.map_for_nets(finding.message.clone(), nets)?
