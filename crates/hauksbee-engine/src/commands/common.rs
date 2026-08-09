@@ -20,7 +20,29 @@ pub fn read_board_text(path: &Path) -> anyhow::Result<String> {
             path.display()
         );
     }
-    std::fs::read_to_string(path).map_err(|e| {
+    let bytes = read_board_bytes(path)?;
+    // A format hauksbee recognises and does not read must say so HERE too. This
+    // reader decodes UTF-8, and a pre-Eagle-6 binary board came back as "stream
+    // did not contain valid UTF-8" — true, useless, and different from what
+    // every other surface says about the same file.
+    if let Some(message) = crate::board_input::unsupported_format_refusal(
+        path.file_name().and_then(|s| s.to_str()).unwrap_or("board"),
+        &bytes,
+    ) {
+        anyhow::bail!("{message}");
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        anyhow::anyhow!(
+            "'{}' is a binary board file; to-code decompiles a text board \
+             (.kicad_pcb, KiCad netlist, Eagle .brd XML, IPC-D-356)",
+            path.display()
+        )
+    })
+}
+
+/// The board file's bytes, with [`read_board_text`]'s not-found guidance.
+fn read_board_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
+    std::fs::read(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             // The suggestion matches the INVOKING surface (this reader serves
             // to-code): a `hauksbee run` command here answered the wrong

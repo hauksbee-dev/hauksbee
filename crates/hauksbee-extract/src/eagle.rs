@@ -282,9 +282,121 @@ fn corrupt_coord(tag: &str, attr: &str, raw: &str) -> ExtractError {
     ))
 }
 
+/// True for a pre-Eagle-6 `.brd` / `.sch`, which is a BINARY format this
+/// reader does not parse.
+///
+/// Eagle moved to XML in version 6. Every earlier drawing opens with a 24-byte
+/// drawing record whose first byte is the tag `0x10` and whose second byte is
+/// the format era: `0x80` for the Eagle 3.x layout and `0x00` for 4.x/5.x.
+/// Those TWO bytes are the whole magic, which is also how KiCad's binary Eagle
+/// importer keys the two branches of its reader.
+///
+/// Byte 2 is NOT part of the magic. It is a per-era number that genuinely
+/// varies: `0x64` across the 70 Mutable Instruments drawings, and `0x30`,
+/// `0x31`, `0x6a` and `0x72` across KiCad's own pre-v6 regression boards. An
+/// earlier version of this detector pinned it to `0x64` and so recognised the
+/// corpus and missed real Eagle files, which is exactly the wrong way round for
+/// a check whose whole job is to name a format hauksbee cannot read. Byte 3 is
+/// zero in all 76 of those files and is kept as the one cheap guard against a
+/// two-byte coincidence.
+///
+/// No text format can begin with a `0x10` control byte, and no container
+/// hauksbee reads (OLE2 `D0 CF 11 E0`, zip `PK`, gzip `1F 8B`) starts this way,
+/// so this cannot take a file away from a reader that would have read it.
+///
+/// This is a NEGATIVE detector: it exists so the refusal can name the format
+/// and the one action that unlocks the file, instead of reciting the whole
+/// accepted-format list at someone holding a board hauksbee reads happily
+/// after a re-save. The `.brd` and `.sch` forms share the header, so the
+/// message must not claim to know which of the two this is.
+pub fn looks_like_eagle_binary(bytes: &[u8]) -> bool {
+    matches!(bytes, [0x10, 0x00 | 0x80, _, 0x00, ..])
+}
+
+/// What to tell someone who dropped a pre-Eagle-6 binary drawing: what the file
+/// is, and the input that unlocks it.
+///
+/// It names Eagle and Fusion because those two certainly write the XML form, and
+/// then stops naming tools: whether any given third-party importer reads the
+/// pre-6 binary format is not something hauksbee can check, and a refusal that
+/// asserts it would be trading one wrong instruction for another. The
+/// requirement is stated instead of the vendor, so the sentence stays true as
+/// the tooling moves.
+pub fn eagle_binary_message() -> String {
+    format!(
+        "this is an Eagle drawing in the pre-Eagle-6 BINARY format, which hauksbee does \
+         not read. Eagle 6 moved the .brd and .sch formats to XML, and the XML form is \
+         what hauksbee reads: open this file once in Eagle 6 or later, or in Fusion 360 \
+         Electronics, re-save it, and retry with the re-saved file. Anything that opens \
+         the pre-6 binary format and writes Eagle XML or a KiCad board will do; failing \
+         that, the design's gerbers are the other way in. See {}",
+        hauksbee_ir::docs_url("docs/ingest/EAGLE.md")
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::extract;
+    use super::{eagle_binary_message, extract, looks_like_eagle_binary};
+
+    #[test]
+    fn pre_eagle_6_binary_headers_are_recognised_and_xml_is_not() {
+        // The first six bytes of real pre-v6 drawings, and the point of the
+        // table is byte 2: it is 0x64 across the whole Mutable Instruments
+        // corpus and something else on every one of KiCad's regression boards,
+        // so a detector that treats it as a fixed stamp passes this crate's own
+        // corpus and refuses to recognise files from anywhere else.
+        for (head, what) in [
+            (
+                [0x10, 0x80, 0x64, 0x00, 0x21, 0x13],
+                "MI braids_v50.brd, era 3",
+            ),
+            (
+                [0x10, 0x00, 0x64, 0x00, 0xed, 0x0d],
+                "MI volts_v01.brd, era 4/5",
+            ),
+            (
+                [0x10, 0x00, 0x72, 0x00, 0xaa, 0x07],
+                "KiCad blink1_b1a.brd, era 4/5",
+            ),
+            (
+                [0x10, 0x80, 0x72, 0x00, 0x88, 0x07],
+                "KiCad blink1_v1a.brd, era 3",
+            ),
+            (
+                [0x10, 0x80, 0x6a, 0x00, 0x35, 0x10],
+                "KiCad boomchak.brd, era 3",
+            ),
+            (
+                [0x10, 0x80, 0x31, 0x00, 0xa6, 0x05],
+                "KiCad brenner57e.brd, era 3",
+            ),
+            (
+                [0x10, 0x80, 0x30, 0x00, 0xc3, 0x01],
+                "KiCad rocketgps.brd, era 3",
+            ),
+            (
+                [0x10, 0x00, 0x6a, 0x00, 0x9a, 0x1b],
+                "KiCad turnemoff.brd, era 4/5",
+            ),
+        ] {
+            assert!(looks_like_eagle_binary(&head), "missed {what}: {head:02x?}");
+        }
+        // The XML form stays with the reader that parses it.
+        assert!(!looks_like_eagle_binary(b"<?xml version=\"1.0\"?><eagle>"));
+        assert!(!looks_like_eagle_binary(b"<eagle version=\"9.6.2\">"));
+        // A truncated header, another binary container, and a third era byte
+        // that is not followed by the zero all 76 real files carry.
+        assert!(!looks_like_eagle_binary(&[0x10, 0x80, 0x64]));
+        assert!(!looks_like_eagle_binary(&[0x10, 0x40, 0x64, 0x00]));
+        assert!(!looks_like_eagle_binary(&[0x10, 0x80, 0x64, 0x01]));
+        assert!(!looks_like_eagle_binary(&[0xd0, 0xcf, 0x11, 0xe0]));
+        assert!(!looks_like_eagle_binary(b"PK\x03\x04"));
+        assert!(!looks_like_eagle_binary(b""));
+        // The message names the format and the action that unlocks the file.
+        let msg = eagle_binary_message();
+        assert!(msg.contains("pre-Eagle-6"), "got: {msg}");
+        assert!(msg.contains("re-save"), "got: {msg}");
+    }
 
     #[test]
     fn attribute_xml_entities_are_unescaped() {
