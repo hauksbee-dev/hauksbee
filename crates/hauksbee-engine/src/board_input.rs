@@ -840,35 +840,36 @@ fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, Bo
 /// analysed twice in one session would export two different reports, which is
 /// the scenario-08 determinism contract. Keeping the two apart also means the
 /// staged name never has to survive a round trip, so an upload name with a
-/// space, a `+`, or non-ASCII in it reaches the report intact and matches what
-/// the CLI reports for the same file.
+/// space, a `+`, or non-ASCII in it reaches the report intact, and matches what
+/// the CLI reports for the same archive saved under that name on disk.
+///
+/// The staging file is a [`tempfile::NamedTempFile`] so it is removed however
+/// the call leaves, including on a panic inside the reader. It keeps a `.zip`
+/// suffix because that is how the reader recognises an archive.
 fn gerber_from_zip_bytes(
     file_name: &str,
     contents: &[u8],
 ) -> Result<hauksbee_extract::gerber::GerberExtraction, BoardInputError> {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static N: AtomicU32 = AtomicU32::new(0);
-    let tmp = std::env::temp_dir().join(format!(
-        "hauksbee-web-gerber-{}-{}.zip",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::write(&tmp, contents)
+    let mut staged = tempfile::Builder::new()
+        .prefix("hauksbee-web-gerber-")
+        .suffix(".zip")
+        .tempfile()
         .map_err(|e| BoardInputError::Zip(format!("could not stage the zip: {e}")))?;
-    let result =
-        ExtractedBoard::from_gerber_with_stats_named(&tmp, &uploaded_board_name(file_name));
-    let _ = std::fs::remove_file(&tmp);
-    result.map_err(|e| {
-        // A zip that fails the gerber read is often a FIRMWARE project zipped
-        // by mistake; point at the firmware slot instead of only rejecting.
-        if let Some(marker) = zip_firmware_marker(contents) {
-            return BoardInputError::Zip(firmware_zip_message(file_name, marker));
-        }
-        BoardInputError::Zip(format!(
-            "could not read '{file_name}' as a gerber archive: {e}. A board zip should \
+    std::io::Write::write_all(&mut staged, contents)
+        .and_then(|()| std::io::Write::flush(&mut staged))
+        .map_err(|e| BoardInputError::Zip(format!("could not stage the zip: {e}")))?;
+    ExtractedBoard::from_gerber_with_stats_named(staged.path(), &uploaded_board_name(file_name))
+        .map_err(|e| {
+            // A zip that fails the gerber read is often a FIRMWARE project zipped
+            // by mistake; point at the firmware slot instead of only rejecting.
+            if let Some(marker) = zip_firmware_marker(contents) {
+                return BoardInputError::Zip(firmware_zip_message(file_name, marker));
+            }
+            BoardInputError::Zip(format!(
+                "could not read '{file_name}' as a gerber archive: {e}. A board zip should \
              contain the gerber fab files (copper + drill), or one .board export."
-        ))
-    })
+            ))
+        })
 }
 
 /// The board name for an uploaded gerber archive: the upload's file name with
@@ -878,8 +879,11 @@ fn gerber_from_zip_bytes(
 /// every report and export and must not move between two analyses of the same
 /// upload. It never reaches the filesystem (the staging path is chosen
 /// separately), so nothing here is sanitised away: the name the user gave the
-/// file is the name they see back, and it matches what `hauksbee run` reports
-/// for the same archive on disk.
+/// file is the name they see back, and for an archive named `<x>.zip` it is the
+/// same stem `hauksbee run <x>.zip` reports.
+///
+/// Backslash counts as a separator, unlike `Path` on unix, because a browser
+/// file input can still hand over a Windows-style `C:\fakepath\job.zip`.
 fn uploaded_board_name(file_name: &str) -> String {
     let leaf = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
     // Strip ONE extension, not every repetition: `board.zip.zip` keeps

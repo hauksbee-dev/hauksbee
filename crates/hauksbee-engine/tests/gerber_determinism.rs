@@ -160,6 +160,45 @@ fn gerber_zip_extraction_names_the_board_from_the_archive() {
     );
 }
 
+/// A FAILING report is under the same contract as a passing one.
+///
+/// The reader's messages used to quote the film's full path, which on the web
+/// path is inside a throwaway directory named from a pid, a counter and a clock
+/// reading. So one unreadable archive analysed twice produced two different
+/// error JSONs, and the message shipped a local absolute path to whoever read
+/// the report. The film's own name is the part the user can act on.
+#[test]
+fn an_unreadable_archive_fails_the_same_way_twice() {
+    let mut out = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut out);
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        writer
+            .start_file("board-F_Cu.gbr", options)
+            .expect("zip entry");
+        // Not valid UTF-8, so the copper film cannot even be read as text.
+        writer.write_all(&[0xff, 0xfe, 0x00, 0x9c]).expect("write");
+        writer.finish().expect("zip finish");
+    }
+    let bytes = out.into_inner();
+
+    let first = hauksbee_engine::frontdoor::analyze_json("broken_fab.zip", &bytes);
+    let second = hauksbee_engine::frontdoor::analyze_json("broken_fab.zip", &bytes);
+    assert!(
+        first.contains("\"ok\":false"),
+        "an unreadable film must fail: {first}"
+    );
+    assert_eq!(first, second, "the failing report must be stable too");
+    assert!(
+        first.contains("board-F_Cu.gbr"),
+        "the message should name the film: {first}"
+    );
+    assert!(
+        !first.contains("hauksbee_gerber_") && !first.contains("hauksbee-web-gerber"),
+        "no staging path may appear in the message: {first}"
+    );
+}
+
 /// The web path must name the board from the UPLOAD, not from wherever the
 /// bytes were parked. Nothing about the staging path may reach the report, and
 /// an upload name the filesystem would have to mangle must survive intact.
