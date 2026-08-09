@@ -832,21 +832,33 @@ fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, Bo
 
 /// Reverse-extract a gerber fab archive supplied as bytes (the web upload).
 /// `from_gerber` wants a path, so the bytes are parked in a temp file.
+///
+/// The staged file keeps the UPLOAD's name, inside a per-call temp directory
+/// that carries the uniqueness. The reader names the board after the archive it
+/// was handed, so staging as `hauksbee-web-gerber-<pid>-<n>.zip` named the board
+/// after the process and a call counter: the same upload analysed twice in one
+/// session produced two different `board_name` values and two different JSON
+/// exports, which is the scenario-08 determinism contract. Directory-per-call
+/// keeps concurrent uploads of the same file name apart without putting anything
+/// run-specific in the board's identity.
 fn gerber_from_zip_bytes(
     file_name: &str,
     contents: &[u8],
 ) -> Result<hauksbee_extract::gerber::GerberExtraction, BoardInputError> {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
-    let tmp = std::env::temp_dir().join(format!(
-        "hauksbee-web-gerber-{}-{}.zip",
+    let staging = std::env::temp_dir().join(format!(
+        "hauksbee-web-gerber-{}-{}",
         std::process::id(),
         N.fetch_add(1, Ordering::Relaxed)
     ));
+    std::fs::create_dir_all(&staging)
+        .map_err(|e| BoardInputError::Zip(format!("could not stage the zip: {e}")))?;
+    let tmp = staging.join(format!("{}.zip", staged_gerber_stem(file_name)));
     std::fs::write(&tmp, contents)
         .map_err(|e| BoardInputError::Zip(format!("could not stage the zip: {e}")))?;
     let result = ExtractedBoard::from_gerber_with_stats(&tmp);
-    let _ = std::fs::remove_file(&tmp);
+    let _ = std::fs::remove_dir_all(&staging);
     result.map_err(|e| {
         // A zip that fails the gerber read is often a FIRMWARE project zipped
         // by mistake; point at the firmware slot instead of only rejecting.
@@ -858,6 +870,45 @@ fn gerber_from_zip_bytes(
              contain the gerber fab files (copper + drill), or one .board export."
         ))
     })
+}
+
+/// The stem to stage an uploaded gerber archive under: the upload's own stem,
+/// reduced to characters that are safe in a path on every platform, and never
+/// empty. A browser upload's name is attacker-controlled, so a `../` or a NUL
+/// in it must not reach the filesystem; this is also the board's name, so it has
+/// to be a pure function of the upload name and nothing else.
+fn staged_gerber_stem(file_name: &str) -> String {
+    let leaf = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    // Strip ONE extension, not every repetition: `board.zip.zip` keeps
+    // `board.zip`, which is what the user named it. `get` rather than an index
+    // because a name ending in a multi-byte character would otherwise panic on
+    // a slice landing mid-codepoint.
+    let base = match leaf.len().checked_sub(4) {
+        Some(cut)
+            if leaf
+                .get(cut..)
+                .is_some_and(|ext| ext.eq_ignore_ascii_case(".zip")) =>
+        {
+            &leaf[..cut]
+        }
+        _ => leaf,
+    };
+    let safe: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = safe.trim_matches(['.', '-']);
+    if trimmed.is_empty() {
+        "board".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// What marks a zip as a firmware project rather than a gerber fab archive:
@@ -922,6 +973,31 @@ fn main {
     }
 }
 "#;
+
+    /// The staged name is a pure function of the upload name, and never a path.
+    /// It becomes the board's name in every report, so it has to be stable, and
+    /// it becomes a filesystem path, so a traversal or a separator in an
+    /// attacker-supplied upload name has to be flattened out.
+    #[test]
+    fn staged_gerber_stem_is_stable_and_path_safe() {
+        assert_eq!(
+            staged_gerber_stem("inkplate6_gerber-0915a100.zip"),
+            "inkplate6_gerber-0915a100"
+        );
+        assert_eq!(staged_gerber_stem("EPD_board.ZIP"), "EPD_board");
+        assert_eq!(staged_gerber_stem("board.zip.zip"), "board.zip");
+        assert_eq!(staged_gerber_stem("no-extension"), "no-extension");
+        assert_eq!(staged_gerber_stem("../../etc/passwd.zip"), "passwd");
+        assert_eq!(staged_gerber_stem("C:\\jobs\\fab.zip"), "fab");
+        assert_eq!(staged_gerber_stem("a b/c;d.zip"), "c-d");
+        assert_eq!(staged_gerber_stem("...zip"), "board");
+        assert_eq!(staged_gerber_stem(".zip"), "board");
+        assert_eq!(staged_gerber_stem(""), "board");
+        // Non-ASCII is replaced, not sliced through: this must not panic. The
+        // replacements are then trimmed off the ends like any other filler.
+        assert_eq!(staged_gerber_stem("платa.zip"), "a");
+        assert_eq!(staged_gerber_stem("boardé"), "board");
+    }
 
     fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
