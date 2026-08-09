@@ -255,3 +255,159 @@ fn odrive_v2_attempt_ground_short_flagged_and_final_is_clean() {
         "the final Inverter.PcbDoc is short-clean, so the contrast is real"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MWGEN-G1 pad-overlap gold row. A shipped 10 MHz-to-6 GHz signal generator,
+// 373 parts, drawn in KiCad 6. Its reference-input corner puts an SMAJ48CA TVS
+// in an SMA body (D503, 2.5 x 1.8 mm pads) on top of two SOT-23 diodes and two
+// hand-solder 0603s, and its Laird BMI-S-205-F shield-can fence pad on J206 on
+// top of a 0603 ferrite bead. Six pads of different nets overlap as a result.
+//
+// The ground truth is the same shape as the ODrive row's: the design's own rule
+// set forbids the overlaps. MWGEN-G1.kicad_pro sets `shorting_items` and
+// `clearance` to `error` and carries no drc_exclusions, and KiCad 9.0.3's own
+// `kicad-cli pcb drc` on this file reports the same six shorting_items
+// violations with the same net pairs and the same pad anchors. The
+// pin-every-pair assertion below is what makes this a regression gate rather
+// than a count: a change that loses one of the six, or that adds a seventh KiCad
+// does not report, fails here.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
+    let Some(pcb) = board("mwgen_g1/MWGEN-G1.kicad_pcb") else {
+        return;
+    };
+    hauksbee_testkit::scanned("MWGEN-G1 pad-overlap gold row", 1);
+
+    let text = std::fs::read_to_string(&pcb).expect("read MWGEN-G1 board");
+    let report = hauksbee_extract::ExtractedBoard::drc(&text).expect("drc runs");
+
+    // Net pair (sorted), layer, and the two footprints whose pads overlap, as
+    // KiCad's own DRC anchors them.
+    let expected = [
+        (
+            [
+                "/Clock reference/Input Clocks/REFIN",
+                "/Clock reference/Input Clocks/REFIN_GND",
+            ],
+            "F.Cu",
+            ["C205", "D503"],
+        ),
+        (
+            [
+                "/Clock reference/Input Clocks/REFIN",
+                "/Clock reference/Input Clocks/REFIN_GND",
+            ],
+            "F.Cu",
+            ["D503", "R204"],
+        ),
+        (
+            ["/Clock reference/Input Clocks/REFIN_GND", "Net-(D202-Pad3)"],
+            "F.Cu",
+            ["D202", "D503"],
+        ),
+        (
+            ["/Clock reference/Input Clocks/REFIN_GND", "Net-(D202-Pad3)"],
+            "F.Cu",
+            ["D203", "D503"],
+        ),
+        (
+            ["/Clock reference/REFOUT_SEC", "GND"],
+            "F.Cu",
+            ["D203", "D503"],
+        ),
+        (["GND", "Net-(FB204-Pad1)"], "F.Cu", ["FB204", "J206"]),
+    ];
+
+    let mut got: Vec<([String; 2], String, [String; 2])> = report
+        .shorts()
+        .map(|s| {
+            let mut nets = [s.net_a_name.clone(), s.net_b_name.clone()];
+            nets.sort();
+            let mut owners = [s.item_a.owner.clone(), s.item_b.owner.clone()];
+            owners.sort();
+            (nets, s.layer.clone(), owners)
+        })
+        .collect();
+    got.sort();
+    let want: Vec<([String; 2], String, [String; 2])> = expected
+        .iter()
+        .map(|(nets, layer, owners)| {
+            (
+                [nets[0].to_string(), nets[1].to_string()],
+                (*layer).to_string(),
+                [owners[0].to_string(), owners[1].to_string()],
+            )
+        })
+        .collect();
+    assert_eq!(
+        got, want,
+        "the six pad overlaps KiCad 9.0.3 reports on this file, exactly"
+    );
+
+    // Every one is a pad-to-pad overlap, not a zone or track artefact: that is
+    // what makes the KiCad cross-check a like-for-like comparison.
+    for s in report.shorts() {
+        assert!(
+            s.gap_mm < 0.0,
+            "overlapping pads, so the gap is negative; {} <-> {} measured {}",
+            s.net_a_name,
+            s.net_b_name,
+            s.gap_mm
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// emonTx V3.4.5 pour-overlap row: one file, one net pair, two layers, opposite
+// verdicts, and the fabrication output to settle which is which.
+//
+// GND and AGND are separate nets with no bridging component, and their
+// same-rank pours overlap in an identical 0.349 mm band on both copper layers
+// (GND's outline runs along y=43.205 with fill below; AGND's runs along
+// y=42.856 with fill above). Reading that outline overlap as copper reported a
+// short on both layers. The gerbers upstream ships beside the `.brd` disagree:
+// on F.Cu, where both pours hold isolate="0.3048", copper_top.gbr keeps them as
+// two distinct filled regions; on B.Cu, where the AGND pour carries
+// isolate="0.00030625", copper_bottom.gbr merges them into one region. So F.Cu
+// was a false positive and B.Cu is real copper, and `isolate` is the whole
+// difference. The emontx3 corpus entry is known_good = false for the B.Cu join,
+// so this test owns the file's coverage.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn emontx_ground_pour_join_is_flagged_on_the_merged_layer_only() {
+    let Some(brd) = board("emontx3/hardware/V3.4.5/emonTx V3.4.5.brd") else {
+        return;
+    };
+    hauksbee_testkit::scanned("emonTx V3.4.5 pour-overlap row", 1);
+
+    let text = std::fs::read_to_string(&brd).expect("read emonTx board");
+    let report = hauksbee_extract::ExtractedBoard::drc(&text).expect("drc runs");
+    let shorts: Vec<_> = report.shorts().collect();
+    assert_eq!(
+        shorts.len(),
+        1,
+        "only the layer whose fill actually merged, got: {:?}",
+        shorts
+            .iter()
+            .map(|s| format!("{} <-> {} on {}", s.net_a_name, s.net_b_name, s.layer))
+            .collect::<Vec<_>>()
+    );
+    let s = shorts[0];
+    let mut nets = [s.net_a_name.as_str(), s.net_b_name.as_str()];
+    nets.sort_unstable();
+    assert_eq!(nets, ["AGND", "GND"]);
+    assert_eq!(
+        s.layer, "B.Cu",
+        "copper_bottom.gbr is the layer with one merged region"
+    );
+    assert!(
+        s.item_a.owner.contains("isolate 0.00030625")
+            || s.item_b.owner.contains("isolate 0.00030625"),
+        "the finding names the zeroed isolate that let the pours meet, got {:?} / {:?}",
+        s.item_a.owner,
+        s.item_b.owner
+    );
+}
