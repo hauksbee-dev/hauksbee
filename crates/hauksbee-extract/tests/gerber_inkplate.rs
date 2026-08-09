@@ -58,14 +58,43 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
     // The Altium drill must parse. Before the reader fix (modal coords,
     // FILE_FORMAT=2:5, T<idx>F..S..C.. tool defs, TYPE sections) this was ZERO
     // and the two layers did not stitch. This is the load-bearing regression
-    // guard, pinned exactly: 630 round plated holes (EPD_board-RoundHoles.TXT)
-    // plus the 8 endpoints of the 4 routed plated slots (-RectHoles/-SlotHoles,
-    // each a G00/M15/G01/M16 rout whose two endpoints stitch as plated barrels).
-    // The corpus file is fixed, so an exact pin is stable and catches any
-    // dialect regression (a partial parse lands on a different number).
+    // guard, pinned exactly, and derived from the three drill files:
+    //
+    //   EPD_board-RoundHoles.TXT declares T1-T5, T7, T8, T10, T11 under
+    //   `;TYPE=PLATED` and T12-T15 under `;TYPE=NON_PLATED`. Counting its body
+    //   coordinate lines (modal, so a bare `Y....` is a hit too) per tool gives
+    //   T1 16, T2 4, T3 459, T4 64, T5 11, T7 31, T8 2, T10 41, T11 2 = 630
+    //   plated, and T12 4, T13 5, T14 4, T15 4 = 17 non-plated that are
+    //   correctly excluded.
+    //
+    //   EPD_board-RectHoles.TXT (plated T9, C0.02756") and
+    //   EPD_board-SlotHoles.TXT (plated T6, C0.01968") each hold two
+    //   G00/M15/G01/M16 routs: a rapid to the start with the cutter up, a
+    //   plunge, ONE cut segment, a retract. That is 4 routed plated slots, and
+    //   each is one plated hit whose barrel is the stadium swept along the cut.
+    //
+    // So 630 + 4 = 634. This test previously pinned 638 because the reader
+    // predated rout handling: it read both the `G00` rapid and the `G01` cut
+    // endpoint of every rout as separate round hits, which turned one slot into
+    // two phantom barrels and counted a cutter-up positioning move as a drilled
+    // hole. The corpus files are fixed, so the exact pin is stable and catches
+    // any dialect regression (a partial parse lands on a different number).
     assert_eq!(
-        s.n_holes, 638,
-        "Inkplate plated-hole count must be 630 round + 8 slot endpoints"
+        s.n_holes, 634,
+        "Inkplate plated-hole count must be 630 round + 4 routed slots"
+    );
+    // The other side of the same pin: the four routs must arrive as slots. If
+    // they ever revert to round hits, n_holes drifts and this drops to zero.
+    assert_eq!(
+        s.n_slots, 4,
+        "the -RectHoles/-SlotHoles routs are 4 plated slots, not round hits"
+    );
+    // Both drill files declare a plain plated set with no layer pair, and the
+    // job carries no partial-span drill, so nothing is refused: every plated
+    // hit on this 2-layer board stitches top to bottom.
+    assert_eq!(
+        s.refused_span_holes, 0,
+        "a 2-layer job with no multi-span drill must refuse no barrel"
     );
 
     // Connectivity reconstructs from copper alone; a dominant ground net exists.
@@ -112,12 +141,12 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
 /// The net count this board should reconstruct to, which it currently does not.
 ///
 /// Reverse extraction collapses the Inkplate to 18 connected components where a
-/// board with 638 plated holes and 492 filled regions on the top layer alone
+/// board with 634 plated holes and 492 filled regions on the top layer alone
 /// should yield well over a hundred. Copper that should stay apart is being
 /// unioned.
 ///
 /// Ruled out by measurement, so nobody repeats the work: the layer count (2),
-/// the plated-hole count (638) and the hole positions are all correct, and
+/// the plated-hole count (634) and the hole positions are all correct, and
 /// units are handled (both readers scale inches to mm, and the drill's
 /// coordinate range, X 0.000 to 5.835 in, sits inside the copper's X 0.000 to
 /// 5.945 in). Clear-polarity handling exists and this file carries only one
