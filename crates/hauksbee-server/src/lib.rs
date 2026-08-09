@@ -844,6 +844,10 @@ mod rate_honesty_tests {
         sim_time: f64,
         cost: f64,
         controls: SolverControls,
+        /// Steps actually taken, observable from the test after the engine
+        /// moves into the loop; proves a "responsiveness while grinding"
+        /// window really contained a grinding step.
+        stepped: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl Engine for SlowEngine {
@@ -864,6 +868,8 @@ mod rate_honesty_tests {
         fn step(&mut self, dt: f64) -> SimFrame {
             std::thread::sleep(std::time::Duration::from_secs_f64(dt * self.cost));
             self.sim_time += dt;
+            self.stepped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             SimFrame {
                 t: self.sim_time,
                 ..Default::default()
@@ -936,6 +942,7 @@ mod rate_honesty_tests {
                 sim_time: 0.0,
                 cost: 5.0,
                 controls: SolverControls::default(),
+                stepped: Default::default(),
             },
             2.0,
         )
@@ -979,11 +986,13 @@ mod rate_honesty_tests {
         });
         // Each ~33 ms frame step burns ~1 s of wall time (cost 30x): the
         // shape of a solver grinding its retry ladder.
+        let stepped: Arc<std::sync::atomic::AtomicUsize> = Default::default();
         let task = tokio::spawn(sim_loop(
             Box::new(SlowEngine {
                 sim_time: 0.0,
                 cost: 30.0,
                 controls: SolverControls::default(),
+                stepped: stepped.clone(),
             }),
             "grind".into(),
             tx,
@@ -1002,6 +1011,12 @@ mod rate_honesty_tests {
             worst = worst.max(t0.elapsed());
         }
         task.abort();
+        // The latency bound is only evidence if a grinding step actually ran
+        // inside the window; a loop that never stepped would pass vacuously.
+        assert!(
+            stepped.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+            "the engine never stepped: this run measured nothing"
+        );
         assert!(
             worst < std::time::Duration::from_millis(400),
             "a 20 ms timer stalled {worst:?} while the engine stepped: the sim loop is \
@@ -1015,6 +1030,10 @@ mod rate_honesty_tests {
         sim_time: f64,
         steps: u32,
         controls: SolverControls,
+        /// Flipped by `reset()`: the engine is healthy afterwards, so the
+        /// test can prove Reset actually reopens the session (the latch
+        /// lifecycle), not just that the failure fired once.
+        healed: bool,
     }
 
     impl Engine for DeadSolveEngine {
@@ -1043,6 +1062,7 @@ mod rate_honesty_tests {
         fn reset(&mut self) {
             self.steps = 0;
             self.sim_time = 0.0;
+            self.healed = true;
         }
         fn set_controls(&mut self, controls: SolverControls) {
             self.controls = controls;
@@ -1053,7 +1073,8 @@ mod rate_honesty_tests {
         fn serial(&mut self, _mcu: &str, _data: &[u8]) {}
         fn set_input(&mut self, _source: &str, _value: f64) {}
         fn analog_failure(&self) -> Option<String> {
-            (self.steps >= 1).then(|| "Newton failed at t=0 even at dt_min".to_string())
+            (!self.healed && self.steps >= 1)
+                .then(|| "Newton failed at t=0 even at dt_min".to_string())
         }
     }
 
@@ -1079,6 +1100,7 @@ mod rate_honesty_tests {
                 sim_time: 0.0,
                 steps: 0,
                 controls: SolverControls::default(),
+                healed: false,
             }),
             "dead".into(),
             tx,
@@ -1113,7 +1135,6 @@ mod rate_honesty_tests {
                 },
             }
         }
-        task.abort();
         assert!(
             saw_error,
             "a permanently failing analog solve must put an Error on the wire"
@@ -1131,6 +1152,83 @@ mod rate_honesty_tests {
             fatal.is_some_and(|f| f.contains("Newton failed at t=0")),
             "the terminal failure must be recorded for replay to late subscribers"
         );
+
+        // The fatal latch: Play on a dead session must NOT step again (it
+        // re-broadcasts the reason instead of re-grinding the dead solve).
+        cmd_tx.send(ClientMessage::Play).await.unwrap();
+        let mut errors_after_replay = 0u32;
+        let mut frames_after_replay = 0u32;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        while tokio::time::Instant::now() < deadline {
+            let timeout = tokio::time::sleep_until(deadline);
+            tokio::select! {
+                _ = timeout => break,
+                msg = rx.recv() => match msg {
+                    Ok(json) => match serde_json::from_str::<ServerMessage>(&json) {
+                        Ok(ServerMessage::Error { .. }) => errors_after_replay += 1,
+                        Ok(ServerMessage::SimFrame(_)) => frames_after_replay += 1,
+                        _ => {}
+                    },
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+            }
+        }
+        assert!(
+            errors_after_replay >= 1,
+            "Play on a fatal session must re-broadcast the reason \
+             (frames_after_replay={frames_after_replay})"
+        );
+        assert_eq!(
+            frames_after_replay, 0,
+            "Play on a fatal session must not step the dead solve again"
+        );
+
+        // Reset clears the latch (the engine heals in this fixture): the
+        // refreshed backlog is broadcast as the acknowledgement that lifts
+        // the banner, and Play flows frames again.
+        cmd_tx.send(ClientMessage::Reset).await.unwrap();
+        cmd_tx.send(ClientMessage::Play).await.unwrap();
+        let mut saw_cleared_backlog = false;
+        let mut frames_after_reset = 0u32;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            let timeout = tokio::time::sleep_until(deadline);
+            tokio::select! {
+                _ = timeout => break,
+                msg = rx.recv() => match msg {
+                    Ok(json) => match serde_json::from_str::<ServerMessage>(&json) {
+                        Ok(ServerMessage::Backlog(b)) => {
+                            if b.fatal.is_none() {
+                                saw_cleared_backlog = true;
+                            }
+                        }
+                        Ok(ServerMessage::SimFrame(_)) => {
+                            frames_after_reset += 1;
+                            if frames_after_reset >= 2 && saw_cleared_backlog {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    },
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+            }
+        }
+        assert!(
+            saw_cleared_backlog,
+            "Reset must broadcast the refreshed backlog (the banner-lift acknowledgement)"
+        );
+        assert!(
+            frames_after_reset >= 1,
+            "after Reset heals the engine, Play must step again"
+        );
+        assert!(
+            shared.backlog.lock().expect("backlog lock").fatal.is_none(),
+            "Reset must clear the recorded terminal failure"
+        );
+        task.abort();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1142,6 +1240,7 @@ mod rate_honesty_tests {
                 sim_time: 0.0,
                 cost: 0.01,
                 controls: SolverControls::default(),
+                stepped: Default::default(),
             },
             1.5,
         )
@@ -1409,11 +1508,17 @@ async fn sim_loop(
                         // as if they belonged to the fresh run. Same for the
                         // terminal-failure marker: `engine.reset()` cleared the
                         // abort streak, so the failure story starts over.
-                        {
+                        let cleared = {
                             let mut backlog = shared.backlog.lock().expect("backlog lock");
                             backlog.faults.clear();
                             backlog.fatal = None;
-                        }
+                            backlog.clone()
+                        };
+                        // Broadcast the refreshed (empty) backlog: every
+                        // connected client lifts its failure banner on THIS
+                        // acknowledgement, not on optimistically having sent
+                        // a Reset a dead loop may never process.
+                        broadcast_msg(&ServerMessage::Backlog(cleared));
                     }
                     ClientMessage::SetSpeed { factor } => {
                         speed = factor.clamp(0.001, 1000.0);
