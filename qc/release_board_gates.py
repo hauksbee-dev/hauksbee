@@ -185,7 +185,33 @@ def audit_release_history(
     }
 
 
-BrowserRunner = Callable[[list[Path], Path, str, str], int]
+BrowserRunner = Callable[[list[Path], Path, str, str, list[Path]], int]
+
+# The manifest axis for an input hauksbee deliberately does not read (a
+# pre-Eagle-6 binary Eagle drawing, today). In the CORPUS gate these are staged
+# and dropped like any other board, but the journey holds them to the opposite
+# contract: an honest refusal, no report, no export, no live launch. Demanding a
+# report from them would report coverage over files nothing opened; dropping
+# them from the gate would leave the refusal untested on real files, which is
+# the only reason the corpus carries them. The external-five gate excludes them
+# from its candidate pool instead: see `run_external_gate`.
+REFUSAL_AXIS = "unreadable-by-design"
+
+
+def _displayed_diagnostic(server_error: str) -> str:
+    """The part of an engine refusal the app renders, per `board-formats.ts`."""
+
+    return re.sub(r"\s*Supported:.*$", "", server_error, flags=re.S).strip() or server_error
+
+
+def _expected_refusals(
+    candidates: list[Candidate], staged_paths: list[Path]
+) -> list[Path]:
+    return [
+        staged
+        for candidate, staged in zip(candidates, staged_paths, strict=True)
+        if REFUSAL_AXIS in candidate.axes
+    ]
 
 
 def _redact_local_paths(value: object, replacements: dict[str, str]) -> object:
@@ -265,14 +291,76 @@ def _validate_browser_results(
                 f"browser journey failed for {candidate.source_id}: "
                 + "; ".join(map(str, failures))
             )
-        if not isinstance(report, dict) or report.get("ok") is not True:
+        expects_refusal = REFUSAL_AXIS in candidate.axes
+        if item.get("expected_refusal") is not expects_refusal:
             raise SelectionError(
-                f"browser journey did not produce an OK report for {candidate.source_id}"
+                f"browser journey did not apply the {REFUSAL_AXIS} contract to "
+                f"{candidate.source_id}"
             )
-        if item.get("exported") is not True:
-            raise SelectionError(
-                f"browser journey did not validate JSON export for {candidate.source_id}"
-            )
+        if expects_refusal:
+            # The refusal side of the same gate, and it must rest on retained
+            # evidence rather than on the journey's own say-so. `refused: true`
+            # with an empty row would otherwise record a passing journey for a
+            # board nothing was ever dropped on, so the refusal payload the
+            # server produced and the message the page rendered are both
+            # required here.
+            if item.get("refused") is not True:
+                raise SelectionError(
+                    f"browser journey did not refuse {candidate.source_id} honestly"
+                )
+            if not isinstance(report, dict) or report.get("ok") is not False:
+                raise SelectionError(
+                    f"browser journey retained no server refusal for {candidate.source_id}, "
+                    f"which the corpus declares {REFUSAL_AXIS}"
+                )
+            server_error = str(report.get("error") or "").strip()
+            if not server_error:
+                raise SelectionError(
+                    f"browser journey retained a refusal with no reason for "
+                    f"{candidate.source_id}"
+                )
+            rendered = str(item.get("refusal_message") or "").strip()
+            if not rendered:
+                raise SelectionError(
+                    f"browser journey retained no rendered refusal for {candidate.source_id}"
+                )
+            # The rendered text has to be the server's, not the journey's. The
+            # app strips the engine's trailing "Supported: ..." clause before
+            # displaying it (frontend/src/lib/board-formats.ts), so apply the
+            # same rule here rather than trusting the journey to have compared
+            # them: this validator audits that artifact, and re-deriving the one
+            # relationship it rests on is the point.
+            if _displayed_diagnostic(server_error) not in rendered:
+                raise SelectionError(
+                    f"retained refusal for {candidate.source_id} does not carry what "
+                    f"the server said"
+                )
+            if (
+                report.get("num_components")
+                or report.get("num_nets")
+                or report.get("sections")
+            ):
+                raise SelectionError(
+                    f"refused {candidate.source_id} still came back carrying board content"
+                )
+            if item.get("exported") is not False:
+                raise SelectionError(
+                    f"browser journey exported JSON for a refused {candidate.source_id}"
+                )
+            if item.get("live_started") is not False:
+                raise SelectionError(
+                    f"browser journey started a live session for a refused "
+                    f"{candidate.source_id}"
+                )
+        else:
+            if not isinstance(report, dict) or report.get("ok") is not True:
+                raise SelectionError(
+                    f"browser journey did not produce an OK report for {candidate.source_id}"
+                )
+            if item.get("exported") is not True:
+                raise SelectionError(
+                    f"browser journey did not validate JSON export for {candidate.source_id}"
+                )
         status = item.get("response_status")
         if not isinstance(status, int) or not 200 <= status < 300:
             raise SelectionError(
@@ -426,8 +514,16 @@ def run_external_gate(
         raise SelectionError("external-five gate requires an external-cohort manifest")
     corpus = discover_candidates(corpus_root, manifest_path=corpus_manifest)
     corpus_hashes = {candidate.sha256 for candidate in corpus}
+    # An `unreadable-by-design` input cannot serve this gate. Its whole question
+    # is whether five previously-unseen real boards analyse in a browser, and a
+    # file hauksbee refuses by design answers nothing about that: five of them
+    # would satisfy the run with five refusals and record a completed
+    # external-five iteration containing no analysed board at all. The refusal
+    # contract stays where the refusal fixtures live, in the corpus gate.
     eligible = [
-        candidate for candidate in external if candidate.sha256 not in corpus_hashes
+        candidate
+        for candidate in external
+        if candidate.sha256 not in corpus_hashes and REFUSAL_AXIS not in candidate.axes
     ]
     manifest_sha256 = hashlib.sha256(external_manifest.read_bytes()).hexdigest()
     reservation = reserve_iteration(
@@ -487,7 +583,13 @@ def run_external_gate(
     }
     result_dir = run_root / "browser"
     try:
-        return_code = runner(staged, result_dir, base_url, "external")
+        # Always empty: the eligibility filter above keeps `unreadable-by-design`
+        # inputs out of this gate entirely. Derived rather than hard-coded so a
+        # future change to that filter cannot silently leave the journey
+        # demanding a report from a file the manifest says is unreadable.
+        return_code = runner(
+            staged, result_dir, base_url, "external", _expected_refusals(selected, staged)
+        )
     except OSError as error:
         _record_external_evidence(
             history_path=history_path,
@@ -579,7 +681,9 @@ def run_corpus_gate(
     staged = _materialize_all(candidates, scratch_root / run_id / "inputs")
     staged_hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in staged]
     result_dir = scratch_root / run_id / "browser"
-    return_code = runner(staged, result_dir, base_url, "corpus")
+    return_code = runner(
+        staged, result_dir, base_url, "corpus", _expected_refusals(candidates, staged)
+    )
     if return_code != 0:
         raise SelectionError(f"browser runner exited with status {return_code}")
     if [
@@ -617,7 +721,7 @@ def _utc_now() -> str:
 
 
 def _playwright_runner(
-    paths: list[Path], output: Path, base_url: str, cohort: str
+    paths: list[Path], output: Path, base_url: str, cohort: str, refusals: list[Path]
 ) -> int:
     output.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
@@ -627,6 +731,9 @@ def _playwright_runner(
             "HB_E2E_BASE": base_url,
             "HB_E2E_OUT": str(output.resolve()),
             "HB_RELEASE_COHORT": cohort,
+            "HB_REFUSAL_FILES": json.dumps(
+                [str(path.resolve()) for path in refusals]
+            ),
         }
     )
     result = subprocess.run(
