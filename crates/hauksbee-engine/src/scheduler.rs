@@ -3334,6 +3334,13 @@ impl Scheduler {
         for _ in 0..n {
             match self.march_chunk(sub, opts, carry.as_deref(), thermal) {
                 Ok((x, sub_diagnostics)) => {
+                    // Every quarter must be physical, not just the final one:
+                    // an insane intermediate would seed the next quarter (and
+                    // deposit its thermal integral) and could wander back to
+                    // a sane-looking endpoint, laundering the divergence.
+                    if self.insane_node_state(&x).is_some() {
+                        return None;
+                    }
                     if let Some(candidate) = sub_diagnostics.final_residual {
                         if diagnostics
                             .final_residual
@@ -3462,6 +3469,9 @@ impl Scheduler {
                 seed.map(<[f64]>::to_vec),
                 &mut scratch,
             )
+            // A companion the sanity policy would reject as a MAIN result
+            // measures nothing as a reference either.
+            .filter(|(x_ref, _)| self.insane_node_state(x_ref).is_none())
             .map(|(x_ref, _)| (x_ref, REFINED_FACTOR, REFINED_TOL_SCALE))
         };
         let companion = companion.or_else(|| {
@@ -3473,6 +3483,7 @@ impl Scheduler {
                 seed.map(<[f64]>::to_vec),
                 &mut scratch,
             )
+            .filter(|(x_ref, _)| self.insane_node_state(x_ref).is_none())
             .map(|(x_ref, _)| (x_ref, COARSE_FACTOR, COARSE_TOL_SCALE))
         })?;
         let (x_ref, richardson, tol_scale) = companion;

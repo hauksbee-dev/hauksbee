@@ -116,11 +116,21 @@ export function useLiveSimulation(): SimulationState {
           // seed-from-backlog effect re-fires per (re)connect.
           case 'Backlog':
             setBacklog({ ...msg })
-            // A replayed terminal failure: a client that connected after the
-            // session died still learns why the sim is stopped.
-            if (msg.fatal) setServerError(msg.fatal)
+            // The replayed backlog is authoritative for this (re)connect: a
+            // terminal failure it carries is shown, and its ABSENCE clears a
+            // stale banner from a previous session (a healthy replacement
+            // must not wear its predecessor's death notice).
+            setServerError(msg.fatal ?? null)
             break
-          case 'SimFrame': pendingFrame.current = msg; scheduleFlush(); break
+          case 'SimFrame':
+            pendingFrame.current = msg
+            scheduleFlush()
+            // A frame means the session is stepping again: any earlier stop
+            // reason no longer describes the present. (A dead solve emits its
+            // Error AFTER its last frame and then stops framing, so the
+            // banner set by that Error is never cleared by this.)
+            setServerError(prev => (prev === null ? prev : null))
+            break
           case 'Status': pendingStatus.current = msg; scheduleFlush(); break
           case 'ProbeData':
             setProbeData(prev => {
