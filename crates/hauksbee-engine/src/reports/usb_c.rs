@@ -87,10 +87,12 @@ pub fn emit(
                 let mut value = evidence.enrich_json(value);
                 value["inputs"] = serde_json::to_value(inputs)?;
                 if let Some(note) = &inconclusive {
-                    if !serious {
-                        value["verdict"] = serde_json::Value::from("invalid");
-                        value["ok"] = serde_json::Value::from(false);
-                    }
+                    // Fail beats invalid, and either way the document carries
+                    // a machine verdict: a serious CC fault with blockers
+                    // beside it must not read as no verdict at all.
+                    value["verdict"] =
+                        serde_json::Value::from(if serious { "fail" } else { "invalid" });
+                    value["ok"] = serde_json::Value::from(false);
                     value["coverage_note"] = serde_json::Value::from(note.clone());
                 }
                 println!("{}", serde_json::to_string(&value)?);
