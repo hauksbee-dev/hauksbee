@@ -24,6 +24,17 @@ pub trait Engine: Send + 'static {
         false
     }
 
+    /// A human-readable reason when this engine's analog solve is failing
+    /// irrecoverably (a divergence no retry will cure), `None` while healthy.
+    ///
+    /// The sim loop polls this after every step: a live session whose solve
+    /// has genuinely died must END with this reason on the wire, not grind
+    /// the failing chunk forever while the client watches a frozen clock.
+    /// Default `None` for engines with no such failure mode.
+    fn analog_failure(&self) -> Option<String> {
+        None
+    }
+
     /// Smallest step worth asking this engine for, in simulated seconds.
     ///
     /// An engine whose cost is dominated by a FIXED per-step price (an external
