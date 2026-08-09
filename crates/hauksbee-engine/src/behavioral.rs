@@ -386,17 +386,24 @@ fn compile_law_implicit(
         return None;
     }
     let compiled = hauksbee_ir::CompiledExpr::compile(&out).ok()?;
-    // PROVE the expression evaluates before choosing the implicit path.
-    // `CompiledExpr::compile` validates variable identifiers but not function
-    // names, so an unknown/misnamespaced function (`bogus(x)`, bare `exp`
-    // where evalexpr wants `math::exp`) compiles fine and would then FAULT
-    // inside Newton at every stamp, failing the analog session; the runtime
-    // form evaluates the same malformed law to a guarded 0 A. One probe at
-    // the all-zero dependency point catches exactly the structural faults
-    // (a non-finite VALUE at the probe point is fine: `ln(0)` is a property
-    // of the probe, not of the expression, and Newton's own FD guard already
-    // owns non-finite iterates).
-    compiled.eval(&vec![0.0; deps.len()], 0.0).ok()?;
+    // PROVE the expression evaluates FINITE before choosing the implicit
+    // path. `CompiledExpr::compile` validates variable identifiers but not
+    // function names, so an unknown/misnamespaced function (`bogus(x)`, bare
+    // `exp` where evalexpr wants `math::exp`) compiles fine and would then
+    // FAULT inside Newton at every stamp, failing the analog session; the
+    // runtime form evaluates the same malformed law to a guarded 0 A, a
+    // contract the CI gate pins (`hauksbee-ci exit3_reachability`: a
+    // `v_in / sense_ohms` law with a 0-ohm sense resistor folds to a
+    // division by zero and must contribute 0 A, never an aborted run). A
+    // non-finite probe VALUE is the same hazard as a structural fault, so
+    // both refuse: `0.0 / (0.0)` is NaN at the probe exactly because it is
+    // NaN at every iterate. The probe point (all dependencies 0, t=0) cannot
+    // certify every iterate Newton will visit, but it catches the whole
+    // folded-constant class, which is what the contract covers.
+    compiled
+        .eval(&vec![0.0; deps.len()], 0.0)
+        .ok()
+        .filter(|v| v.is_finite())?;
     Some((compiled, deps))
 }
 
@@ -1427,8 +1434,17 @@ mod tests {
         assert!(compile_law_implicit("math::exp(v_io)", &roles(), &params()).is_some());
         assert!(compile_law_implicit("max(0.0, v_io)", &roles(), &params()).is_some());
         assert!(compile_law_implicit("min(v_io, v_vbus)", &roles(), &params()).is_some());
-        // A non-finite VALUE at the zero probe point is not a structural
-        // fault: the law is still implicit-eligible.
-        assert!(compile_law_implicit("math::ln(v_io + 0.0)", &roles(), &params()).is_some());
+    }
+
+    /// A law that probes non-finite refuses the implicit path and keeps the
+    /// runtime form's clamp-to-0-A contract (pinned by hauksbee-ci's
+    /// `an_unevaluable_behavioural_law_is_clamped_rather_than_poisoning_the_solve`):
+    /// the canonical case is a division by a parameter that folded to zero.
+    #[test]
+    fn non_finite_probe_refuses_and_keeps_the_clamp_contract() {
+        let mut p = params();
+        p.set_f64("sense_ohms", 0.0);
+        assert!(compile_law_implicit("v_io / sense_ohms", &roles(), &p).is_none());
+        assert!(compile_law_implicit("math::ln(v_io + 0.0)", &roles(), &p).is_none());
     }
 }
