@@ -25,6 +25,29 @@ pub fn emit(
     // identity (which resistor is a real Rd), so unbound verdict-critical
     // parts must be said out loud on this surface too, not only exit-coded
     // under --strict.
+    // Scoped to the CC analysis: the CC verdict rests on the identity of the
+    // parts on the receptacle's CC nets, so only unbound critical parts that
+    // actually touch those nets can make THIS surface inconclusive. An
+    // unrelated unmodelled MCU elsewhere on the board does not, and with no
+    // receptacle at all there is no CC claim to qualify.
+    let cc_blockers: Vec<String> = match crate::checks::usb_c::receptacle_cc_net_names(board) {
+        Some(cc_nets) => blockers
+            .iter()
+            .filter(|reference| {
+                board.components.iter().any(|c| {
+                    c.reference == **reference
+                        && c.pins.iter().any(|p| {
+                            p.net
+                                .and_then(|id| board.net(id))
+                                .is_some_and(|n| cc_nets.contains(&n.name))
+                        })
+                })
+            })
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    };
+    let blockers = cc_blockers.as_slice();
     let inconclusive =
         (!blockers.is_empty()).then(|| crate::result::inconclusive_verdict(blockers));
     // Failure beats inconclusiveness, same precedence as JsonReport::verdict:
