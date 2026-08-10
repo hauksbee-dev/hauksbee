@@ -3005,9 +3005,10 @@ pub mod eagle_drc {
             /// only" and the fill can never crowd them. Against another POUR it
             /// does not: the emonTx V3.4.5 pours at `isolate="0.00030625"`
             /// against a GND pour under an 8 mil `mdWireWire` rule, and its own
-            /// CAM output emits the two as one filled region. So here the raw
-            /// value governs, and `POUR_MERGE_ISOLATE_MM` is the band in which
-            /// it means "no gap at all".
+            /// CAM output emits the two as one filled region, which the rules
+            /// floor would have prevented. So the raw value is what the
+            /// pour-to-pour pass reads, and `POUR_MERGE_ISOLATE_MM` is the band
+            /// in which it is taken to mean "no gap at all".
             isolate: f64,
             /// Pour priority. With differing ranks the higher-numbered pour
             /// yields; same-rank pours of different signals get no arbitration
@@ -4045,9 +4046,9 @@ pub mod eagle_drc {
         // around the lower), so they stay silent. Same-rank pours of different
         // signals whose OUTLINES overlap are not, on their own, a short: the
         // yielding pour is still carved back by its own `isolate`, and the
-        // outline says nothing about where the fill lands. The overlap only
-        // survives into copper when a pour's `isolate` is zero, because then
-        // the fill is allowed to run right up to the foreign pour.
+        // outline says nothing about where the fill lands. What this pass treats
+        // as reaching copper is an overlap where a pour's `isolate` is zero, so
+        // nothing in the file asks for a gap.
         //
         // The emonTx V3.4.5 (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`) is the
         // measurement behind that: GND and AGND carry same-rank pours whose
