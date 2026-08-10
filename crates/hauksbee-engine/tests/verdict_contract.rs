@@ -641,8 +641,11 @@ fn assert_gate_matches_verdict(surface: &[&str], board: &Path, want_verdict: &st
         stderr(&json)
     );
     assert_eq!(ok, verdict == "pass", "ok must mirror the verdict word");
-    // Without --strict every surface stays exit 0: the verdict is a document
-    // field, and turning it into an exit code is what --strict is for.
+    // Without --strict every surface this helper covers stays exit 0: the
+    // verdict is a document field, and turning it into an exit code is what
+    // --strict is for. `--thermal` and `--ac` are not covered here because they
+    // gate by DEFAULT (their own tests pin that), which is why the helper takes
+    // the selector rather than looping over all of them.
     assert_eq!(
         json.status.code(),
         Some(0),
@@ -747,11 +750,13 @@ fn usb_c_strict_exit_agrees_with_its_cc_scoped_verdict() {
 #[test]
 fn the_report_surface_describes_the_binding_and_never_gates_on_it() {
     // `--report` is a description of what was modelled, not a pass/fail check,
-    // so `--strict` never reaches it (reports/bind.rs). Its verdict therefore
-    // may not read `invalid` either: incomplete binding is this report's
-    // SUBJECT, printed in full, and binding completeness reaches a verdict only
-    // through the verdict-critical bind gate this surface is exempt from. A
-    // document saying `ok:false` beside a command that always exits 0 hands a
+    // so `--strict` never reaches its renderer (reports/bind.rs takes no strict
+    // flag; the pre-surface refusal for a board with no placement still applies
+    // and exits 3 over an `invalid` document, like every other surface). Its
+    // verdict therefore may not read `invalid` either: incomplete binding is
+    // this report's SUBJECT, printed in full, and binding completeness reaches a
+    // verdict only through the verdict-critical bind gate this surface is exempt
+    // from. A document saying `ok:false` beside a command that exits 0 hands a
     // pipeline two answers.
     for name in [
         "verdict_fet_unbound.kicad_pcb",
