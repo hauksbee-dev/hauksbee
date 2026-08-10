@@ -347,24 +347,53 @@ the *computed* fill polygon is absent, because Eagle re-derives it on every
 ratsnest / CAM run. That derivation is what keeps the fill out of the
 pour-to-copper short test: Eagle carves max(`isolate`, the applicable
 design-rule / net-class clearance) around every foreign-net wire, pad and via
-(an `isolate` below the rules distance is ignored), thermal spokes only remove
+(an `isolate` below the rules distance is ignored there; the pour-to-POUR case
+below is measured to behave differently), thermal spokes only remove
 same-net copper, and orphan removal only deletes fill pockets. Every setting
 keeps or widens gaps, so a correctly derived fill cannot short or crowd foreign
 copper in the same file. Treating the drawn outline as solid copper instead
 would manufacture false shorts on every trace the fill legitimately carves
 around. To be precise about what is and is not computed: the fill itself is
 never reconstructed and the isolate distance is never numerically re-verified;
-the settings are parsed, drive the reasoning above, and are disclosed verbatim
-on pour findings. Pour-to-copper pairs are therefore *not checked* (rather than
+the settings are parsed, drive the reasoning above, and travel verbatim on a pour
+finding's `Item::owner` field, though `--drc` does not render that field. Pour-to-copper pairs are therefore *not checked* (rather than
 checked and found clean), and same-rank pours that approach each other without
 ring overlap are not distance-checked either, since the fill extent near the
 boundary depends on those settings. The argument above says a fill Eagle
 derives from these settings would not violate; a hand-edited file whose fill
-was never re-derived is outside it. The one construct the settings cannot make
-safe under any derivation IS checked: two
-overlapping same-rank pours of different signals have no arbitration (Eagle
-pours both, a physical short, and its own DRC flags the overlap), and the
-Eagle path reports that short with the pour settings disclosed on the finding.
+was never re-derived is outside it.
+
+One pour-to-pour construct IS checked: two overlapping same-rank pours of
+different signals get no arbitration from their rank, and the overlap is reported.
+Its error rate is measured rather than assumed, because the emonTx revision family
+ships fabrication output beside the design and so can be scored. Across the six
+layer-instances with copper gerbers, the rule is right about four: it flags the
+three layers where the two nets really do share copper, and over-reports two top
+layers where the outlines overlap and nothing bridges them. The scoring table is in
+[`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md).
+
+**The two over-reports, and why no threshold removes them.** Whether two
+overlapping pours end up in contact is a property of the fill, and the `.brd` does
+not carry the fill. `isolate` is not a substitute: it is necessary but not
+sufficient, which is measured, because the emonTx V3.4.0 sets BOTH of its top-layer
+pours to 0.00030625 with overlapping outlines and their fills still come out as
+separate components. A narrowing that reported the overlap only below a
+one-micrometre `isolate` was implemented and reverted for that reason: it fixed one
+of the two over-reports and silenced a third layer where a trace genuinely joins
+the two nets, which trades a false positive for the worse kind of error (see
+`SHORT_TOUCH_EPS_MM` in `drc.rs` on under-reporting a short). Closing them properly
+needs Eagle's fill reconstructed from the outline, the pour settings and the
+foreign copper, which is not implemented.
+
+**A tie the net-tie recogniser cannot see.** The three true reports on that family
+are all a ground tie the designer DECLARED: `emonTx V3.4.5.sch` wires an AGND
+supply symbol to a GND supply symbol in one segment of net `GND`, from V3.4.1
+onward. So they are true about the copper and wrong to be SERIOUS. The Eagle
+net-tie exemption keys on jumper libraries and package conventions
+([`../checks/SHORTS.md`](../checks/SHORTS.md)), which cannot express that, and the
+declaration is in the `.sch` while this reader is handed the `.brd`. Reaching it
+needs the schematic's net segments, or a rule for the two-supply-symbol construct.
+
 That overlap keys on the polygons' vertex rings: same-rank pours whose rings
 miss by less than their drawn boundary stroke widths are not flagged, and
 pinning whether Eagle treats a stroke graze as overlap needs an
