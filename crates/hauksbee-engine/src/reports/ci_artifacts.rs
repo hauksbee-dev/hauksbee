@@ -330,12 +330,17 @@ pub fn sarif_json_with_refusal(
 /// GitHub Actions workflow annotations for gate-grade findings, printed only
 /// under `GITHUB_ACTIONS` and only when `--strict` is gating (the same items
 /// the `FAILED under --strict` line names). One `::error` per finding.
+///
+/// stderr, like every other annotation here: a workflow command is not report
+/// content, and on stdout it appended non-JSON lines after the `--json`
+/// document, so a consumer parsing a gating run's output failed on trailing
+/// data instead of reading the verdict it was gating on.
 pub fn github_annotations(items: &[String]) {
     if std::env::var_os("GITHUB_ACTIONS").is_none() {
         return;
     }
     for item in items {
-        println!("::error title=hauksbee --strict gate::{item}");
+        eprintln!("::error title=hauksbee --strict gate::{item}");
     }
 }
 
