@@ -602,7 +602,9 @@ into inscribed chords, which stay inside a convex stretch of a boundary but
 cut across the copper on a concave one. An aperture block (`%AB`) resolves to
 nothing at all, this plotter not implementing blocks. And the object
 transforms `%LS` / `%LR` / `%LM` are not applied, so a `2x1` rectangle under
-`%LS0.5*%` really clears `1x0.5`. Each is correct while it only *adds* copper,
+`%LS0.5*%` really clears `1x0.5`. Nor is `%IPNEG*%`, where the whole image is
+complemented so the clear objects are the copper. Each is correct while it only
+*adds* copper,
 since a flash that claims a little too much never invents a gap, and
 destructive the moment it subtracts. Those clears are refused outright.
 

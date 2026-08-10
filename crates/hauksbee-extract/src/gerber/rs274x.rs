@@ -1943,6 +1943,18 @@ fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
         })
         .unwrap_or(0);
     let c = poly[m];
+    // Scale for "coincident" and for the step. Bitwise equality is not enough:
+    // `arc_samples` recomputes a closed loop's last vertex from the arc angle, so a
+    // region drawn as two G03 semicircles from its lowest point closes ~1e-15 away
+    // from where it started, and `stadium_outline`'s two cap loops repeat their
+    // segment-perpendicular vertex to within 1e-16. A neighbour that close is
+    // floating-point dust: normalising it gives a direction that is noise, and
+    // taking the step length from it gives a step of 1e-19. Either silently puts
+    // the witness back on the boundary, or outside the contour altogether, which is
+    // the ambiguity this function exists to remove.
+    let bb = contour_bounds(poly);
+    let diag = (bb[2] - bb[0]).hypot(bb[3] - bb[1]);
+    let coincident = diag * 1e-9;
     // Walk outward past any vertex coincident with `c` for the two edge
     // directions. The immediate neighbours are not usable: a region contour is
     // built from its start point plus every draw endpoint, so a properly closed
@@ -1963,7 +1975,7 @@ fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
                     poly[(m + k) % n]
                 }
             })
-            .find(|&z| z != c)
+            .find(|&z| (z.0 - c.0).hypot(z.1 - c.1) > coincident)
     };
     let (Some(p), Some(q)) = (away(0), away(1)) else {
         return c;
@@ -1990,10 +2002,13 @@ fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
             return c;
         }
     }
+    // A thousandth of the shorter adjacent edge, but never less than a millionth of
+    // the contour's own diagonal: an edge shortened by flattening must not shrink
+    // the step to nothing.
     let short = (p.0 - c.0)
         .hypot(p.1 - c.1)
         .min((q.0 - c.0).hypot(q.1 - c.1));
-    let step = short * 1e-3;
+    let step = (short * 1e-3).max(diag * 1e-6);
     (c.0 + bx / blen * step, c.1 + by / blen * step)
 }
 

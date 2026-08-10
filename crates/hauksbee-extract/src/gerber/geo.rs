@@ -425,32 +425,50 @@ impl<'a> PolyGrid<'a> {
             }
         }
         // Classify the non-boundary cells exactly, by *scanline parity* rather
-        // than by per-cell even-odd (which would be O(cells x vertices)). For
-        // each grid row we intersect every contour's edges with the row's centre
-        // line once (O(vertices)), sort the crossing x's, and fill the spans
-        // between consecutive crossings as inside. Crossings of ALL contours go
-        // into one sorted list, which is what makes the parity even-odd over the
-        // whole shape: a hole's two crossings close the span its outer opened.
-        // This is exact (no flood-fill leakage) and costs O(rows x vertices).
-        // Cells already marked boundary keep their exact-test flag.
+        // than by per-cell even-odd (which would be O(cells x vertices)). For each
+        // grid row we intersect the edges crossing that row's centre line with it,
+        // sort the crossing x's, and fill the spans between consecutive crossings
+        // as inside. Crossings of ALL contours go into one sorted list, which is
+        // what makes the parity even-odd over the whole shape: a hole's two
+        // crossings close the span its outer opened. This is exact (no flood-fill
+        // leakage). Cells already marked boundary keep their exact-test flag.
+        //
+        // The edges are bucketed by the rows they span first. Walking every edge
+        // for every row is O(rows x vertices), and rows scale with the vertex
+        // count, so a plane with 6084 annular antipads (each a 64-gon plus a 32-gon
+        // rim, ~600k vertices over 2048 rows) spent 3.2 s here. Bucketing makes it
+        // O(vertices + rows spanned + cells), and an antipad spans two or three
+        // rows.
         if contours.iter().any(|c| c.len() >= 3) {
+            let row_of = |y: f64| -> isize { ((y - miny) * inv_cell).floor() as isize };
+            let mut rows: Vec<Vec<(f64, f64, f64, f64)>> = vec![Vec::new(); ny];
+            for pts in contours {
+                let n = pts.len();
+                if n < 3 {
+                    continue;
+                }
+                let mut j = n - 1;
+                for i in 0..n {
+                    let (a, b) = (pts[j], pts[i]);
+                    j = i;
+                    if a.1 == b.1 {
+                        continue; // horizontal: crosses no row centre line
+                    }
+                    let (lo, hi) = if a.1 < b.1 { (a.1, b.1) } else { (b.1, a.1) };
+                    let r0 = row_of(lo).clamp(0, ny as isize - 1) as usize;
+                    let r1 = row_of(hi).clamp(0, ny as isize - 1) as usize;
+                    for r in r0..=r1 {
+                        rows[r].push((a.0, a.1, b.0, b.1));
+                    }
+                }
+            }
             let mut xs: Vec<f64> = Vec::new();
-            for gy in 0..ny {
+            for (gy, edges) in rows.iter().enumerate() {
                 let yc = miny + (gy as f64 + 0.5) / inv_cell;
                 xs.clear();
-                for pts in contours {
-                    let n = pts.len();
-                    if n < 3 {
-                        continue;
-                    }
-                    let mut j = n - 1;
-                    for i in 0..n {
-                        let (xi, yi) = pts[i];
-                        let (xj, yj) = pts[j];
-                        if (yi > yc) != (yj > yc) {
-                            xs.push((xj - xi) * (yc - yi) / (yj - yi) + xi);
-                        }
-                        j = i;
+                for &(ax, ay, bx, by) in edges {
+                    if (ay > yc) != (by > yc) {
+                        xs.push((bx - ax) * (yc - ay) / (by - ay) + ax);
                     }
                 }
                 xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -578,8 +596,12 @@ impl<'a> PolyGrid<'a> {
     /// Is `(px, py)` inside the shape? O(1) grid lookup, exact test only on a
     /// boundary cell.
     pub fn contains(&self, px: f64, py: f64) -> bool {
-        let gx = ((px - self.minx) * self.inv_cell) as isize;
-        let gy = ((py - self.miny) * self.inv_cell) as isize;
+        // `floor`, not a truncating cast: a query up to one cell left of `minx` or
+        // below `miny` truncates to index 0 and reads the edge row/column instead
+        // of falling outside the grid. Unreachable through today's callers, which
+        // pre-filter by the grid's own extent, and a trap for the next one.
+        let gx = ((px - self.minx) * self.inv_cell).floor() as isize;
+        let gy = ((py - self.miny) * self.inv_cell).floor() as isize;
         if gx < 0 || gy < 0 || gx as usize >= self.nx || gy as usize >= self.ny {
             return false;
         }

@@ -372,11 +372,18 @@ pub fn reconstruct(
                     // that isolates them, which at 512 cells over a 100 mm board
                     // (0.2 mm a cell) is one cell: every pad landed in the
                     // boundary band and paid the exact poly distance over the
-                    // pour's whole vertex count. Measured on a 100 mm plane with
-                    // 6084 antipads: 3.97 s at 512, 0.10 s at 2048, of which the
-                    // build is 73 ms. The grid is exact at any resolution
-                    // (scanline parity plus an exact test on a boundary cell), so
-                    // this only moves work, never answers.
+                    // pour's whole vertex count anyway. The grid is exact at any
+                    // resolution (scanline parity plus an exact test on a boundary
+                    // cell), so this only moves work, never answers.
+                    //
+                    // Whole-extraction times for a 100 mm plane with 6084 antipads
+                    // and a pad in each: 3.97 s with the ceiling at 512, 48 ms at
+                    // 2048. With the antipads drawn as ANNULAR clear flashes, the
+                    // shape a real negative plane carries (a 64-gon plus a 32-gon
+                    // rim each, some 600k contour vertices), 59 ms; with 64000 of
+                    // them, 0.60 s. Those last two are only affordable because the
+                    // scanline buckets its edges by row (see `PolyGrid::new`);
+                    // without that the build alone was 3.2 s.
                     let cells = (verts / 4).clamp(64, 2048);
                     (*rgi, super::geo::PolyGrid::new(contours, cells))
                 })
