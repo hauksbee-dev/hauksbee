@@ -261,7 +261,8 @@ fn odrive_v2_attempt_ground_short_flagged_and_final_is_clean() {
 // on four layers, drawn in KiCad 6. Its reference-input corner puts an SMAJ48CA
 // TVS in an SMA body (D503, 2.5 x 1.8 mm pads) on top of two SOT-23 diodes and two
 // hand-solder 0603s, and its Laird BMI-S-205-F shield-can fence pad on J206 on
-// top of a 0603 ferrite bead. Six pads of different nets overlap as a result.
+// top of a 0603 ferrite bead. Nine pads meet in six different-net pairs as a
+// result.
 //
 // The ground truth is the same shape as the ODrive row's: the design's own rule
 // set forbids the overlaps, and here a second tool agrees on every one. Both
@@ -394,8 +395,9 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
     }
 
     // KiCad's expected keys come from the recording. The footprint pair is
-    // derived from its "<REF> pad <n>" strings, and the pad NUMBER is pinned
-    // separately below, through the location check.
+    // derived from its "<REF> pad <n>" strings; the location check below pins the
+    // pad number only where the footprint's pads are more than 4 mm apart, which
+    // is D503's case and not R204's (1.825 mm) or D203's (1.9 mm).
     let want: std::collections::BTreeSet<Key> = recorded
         .iter()
         .map(|r| {
@@ -467,11 +469,11 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
         );
     }
 
-    // And each contact point must sit on the pads KiCad named. The tolerance is
-    // 2 mm, exactly half the 4 mm between D503's own two pads, so a point on the
-    // wrong one of them is 4 mm from the right anchor and fails: the pad number
-    // KiCad reports is pinned even though hauksbee's finding only names the
-    // footprint.
+    // And each contact point must sit on the pads KiCad named, within 2 mm. On
+    // D503, whose two pads are 4 mm apart, that pins WHICH pad: a point on the
+    // wrong one is 4 mm from the right anchor. On the smaller footprints
+    // (R204 1.825 mm between pads, D203 1.9 mm) both pads are inside the
+    // tolerance, so there it only pins the footprint and the neighbourhood.
     for r in &recorded {
         let mut owners = [
             r.pads[0].split(" pad ").next().unwrap().to_string(),
@@ -560,7 +562,7 @@ fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<(usize, bool)> {
     let mut current: Option<Vec<(f64, f64)>> = None;
     let (mut cx, mut cy) = (0.0f64, 0.0f64);
     let mut dark = true;
-    // %FSLAX34Y34%: six integer digits, four of them fractional, so a raw
+    // %FSLAX34Y34%: three integer digits and four fractional, so a raw
     // coordinate is millimetres * 1e4.
     assert!(
         text.contains("%FSLAX34Y34*%") && text.contains("%MOMM*%"),
@@ -738,5 +740,63 @@ fn emontx_ground_pour_join_is_flagged_on_the_merged_layer_only() {
         "the finding names the zeroed isolate that let the pours meet, got {:?} / {:?}",
         s.item_a.owner,
         s.item_b.owner
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The same check's KNOWN FALSE POSITIVE, pinned deliberately.
+//
+// emonTx V3.4.0 is three revisions earlier and sets BOTH top-layer ground pours
+// to isolate="0.00030625" where V3.4.5 sets one, with the same overlapping
+// outlines. So the pour-to-pour rule fires on both of its layers. The bottom one
+// is right. The top one is WRONG: labelling connected copper in the
+// emonTxV3.4_GERBERS export (registered to the board by its own drill file, all
+// 108 vias inside 30 um) and attributing each body by the `.brd`'s GND-net and
+// AGND-net items puts the AGND body in a different component from the GND body.
+// A near-zero `isolate` is necessary but not sufficient for the fills to meet,
+// and no threshold on `isolate` can fix that.
+//
+// This test therefore asserts a result that is partly wrong, on purpose. It is
+// here so the error is a failing assertion away from being noticed rather than a
+// paragraph nobody re-reads: whoever implements fill reconstruction will see this
+// test go red, and the note in `docs/about/LIMITATIONS.md` is the next thing they
+// should edit. The gerber measurement itself is not re-run here, because reading a
+// stroked inch-unit pour needs a raster rather than the contour walk above; it
+// lives in the evidence doc with its numbers.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn emontx_v340_top_layer_pour_flag_is_a_known_false_positive() {
+    let Some(brd) = board("emontx3_v340/hardware/V3.4.0/emonTx V3.4.brd") else {
+        return;
+    };
+    hauksbee_testkit::scanned("emonTx V3.4.0 known-false-positive row", 1);
+
+    let text = std::fs::read_to_string(&brd).expect("read emonTx V3.4.0 board");
+    let report = hauksbee_extract::ExtractedBoard::drc(&text).expect("drc runs");
+
+    // The input condition that makes the check fire, asserted from the file so the
+    // test cannot drift onto some other reason for the same output.
+    let mut layers: Vec<&str> = report
+        .shorts()
+        .map(|s| {
+            let mut nets = [s.net_a_name.as_str(), s.net_b_name.as_str()];
+            nets.sort_unstable();
+            assert_eq!(nets, ["AGND", "GND"], "only the ground pair fires here");
+            assert!(
+                s.item_a.owner.contains("isolate 0.00030625")
+                    && s.item_b.owner.contains("isolate 0.00030625"),
+                "both pours carry the near-zero isolate on this revision: {:?} / {:?}",
+                s.item_a.owner,
+                s.item_b.owner
+            );
+            s.layer.as_str()
+        })
+        .collect();
+    layers.sort_unstable();
+    assert_eq!(
+        layers,
+        ["B.Cu", "F.Cu"],
+        "both layers flag: B.Cu correctly, F.Cu as the known false positive"
     );
 }

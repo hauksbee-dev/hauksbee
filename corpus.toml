@@ -578,6 +578,40 @@ expect = [
   "hardware/V3.4.5/GERBERS emonTx V3.4.5_2021-04-07/CAMOutputs/GerberFiles/copper_bottom.gbr",
 ]
 
+# The same product, three revisions earlier, kept for one measurement: V3.4.0 sets
+# BOTH of its top-layer ground pours to isolate="0.00030625" where V3.4.5 sets one,
+# and its shipped gerbers show those two fills as SEPARATE copper. That makes the
+# near-zero isolate necessary but not sufficient for a merge, and makes the
+# pour-to-pour check's flag on this layer a known false positive. The test pins it
+# so the error is visible in CI rather than only in prose.
+[[board]]
+id = "emontx3_v340"
+name = "OpenEnergyMonitor emonTx V3.4 (the both-layers-near-zero pour revision)"
+url = "https://github.com/openenergymonitor/EmonTx3"
+rev = "411de96187900f694f9e8fefd7ba9a6e30ad99aa"
+dest = "emontx3_v340"
+license = "GPL-3.0"
+license_note = "LICENSE at this revision is the GPL-3.0 text"
+axes = ["eagle", "power-electronics", "avr", "small"]
+subdir = "hardware/V3.4.0"
+known_good = false
+known_good_note = """
+Adjudicated, and the awkward half of the adjudication: hauksbee reports GND <-> \
+AGND on both copper layers here, and the top-layer one is WRONG. Both top pours \
+carry isolate="0.00030625" with overlapping outlines, so the check fires, but \
+labelling the copper in the shipped emonTxV3.4_GERBERS export and attributing each \
+body by the .brd's own GND-net and AGND-net items puts the AGND body in a \
+different connected component from the GND body. The bottom-layer finding is real, \
+the same as V3.4.5's. Kept in the corpus because a measured false positive is \
+worth more to the next reader than a clean story: see the emonTx section of \
+docs/evidence/KNOWN_FAULTS_VALIDATION.md and the false-positive entry in \
+docs/about/LIMITATIONS.md.
+"""
+expect = [
+  "hardware/V3.4.0/emonTx V3.4.brd",
+  "hardware/V3.4.0/emonTxV3.4_GERBERS.zip",
+]
+
 # ---------------------------------------------------------------------------
 # Motor drivers
 # ---------------------------------------------------------------------------

@@ -44,8 +44,11 @@ The other 1138 violations are trimmed, which is a deviation from the
 `openmower_62dd369` oracle beside this one (that report is committed unedited).
 The reason is size: the unedited run is 1.3 MB of mostly silkscreen and
 hole-spacing noise, and the trim is mechanical (`type == "shorting_items"`) with
-the discarded content fully accounted for by the committed tally, so re-running
-the command above reproduces it.
+the discarded content accounted for by the committed tally. Re-running the command
+reproduces the six `shorting_items` exactly, descriptions, UUIDs and positions
+included, which is what this oracle is for. The bulk counts are not bit-stable
+between runs: independent re-runs have produced 1143 objects with `clearance` 502
+against this file's 1144 and 503. Nothing asserts them.
 
 ## What the test does with it
 
