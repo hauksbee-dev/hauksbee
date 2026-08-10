@@ -344,7 +344,11 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         if cfg.json {
             println!(
                 "{}",
-                serde_json::json!({ "ok": true, "verdict": "invalid", "refusal": refusal })
+                // `ok` is true iff the verdict is `pass` (docs/analysis/JSON_OUTPUT.md
+                // states the invariant, and every other rollup honours it). This
+                // envelope read `ok:true` beside `verdict:"invalid"` and exit 3,
+                // so a consumer gating on `ok` treated a refusal as a clean run.
+                serde_json::json!({ "ok": false, "verdict": "invalid", "refusal": refusal })
             );
         } else {
             eprintln!("error: {msg}");
@@ -1136,6 +1140,13 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // JSON for the same board says invalid.
             let mut jr = JsonReport::new(&board_name, summary)
                 .with_bind_verdict_gate()
+                // The co-sim exit gate fails on ANY raised fault, and the
+                // plain-language classifier grades most of them `warning`, so
+                // without this the co-sim document read `pass` beside its own
+                // exit 2. `--strict-boot` is the same story one flag over: it
+                // turns the boot advisory into an exit 2, so under that flag
+                // the advisory is gate-grade for this document too.
+                .with_surface_gate(!faults.is_empty() || (cfg.strict_boot && has_boot_advisory))
                 .with_inputs(&inputs)
                 .with_evidence(&run_evidence);
             // A substitution is an info-level note that must never be silently
@@ -1494,12 +1505,29 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 ) {
                     write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
                 }
+                // The annotation surface too, independent of the artifact
+                // flags: a refusal that shows red in JUnit/SARIF and says
+                // nothing in the checks tab is the same split verdict the
+                // artifacts exist to prevent.
+                if let Some(refusal) = &strict_refusal {
+                    crate::reports::ci_artifacts::github_refusal_annotation(refusal);
+                }
                 if !cfg.json {
                     if let Some(refusal) = &strict_refusal {
                         eprintln!("{}", refusal.render_text());
                     }
                 }
-                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                // `fail` outranks `invalid`, the same precedence the verdict
+                // field applies: a run that raised real electrical faults CAN
+                // be judged, so the fault gate below takes the exit (2) and
+                // this refusal stays on stderr and in the artifacts. Exiting 3
+                // here put "invalid for analysis" beside a document reading
+                // `"verdict":"fail"`. A timing refusal, if this run also had
+                // one, still exits 3 from between here and that gate: that
+                // exception is documented in docs/ci/CI.md.
+                if faults.is_empty() {
+                    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                }
             }
         }
 
@@ -1542,11 +1570,25 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 ) {
                     write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
                 }
+                // The annotation surface too, independent of the artifact
+                // flags: a refusal that shows red in JUnit/SARIF and says
+                // nothing in the checks tab is the same split verdict the
+                // artifacts exist to prevent.
+                if let Some(refusal) = &strict_refusal {
+                    crate::reports::ci_artifacts::github_refusal_annotation(refusal);
+                }
                 if !cfg.json {
                     if let Some(refusal) = &strict_refusal {
                         eprintln!("{}", refusal.render_text());
                     }
                 }
+                // NOT the zero-activity precedence: there the analog solve was
+                // sound, so raised faults were a judgement the run could make.
+                // Here the solve held stale voltages over the failed windows,
+                // which is where these faults may come from, so the honest exit
+                // is still invalid-for-analysis. The document's `fail` verdict
+                // grades the faults as observed; this code says they could not
+                // be trusted, and refusing outranks that.
                 std::process::exit(code);
             }
         }
@@ -1593,7 +1635,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 fault_findings.iter().any(|f| f.message == a)
             });
         if cfg.strict && strict_invalid {
-            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            crate::reports::exit_invalid_for_analysis(&strict_blockers);
         }
         return Ok(());
     }

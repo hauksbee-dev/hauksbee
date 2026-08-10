@@ -71,7 +71,8 @@ pub fn emit(
     // The verdict blockers: current-carrying / active parts with no model. A
     // lint that came back clean over an unbound power FET or main IC must say
     // INCONCLUSIVE (naming them, and what unlocks a conclusive verdict) rather
-    // than a clean bill, on every surface. Exit codes are unchanged.
+    // than a clean bill, on every surface. Without --strict the exit code is
+    // unchanged; under it these blockers exit 3, matching the verdict field.
     let blockers =
         crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
     match mode {
@@ -117,7 +118,7 @@ pub fn emit(
     // the verdict-critical set only, never through any open passive's per-net
     // map, so --strict cannot exit 3 where the verdict field says pass.
     if strict && !blockers.is_empty() {
-        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        super::exit_invalid_for_analysis(&blockers);
     }
     Ok(())
 }
@@ -180,13 +181,19 @@ fn lint_json(
 ) -> Result<String, hauksbee_ir::evidence::EvidenceError> {
     let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
         .with_bind_verdict_gate()
+        // `lint_fails` is this surface's exit gate and it includes
+        // medium-severity findings, which serialize as `warning`; without
+        // telling the verdict so, the document read `pass` beside exit 2.
+        .with_surface_gate(lint_fails(report))
         .with_inputs(inputs)
         .with_evidence(evidence);
     jr.findings = Some(lint_findings_json(report));
     jr.attach_finding_evidence(evidence, Vec::new())?;
     // The INCONCLUSIVE verdict on the machine surface: a coverage note with the
-    // same sentence the text/plain verdicts print. Informational, never gating;
-    // the structured part list is already in `bind.active_path_unresolved`.
+    // same sentence the text/plain verdicts print. The note itself gates
+    // nothing, but the parts it names are the bind gate's, so this document's
+    // `verdict` reads `invalid` beside it and --strict exits 3. The structured
+    // part list is already in `bind.active_path_unresolved`.
     if !blockers.is_empty() {
         jr.notes.push(JsonNote {
             kind: JsonNoteKind::Coverage,
@@ -249,6 +256,8 @@ pub fn emit_resources(
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
                 .with_bind_verdict_gate()
+                // Same gate as `--lint` above, so the same widening applies.
+                .with_surface_gate(lint_fails(&report))
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.findings = Some(lint_findings_json(&report));
@@ -310,7 +319,7 @@ pub fn emit_resources(
     // the verdict-critical set only, never through any open passive's per-net
     // map, so --strict cannot exit 3 where the verdict field says pass.
     if strict && !blockers.is_empty() {
-        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        super::exit_invalid_for_analysis(&blockers);
     }
     Ok(())
 }

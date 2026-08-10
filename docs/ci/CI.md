@@ -1133,8 +1133,8 @@ the CLI says so on stderr.
 |---|---|
 | 0 | clean, or a report-only run without `--strict` |
 | 1 | the run never happened: the board could not be read (unrecognized format, a Git LFS pointer, a missing file, an ASCII-Protel `.PcbDoc`) or the analysis could not be set up |
-| 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`). Also a usage error, such as two report flags at once |
-| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict`, thermal table with no usable coverage, or a PARTIAL-coverage `--thermal` result, see below) |
+| 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`, and they outrank a zero-activity refusal: a run that saw faults was analysable). Also a usage error, such as two report flags at once |
+| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict` that raised no faults, thermal table with no usable coverage, a PARTIAL-coverage `--thermal` result, undermined run-level evidence under `--strict`, or unbound verdict-critical parts on a model-dependent surface under `--strict`, see below) |
 
 `--thermal` gates on coverage **by default**: a partial-coverage table (real
 rows while an active power IC on the live circuit is open/unresolved) exits 3,
@@ -1148,25 +1148,67 @@ still prints on stderr and rides the JSON `notes`. `--strict-thermal` is
 accepted as a quiet no-op: it used to opt in to what is now the default, so
 invocations that passed it keep their exact behaviour.
 
-The INCONCLUSIVE verdict itself never moves an exit code. When
+The INCONCLUSIVE verdict never moves an exit code on its own. When
 current-carrying / active parts have no model, `--lint` / `--si` / `--check`
 print "INCONCLUSIVE: N current-carrying / active part(s) have no model (U3,
 Q1, ...)" instead of a clean bill, and the same sentence rides the JSON
-`notes` (kind `coverage`); the exit code stays whatever the table above says
-for the run. Prose honesty and exit-code policy are deliberately separate
-contracts: making INCONCLUSIVE alone exit non-zero would change what `--lint`
-and `--si` mean to every pipeline that calls them without `--strict`.
+`notes` (kind `coverage`). Without `--strict` the exit code stays 0: prose
+honesty and exit-code policy are deliberately separate contracts, and making
+INCONCLUSIVE alone exit non-zero would change what `--lint` and `--si` mean to
+every pipeline that calls them without `--strict`. Under `--strict` those same
+model-dependent surfaces exit 3, because their machine `verdict` field reads
+`invalid` for the unbound part and an exit code that disagreed with the document
+beside it would give a pipeline two answers. If the run ALSO gates on a
+finding, `fail` outranks the unbound part on both: verdict `fail`, exit 2.
+
+The copper (`--drc`) and descriptive (`--report`) surfaces are exempt on both:
+copper reads the layout and owes nothing to device models, and `--report`
+describes the binding rather than judging it, so it never gates and its verdict
+never turns the incomplete binding it prints into a refusal.
 
 Exit 1 and exit 2 are worth keeping apart in a pipeline: 1 means your input was
-never analysed, 2 means it was analysed and the board is at fault. A CI step that
-treats both as "hardware failed" will report a broken file path as a broken
-board.
+never analysed, 2 means it was analysed and the board is at fault. A CI step
+that treats both as "hardware failed" will report a broken file path as a
+broken board.
 
 What `--strict` gates on, per report: `--drc` true copper shorts (clearance
 notes never gate), `--lint` high/medium findings, `--si` any real finding,
 `--usb-c` a serious CC verdict, and `--check` / bare `--json` the union of
 these. On a board format newer than the validated range (KiCad 10+),
 possibly-phantom shorts do not gate. The printed caveat says to cross-check.
+
+Each gate is per surface, and when it is armed it agrees with that surface's
+own machine verdict on the same board: `fail` exits 2, `invalid` exits 3, `pass`
+exits 0. Those gates are deliberately wider than the `serious` severity
+(`--lint` gates on medium findings, `--si` on any real finding), so a run gating
+on a `warning`-severity finding reads `verdict: "fail"` in the very document its
+exit code was printed beside.
+
+Do not use a non-strict run to predict a strict one. On the static surfaces the
+document does not change with the flag (a refusing verdict prints beside exit 0
+without `--strict`), so reading it there is at worst incomplete. On the co-sim
+path it is misleading: the zero-activity and analog-abort refusals are only
+constructed under `--strict` and the boot advisory is only gate-grade under
+`--strict-boot`, so none of the three reaches the document until its flag is
+passed. What the run found on its own, bind blockers and raised faults, is in
+the document either way.
+In the other direction, `--thermal --no-strict-thermal` opts out of the
+PARTIAL-coverage escalation permanently, so that document can read `invalid` at
+exit 0 whatever else is passed; a thermal table with no usable coverage at all
+still exits 3 through the flag. Run the gate you intend to gate on. `--report`
+has no gate of its own; a board with no component placement still refuses before
+any surface renders.
+
+Two co-sim paths deliberately keep exit 3 over a `fail` document, because there
+the run is not analysable even though it observed faults: an aborted analog
+solve (the faults may come from the windows the solve failed on) and a runtime
+timing refusal. Everywhere else an armed gate and its verdict agree, including
+the zero-activity refusal, which yields to the faults it saw (exit 2) because
+the analog solve behind them was sound. These three resolve the same collision
+differently on purpose, per what the run could actually judge; note that
+`hauksbee-ci` merges codes ACROSS specs the other way (3 > 2, above), because
+there the question is which spec's result is least trustworthy rather than what
+one run concluded.
 
 ## Limitations
 

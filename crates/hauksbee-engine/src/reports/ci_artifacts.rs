@@ -54,13 +54,50 @@ pub fn evidence_findings_with_gate(
 /// GitHub error annotation for unbound verdict-critical parts, so the
 /// annotation surface agrees with the gate-grade JUnit/SARIF entry the same
 /// blockers produce. No-op outside GitHub Actions.
+///
+/// At most once per process. Two call sites reach it for the same run: the
+/// artifact writer, which is the only one a NON-gating run reaches at all, and
+/// the invalid-for-analysis exit, which must annotate a gating run whether or
+/// not artifacts were asked for. A run that passes through both would otherwise
+/// spend two of GitHub's ten annotations-per-type-per-step on the same refusal. The artifact writer runs
+/// first and names the whole run's blockers, so the surviving annotation is the
+/// widest one: on `--usb-c`, whose exit site names only the CC-scoped subset,
+/// the kept line is the superset rather than that surface's own list.
 pub fn github_blocker_annotation(blockers: &[String]) {
+    static ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if blockers.is_empty() || std::env::var_os("GITHUB_ACTIONS").is_none() {
+        return;
+    }
+    if ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return;
     }
     eprintln!(
         "::error title=hauksbee evidence undermined::{}",
         crate::result::inconclusive_verdict(blockers)
+    );
+}
+
+/// GitHub error annotation for a whole-run refusal (the exit-3 documents the
+/// JUnit `<error>` and the SARIF `hauksbee/invalid-for-analysis` result carry),
+/// so the annotation surface cannot stay silent on a run the other two
+/// artifacts show red. It fires on the refusal, not on the exit code, so a run
+/// that refused AND raised faults annotates both this and the `--strict` gate
+/// while exiting 2: the faults outrank the refusal for the exit code without
+/// making the refusal untrue. No-op outside GitHub Actions.
+pub fn github_refusal_annotation(refusal: &Refusal) {
+    if std::env::var_os("GITHUB_ACTIONS").is_none() {
+        return;
+    }
+    eprintln!(
+        "::error title=hauksbee invalid for analysis::{}",
+        // `%` first, then the newline: a workflow command decodes the escapes,
+        // so escaping the newline first would send its `%0A` back through the
+        // percent pass and arrive as a literal `%250A`.
+        refusal
+            .render_text()
+            .replace('%', "%25")
+            .replace('\r', "%0D")
+            .replace('\n', "%0A")
     );
 }
 
@@ -316,12 +353,17 @@ pub fn sarif_json_with_refusal(
 /// GitHub Actions workflow annotations for gate-grade findings, printed only
 /// under `GITHUB_ACTIONS` and only when `--strict` is gating (the same items
 /// the `FAILED under --strict` line names). One `::error` per finding.
+///
+/// stderr, like every other annotation here: a workflow command is not report
+/// content, and on stdout it appended non-JSON lines after the `--json`
+/// document, so a consumer parsing a gating run's output failed on trailing
+/// data instead of reading the verdict it was gating on.
 pub fn github_annotations(items: &[String]) {
     if std::env::var_os("GITHUB_ACTIONS").is_none() {
         return;
     }
     for item in items {
-        println!("::error title=hauksbee --strict gate::{item}");
+        eprintln!("::error title=hauksbee --strict gate::{item}");
     }
 }
 
