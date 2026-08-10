@@ -656,9 +656,18 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
         for marker in ["in", "inner", "signal", "layer"] {
             for (pos, _) in n.full.match_indices(marker) {
                 let tail = &n.full[pos + marker.len()..];
+                // A marker BURIED in a word may not claim a layer index, in
+                // either form. `main2-In1_Cu.gbr` otherwise read its own
+                // project name: the "in" inside "main" butts straight against
+                // `2`, so the butt-up pass took it and reported inner layer 2.
+                // Worse than a wrong label, since two films of one job can then
+                // collide on an index and `assign_inner_indices` densifies them
+                // into the wrong stack order, which is what the blind-via layer
+                // pair resolution keys on.
+                let token_start = pos == 0 || !n.full.as_bytes()[pos - 1].is_ascii_alphabetic();
                 let k = if pass == 0 {
-                    index_at(tail)
-                } else if pos == 0 || !n.full.as_bytes()[pos - 1].is_ascii_alphabetic() {
+                    token_start.then(|| index_at(tail)).flatten()
+                } else if token_start {
                     index_after_sep(tail)
                 } else {
                     None
@@ -843,6 +852,23 @@ mod tests {
         assert!(matches!(
             role("board_copper_layer_2.gbr"),
             LayerRole::Copper { index: 2, .. }
+        ));
+        // A marker buried in a word may not claim an index in EITHER form. The
+        // butt-up pass had no token-start gate, so `main2-In1_Cu.gbr` read the "in"
+        // inside "main" against the `2` right after it. Two films of one job then
+        // collide on an index and `assign_inner_indices` densifies them into the
+        // wrong stack order, which is what blind-via layer-pair resolution reads.
+        assert!(matches!(
+            role("main2-In1_Cu.gbr"),
+            LayerRole::Copper { index: 1, .. }
+        ));
+        assert!(matches!(
+            role("origin3-In1_Cu.gbr"),
+            LayerRole::Copper { index: 1, .. }
+        ));
+        assert!(matches!(
+            role("pin2-In10_Cu.gbr"),
+            LayerRole::Copper { index: 10, .. }
         ));
         // And no name-based copper rule may claim a file that is plainly not a
         // film. Altium's per-side pick-and-place and its per-layer prints both
