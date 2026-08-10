@@ -38,12 +38,20 @@
 //!    the `invalid` route (whose blockers are gate-grade `serious` evidence
 //!    findings), through the co-sim rewrite and its refusal rewrite.
 //!
-//!    They do NOT yet agree on the widened `fail` route: JUnit/SARIF grade a
-//!    testcase failure on `severity == "serious"` alone, so a run that gates on
-//!    a medium lint finding or on co-sim faults is red in its exit code and its
-//!    verdict and still archives `failures="0"`. Closing that needs a
-//!    per-finding gating flag rather than a severity word, so it is
-//!    deliberately not pinned here.
+//!    They agree on the widened `fail` route too: the artifacts grade a
+//!    testcase failure on the finding's own `gating` flag, not on the severity
+//!    word, so a run that gates on a medium lint finding or on co-sim faults
+//!    archives a failing testcase instead of `failures="0"`. Pinned below from
+//!    both sides, including the direction that must stay green: a
+//!    possibly-phantom copper short is `warning` and does NOT gate, so it stays
+//!    a passing testcase carrying its text.
+//!
+//!    What the flag cannot close is a coverage question, not a grading one: a
+//!    non-zero exit whose reason never became a finding has nothing in the
+//!    artifact to mark. The boot advisory `--strict-boot` exits 2 on, the
+//!    placement and no-processor refusals, the timing-evidence refusal and the
+//!    `--ac`/`--thermal` validity refusals are all in that class.
+//!    docs/ci/CI.md lists the ones that have been checked.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -1030,6 +1038,418 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
             .count(),
         1,
         "the blocker annotation fires once, not once per call site:\n{err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The widened `fail` route on the artifact surfaces. A gate that is wider than
+// the shared `serious` grade used to leave the archived JUnit reading
+// `failures="0"` beside a red verdict and a non-zero exit, which tells a CI
+// dashboard the build was fine. The artifacts grade on the finding's own
+// `gating` flag, so all three sides of that run say the same thing.
+// ---------------------------------------------------------------------------
+
+/// Every `<testcase>` in a JUnit document that carries a `<failure>`.
+fn junit_failing_testcases(xml: &str) -> Vec<String> {
+    xml.split("<testcase name=\"")
+        .skip(1)
+        .filter(|rest| {
+            rest.split("</testcase>")
+                .next()
+                .unwrap_or("")
+                .contains("<failure")
+        })
+        .filter_map(|rest| rest.split('"').next().map(str::to_string))
+        .collect()
+}
+
+/// SARIF `(ruleId, level)` pairs.
+fn sarif_levels(doc: &serde_json::Value) -> Vec<(String, String)> {
+    doc["runs"][0]["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .map(|r| {
+            (
+                r["ruleId"].as_str().unwrap_or_default().to_string(),
+                r["level"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_gating_medium_finding_is_red_in_the_archived_artifact_too() {
+    // The fixture's only finding is a medium/`warning` one, so nothing here is
+    // `serious`: the severity word alone made this artifact all-green while the
+    // verdict said `fail` and `--strict` exited 2.
+    let b = fixture("verdict_medium_lint.kicad_pcb");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("out.xml");
+    let sarif = dir.path().join("out.sarif");
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--lint",
+        "--json",
+        "--strict",
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert_eq!(v["verdict"], "fail");
+    assert_eq!(
+        v["serious_count"], 0,
+        "the gating finding is not serious:\n{v}"
+    );
+
+    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    assert!(
+        !junit_all_green(&xml),
+        "a run that exited 2 must not archive an all-green report: {}",
+        junit_root(&xml)
+    );
+    assert_eq!(
+        junit_failing_testcases(&xml),
+        vec!["placeholder_value R3".to_string()],
+        "the failing testcase is the gating finding itself:\n{xml}"
+    );
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
+            .expect("valid SARIF JSON");
+    assert!(
+        sarif_levels(&doc).contains(&("lint/placeholder_value".into(), "error".into())),
+        "SARIF must raise the gating finding at error level:\n{:?}",
+        sarif_levels(&doc)
+    );
+}
+
+#[test]
+fn the_same_board_archives_all_green_once_a_waiver_takes_the_gate_away() {
+    // The other side of the same board: an active waiver overrules the only
+    // gating finding, so the gate is not engaged, the verdict is `pass`, the
+    // exit is 0 and the archived report has to be green. This is the control on
+    // the test above, not a second reading of the flag: waivers are applied
+    // before the artifact is written, so the finding is absent from the file
+    // either way. What it pins is that the three surfaces go green together.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let b = dir.path().join("verdict_medium_lint.kicad_pcb");
+    std::fs::copy(fixture("verdict_medium_lint.kicad_pcb"), &b).expect("stage the board");
+    // Beside the board, where `WaiverSet::discover` looks.
+    std::fs::write(
+        dir.path().join("hauksbee-waivers.toml"),
+        "[[waive]]\ncheck = \"lint\"\nkind = \"placeholder_value\"\nrefs = [\"R3\"]\n\
+         reason = \"R3 is a documented DNP placeholder on this build\"\n\
+         until = \"2999-01-01\"\n",
+    )
+    .expect("stage the waiver");
+    let junit = dir.path().join("out.xml");
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--lint",
+        "--json",
+        "--strict",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert_eq!(v["verdict"], "pass");
+    assert_eq!(
+        v["waived"].as_array().map(Vec::len),
+        Some(1),
+        "the overruled finding is reported, not hidden:\n{v}"
+    );
+    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    assert!(
+        junit_all_green(&xml),
+        "an exit-0 pass must archive a green report: {}",
+        junit_root(&xml)
+    );
+
+    // Every static surface has to excuse it, on the same board, or the exit code
+    // and the archived file are answering with different suites. The bare
+    // `--json` gate skipped waivers entirely: it exited 2 on the excused finding
+    // while the artifact, written from the waived-down suite, said
+    // `failures="0"`. That is the same split verdict this contract exists to
+    // forbid, on the likeliest CI invocation of all.
+    for surface in [
+        vec!["--json", "--strict"],
+        vec!["--check", "--json", "--strict"],
+        vec!["--lint", "--json", "--strict"],
+    ] {
+        let junit = dir.path().join(format!("{}.xml", surface.join("")));
+        let mut args = vec!["run", b.to_str().unwrap()];
+        args.extend(surface.iter().copied());
+        args.extend(["--junit", junit.to_str().unwrap()]);
+        let out = run(&args);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{surface:?} must excuse the waived finding; stderr: {}",
+            stderr(&out)
+        );
+        let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+        assert_eq!(v["verdict"], "pass", "{surface:?}: {v}");
+        assert_eq!(
+            v["waived"].as_array().map(Vec::len),
+            Some(1),
+            "{surface:?} reports the overruled finding rather than hiding it:\n{v}"
+        );
+        assert!(
+            v["findings"]
+                .as_array()
+                .is_none_or(|f| f.iter().all(|f| f["kind"] != "placeholder_value")),
+            "{surface:?} must not carry the excused finding as live:\n{v}"
+        );
+        let xml = std::fs::read_to_string(&junit).expect("junit written");
+        assert!(
+            junit_all_green(&xml),
+            "{surface:?} archived a red report beside exit 0: {}",
+            junit_root(&xml)
+        );
+    }
+}
+
+#[test]
+fn the_artifact_grades_the_whole_suite_even_when_the_selector_is_narrower() {
+    // The artifact is written from the whole static suite whichever selector
+    // asked for it, so its gate is `--check`'s. On a narrower selector that is
+    // wider than the exit code, and this is the direction the widened grading
+    // makes visible: `--drc --strict` on this board exits 0 on the copper it was
+    // asked about, while the file it archives marks the lint finding that would
+    // have failed `--check --strict`. docs/ci/CI.md and
+    // docs/analysis/JSON_OUTPUT.md both promise this; without a test the promise
+    // is prose. It is the safe direction (a red file beside a green exit, never
+    // the reverse), and `--check --strict` is what makes the two agree.
+    let b = fixture("verdict_medium_lint.kicad_pcb");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("drc-selector.xml");
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--drc",
+        "--strict",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the copper surface has nothing to gate on here; stderr: {}",
+        stderr(&out)
+    );
+    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    assert_eq!(
+        junit_failing_testcases(&xml),
+        vec!["placeholder_value R3".to_string()],
+        "the file still grades the whole suite:\n{xml}"
+    );
+    // The documented way to make them agree.
+    let junit = dir.path().join("check-selector.xml");
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--check",
+        "--strict",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
+    assert_eq!(
+        junit_failing_testcases(&std::fs::read_to_string(&junit).expect("junit written")),
+        vec!["placeholder_value R3".to_string()],
+    );
+}
+
+#[test]
+fn a_cosim_fault_run_archives_a_failing_testcase() {
+    // Every raised fault fails the co-sim gate, and the plain-language
+    // classifier grades most of them `warning`, so this whole family was
+    // archived green beside a `fail` verdict and an exit 2 under `--strict`.
+    let board = fixture("cosim_fault_led.kicad_pcb");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("out.xml");
+    let sarif = dir.path().join("out.sarif");
+    let out = run(&[
+        "run",
+        board.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--json",
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let (verdict, _) = json_verdict(&out);
+    assert_eq!(verdict, "fail", "the faults fail this run's own gate");
+
+    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let failing = junit_failing_testcases(&xml);
+    assert!(
+        failing.iter().any(|c| c == "overpower R1"),
+        "the fault that failed the gate is the failing testcase: {failing:?}\n{xml}"
+    );
+    assert!(
+        !junit_all_green(&xml),
+        "a `fail` verdict must not archive an all-green report: {}",
+        junit_root(&xml)
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
+            .expect("valid SARIF JSON");
+    assert!(
+        sarif_levels(&doc).contains(&("cosim/overpower".into(), "error".into())),
+        "SARIF raises the fault at error level:\n{:?}",
+        sarif_levels(&doc)
+    );
+
+    // The armed side: the co-sim exit gate is asked of these same flags, so
+    // under `--strict` the exit code is 2 beside the same failing testcase. This
+    // board also refuses (no firmware to exercise), and `fail` outranks that, so
+    // 2 is the code the flags have to produce.
+    let strict_junit = dir.path().join("strict.xml");
+    let out = run(&[
+        "run",
+        board.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--json",
+        "--strict",
+        "--junit",
+        strict_junit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
+    assert_eq!(json_verdict(&out).0, "fail");
+    let strict_xml = std::fs::read_to_string(&strict_junit).expect("junit written");
+    assert!(
+        junit_failing_testcases(&strict_xml)
+            .iter()
+            .any(|c| c == "overpower R1"),
+        "the archived file names the fault the exit 2 was about:\n{strict_xml}"
+    );
+}
+
+#[test]
+fn an_invalid_verdict_keeps_the_invalid_shape_in_the_artifact() {
+    // Precedence: widening what counts as a failure must not relabel the
+    // `invalid` route. This board's red comes from unbound verdict-critical
+    // parts, so the artifact carries the INVALID evidence blocker as its only
+    // gate-grade entry and the document still reads `invalid`, not `fail`.
+    let b = fixture("verdict_fet_unbound.kicad_pcb");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("out.xml");
+    let sarif = dir.path().join("out.sarif");
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--check",
+        "--json",
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    assert_eq!(json_verdict(&out).0, "invalid");
+
+    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    assert_eq!(
+        junit_failing_testcases(&xml),
+        vec!["undermined Q1".to_string()],
+        "the blocker is the only gate-grade entry:\n{xml}"
+    );
+    assert!(
+        xml.contains("INVALID evidence:"),
+        "and it keeps the invalid wording rather than reading as a plain \
+         finding failure:\n{xml}"
+    );
+    // `<error>` belongs to a whole-run refusal (exit 3), which this is not: the
+    // two red shapes stay distinct.
+    assert!(junit_root(&xml).contains("errors=\"0\""), "{xml}");
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
+            .expect("valid SARIF JSON");
+    let levels = sarif_levels(&doc);
+    assert!(
+        levels.contains(&("evidence/undermined".into(), "error".into())),
+        "{levels:?}"
+    );
+    assert!(
+        !levels
+            .iter()
+            .any(|(id, _)| id == "hauksbee/invalid-for-analysis"),
+        "no refusal result on a run that reached a verdict:\n{levels:?}"
+    );
+}
+
+#[test]
+fn a_medium_finding_that_does_not_gate_stays_a_passing_testcase() {
+    // The direction that must NOT turn red. A copper short on a board format
+    // the copper extraction was never validated against may be phantom, so it
+    // grades `warning` and the copper gate excuses it: the run passes, exits 0,
+    // and the finding is archived as a passing case carrying its text. It wears
+    // the same `warning` severity a gating lint finding wears, which is how the
+    // artifact proves it grades the gate and not the vocabulary.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let b = dir.path().join("phantom_short.kicad_pcb");
+    let text = std::fs::read_to_string(boot_gate_board()).expect("the shorted example board");
+    // Same two shorts, re-declared as a KiCad version the copper extraction has
+    // not been validated against.
+    let (first, rest) = text.split_once('\n').expect("a header line");
+    assert!(
+        first.contains("(version 20171130)"),
+        "the fixture's version line moved: {first}"
+    );
+    std::fs::write(
+        &b,
+        format!("{}\n{rest}", first.replace("20171130", "20260206")),
+    )
+    .expect("stage the board");
+
+    let junit = dir.path().join("out.xml");
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--check",
+        "--json",
+        "--strict",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert_eq!(v["verdict"], "pass");
+    assert_eq!(
+        v["drc"]["shorts"].as_array().map(Vec::len),
+        Some(2),
+        "the shorts are still reported, not dropped:\n{v}"
+    );
+    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    assert!(
+        junit_all_green(&xml),
+        "an excused finding must not fail the archived report: {}",
+        junit_root(&xml)
+    );
+    assert!(
+        junit_testcases(&xml)
+            .iter()
+            .any(|c| c.starts_with("short ")),
+        "and it is still archived, as a passing case:\n{xml}"
+    );
+    assert!(
+        xml.contains("<system-out>copper short:"),
+        "carrying its text:\n{xml}"
     );
 }
 

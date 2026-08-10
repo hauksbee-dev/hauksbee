@@ -135,8 +135,10 @@ pub fn emit(
     }
     // Strict: any true short fails the gate (clearance-only does not). An
     // unvalidated board format (KiCad 10+) yields possibly-phantom shorts, so it
-    // does not gate (the printed caveat tells the user to cross-check).
-    let would_gate = report.version_warning.is_none() && report.short_count() > 0;
+    // does not gate (the printed caveat tells the user to cross-check). Asked of
+    // the machine findings, so this exit code and the `--junit`/`--sarif` files
+    // count the same shorts.
+    let would_gate = super::check::drc_gate_fails(&report);
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
         super::strict_gate_exit(mode, &super::drc_gate_items(&report));

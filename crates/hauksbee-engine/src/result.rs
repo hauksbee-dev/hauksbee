@@ -20,6 +20,8 @@
 //!
 //! ## Exit-code contract (see ONBOARDING_PLAN §4.2)
 //! - `0`  clean, or findings present but not `--strict`.
+//! - `1`  the run never happened: the board could not be read, or the analysis
+//!        could not be set up. An input error, not a verdict about the board.
 //! - `2`  `--strict` and at least one gating finding.
 //! - `3`  **board invalid for the requested analysis** (AC with no signal path,
 //!        thermal with no resolved dissipating devices). A run that could not
@@ -794,10 +796,28 @@ fn is_transistor_ref(reference: &str) -> bool {
 // Info-level notes + machine-readable co-sim summary
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// An info-level, never-`--strict`, always-emitted note. Distinct from
-/// [`JsonFinding`]: a note never gates a CI pipeline and never changes an exit
-/// code; it is the structured home for honesty annotations that must never be
-/// silently absent (bind roles, co-sim substitution, coverage caveats, SI info).
+/// An always-emitted, info-level note: the structured home for honesty
+/// annotations that must never be silently absent (bind roles, co-sim
+/// substitution, coverage caveats, SI info, boot hazards).
+///
+/// Distinct from [`JsonFinding`]: a note carries no severity and no gating flag,
+/// nothing counts it into `serious_count`, and no gate reads this array. But
+/// "informational" is about the note, NOT about what it reports: 3 of the 5
+/// [`JsonNoteKind`] variants describe a condition a gate reads from its own
+/// source, so seeing one of those does not mean the run exited 0.
+///
+/// - `Coverage` carries the INCONCLUSIVE sentence for unbound verdict-critical
+///   parts (verdict `invalid`, exit 3 under `--strict`) and the `--thermal`
+///   PARTIAL-coverage caveat (exit 3 BY DEFAULT, unless `--no-strict-thermal`).
+/// - `CosimSubstitution` reports a substitute MCU core, which is an
+///   `Undermined`-class assumption: on a run-level evidence map it makes the
+///   verdict `invalid`, and `--strict` exits 3.
+/// - `BootControlNet` reports the boot hazard `--strict-boot` escalates to a
+///   failing gate (verdict `fail`, exit 2).
+///
+/// The other 2, `BindRole` and `SiInfo`, report conditions no gate reads: an
+/// inferred pin role is a `Qualified`-class assumption, which never invalidates
+/// a run, and the SI gate counts real findings only, never its info notes.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct JsonNote {
     pub kind: JsonNoteKind,
@@ -1395,6 +1415,29 @@ pub struct JsonFinding {
     pub kind: String,
     /// "serious" | "warning" | "note" | "info".
     pub severity: String,
+    /// Whether THIS finding is a reason the run fails its gate.
+    ///
+    /// Not a restatement of `severity`. Every `serious` finding gates, and so do
+    /// findings the severity word grades lower: a medium (`warning`) lint
+    /// finding, every real SI finding, every co-sim fault. It runs the other way
+    /// too, so a `warning` is not a gate grade on its own: a copper short on a
+    /// board format the copper extraction was never validated against may be
+    /// phantom and does not gate, a `note`-grade lint finding does not gate, and
+    /// neither does a qualified or demoted evidence badge.
+    ///
+    /// A consumer asking "which findings is the exit code about" reads this, not
+    /// the severity word. The CI artifacts do exactly that, so a `--junit`
+    /// `<failure>`, a SARIF `error` level and a GitHub `::error` mark the
+    /// findings the run failed on.
+    ///
+    /// Set where the finding is built, from the predicate that surface's gate
+    /// asks. The gates in reports::mod (lint_fails, si_fails) and
+    /// reports::check (drc_gate_fails) are DEFINED as "any finding here is
+    /// gating", so the archived file and the exit code cannot disagree about a
+    /// finding in this array. A copper short is the one gate-grade item that is
+    /// NOT in this array on any surface: it is rendered as `drc.shorts`, which
+    /// has no gating flag, and `serious_count` counts it separately.
+    pub gating: bool,
     pub nets: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location_mm: Option<[f64; 2]>,
@@ -1434,6 +1477,25 @@ fn lint_sev_str(s: Severity) -> &'static str {
     }
 }
 
+/// Whether a lint finding of this severity fails the lint family's `--strict`
+/// gate. Medium gates while serializing as `warning`, which is why the CI
+/// artifacts cannot grade on the severity word.
+///
+/// The one definition of that gate: [`crate::reports::lint_fails`] and
+/// [`crate::reports::lint_gate_items`] both read the flag this stamps onto
+/// [`JsonFinding::gating`], so there is no second copy of the rule to drift.
+pub(crate) fn lint_finding_gates(s: Severity) -> bool {
+    matches!(s, Severity::High | Severity::Medium)
+}
+
+/// Whether an SI entry fails the `--si` gate: every real finding does, and the
+/// informational computed-value notes do not. Mirrors
+/// [`hauksbee_extract::SiReport::finding_count`], which is what the gate used
+/// to count directly.
+pub(crate) fn si_finding_gates(s: SiSeverity) -> bool {
+    s.is_finding()
+}
+
 /// Whether an SI info note is actionable (off-target deviation, not "ok"/"no
 /// judgement"). Mirrors the plain-mode promotion rule so JSON and `--plain`
 /// agree on what counts as actionable.
@@ -1458,6 +1520,7 @@ pub fn si_findings_json(report: &SiReport) -> Vec<JsonFinding> {
                 check: "si".to_string(),
                 kind: f.check.as_str().to_string(),
                 severity: si_sev_str(f.severity).to_string(),
+                gating: si_finding_gates(f.severity),
                 nets: f.nets.clone(),
                 location_mm: None,
                 layer: None,
@@ -1486,6 +1549,9 @@ pub fn usbc_finding_json(report: &crate::checks::usb_c::UsbcReport) -> Option<Js
         check: "usb_c".to_string(),
         kind: "cc_compliance".to_string(),
         severity: severity.to_string(),
+        // The same call the `--check` / `--usb-c` gate makes, so the artifact
+        // grades this finding on the gate's own answer.
+        gating: report.is_serious(),
         nets: Vec::new(),
         location_mm: None,
         layer: None,
@@ -1510,6 +1576,7 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             check: "lint".to_string(),
             kind: f.check.as_str().to_string(),
             severity: lint_sev_str(f.severity).to_string(),
+            gating: lint_finding_gates(f.severity),
             nets: f.nets.clone(),
             location_mm: None,
             layer: None,
@@ -1542,6 +1609,12 @@ pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFind
                 crate::plain::PlainLevel::Note => "note",
             }
             .to_string(),
+            // The co-sim gate fails on ANY raised fault, and the
+            // plain-language classifier grades most of them `warning`, so
+            // every fault finding is gating whatever its severity word says.
+            // The gate itself asks these flags (see the `--headless` branch of
+            // `commands::run`), so the count cannot diverge.
+            gating: true,
             nets: Vec::new(),
             location_mm: None,
             layer: None,
@@ -1888,9 +1961,13 @@ impl JsonReport {
         let mut waived = Vec::new();
         if let Some(findings) = &self.findings {
             for f in findings {
-                // Only a gating finding can be waived. Waiving a note would
-                // suppress information without changing any outcome, which is
-                // cost with no benefit.
+                // Waiving a note would suppress information without changing
+                // any outcome, which is cost with no benefit, so only the
+                // `serious` grade is offered a waiver here. That is narrower
+                // than `JsonFinding::gating`: this path counts `serious_count`,
+                // and the surfaces whose gate is wider apply their waivers
+                // upstream, before a finding reaches this document (see
+                // `reports::check::gather_findings`).
                 if f.severity == "serious" {
                     if let Some(w) =
                         waivers.take_waiver(&f.check, &f.kind, &f.nets, &f.refs, &f.message)

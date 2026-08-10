@@ -28,16 +28,20 @@ pub fn evidence_findings_with_gate(
     use hauksbee_ir::evidence::EvidenceStatus;
     maps.iter()
         .filter_map(|map| {
-            let (severity, prefix) = match map.status() {
+            let (severity, gating, prefix) = match map.status() {
                 EvidenceStatus::Clean => return None,
-                EvidenceStatus::Qualified => ("warning", "QUALIFIED evidence"),
-                EvidenceStatus::Undermined if gates(map) => ("serious", "INVALID evidence"),
-                EvidenceStatus::Undermined => ("warning", "UNDERMINED evidence"),
+                EvidenceStatus::Qualified => ("warning", false, "QUALIFIED evidence"),
+                EvidenceStatus::Undermined if gates(map) => ("serious", true, "INVALID evidence"),
+                EvidenceStatus::Undermined => ("warning", false, "UNDERMINED evidence"),
             };
             Some(JsonFinding {
                 check: "evidence".into(),
                 kind: map.status().as_str().into(),
                 severity: severity.into(),
+                // `gates` IS the run-level split the JSON verdict makes, so the
+                // arm that reaches `invalid` is the arm that marks the finding
+                // gating; a demoted finding-backed map wears a badge instead.
+                gating,
                 nets: Vec::new(),
                 location_mm: None,
                 layer: None,
@@ -55,11 +59,16 @@ pub fn evidence_findings_with_gate(
 /// annotation surface agrees with the gate-grade JUnit/SARIF entry the same
 /// blockers produce. No-op outside GitHub Actions.
 ///
-/// At most once per process. Two call sites reach it for the same run: the
-/// artifact writer, which is the only one a NON-gating run reaches at all, and
-/// the invalid-for-analysis exit, which must annotate a gating run whether or
-/// not artifacts were asked for. A run that passes through both would otherwise
-/// spend two of GitHub's ten annotations-per-type-per-step on the same refusal. The artifact writer runs
+/// At most once per process. It has 2 call sites: the artifact writer in
+/// `commands::run`, gated on `--junit`/`--sarif` alone, and
+/// [`super::exit_invalid_for_analysis`], which must annotate a gating run
+/// whether or not artifacts were asked for. Only the first is reachable without
+/// `--strict`: all 7 callers of that exit helper (in `reports::lint` twice,
+/// `reports::check` twice, `reports::si`, `reports::usb_c` and `commands::run`)
+/// are behind a `strict &&` guard.
+///
+/// A run that passes through both would otherwise spend two of GitHub's ten
+/// annotations-per-type-per-step on the same refusal. The artifact writer runs
 /// first and names the whole run's blockers, so the surviving annotation is the
 /// widest one: on `--usb-c`, whose exit site names only the CC-scoped subset,
 /// the kept line is the superset rather than that surface's own list.
@@ -118,7 +127,9 @@ pub fn github_evidence_annotations_with_gate(
         return;
     }
     for finding in evidence_findings_with_gate(maps, gates) {
-        let level = if finding.severity == "serious" {
+        // The same predicate JUnit and SARIF grade on, so the three artifact
+        // surfaces cannot split over one map.
+        let level = if is_failure(&finding) {
             "error"
         } else {
             "warning"
@@ -138,10 +149,19 @@ pub const SARIF_SCHEMA_URL: &str =
 /// SARIF version matching [`SARIF_SCHEMA_URL`].
 pub const SARIF_VERSION: &str = "2.1.0";
 
-/// Whether a finding fails the JUnit testcase / escalates the SARIF level.
-/// "serious" is the shared gate grade across the report surfaces.
+/// Whether a finding fails the JUnit testcase / escalates the SARIF level: the
+/// finding's own [`JsonFinding::gating`] flag, set where the finding was built
+/// from the predicate its surface's gate asks.
+///
+/// NOT the severity word. The check families gate wider than the shared
+/// `serious` grade (a medium lint finding, any real SI finding, every co-sim
+/// fault), so a run could exit 2 with a red `verdict` and still archive
+/// `failures="0"`: a dashboard reading the artifact was told the build was fine.
+/// The precedence between the grades is untouched, because it lives elsewhere:
+/// a refusal is an `<error>`, not a `<failure>`, and the `invalid` route's
+/// blockers keep their "INVALID evidence" text.
 fn is_failure(f: &JsonFinding) -> bool {
-    f.severity == "serious"
+    f.gating
 }
 
 /// The `<check> <net/ref>` subject line shared with the strict-gate output.
@@ -162,9 +182,9 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Render the findings as one JUnit XML document: one `<testsuite>` per check
-/// family, one `<testcase>` per finding (serious findings carry a
-/// `<failure>`), and a synthetic passing "no findings" case for a clean check
-/// so an empty suite is distinguishable from a suite that never ran.
+/// family, one `<testcase>` per finding (gating findings carry a `<failure>`),
+/// and a synthetic passing "no findings" case for a clean check so an empty
+/// suite is distinguishable from a suite that never ran.
 pub fn junit_xml(board_name: &str, findings: &[JsonFinding]) -> String {
     junit_xml_with_refusal(board_name, findings, None)
 }
@@ -271,9 +291,9 @@ pub fn junit_xml_with_refusal(
 }
 
 /// Render the findings as one SARIF 2.1.0 document. Rules are deduplicated by
-/// `check/kind`; each finding becomes a result whose level maps serious ->
-/// error, everything else -> warning, located at the board file (hauksbee
-/// findings are electrical, not line-addressed).
+/// `check/kind`; each finding becomes a result whose level maps gating ->
+/// error, non-gating -> warning, located at the board file (hauksbee findings
+/// are electrical, not line-addressed).
 pub fn sarif_json(board_path: &Path, findings: &[JsonFinding]) -> String {
     sarif_json_with_refusal(board_path, findings, None)
 }
@@ -371,11 +391,15 @@ pub fn github_annotations(items: &[String]) {
 mod tests {
     use super::*;
 
+    /// A finding whose gate grade follows its severity, the shape the DRC and
+    /// evidence families produce. The gate-wider families have their own tests
+    /// in `tests/verdict_contract.rs`, end to end through the CLI.
     fn finding(check: &str, kind: &str, severity: &str, net: &str, msg: &str) -> JsonFinding {
         JsonFinding {
             check: check.to_string(),
             kind: kind.to_string(),
             severity: severity.to_string(),
+            gating: severity == "serious",
             nets: vec![net.to_string()],
             location_mm: None,
             layer: None,
@@ -411,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn junit_maps_serious_to_failure_and_keeps_clean_suites_nonempty() {
+    fn junit_maps_a_gating_finding_to_failure_and_keeps_clean_suites_nonempty() {
         let out = junit_xml(
             "b",
             &[
@@ -436,6 +460,29 @@ mod tests {
         assert!(
             esc.contains("x&lt;y") && esc.contains("A&amp;B") && esc.contains("m&quot;q&quot;")
         );
+    }
+
+    #[test]
+    fn the_gate_grade_is_the_gating_flag_and_not_the_severity_word() {
+        // Both directions, on the two shapes that really occur: a medium lint
+        // finding that gates (`warning`, gating) and a possibly-phantom copper
+        // short that does not (`warning`, not gating). Grading on the severity
+        // word made the first one green.
+        let mut gating = finding("lint", "placeholder_value", "warning", "+5V", "no value");
+        gating.gating = true;
+        let phantom = finding("drc", "short", "warning", "GND", "may be phantom");
+        let out = junit_xml("b", &[gating.clone(), phantom.clone()]);
+        assert!(out.contains("failures=\"1\""), "{out}");
+        assert!(out.contains("<failure message=\"no value\"/>"), "{out}");
+        assert!(
+            out.contains("<system-out>may be phantom</system-out>"),
+            "{out}"
+        );
+
+        let sarif = sarif_json(Path::new("b.kicad_pcb"), &[gating, phantom]);
+        let v: serde_json::Value = serde_json::from_str(&sarif).expect("sarif parses");
+        assert_eq!(v["runs"][0]["results"][0]["level"], "error");
+        assert_eq!(v["runs"][0]["results"][1]["level"], "warning");
     }
 
     #[test]

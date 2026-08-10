@@ -76,6 +76,10 @@ interface EngineFinding {
   check: string;
   kind: string;
   severity: string;
+  /** Whether this finding is a reason the run fails its gate. Wider than
+   *  `severity === "serious"`; optional here because older engine builds
+   *  predate the field. */
+  gating?: boolean;
   nets: string[];
   refs: string[];
   actionable: boolean;
@@ -126,7 +130,10 @@ export function severityFromEngine(s: string): Sev {
     case "medium":
       return "warning";
     default:
-      // "note", "info", and anything future stays visible but non-gating.
+      // "note", "info", and anything future stays visible at the lowest rung.
+      // This maps the severity WORD to a diagnostic colour; it is not a gate
+      // reading. Whether a finding fails the run is `JsonFinding.gating`, which
+      // is set on more than the `serious` ones (docs/analysis/JSON_OUTPUT.md).
       return "info";
   }
 }
