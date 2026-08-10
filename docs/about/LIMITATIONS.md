@@ -377,8 +377,17 @@ both copper layers, and the gerbers it ships beside the `.brd` show the pair
 separate on the layer where both pours hold `isolate="0.3048"` and joined on the
 layer where one holds `0.00030625`.
 
-**The false-negative class that buys.** An overlap whose smaller `isolate` is at
-or above one micrometre is now silent, and the fill is still never reconstructed,
+**The false positive it keeps.** A pour with no `isolate` attribute at all parses
+as zero and still flags, so two same-rank pours that set nothing and overlap are
+reported. That is an extrapolation, not the measurement: the emonTx merge was
+observed at 0.00030625, and against a foreign track or pad an absent `isolate`
+means "rules only" rather than "no gap", as the paragraph above says. It is kept
+deliberately, on the grounds that an over-report of a contact costs a reader less
+than a miss, and that no board in the corpus carries the construct; it is written
+down here rather than left in the code.
+
+**The false-negative class the narrowing buys.** An overlap whose smaller
+`isolate` is at or above one micrometre is now silent, and the fill is still never reconstructed,
 so a pour pair that a CAM run merges anyway is not caught. Nor is a sub-rule but
 non-zero `isolate` reported as a clearance finding, because answering that needs
 the fill. The band where the threshold sits is bounded by measurement only from

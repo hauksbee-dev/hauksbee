@@ -717,9 +717,11 @@ own `kicad-cli pcb drc` on the same file reports the same six shorting_items \
 violations, the same net pairs and the same pad anchors, and the project's \
 MWGEN-G1.kicad_pro sets `shorting_items` and `clearance` to `error` with an \
 empty drc_exclusions list, so the design's own rule set forbids every one of \
-them. The entry earns its place regardless: an RF instrument at 373 footprints, \
-with shield cans and a wideband synthesiser section, is coverage nothing else \
-here supplies.
+them. The entry earns its place regardless, though not for novelty: hackrf_one is \
+also an RF instrument with a Laird shield frame and a wideband synthesiser. What \
+this one adds is a KiCad 6 layout whose own DRC output disagrees with nothing we \
+report, six recorded pad overlaps to regress against, and a placement-collision \
+shape the rest of the corpus does not contain.
 """
 expect = [
   "MWGEN-G1.kicad_pcb",
