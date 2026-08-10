@@ -664,10 +664,29 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
                 // collide on an index and `assign_inner_indices` densifies them
                 // into the wrong stack order, which is what the blind-via layer
                 // pair resolution keys on.
-                let token_start = pos == 0 || !n.full.as_bytes()[pos - 1].is_ascii_alphabetic();
+                // `in` is the one marker short enough to hide inside ordinary words:
+                // `main`, `pin`, `origin`, `austin`. `main2-In1_Cu.gbr` read its own
+                // project name that way, the "in" inside "main" butting straight
+                // against `2`, and reported inner layer 2. Worse than a wrong label,
+                // since two films of one job then collide on an index and
+                // `assign_inner_indices` densifies them into the wrong stack order,
+                // which is what blind-via layer-pair resolution keys on. So `in` has
+                // to start a token in EITHER form.
+                //
+                // The longer markers must NOT carry that requirement in the butt-up
+                // form. They glue to a preceding word only in names where the digit
+                // IS the layer index, and demanding a token start there discarded
+                // `board-InnerLayer1_Cu.gbr`, `board_MidLayer1_Cu.gbr` and
+                // `board-CopperLayer2_Cu.gbr`, which classified as copper before:
+                // the same silent loss this function has been fixed for twice
+                // already. The separated form keeps the requirement for all of them,
+                // that being where a stray number after a word is the real hazard.
+                let at_token_start = pos == 0 || !n.full.as_bytes()[pos - 1].is_ascii_alphabetic();
                 let k = if pass == 0 {
-                    token_start.then(|| index_at(tail)).flatten()
-                } else if token_start {
+                    (at_token_start || marker != "in")
+                        .then(|| index_at(tail))
+                        .flatten()
+                } else if at_token_start {
                     index_after_sep(tail)
                 } else {
                     None
@@ -870,6 +889,20 @@ mod tests {
             role("pin2-In10_Cu.gbr"),
             LayerRole::Copper { index: 10, .. }
         ));
+        // The longer markers keep the butt-up form ungated: they glue to a
+        // preceding word only where the digit IS the layer index, and requiring a
+        // token start there discarded copper these names classified before.
+        for (name, want) in [
+            ("board-InnerLayer1_Cu.gbr", 1usize),
+            ("board_MidLayer1_Cu.gbr", 1),
+            ("board-CopperLayer2_Cu.gbr", 2),
+            ("board-CopperInner1.gbr", 1),
+        ] {
+            match role(name) {
+                LayerRole::Copper { index, .. } => assert_eq!(index, want, "{name}"),
+                other => panic!("{name} should be copper, got {other:?}"),
+            }
+        }
         // And no name-based copper rule may claim a file that is plainly not a
         // film. Altium's per-side pick-and-place and its per-layer prints both
         // carry the words the top and bottom rules key on, and the directory scan

@@ -151,9 +151,9 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
 /// components where a board with 634 plated holes and 492 filled regions on the
 /// top layer alone has well over a hundred. The single `%LPC*%` pair was the
 /// whole story. Altium plots the plane negatively, one board-sized dark region
-/// followed by 491 clear regions, and clear geometry was discarded rather than
-/// cut, so both copper films were solid sheets and every net was unioned into
-/// its plane. The mechanism is gated in isolation by
+/// followed by 478 clear regions and then, under `%LPD*%`, 13 more dark islands
+/// (the bottom film is 1, 132 and 3). Clear geometry was discarded rather than cut,
+/// so both copper films were solid sheets and every net was unioned into its plane. The mechanism is gated in isolation by
 /// `tests/gerber_negative_pour.rs`; this is the same fix measured on a real
 /// Altium board.
 #[test]
