@@ -760,8 +760,9 @@ struct RunArgs {
 
     /// Exit non-zero if a report (--check/--drc/--lint/--si/--resources/--usb-c) finds problems,
     /// so it can gate a CI pipeline directly. Default stays exit 0 (scripts that
-    /// only read the text are unaffected). Counts shorts + serious/medium lint &
-    /// SI findings; clearance-only and low-severity notes do not fail the gate.
+    /// only read the text are unaffected). Counts shorts, serious/medium lint
+    /// findings and every real SI finding; DRC clearance notes and the lint
+    /// low-severity notes do not fail the gate.
     #[arg(long, visible_alias = "fail-on-findings")]
     strict: bool,
 
