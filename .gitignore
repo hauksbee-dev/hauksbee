@@ -40,9 +40,8 @@ video/remotion/public/media/
 
 # macOS noise
 .DS_Store
-codex-webreview.log
+codex-*.log
 vendor/kicad-forge/Cargo.lock
-codex-routing-mosfet-review.log
 cursor-review*.log
 
 # Agent verification screenshots (scratch, never repo content)

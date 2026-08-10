@@ -1576,12 +1576,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                         eprintln!("{}", refusal.render_text());
                     }
                 }
-                // Same precedence as the zero-activity refusal above: raised
-                // faults are a judgement this run CAN make, so they own the
-                // exit code.
-                if faults.is_empty() {
-                    std::process::exit(code);
-                }
+                // NOT the zero-activity precedence: there the analog solve was
+                // sound, so raised faults were a judgement the run could make.
+                // Here the solve held stale voltages over the failed windows,
+                // which is where these faults may come from, so the honest exit
+                // is still invalid-for-analysis. The document's `fail` verdict
+                // grades the faults as observed; this code says they could not
+                // be trusted, and refusing outranks that.
+                std::process::exit(code);
             }
         }
 
@@ -1627,7 +1629,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 fault_findings.iter().any(|f| f.message == a)
             });
         if cfg.strict && strict_invalid {
-            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            crate::reports::exit_invalid_for_analysis(&strict_blockers);
         }
         return Ok(());
     }

@@ -60,8 +60,9 @@ and failure parse the same way:
 
 `verdict` is `"fail"` when `serious_count > 0`, or when the emitting surface's
 own `--strict` gate fails on a finding the `serious` severity does not carry
-(`--lint` gates on medium-severity findings, `--si` on any finding, the co-sim
-surface on any raised fault; `--strict-boot` adds the boot advisory). It is
+(`--lint` gates on medium-severity findings, `--si` on any real finding
+including its low ones but not its informational notes, the co-sim surface on
+any raised fault; `--strict-boot` adds the boot advisory). It is
 `"invalid"` when nothing gates but the run-level claim could not be judged: a
 top-level `refusal`, AC or thermal reporting `valid:false`, undermined
 run-level evidence, or unbound verdict-critical parts on a model-dependent
@@ -87,10 +88,13 @@ descriptive (`--report`) surfaces are exempt, on both the verdict and the exit
 code: copper reads the layout, and `--report` describes the binding rather than
 judging it (`docs/ci/CI.md` states that boundary).
 
-A `"pass"` can still be **qualified** rather than refused: `--thermal
---no-strict-thermal` returns `valid:true` and exit 0 while keeping its
-PARTIAL-coverage caveat in `notes`. Read `verdict: "pass"` together with
-`notes` and the `bind` fields, never on its own.
+Read `verdict` together with `notes` and the `bind` fields, never on its own:
+`thermal.valid: true` under `--thermal --no-strict-thermal` means the table is
+usable, not that the coverage is complete, and the top-level `verdict` can
+still be `invalid` for the undermined evidence behind it while the opt-out
+returns exit 0. That opt-out is the one place the exit code and the verdict
+deliberately part company (it exists to stop thermal coverage failing a build),
+the same way omitting `--strict` leaves a `fail` verdict at exit 0.
 
 ## Sections
 

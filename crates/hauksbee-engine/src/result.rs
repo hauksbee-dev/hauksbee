@@ -1553,8 +1553,9 @@ pub struct JsonReport {
     /// trim those per-net maps out of their verdicts for the same reason.
     /// Without this the descriptive document read `"ok":false` while the
     /// command always exited 0, so the two ways to gate on it disagreed. A
-    /// refusal still invalidates. Not serialized: the evidence array and the
-    /// bind summary carry every binding fact this exemption does not gate on.
+    /// top-level refusal would still invalidate, though no descriptive surface
+    /// sets one today. Not serialized: the evidence array and the bind summary
+    /// carry every binding fact this exemption does not gate on.
     #[serde(skip)]
     pub descriptive_only: bool,
     /// Every explicitly supplied input and what it contributed to this run.
