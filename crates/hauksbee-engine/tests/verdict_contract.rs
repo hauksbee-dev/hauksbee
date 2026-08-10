@@ -20,27 +20,30 @@
 //! 3. **Cross-surface parity.** Each surface's `--strict` exit code says the
 //!    same thing as that surface's own JSON verdict, on the same board:
 //!    `invalid` exits 3, `fail` exits 2, `pass` exits 0. Three exceptions are
-//!    deliberate: the `--thermal --no-strict-thermal` opt-out, pinned below
-//!    because its document must keep refusing even though its exit does not,
-//!    and the two co-sim paths that keep exit 3 over a `fail` document because
-//!    the run was not analysable even though it observed faults (an aborted
-//!    analog solve, a runtime timing refusal), which are documented in
-//!    docs/ci/CI.md and not pinned here. The gate is per surface, so the bind
-//!    gate that invalidates `--lint`/`--si`/`--check`/`--usb-c` leaves the
-//!    copper (`--drc`) and descriptive (`--report`) surfaces alone, on both the
-//!    exit code and the verdict field. The CI artifacts follow it as far as they
-//!    can today: the GitHub annotations agree on every run the bind-gate and
-//!    co-sim-refusal paths own (an analysis surface that refuses on its own
-//!    validity, and an exit 3 for undermined coverage alone, name no blockers
-//!    and annotate nothing; and with an artifact flag the whole-suite artifact
-//!    writer annotates regardless of the selected surface), and JUnit/SARIF
-//!    agree on the `invalid` route (whose blockers are gate-grade `serious`
-//!    evidence findings), through the co-sim rewrite and its refusal rewrite. They do NOT yet agree on the
-//!    widened `fail` route: JUnit/SARIF grade a testcase failure on
-//!    `severity == "serious"` alone, so a run that gates on a medium lint
-//!    finding or on co-sim faults is red in its exit code and its verdict and
-//!    still archives `failures="0"`. Closing that needs a per-finding gating
-//!    flag rather than a severity word, so it is deliberately not pinned here.
+//!    deliberate: the `--no-strict-thermal` opt-out, pinned below because its
+//!    document must keep refusing even though its exit does not, and the two
+//!    co-sim paths that keep exit 3 over a `fail` document because the run was
+//!    not analysable even though it observed faults (an aborted analog solve, a
+//!    runtime timing refusal), documented in docs/ci/CI.md, not pinned here.
+//!
+//!    The gate is per surface, so the bind gate that invalidates
+//!    `--lint`/`--si`/`--check`/`--usb-c` leaves the copper (`--drc`) and
+//!    descriptive (`--report`) surfaces alone, on both the exit code and the
+//!    verdict field. The CI artifacts follow as far as they can today: the
+//!    GitHub annotations agree on every run the bind-gate and co-sim-refusal
+//!    paths own (an analysis surface that refuses on its own validity, and an
+//!    exit 3 for undermined coverage alone, name no blockers and annotate
+//!    nothing; and with an artifact flag the whole-suite artifact writer
+//!    annotates regardless of the selected surface), and JUnit/SARIF agree on
+//!    the `invalid` route (whose blockers are gate-grade `serious` evidence
+//!    findings), through the co-sim rewrite and its refusal rewrite.
+//!
+//!    They do NOT yet agree on the widened `fail` route: JUnit/SARIF grade a
+//!    testcase failure on `severity == "serious"` alone, so a run that gates on
+//!    a medium lint finding or on co-sim faults is red in its exit code and its
+//!    verdict and still archives `failures="0"`. Closing that needs a
+//!    per-finding gating flag rather than a severity word, so it is
+//!    deliberately not pinned here.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

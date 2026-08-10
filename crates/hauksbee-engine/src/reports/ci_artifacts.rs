@@ -81,7 +81,10 @@ pub fn github_blocker_annotation(blockers: &[String]) {
 /// GitHub error annotation for a whole-run refusal (the exit-3 documents the
 /// JUnit `<error>` and the SARIF `hauksbee/invalid-for-analysis` result carry),
 /// so the annotation surface cannot stay silent on a run the other two
-/// artifacts show red. No-op outside GitHub Actions.
+/// artifacts show red. It fires on the refusal, not on the exit code, so a run
+/// that refused AND raised faults annotates both this and the `--strict` gate
+/// while exiting 2: the faults outrank the refusal for the exit code without
+/// making the refusal untrue. No-op outside GitHub Actions.
 pub fn github_refusal_annotation(refusal: &Refusal) {
     if std::env::var_os("GITHUB_ACTIONS").is_none() {
         return;

@@ -81,7 +81,8 @@ pub fn emit(
     };
     // The verdict blockers: a clean SI result over an unbound power FET / main
     // IC is a vacuous pass, so every surface says INCONCLUSIVE (count, named
-    // parts, unlocking input) instead of a clean bill. Exit codes unchanged.
+    // parts, unlocking input) instead of a clean bill. Without --strict the exit
+    // code is unchanged; under it these blockers exit 3, matching the verdict.
     let blockers =
         crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
     match mode {

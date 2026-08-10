@@ -1187,7 +1187,8 @@ document does not change with the flag (a refusing verdict prints beside exit 0
 without `--strict`), so reading it there is at worst incomplete. On the co-sim
 path it is misleading: the zero-activity refusal is only constructed under
 `--strict` and the boot advisory is only gate-grade under `--strict-boot`, so
-those documents read `pass` until the flag is passed. In the other direction,
+neither reaches the document until its flag is passed (whatever else the run
+found on its own, such as bind blockers or raised faults, is there either way). In the other direction,
 `--thermal --no-strict-thermal` opts out of the PARTIAL-coverage escalation
 permanently, so that document can read `invalid` at exit 0 whatever else is
 passed; a thermal table with no usable coverage at all still exits 3 through the
