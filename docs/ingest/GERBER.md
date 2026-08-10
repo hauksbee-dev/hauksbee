@@ -570,7 +570,12 @@ A void becomes an extra contour on the pour it sits inside, which is what
 interior as empty and the copper around it as copper. Even-odd does most of
 the work by itself: a thermal relief's separate arc-shaped voids leave the
 spokes standing, so the pad stays on the pour exactly as fabricated, and an
-annular void's inner rim leaves its copper island standing. A void is cut
+annular void's inner rim leaves its copper island standing, and that island is
+then moved out of the pour's primitive into its own, because connectivity
+unions per primitive and an island left inside the pour's shape is shorted
+straight back to the plane. An island is freed only when no other void's
+bounds overlap it; one another void may have touched stays a contour of the
+pour, over-connected. A void is cut
 from every `Region` primitive whose own contours, as drawn, contain every
 vertex of the void, and which was painted **before** it, gerber being a
 painter's model. A void already covered whole by an earlier void is skipped,
@@ -608,9 +613,24 @@ island reads slightly wide rather than slightly short, and refused when the
 hole is so nearly as wide as its aperture that the circumscribed rim escapes
 the outer boundary.
 
+Nesting depth is NOT used to classify a cut pour's contours. That classifier,
+which does group the contours of a single `G36`/`G37` region, needs contours
+that never cross, and voids across a whole film do cross: two overlapping
+antipads put one void's witness vertex inside the other, which reads as an
+outer boundary and promotes the void to a phantom polygon of copper. On a
+12000-antipad plane whose columns overlap that promoted 11890 voids and the
+board-sized sheet came back.
+
+A region counts as clear only when the polarity is clear at **both** `G36` and
+`G37`. Which end decides is a reading of when the region object is created, and
+requiring both means an ambiguous film is painted rather than subtracted, so a
+wrong reading over-connects instead of fabricating a break. A region that flips
+polarity mid-way is painted, never dropped.
+
 The remaining limits all leave copper standing: the refusals above, a void
 straddling a pour's edge, a void laid over a track or a pad rather than over a
-pour, and the intersection of two voids that only partially overlap.
+pour, the intersection of two voids that only partially overlap, and an island
+ringed by several separate voids rather than by one void's own hole contour.
 
 Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
 pour with two ringed pads must reconstruct to three conductors, and its

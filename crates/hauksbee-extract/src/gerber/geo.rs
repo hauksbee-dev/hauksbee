@@ -483,6 +483,18 @@ impl<'a> PolyGrid<'a> {
         }
     }
 
+    /// Mark every cell the segment `a..b` passes through.
+    ///
+    /// A supercover traversal (Amanatides-Woo): step from the cell holding `a` to
+    /// the cell holding `b`, always crossing whichever of the next vertical or
+    /// horizontal cell boundary the segment reaches first. Point-sampling the
+    /// segment at one-cell spacing does NOT do this: whenever a step advances
+    /// both cell coordinates, the cell the segment crossed in between is never
+    /// visited. Those missed cells then took their classification from the
+    /// scanline parity at their CENTRE, so every query in one of them on the far
+    /// side of the boundary got the wrong answer, and `near_boundary` could
+    /// answer "no boundary here" over a boundary that was really there. A rotated
+    /// square at 512 cells missed 524 crossed cells.
     fn stamp_edge(
         cells: &mut [u8],
         nx: usize,
@@ -493,17 +505,72 @@ impl<'a> PolyGrid<'a> {
         a: (f64, f64),
         b: (f64, f64),
     ) {
-        // Sample the edge densely enough to hit every cell it crosses.
-        let len = (b.0 - a.0).hypot(b.1 - a.1);
-        let steps = ((len * inv_cell).ceil() as usize + 1).max(1);
-        for s in 0..=steps {
-            let t = s as f64 / steps as f64;
-            let x = a.0 + (b.0 - a.0) * t;
-            let y = a.1 + (b.1 - a.1) * t;
-            let gx = ((x - minx) * inv_cell) as isize;
-            let gy = ((y - miny) * inv_cell) as isize;
+        let mark = |cells: &mut [u8], gx: isize, gy: isize| {
             if gx >= 0 && gy >= 0 && (gx as usize) < nx && (gy as usize) < ny {
                 cells[gy as usize * nx + gx as usize] = 2;
+            }
+        };
+        // Cell coordinates, in units where one cell is 1.0.
+        let (ax, ay) = ((a.0 - minx) * inv_cell, (a.1 - miny) * inv_cell);
+        let (bx, by) = ((b.0 - minx) * inv_cell, (b.1 - miny) * inv_cell);
+        let (mut gx, mut gy) = (ax.floor() as isize, ay.floor() as isize);
+        let (tx, ty) = (bx.floor() as isize, by.floor() as isize);
+        mark(cells, gx, gy);
+        if (gx, gy) == (tx, ty) {
+            return;
+        }
+        let (dx, dy) = (bx - ax, by - ay);
+        let stepx: isize = if dx > 0.0 {
+            1
+        } else if dx < 0.0 {
+            -1
+        } else {
+            0
+        };
+        let stepy: isize = if dy > 0.0 {
+            1
+        } else if dy < 0.0 {
+            -1
+        } else {
+            0
+        };
+        // Parameter (0..1 along the segment) of the next crossing on each axis,
+        // and the parameter step between successive crossings.
+        let next = |v: f64, g: isize, step: isize, d: f64| -> f64 {
+            if step == 0 {
+                f64::INFINITY
+            } else {
+                let edge = if step > 0 { g as f64 + 1.0 } else { g as f64 };
+                (edge - v) / d
+            }
+        };
+        let mut tmx = next(ax, gx, stepx, dx);
+        let mut tmy = next(ay, gy, stepy, dy);
+        let ddx = if stepx == 0 {
+            f64::INFINITY
+        } else {
+            1.0 / dx.abs()
+        };
+        let ddy = if stepy == 0 {
+            f64::INFINITY
+        } else {
+            1.0 / dy.abs()
+        };
+        // The traversal visits at most one cell per unit crossed on either axis,
+        // so this bound cannot cut a legitimate walk short; it only stops a walk
+        // that non-finite coordinates would otherwise run forever.
+        let limit = (dx.abs() + dy.abs()).ceil().max(1.0) as usize + 4;
+        for _ in 0..limit {
+            if tmx <= tmy {
+                gx += stepx;
+                tmx += ddx;
+            } else {
+                gy += stepy;
+                tmy += ddy;
+            }
+            mark(cells, gx, gy);
+            if (gx, gy) == (tx, ty) {
+                return;
             }
         }
     }
@@ -575,6 +642,94 @@ mod tests {
                     point_in_polygon(x, y, &poly),
                     "mismatch at ({x},{y})"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn poly_grid_matches_exact_on_diagonal_edges_and_holes() {
+        // The case a point-sampled edge stamp got wrong. Axis-aligned edges hide
+        // it: a diagonal edge advances both cell coordinates in one step, and the
+        // cell it crossed in between goes unstamped, so it takes its answer from
+        // the scanline parity at its CENTRE and every query in it on the far side
+        // of the boundary is wrong. A rotated square at 512 cells missed 524 such
+        // cells. Rotated, off-origin, with a rotated hole, at several resolutions,
+        // sampled on a grid deliberately incommensurate with the cells.
+        let rot = |pts: &[(f64, f64)], t: f64, ox: f64, oy: f64| -> Vec<(f64, f64)> {
+            pts.iter()
+                .map(|&(x, y)| {
+                    (
+                        ox + x * t.cos() - y * t.sin(),
+                        oy + x * t.sin() + y * t.cos(),
+                    )
+                })
+                .collect()
+        };
+        let square = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
+        let hole = [(-3.0, -3.0), (3.0, -3.0), (3.0, 3.0), (-3.0, 3.0)];
+        let contours = vec![rot(&square, 0.41, 1.7, -2.3), rot(&hole, 0.93, 2.1, -1.9)];
+        for cells in [32usize, 64, 97, 128, 512] {
+            let grid = PolyGrid::new(&contours, cells);
+            let mut bad = 0;
+            for i in 0..311 {
+                for j in 0..311 {
+                    let x = -14.0 + i as f64 * 0.10353;
+                    let y = -16.0 + j as f64 * 0.10171;
+                    if grid.contains(x, y) != point_in_contours(x, y, &contours) {
+                        bad += 1;
+                    }
+                }
+            }
+            assert_eq!(bad, 0, "grid disagreed with exact at {cells} cells");
+        }
+    }
+
+    #[test]
+    fn poly_grid_near_boundary_never_misses_a_crossed_cell() {
+        // `near_boundary` returning false has to be a SOUND refusal: it is used to
+        // skip an exact poly-distance test, so a false negative drops a real
+        // pad-to-pour connection. Brute-force every cell against every edge and
+        // require that each cell an edge genuinely crosses is stamped.
+        let poly: Vec<(f64, f64)> = (0..7)
+            .map(|k| {
+                let a = 0.37 + k as f64 * std::f64::consts::TAU / 7.0;
+                (3.3 + 9.0 * a.cos(), -1.1 + 9.0 * a.sin())
+            })
+            .collect();
+        let contours = vec![poly.clone()];
+        let grid = PolyGrid::new(&contours, 64);
+        let cell = 1.0 / grid.inv_cell;
+        for gy in 0..grid.ny {
+            for gx in 0..grid.nx {
+                let (x0, y0) = (grid.minx + gx as f64 * cell, grid.miny + gy as f64 * cell);
+                let b = [x0, y0, x0 + cell, y0 + cell];
+                // Does any edge cross this cell?
+                let corners = [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])];
+                let n = poly.len();
+                let mut crossed = false;
+                let mut j = n - 1;
+                for i in 0..n {
+                    for k in 0..4 {
+                        if segments_intersect(poly[j], poly[i], corners[k], corners[(k + 1) % 4]) {
+                            crossed = true;
+                        }
+                    }
+                    // An edge wholly inside the cell crosses no side.
+                    if poly[i].0 >= b[0]
+                        && poly[i].0 <= b[2]
+                        && poly[i].1 >= b[1]
+                        && poly[i].1 <= b[3]
+                    {
+                        crossed = true;
+                    }
+                    j = i;
+                }
+                if crossed {
+                    assert!(
+                        grid.near_boundary(b),
+                        "cell ({gx},{gy}) is crossed but not stamped"
+                    );
+                }
             }
         }
     }
