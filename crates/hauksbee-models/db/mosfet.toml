@@ -1090,3 +1090,184 @@ max_power_w = 0.35          # FR4, minimum recommended pad size (Note 1)
 max_voltage_v = 20.0        # VDS (VGS is +-12 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 357.0    # same min-pad FR4 condition
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DMG3404L: Diodes Incorporated N-channel logic-level trench MOSFET, SOT-23.
+#
+# Source: Diodes Incorporated "DMG3404L N-Channel Enhancement Mode MOSFET",
+#   document DS37640 Rev. 2-2, January 2016
+#   (www.diodes.com/assets/Datasheets/DMG3404L.pdf), Maximum Ratings, Thermal
+#   Characteristics and Electrical Characteristics tables.
+#
+# Datasheet figures used (TA = +25 C):
+#   VGS(th) = 1.0 / 1.5 / 2.0 V        @ VDS = VGS, ID = 250 uA        -> vto
+#   RDS(on) typ 21 mOhm (max 25)       @ VGS = 10 V,  ID = 5.8 A
+#   RDS(on) typ 24 mOhm (max 35)       @ VGS = 4.5 V, ID = 4.8 A
+#   Ciss 641 pF / Coss 66 pF / Crss 51 pF  @ VDS = 15 V, VGS = 0, 1 MHz
+#   VSD typ 0.75 V (max 1.0) @ VGS = 0, IS = 1 A
+#   BVDSS 30 V, VGSS +/-20 V, IDM 30 A
+#
+# kp: ONE route only, and that is worth saying plainly. Diodes publishes no gFS
+# and no SPICE card for this part, so the second, independent check the AO3400A
+# entry above enjoys does not exist here. From the two RDS(on) rows, modelling
+# on-resistance as channel + ohmic, R(VGS) = 1/(kp*(VGS-vto)) + (rd+rs):
+#   subtracting the rows eliminates (rd+rs), giving
+#   kp = (1/(4.5-1.5) - 1/(10-1.5)) / (0.024 - 0.021) = 0.215686 / 0.003
+#      = 71.9 A/V^2
+#   rd+rs = 0.021 - 1/(71.9 * 8.5) = 19.36 mOhm, split evenly as the siblings do.
+# With only two rows the fit has no degrees of freedom left, so there is NO
+# out-of-sample check: unlike the AO3400A, the 4.5 V row was used in the fit and
+# reproducing it proves nothing. Treat kp as a fit to two points, not a measured
+# parameter.
+#
+# NOT MODELLED: the body diode (VSD is on the datasheet; `body_is` is left at the
+# engine default, matching every other entry in this file), `lambda` (no
+# datasheet states one), and the gate resistance Rg = 2.2 Ohm.
+#
+# THE TWO ID RATINGS ARE BOTH REAL AND THEY DIFFER BY 40%. Note 5 (minimum
+# recommended pad) gives 4.2 A continuous and PD = 0.78 W; Note 6 (a 1 inch
+# square copper plate under a thermal via) gives 5.8 A and 1.33 W. A stress check
+# should judge against the pad-layout figure, because that is what an ordinary
+# board provides, so `max_current_a` carries 4.2 A and not the headline 5.8 A.
+[[models]]
+id = "dmg3404l"
+kind = "nmos"
+description = "DMG3404L N-channel MOSFET SOT-23, 30V, 4.2A, Rds(on) 21mOhm typ @ Vgs=10V"
+
+[models.match]
+# Boards commonly write the part without the logic-level "L" (the margay
+# datalogger's Q1 is valued "DMG3404"); Diodes only builds the L. "-7" and "-13"
+# are tape-and-reel quantity codes. No opposite-polarity part shares the "DMG3404"
+# prefix (Diodes' nearest P-channel devices are the DMG3401LSN in SC59 and the
+# DMG3415U, a -20 V not-for-new-design part), so the regex cannot reach one.
+value_re = "(?i)^DMG3404L?[A-Z0-9-]*$"
+
+[models.params]
+vto    = 1.5       # VGS(th) typ (V) (min 1.0, max 2.0)
+kp     = 71.9      # A/V^2, from the two RDS(on) rows (see the derivation above)
+rd     = 0.0097    # half the 19.36 mOhm ohmic residue of RDS(on) @ VGS = 10 V
+rs     = 0.0097    # other half
+cgd    = 5.1e-11   # = Crss, 51 pF @ VGS = 0, VDS = 15 V, 1 MHz
+cgs    = 5.9e-10   # = Ciss - Crss = 641 - 51 = 590 pF, same test condition
+
+[models.pins]
+# 1 = Gate, 2 = Source, 3 = Drain, the standard SOT-23 single-MOSFET order.
+#
+# DS37640 never prints pin NUMBERS: it gives a top-view "Pin Configuration" drawing
+# with G, S and D on the leads, so the numbering here is the standard reading of
+# that drawing rather than a table quoted from it. What corroborates it is the
+# margay datalogger, where Q1 sits in the battery's ground return with pad 1 on
+# VBAT+ and pad 2 on GND: a reverse-battery protection FET, which only works with
+# this pad order. Stated explicitly rather than left to the SOT-23 pin rule, so an
+# Eagle board with no pin functions binds with no guess warning.
+"1" = "gate"
+"2" = "source"
+"3" = "drain"
+
+[models.ratings]
+max_current_a       = 4.2     # ID continuous, TA = 25 C, minimum recommended pad
+                              # (Note 5); 5.8 A on the 1-inch-square copper of
+                              # Note 6. See the note above.
+max_surge_current_a = 30.0    # IDM, pulse width <= 10 us, duty <= 1%
+max_power_w         = 0.78    # PD, Note 5 board (1.33 W on the Note 6 board)
+max_voltage_v       = 30.0    # BVDSS / VDSS
+theta_ja_c_per_w    = 164.0   # RthJA, Note 5 board (96 C/W on the Note 6 board)
+max_junction_temp_c = 150.0   # TJ
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FDN360P: onsemi (ex-Fairchild) P-channel PowerTrench MOSFET, SuperSOT-3.
+#
+# Source: Fairchild/onsemi "FDN360P Single P-Channel, PowerTrench MOSFET",
+#   May 2003, document revision "FDN360P Rev F1 (W)" (the reprint carries an
+#   onsemi cover; the electrical tables are the Fairchild ones). Absolute
+#   Maximum Ratings, Thermal Characteristics and Electrical Characteristics.
+#
+# "SuperSOT-3" is the Fairchild-era name for the outline; onsemi's current revision
+# calls the same package SOT-23 / SuperSOT-23, case 527AG. The datasheet says it
+# outright either way: "Identical pin-out to SOT-23".
+#
+# THE THRESHOLD IS NEGATIVE, and on a P-channel entry that is not cosmetic. The
+# binder folds `vto` by the polarity sign before handing it to the solver
+# (`bind_mosfet`: `vto * polarity.sign()`, which is -1 for pmos), so a POSITIVE
+# vto here would reach the solver as -1.9 V and model a DEPLETION-mode P-FET: one
+# that conducts with its gate at its source. On the board this part came from, Q2
+# is a high-side load switch, so it would have been permanently on and the rail it
+# gates would have read as always present. Every other P-channel entry in this
+# file states a negative vto for the same reason; this one must too.
+#
+# The RESISTANCES and the transconductance are magnitudes: only `vto` is folded.
+# The derivation below likewise works in |VGS| throughout, because an
+# on-resistance fit has no use for the sign.
+#
+# Datasheet figures used (TA = 25 C; the part is P-channel, so every voltage and
+# current in the datasheet is negative):
+#   VGS(th) = -1 / -1.9 / -3 V         @ VDS = VGS, ID = -250 uA       -> vto
+#   RDS(on) typ 63 mOhm (max 80)       @ VGS = -10 V,  ID = -2 A
+#   RDS(on) typ 100 mOhm (max 125)     @ VGS = -4.5 V, ID = -1.5 A
+#   gFS     typ 5 S                    @ VDS = -5 V, ID = -2 A
+#   Ciss 298 pF / Coss 83 pF / Crss 39 pF  @ VDS = -15 V, VGS = 0, 1 MHz
+#   VSD typ -0.8 V (max -1.2) @ VGS = 0, IS = -0.42 A
+#   BVDSS -30 V, VGSS +/-20 V, IDM -10 A
+#
+# kp: two routes, and unlike the AO3400A above they do NOT agree closely, so the
+# choice is recorded rather than hidden.
+#   (a) from gFS: level-1 saturation gm = sqrt(2*kp*ID), so
+#       kp = gFS^2 / (2*ID) = 25 / 4 = 6.25 A/V^2.
+#   (b) from the two RDS(on) rows, R = 1/(kp*(|VGS| - |vto|)) + (rd+rs):
+#       kp = (1/(4.5-1.9) - 1/(10-1.9)) / (0.100 - 0.063) = 0.261159 / 0.037
+#          = 7.06 A/V^2.   (Note the bars: the arithmetic is in magnitudes
+#          throughout, which is why 1.9 and not -1.9 appears in it.)
+#   The two are 13% apart, which is ordinary for a level-1 fit to a trench
+#   device. (b) is used, because the thing this model is asked to get right on a
+#   board is the conducted drop through a closed switch, and (b) is the route
+#   that reproduces on-resistance by construction. (a) is then a cross-check at
+#   the 13% level rather than a confirmation, and the honest reading of this
+#   entry is that its saturation transconductance is good to about that.
+#   rd+rs = 0.063 - 1/(7.06 * 8.1) = 45.5 mOhm, split evenly.
+#
+# NOT MODELLED: the body diode, `lambda`, and the breakdown/threshold
+# temperature coefficients (-22 mV/C and +4 mV/C).
+[[models]]
+id = "fdn360p"
+kind = "pmos"
+description = "FDN360P P-channel MOSFET SuperSOT-3/SOT-23, 30V, 2A, Rds(on) 63mOhm typ @ Vgs=-10V"
+
+[models.match]
+# The die ships only as FDN360P; the trailing characters are packing codes. The
+# lower-voltage FDN306P is a DIFFERENT part (-12 V, -2.6 A) whose datasheet is
+# frequently mislabelled as this one, so the regex requires the full "FDN360P" and
+# cannot pick it up.
+value_re = "(?i)^FDN360P[A-Z0-9-]*$"
+
+[models.params]
+vto    = -1.9      # VGS(th) typ (V), NEGATIVE for P-channel (min -1.0, max -3.0).
+                   # See the sign note above before changing this.
+kp     = 7.06      # A/V^2, from the two RDS(on) rows; gFS route gives 6.25
+rd     = 0.0228    # half the 45.5 mOhm ohmic residue of RDS(on) @ |VGS| = 10 V
+rs     = 0.0228    # other half
+cgd    = 3.9e-11   # = Crss, 39 pF @ VGS = 0, VDS = -15 V, 1 MHz
+cgs    = 2.59e-10  # = Ciss - Crss = 298 - 39 = 259 pF, same test condition
+
+[models.pins]
+# 1 = Gate, 2 = Source, 3 = Drain.
+#
+# The datasheet says "Identical Pin-Out to SOT-23" outright, and that sentence is
+# what carries the numbering: like the DMG3404L above, this sheet's package drawing
+# prints only the letters D / G / S and no pin NUMBERS, in both the Fairchild May
+# 2003 revision cited here and onsemi's current one. So the numbering is the
+# standard reading of the SOT-23 convention the datasheet points at, not a table
+# quoted from it. Cross-checked against the margay datalogger, where Q2 has pad 2
+# on the 3V3 rail and pad 3 on the FTDI-only rail: a high-side load switch, which
+# only works with this pad order.
+"1" = "gate"
+"2" = "source"
+"3" = "drain"
+
+[models.ratings]
+max_current_a       = 2.0     # |ID| continuous, Note 1a
+max_surge_current_a = 10.0    # |ID| pulsed
+max_power_w         = 0.5     # PD single operation, Note 1a (0.46 W on Note 1b)
+max_voltage_v       = 30.0    # |BVDSS|
+theta_ja_c_per_w    = 250.0   # RthJA, Note 1a
+theta_jc_c_per_w    = 75.0    # RthJC
+max_junction_temp_c = 150.0   # TJ

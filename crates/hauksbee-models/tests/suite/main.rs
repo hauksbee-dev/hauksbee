@@ -18,6 +18,7 @@ mod corpus_batch_resolve;
 mod corpus_coverage_ratchet;
 mod digital_pin_maps;
 mod exact_override_tiebreak;
+mod external_five_coverage;
 mod extract_model_choice;
 mod layer_docs;
 mod module_carrier_resolve;

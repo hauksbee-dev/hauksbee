@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 use hauksbee_extract::{Component, ExtractedBoard};
+use hauksbee_ir::evidence::Assumption;
 use hauksbee_ir::{
     BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, SourceKind,
 };
@@ -428,7 +429,7 @@ pub fn bind_board_with(
 
         let (kind_str, outcome, warning, guesses) = match &model {
             None => {
-                let (kind_str, outcome, warning) = unresolved_outcome(comp, &node_of);
+                let (kind_str, outcome, warning) = unresolved_outcome(comp, &node_of, lib);
                 (kind_str, outcome, warning, Vec::new())
             }
             Some(m) => {
@@ -1367,26 +1368,22 @@ fn is_crystal_like(prefix: &str, value: &str) -> bool {
 }
 
 /// A value string that is *wholly* a frequency: a number, an optional k/M/G SI
-/// prefix, and a trailing "Hz" ("16MHz", "8 Mhz", "32.768kHz"). The whole-value
-/// test matters: a ferrite bead is conventionally valued as impedance@frequency
-/// ("600@100MHz"), which also ends in "hz", but a bead sits in *series* in a
-/// power/signal path, so binding it Ignore would open that path and re-create
-/// the exact solve-collapse this crystal handling exists to prevent. Requiring
-/// the remainder (after stripping "hz" and the SI prefix) to be purely numeric
-/// rejects "600@100MHz" (the '@' survives) while accepting real crystal values.
+/// prefix, and a trailing "Hz" ("16MHz", "8 Mhz", "32.768kHz").
+///
+/// The whole-value test matters: a ferrite bead is conventionally valued as
+/// impedance@frequency ("600@100MHz"), which also ends in "hz", but a bead sits
+/// in *series* in a power/signal path, so binding it Ignore would open that path
+/// and re-create the exact solve-collapse this crystal handling exists to
+/// prevent. The shared grammar rejects it because the '@' is not part of a
+/// frequency, while accepting real crystal values.
+///
+/// This defers to the value parser rather than doing its own suffix arithmetic:
+/// a hand-rolled `strip_suffix("hz")` here and the parser's own unit table are
+/// two answers to one question, and they drifted (the parser called "16Mhz"
+/// unparseable while this said it was a frequency, so a crystal the DB resolved
+/// as a passive died on the parse the fallback never reached).
 fn value_is_frequency(value: &str) -> bool {
-    let v = value.trim().to_ascii_lowercase();
-    let Some(num) = v.strip_suffix("hz") else {
-        return false;
-    };
-    // Trim AGAIN after stripping the SI prefix: a space-separated value ("16 MHz")
-    // leaves the space between the magnitude and prefix exposed only once the 'm'
-    // is stripped ("16 mhz" -> strip "hz" -> "16 m" -> strip 'm' -> "16 "), and
-    // without this final trim the trailing space fails the all-digits check, so
-    // the extremely common "16 MHz" / "32.768 kHz" form was rejected and a
-    // C-prefixed crystal fell through to the capacitor heuristic (solve collapse).
-    let num = num.trim().trim_end_matches(['k', 'm', 'g']).trim();
-    !num.is_empty() && num.chars().all(|c| c.is_ascii_digit() || c == '.')
+    hauksbee_models::value::parse_frequency_hz(value).is_some()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1781,11 +1778,19 @@ fn non_empty(s: &str) -> Option<String> {
     }
 }
 
+/// Collapse a multi-line TOML string into one report sentence: the abstention
+/// table's `because`/`unlocked_by` are written as wrapped block strings so they are
+/// readable in the file, and a report line wants them unwrapped.
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Build the outcome for a PRESENT component with no resolved model. The two
 /// absent assembly states never reach here: pass 2 rows them before resolving.
 fn unresolved_outcome(
     comp: &Component,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+    lib: &ModelLibrary,
 ) -> (Option<String>, BindOutcome, Option<String>) {
     if let Some(McuFamilyRoute::NoPlatform { family }) = route_mcu_family(comp) {
         let msg = format!(
@@ -1819,10 +1824,35 @@ fn unresolved_outcome(
         .iter()
         .find(|(k, _)| k == hauksbee_extract::altium::VALUE_UNRESOLVED_KEY)
         .map(|(_, v)| v.clone());
-    let reason = match value_unresolved {
-        Some(why) => why,
-        None if two_terminal => "no model; left open".to_string(),
-        None => "no model".to_string(),
+    // A NAMED ABSTENTION beats the generic sentence. `db/unmodelled.toml` carries
+    // the parts this library has looked at and cannot model honestly, each with the
+    // input that would unlock it, and the report prints the binder's `reason` as the
+    // disclosure's "because". So a part on that list says WHY it is open and what
+    // would close it, where an unexamined part says "no model" and means it.
+    //
+    // The table is consulted only HERE, after resolution has already failed, and it
+    // contributes only this string: it cannot bind anything, and a stale entry for a
+    // part that has since gained a real model is unreachable rather than wrong.
+    let mpn = comp
+        .properties
+        .iter()
+        .find(|(k, _)| k.to_ascii_lowercase().contains("mpn"))
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    let abstention = lib.unmodelled().note_for(&comp.value, mpn);
+    let reason = match (value_unresolved, abstention) {
+        // The extractor's own explanation for a valueless part wins: it says the
+        // value is missing, which is a different and more immediate fact than any
+        // statement about a named part.
+        (Some(why), _) => why,
+        (None, Some(note)) => format!(
+            "{}{}{}",
+            one_line(&note.because),
+            hauksbee_ir::evidence::Assumption::UNLOCKED_BY_MARKER,
+            one_line(&note.unlocked_by)
+        ),
+        (None, None) if two_terminal => "no model; left open".to_string(),
+        (None, None) => "no model".to_string(),
     };
     (None, BindOutcome::Unresolved { reason }, warning)
 }
@@ -1858,6 +1888,115 @@ fn bind_component(
             .and_then(|p| node_of(p.net))
     };
 
+    // A crystal, resonator or packaged oscillator is `kind = "passive"` in the
+    // DB because that is the shape of its pad map, but it is NOT a two-terminal
+    // R/C/L and its value field is a FREQUENCY or a part number, never a
+    // magnitude. Sending it through `bind_passive` asks the value parser for
+    // ohms and gets one of three wrong answers: `None` for "16Mhz" and
+    // "Abracon_ABM11" (the part reported as an unresolved open, dragging the
+    // board's verdict down for a part the library had in fact identified), or,
+    // worse, a NUMBER for a bare "32.768", which stamps a 32.768 Ω resistor
+    // across an oscillator that has no such conductance.
+    //
+    // The engine's own `crystal_fallback` already binds this class Skipped for
+    // exactly this reason, so the DB path was the only one that got it wrong,
+    // and a curated entry was strictly worse than no entry at all. Same
+    // treatment here: high-impedance, clock supplied by the MCU model. The two
+    // load caps beside it are genuine passives and are unaffected.
+    // WHAT `Skipped` ACTUALLY COSTS, because it is not free and an earlier version
+    // of this comment claimed the opposite. `BindOutcome::Skipped` is
+    // `is_ignored()`, so the row leaves `non_ignored()`: it drops out of the
+    // resolved/total denominator, and `BoardEvidence::from_bound` builds an
+    // `open_part` assumption only for `Unresolved`, so it produces no assumption on
+    // any evidence surface either. Skipping a part therefore makes the board read as
+    // MORE fully handled, not less.
+    //
+    // For a bare two-terminal quartz that is right, and is what the engine's own
+    // `crystal_fallback` has always done: there is no motional arm to model, so
+    // there is nothing a reader could act on.
+    //
+    // For a PACKAGED OSCILLATOR it is not right on its own. `crystal_footprint` in
+    // db/passives.toml matches `^Oscillator...:` too, so a TCXO lands here, and a
+    // TCXO is not a quartz blank: it has a supply pin and it DRIVES a clock. Its
+    // supply draw and its driven output both go unmodelled, and a board whose only
+    // clock source is a TCXO should not read as fully handled. So that case carries
+    // a WARNING, which `BindReport::warnings` collects over every row including the
+    // ignored ones and the bind report prints; the reason string alone would reach
+    // only the bind table's own line.
+    if model.passive_class == Some(hauksbee_models::schema::PassiveClass::Crystal) {
+        // THE DISCRIMINATOR IS THE WIRING, NOT THE FOOTPRINT STRING. An earlier
+        // version of this tested only `footprint.contains("oscillator")`, which is
+        // the KiCad library's spelling and nobody else's. `crystal_value` in
+        // db/passives.toml matches a bare frequency with no footprint constraint at
+        // all, so a TCXO in an Eagle-style land ("complib:OSC_SMD_3225_4P",
+        // "XO-5032") resolved to this class and took the SILENT path: measured on a
+        // corpus board, renaming the footprint alone moved the part from 52 mentions
+        // under `--check --plain` to zero. That was also a REGRESSION, and the worst
+        // kind. Before this branch such a part reached `bind_passive_array`, failed
+        // `parse_value("40MHz")`, and came out `Unresolved`, i.e. disclosed as an
+        // open active part. Skipping it silently moved it from disclosed to
+        // undisclosed, which is the one transition this project forbids.
+        //
+        // What actually separates the two kinds is that a POWERED part has a pin on a
+        // supply rail. A quartz blank has two terminals that go to the MCU's
+        // oscillator pins and, on a 4-pad part, two shield pads that go to GROUND: it
+        // is never wired to a rail. So the board's own resolved power nets answer the
+        // question, and the footprint string stays as a third-chance signal for a
+        // part whose supply net the rail detector did not classify.
+        //
+        // A COUNT OF NON-GROUND NETS DOES NOT WORK, and it is worth recording why so
+        // nobody tries it again. The idea was that a quartz blank presents exactly two
+        // non-ground nets, so more than two means a powered part. Two corpus boards
+        // break it. corne-cherry grounds its 4-pad crystal's shield pads to a net
+        // called "GNDR", which is not `NodeId::GROUND`, and lily58's Pro_V2 wires its
+        // shield pads to the load-capacitor nets rather than to ground at all, giving
+        // four non-ground nets on an ordinary 12 MHz crystal. Both produced a caveat
+        // about a part that is modelled correctly, and a warning list with false
+        // entries in it is how the true ones lose their audience.
+        //
+        // What is left is the two signals that do not depend on how a board names or
+        // wires its ground: a pin on a RESOLVED SUPPLY RAIL, which is what a powered
+        // oscillator has and a crystal never does, and the footprint string, which
+        // catches a KiCad-library part whose supply net the rail detector missed.
+        let mut on_a_supply_rail = false;
+        for pin in &comp.pins {
+            let Some(node) = node_of(pin.net) else {
+                continue;
+            };
+            if node.is_ground() {
+                continue;
+            }
+            if power_nets.contains_key(circuit.node_name(node)) {
+                on_a_supply_rail = true;
+                break;
+            }
+        }
+        let is_powered_oscillator =
+            on_a_supply_rail || comp.footprint.to_ascii_lowercase().contains("oscillator");
+        let warning = is_powered_oscillator.then(|| {
+            format!(
+                "{}{} ({}): packaged oscillator skipped as high impedance; it has a \
+                 supply pin and drives a clock, and neither its supply draw nor its \
+                 output is modelled, so any result that depends on this clock \
+                 existing is not evidence",
+                Assumption::PARTIAL_MODEL_MARKER,
+                comp.reference,
+                comp.value
+            )
+        });
+        return (
+            BindOutcome::Skipped {
+                reason: "crystal, resonator or packaged oscillator: modelled as \
+                         high impedance, with no motional arm and no oscillator \
+                         core, so a powered oscillator's supply draw and its \
+                         driven clock output are absent too"
+                    .to_string(),
+            },
+            warning,
+            guesses,
+        );
+    }
+
     let (outcome, warning) = match model.kind {
         Passive => bind_passive(comp, model, circuit, node_of),
         Diode => bind_diode(comp, model, circuit, &role_nets),
@@ -1878,7 +2017,7 @@ fn bind_component(
                     BindOutcome::Digital {
                         kind: kind.to_string(),
                     },
-                    None,
+                    entry_warning(comp, model),
                 ),
                 // A part whose logic spec does not compile is NOT bound: its
                 // nets float. Reporting it as `Digital` anyway made a broken
@@ -1911,7 +2050,7 @@ fn bind_component(
                     BindOutcome::Digital {
                         kind: "adc".to_string(),
                     },
-                    None,
+                    entry_warning(comp, model),
                 ),
                 Err(e) => (
                     BindOutcome::Unresolved {
@@ -2141,6 +2280,41 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
             "s" | "sel" | "in" | "ctrl" => "ctrl",
             "gnd" | "vss" => "vss",
             "vcc" | "vdd" => "vcc",
+            _ => return None,
+        },
+        // A regulator's pad NUMBERS are the least portable thing about it, and
+        // its pin NAMES are among the most: "VIN"/"VOUT"/"GND"/"CE" mean the
+        // same on every LDO ever built, while the pad they land on changes with
+        // the package and, worse, between a vendor's own package options.
+        //
+        // The XC6204 is the case that forced this arm. Torex's own pin-assignment
+        // table gives SOT-25 as 1=VIN, 2=VSS, 3=CE, 4=NC, 5=VOUT and SOT-89-5 as
+        // 4=VIN, 2=VSS, 3=CE, 1=NC, 5=VOUT: pads 1 and 4 trade places between two
+        // packages of the same part. A board that fits the SOT-89-5 land with a
+        // symbol carrying the SOT-25 numbers (the MWGEN-G1 does, on all three of
+        // its regulators) then disagrees with whichever map the DB entry chose,
+        // and the input pin lands on a pad the model calls "nc". The board's own
+        // pinfunction is the evidence that settles it, and it was being thrown
+        // away because this function had no arm for the kind.
+        //
+        // `fb` covers the adjustable parts' feedback node. `shdn` is deliberately
+        // NOT folded into `en`: it is the same pin with the opposite sense, and a
+        // model that ever gates on `en` would read a shutdown as an enable.
+        ComponentKind::Vreg => match f.as_str() {
+            "vin" | "in" | "input" | "vi" => "in",
+            "vout" | "out" | "output" | "vo" => "out",
+            "gnd" | "vss" | "ground" | "gnd1" => "gnd",
+            "ce" | "en" | "enable" => "en",
+            // `shdn` gets its OWN role and is deliberately not folded into `en`: it
+            // is the active-LOW spelling, so a binder that later learns to gate on
+            // the enable must be able to tell the two apart or it will invert half
+            // the library. Mapped rather than omitted so that a board naming the pad
+            // `SHDN` is read from its pin function instead of falling through to
+            // pin-rule guessing; `bind_vreg` treats both as "an enable exists and is
+            // not modelled" and says so.
+            "shdn" | "shutdown" | "nshdn" => "shdn",
+            "fb" | "adj" | "feedback" => "fb",
+            "nc" => "nc",
             _ => return None,
         },
         ComponentKind::Opamp | ComponentKind::Comparator => match f.as_str() {
@@ -2772,6 +2946,30 @@ fn bind_mosfet(
     )
 }
 
+/// An entry's own `warning` param, as a caveat ready for the bind report AND the
+/// evidence map.
+///
+/// ONE helper rather than a copy per binder, because the copies were the bug. The
+/// param existed and only `bind_opamp` read it, so an `analog_switch`, a `vreg` and
+/// a `digital` entry could describe its own gap in the database and have that text
+/// reach nobody: the `Digital` dispatch arms hard-coded `None` and `bind_vreg` had no
+/// warning channel at all. Five regulator entries and six logic entries were added
+/// against exactly those two paths, so the disclosure mechanism this file builds was
+/// unavailable to most of the coverage it shipped.
+///
+/// The marker is what makes it evidence. See [`Assumption::PARTIAL_MODEL_MARKER`]:
+/// without it the text lands only on `--report`, and a caveat present on one surface
+/// and absent on another is worse than one absent everywhere.
+fn entry_warning(comp: &Component, model: &ModelEntry) -> Option<String> {
+    let w = model.params.get_str("warning")?;
+    Some(format!(
+        "{}{} ({}): {w}",
+        Assumption::PARTIAL_MODEL_MARKER,
+        comp.reference,
+        comp.value
+    ))
+}
+
 fn bind_vreg(
     comp: &Component,
     model: &ModelEntry,
@@ -2800,7 +2998,7 @@ fn bind_vreg(
             BindOutcome::Behavioral {
                 device: format!("vreg {:.1}V behavioral converter", conv.vout_setpoint),
             },
-            None,
+            entry_warning(comp, model),
         );
     }
     let out = roles.get("out").copied();
@@ -2834,11 +3032,74 @@ fn bind_vreg(
         n: NodeId::GROUND,
         kind: SourceKind::Dc(vout),
     });
+    // THE ENABLE IS NOT MODELLED, and this says so for every entry that has one
+    // rather than making each entry repeat the sentence.
+    //
+    // Nothing above reads an `en` or `shdn` role. The stamp is an unconditional ideal
+    // source, so a regulator held OFF by its enable still presents its output rail at
+    // full voltage, and the board reads as having a rail it does not have. That is
+    // the silent-wrongness direction: the rail is asserted, not withheld.
+    //
+    // Keyed on the ENTRY's pin map, not on the resolved roles, because an enable pad
+    // the board left unconnected produces the same asserted rail and deserves the
+    // same caveat. Emitted here rather than in the database so that every regulator
+    // entry, including ones added later, is covered by construction; when `bind_vreg`
+    // learns to gate on the enable this block is what to delete.
+    let names_an_enable = model
+        .pins
+        .values()
+        .any(|r| matches!(r.as_str(), "en" | "shdn"));
+    let enable_warning = names_an_enable.then(|| {
+        format!(
+            "{}{} ({}): its {} pin is not modelled; the output rail is stamped as an \
+             unconditional ideal source, so a board that holds this regulator OFF \
+             still reads as having this rail present at {vout:.2} V",
+            Assumption::PARTIAL_MODEL_MARKER,
+            comp.reference,
+            comp.value,
+            if model.pins.values().any(|r| r == "shdn") {
+                "shutdown"
+            } else {
+                "enable"
+            },
+        )
+    });
+    // SEVERAL caveats can apply to one regulator and there is one channel, so they
+    // are joined rather than one silently winning. Each is a full sentence already;
+    // the leading one keeps the marker that makes the whole string evidence, and the
+    // followers drop their own "REF (VALUE): " so the reference is not repeated.
+    let mut caveats: Vec<String> = [entry_warning(comp, model), enable_warning, vout_warning]
+        .into_iter()
+        .flatten()
+        .collect();
+    let warning = if caveats.is_empty() {
+        None
+    } else {
+        let lead = caveats.remove(0);
+        // The follower's own "REF (VALUE): " comes off so the reference is not said
+        // twice in one sentence. The KNOWN prefix is stripped rather than cutting at
+        // the first ": ", which a component value containing a colon would break.
+        let prefix = format!("{} ({}): ", comp.reference, comp.value);
+        let rest: Vec<String> = caveats
+            .iter()
+            .map(|c| {
+                let c = c
+                    .strip_prefix(Assumption::PARTIAL_MODEL_MARKER)
+                    .unwrap_or(c);
+                c.strip_prefix(prefix.as_str()).unwrap_or(c).to_string()
+            })
+            .collect();
+        if rest.is_empty() {
+            Some(lead)
+        } else {
+            Some(format!("{lead}; also {}", rest.join("; also ")))
+        }
+    };
     (
         BindOutcome::Behavioral {
             device: format!("vreg {vout:.1}V source"),
         },
-        vout_warning,
+        warning,
     )
 }
 
@@ -2855,10 +3116,7 @@ fn bind_opamp(
     let slew = model.params.get_f64("slew");
     let rail_lo = model.params.get_f64("rail_lo").unwrap_or(0.0);
     let rail_hi = model.params.get_f64("rail_hi").unwrap_or(5.0);
-    let warning = model
-        .params
-        .get_str("warning")
-        .map(|w| format!("{} ({}): {w}", comp.reference, comp.value));
+    let warning = entry_warning(comp, model);
 
     // Multi-channel packages (LM358 dual, INA2181 dual, LM324 quad) carry
     // per-channel roles out_a/in_plus_a/in_minus_a, ..._b/_c/_d. Stamp one
@@ -3168,11 +3426,41 @@ fn bind_analog_switch(
     let (a, b) = match (a, b) {
         (Some(a), Some(b)) if a != b => (a, b),
         _ => {
-            // Fall back: first two non-power roles. The control role is EXCLUDED:
-            // it is the switch's gate, not a signal terminal. Wiring it as a
-            // throw would stamp a VSwitch whose `b` equals its own `ctrl_p`,
-            // fabricating a ~ron path that shorts a signal net to the control
-            // line (and injects/loads the control voltage) when the gate goes
+            // AN ENTRY THAT NAMES ITS TERMINALS IS BELIEVED ABOUT WHICH PADS THEY
+            // ARE. If the map declares `in_out_a`/`in_out_b` (or `com`/`s0`) and the
+            // pair did not resolve, the board did not connect one of them, and the
+            // honest answer is an open switch. Scanning for two other pads instead
+            // invents a conducting path between terminals the datasheet says are not
+            // a switch at all.
+            //
+            // The PCA9306 is the case that showed it. Its map names SCL2 `in_out_a`
+            // and SCL1 `in_out_b`, and its other pads are VREF1, VREF2, SDA1, SDA2.
+            // `is_power_role` matches only vcc/vdd/vss/gnd, so VREF1 and the two SDA
+            // pads are all candidates here: a board leaving one SCL pad unconnected
+            // got 25.5 Ohm stamped from VREF1 onto SDA1, a path that exists on no
+            // board, WHILE the entry's own disclosure said the modelled channel was
+            // SCL1<->SCL2. A wrong path described by a confident caveat is worse than
+            // either alone.
+            let names_its_terminals = model.pins.values().any(|r| {
+                matches!(
+                    r.as_str(),
+                    "com" | "s0" | "s1" | "in_out_a" | "in_out_b" | "in_out_1a" | "in_out_1b"
+                )
+            });
+            if names_its_terminals {
+                return open_warning(
+                    comp,
+                    "analog switch terminal not connected: the model names which pads \
+                     are the switched path and one of them has no net, so no path is \
+                     stamped rather than guessing which other pads to bridge",
+                );
+            }
+            // Only for an entry with NO named terminals, where the roles came from
+            // the pin-rule table and there is nothing better to go on. The control
+            // role is EXCLUDED: it is the switch's gate, not a signal terminal.
+            // Wiring it as a throw would stamp a VSwitch whose `b` equals its own
+            // `ctrl_p`, fabricating a ~ron path that shorts a signal net to the
+            // control line (and injects/loads the control voltage) when the gate goes
             // high, a conductive path that does not exist on the real board.
             let mut nodes: Vec<NodeId> = roles
                 .iter()
@@ -3219,11 +3507,18 @@ fn bind_analog_switch(
         ron,
         roff,
     });
+    // AN ENTRY'S OWN `warning` REACHES THE REPORT FROM HERE, the way `bind_opamp`
+    // already does it. This path stamps ONE switch, so a multi-channel part
+    // (TXS0108E: eight channels, PCA9306: two) and a two-throw mux whose second
+    // throw cannot be modelled (TPS2104) are all bound with a real gap in them.
+    // Those gaps were stated only in TOML comments, which no report surface reads,
+    // while the board saw `Behavioral vswitch` with no warning and counted the part
+    // as resolved. A comment is not a disclosure.
     (
         BindOutcome::Behavioral {
             device: "vswitch".to_string(),
         },
-        None,
+        entry_warning(comp, model),
     )
 }
 
@@ -3888,11 +4183,19 @@ pub(crate) fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     if module {
         // Arduino Nano header: d0..d13 map to Arduino digital pins.
         // d0=PD0 .. d7=PD7, d8=PB0 .. d13=PB5.
+        //
+        // This `d<n>` table is the NANO's, not "every module's": the same
+        // silkscreened D5 is PC6 on a SparkFun Pro Micro and PD5 on a Nano, so a
+        // module entry whose header numbers do not follow the Nano's ATmega328P
+        // mapping must NOT use `d<n>` role names. Those entries name the port
+        // pin directly ("pc6", "pf7_adc7") and fall through to the standard
+        // parser below, which is why this arm no longer swallows every role on a
+        // module: returning None here silently unbound every Pro Micro pin.
         if let Some(rest) = r.strip_prefix('d') {
-            let num: u8 = rest.split('_').next().unwrap_or("").parse().ok()?;
-            return arduino_digital_to_port(num);
+            if let Ok(num) = rest.split('_').next().unwrap_or("").parse::<u8>() {
+                return arduino_digital_to_port(num);
+            }
         }
-        return None;
     }
     // Port-pin roles, two conventions sharing the `p` prefix:
     //
@@ -3972,14 +4275,16 @@ fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
 /// adc index ("pc2_adc2").
 pub(crate) fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
+    // As in `gpio_of_role`, the bare `a<n>` table is the NANO's. A module whose
+    // header analog pins are not the ATmega328P's port C names its pins by port
+    // instead, and those fall through to the standard parser.
     if module {
-        let rest = r.strip_prefix('a')?;
-        let n: u8 = rest.split('_').next().unwrap_or("").parse().ok()?;
-        // A0..A5 = PC0..PC5; A6/A7 have no digital port pin.
-        if n <= 5 {
-            return Some(('C', n));
+        if let Some(rest) = r.strip_prefix('a') {
+            if let Ok(n) = rest.split('_').next().unwrap_or("").parse::<u8>() {
+                // A0..A5 = PC0..PC5; A6/A7 have no digital port pin.
+                return (n <= 5).then_some(('C', n));
+            }
         }
-        return None;
     }
     // Bare role like "pc2_adc2": let the standard parser recover the port pin.
     gpio_of_role(role, false)
@@ -3989,14 +4294,14 @@ pub(crate) fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> 
 fn adc_of_role(role: &str, module: bool) -> Option<u8> {
     let r = role.to_ascii_lowercase();
     if module {
-        // Nano "a0".."a7".
+        // Nano "a0".."a7". A module that names its pins by port instead
+        // ("pf7_adc7" on a Pro Micro) falls through to the bare form below,
+        // which reads the channel number out of the role.
         if let Some(rest) = r.strip_prefix('a') {
-            let n: u8 = rest.split('_').next().unwrap_or("").parse().ok()?;
-            if n <= 7 {
-                return Some(n);
+            if let Ok(n) = rest.split('_').next().unwrap_or("").parse::<u8>() {
+                return (n <= 7).then_some(n);
             }
         }
-        return None;
     }
     // Bare "pc0_adc0" .. "pc5_adc5".
     if let Some(idx) = r.find("adc") {
@@ -6140,6 +6445,134 @@ mod crystal_fallback_tests {
         assert!(!is_crystal_like("R", "10k"));
     }
 
+    /// A crystal the MODEL LIBRARY resolves must be skipped exactly as the
+    /// engine's own fallback skips one, and before this it was not.
+    ///
+    /// The `crystal_value` and `crystal_footprint` entries in db/passives.toml are
+    /// `kind = "passive"` because that is the shape of a two-pad map, and
+    /// `bind_passive` therefore asked the value parser for OHMS. On a crystal's
+    /// value field that has three outcomes and all three are wrong:
+    ///
+    ///   - "16Mhz" and "Abracon_ABM11" parse to nothing, so the part was reported
+    ///     as an unresolved OPEN. That is the mild failure and it still cost the
+    ///     board's verdict, for a part the library had in fact identified.
+    ///   - a bare "32.768" parses to a NUMBER, so a 32.768 ohm resistor was
+    ///     stamped across an oscillator that has no such conductance. That is the
+    ///     failure that matters: a fabricated component, reported as modelled.
+    ///
+    /// So resolving a crystal was strictly worse than not resolving one, which is
+    /// the shape of bug this whole file exists to avoid. `bind_component` now
+    /// routes `passive_class = "crystal"` to Skipped before the kind dispatch.
+    #[test]
+    fn a_library_resolved_crystal_is_skipped_and_never_stamped() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+
+        // Every spelling the external-five boards actually carry, plus the bare
+        // 32.768 that used to become a resistor.
+        for (reference, value, footprint) in [
+            ("Q1", "16Mhz", ""),
+            ("Y1", "40MHz", ""),
+            (
+                "X201",
+                "XTCLH40M000CHJA0P0",
+                "Oscillator:Oscillator_SMD_Fordahl_DFAS15-4Pin_5.0x3.2mm",
+            ),
+            (
+                "Y401",
+                "Abracon_ABM11",
+                "Crystal:Crystal_SMD_Abracon_ABM3-4Pin_2.0x1.6mm",
+            ),
+            ("Y2", "32.768", ""),
+            ("Y3", "32.768kHz", ""),
+        ] {
+            let mut c = comp(reference, value);
+            c.footprint = footprint.to_string();
+            c.pins = vec![pin("1", 1), pin("2", 2)];
+
+            let mut circuit = Circuit::new();
+            let a = circuit.node("XA");
+            let b = circuit.node("XB");
+            let node_of = move |net: Option<i64>| match net {
+                Some(1) => Some(a),
+                Some(2) => Some(b),
+                _ => None,
+            };
+            let devices_before = circuit.devices.len();
+
+            // Resolve the way the binder does, then bind.
+            let mut q = ComponentQuery::new(None, Some(c.value.clone()), Some(c.footprint.clone()));
+            q.mpn = Some(c.value.clone());
+            let model = lib.resolve(&q).model.unwrap_or_else(|| {
+                panic!("{reference} ({value}) must resolve to a curated crystal entry")
+            });
+            assert_eq!(
+                model.passive_class,
+                Some(hauksbee_models::schema::PassiveClass::Crystal),
+                "{reference} ({value}) resolved to {} which is not a crystal entry",
+                model.id
+            );
+
+            let (outcome, warning, _) = bind_component(
+                &c,
+                &model,
+                Confidence::Exact,
+                &mut circuit,
+                &node_of,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                false,
+                &HashMap::new(),
+                pin_rules,
+            );
+
+            match &outcome {
+                BindOutcome::Skipped { reason } => {
+                    assert!(
+                        reason.contains("crystal"),
+                        "{reference} ({value}) skipped for the wrong reason: {reason}"
+                    );
+                }
+                other => panic!("{reference} ({value}) must be Skipped, got {other:?}"),
+            }
+            // THE DISCLOSURE, BOTH WAYS. `Skipped` is `is_ignored()`, so the row
+            // leaves the resolve denominator AND produces no `open_part`
+            // assumption: skipping is what makes a board read as fully handled.
+            // For a bare quartz blank that is the honest answer, so it must stay
+            // silent. For a PACKAGED OSCILLATOR it is not: the part has a supply
+            // pin and drives a clock, and neither is modelled, so it must carry a
+            // warning onto the report. Delete the warning arm in the crystal branch
+            // and the oscillator half of this fails.
+            let is_oscillator = footprint.to_ascii_lowercase().contains("oscillator");
+            if is_oscillator {
+                let w = warning.unwrap_or_else(|| {
+                    panic!(
+                        "{reference} ({value}) is a packaged oscillator excluded from \
+                         the resolve denominator with nothing said about it"
+                    )
+                });
+                assert!(
+                    w.contains(reference) && w.contains("supply") && w.contains("clock"),
+                    "the oscillator warning must name the part and say what is \
+                     missing: {w}"
+                );
+            } else {
+                assert!(
+                    warning.is_none(),
+                    "{reference} ({value}) is a bare crystal, not a problem to warn \
+                     about: {warning:?}"
+                );
+            }
+            assert_eq!(
+                circuit.devices.len(),
+                devices_before,
+                "{reference} ({value}) stamped a device: a crystal has no ohms, \
+                 farads or henries for the solver to use"
+            );
+        }
+    }
+
     /// The load-bearing regression: a crystal whose reference starts with 'C'
     /// and whose value is a frequency must NOT bind as a (gigafarad) capacitor.
     /// Before the fix it bound Passive with value 16e6 F, which collapsed the
@@ -6153,6 +6586,782 @@ mod crystal_fallback_tests {
         // A real 'C' capacitor still binds as a passive (no regression).
         let cap = fallback_entry(&comp("C7", "22pF")).expect("cap binds");
         assert_eq!(cap.kind, ComponentKind::Passive);
+    }
+
+    /// A three-terminal transistor on an EAGLE board had no electrode roles at
+    /// all, because the pin-rule footprint pattern was written against KiCad's
+    /// spelling and no other tool's.
+    ///
+    /// `SOT-23(?:$|[^-0-9])` reads every KiCad footprint name correctly and none of
+    /// the ones Eagle libraries write: `SOT23-3`, `SOT23-3@1` (the `@n` is Eagle's
+    /// duplicate-package suffix) and `SOT323`. The symptom was the diagnostic
+    /// "MOSFET pins not all connected" and an open circuit in place of a conducting
+    /// switch, on a part the library had resolved. The pattern is now loose about
+    /// the hyphen and `pad_count = 3` is what keeps it honest.
+    #[test]
+    fn the_three_terminal_pin_rules_read_every_cad_tools_package_spelling() {
+        let lib = ModelLibrary::builtin();
+        let rules = lib.pin_rules();
+
+        // Eagle's spellings, KiCad's, and the SOT-323 / SC-70 shrink of the same
+        // outline, which carries the same pad order.
+        for footprint in [
+            "SOT-23",
+            "SOT-23_Handsoldering",
+            "Package_TO_SOT_SMD:SOT-23",
+            "SOT23-3",
+            "SOT23-3@1",
+            "SOT23",
+            "SOT323",
+            "SOT-323",
+            "SC-70",
+            "SC70-3",
+            "TO-236",
+        ] {
+            for (kind, expected) in [
+                (ComponentKind::Nmos, ["gate", "source", "drain"]),
+                (ComponentKind::Pmos, ["gate", "source", "drain"]),
+                (ComponentKind::BjtNpn, ["base", "emitter", "collector"]),
+                (ComponentKind::BjtPnp, ["base", "emitter", "collector"]),
+            ] {
+                for (i, role) in expected.iter().enumerate() {
+                    let pad = (i + 1).to_string();
+                    let got = rules.role_for_pad(footprint, Some(kind), 3, &pad);
+                    assert_eq!(
+                        got.as_ref().map(|r| r.role.as_str()),
+                        Some(*role),
+                        "{footprint} {kind:?} pad {pad} must infer {role}"
+                    );
+                }
+            }
+        }
+
+        // The pad count is the guard that lets the pattern be loose. A five- or
+        // six-lead SOT-23 is a different part entirely (an LDO, a load switch, a
+        // logic gate) and must get NO transistor electrode role, even though the
+        // footprint string contains "SOT-23".
+        for (footprint, pads) in [
+            ("SOT-23-5", 5),
+            ("SOT-23-6", 6),
+            ("SOT23-6L", 6),
+            ("SOT-353_SC-70-5", 5),
+            ("SC-70_6", 6),
+        ] {
+            assert!(
+                rules
+                    .role_for_pad(footprint, Some(ComponentKind::Nmos), pads, "1")
+                    .is_none(),
+                "{footprint} has {pads} pads and must not take a 3-pad transistor rule"
+            );
+        }
+
+        // TO-92 is deliberately absent: it is also a three-terminal transistor
+        // package, but its pad order is not this one and vendors disagree about
+        // which way round, so a guess there would be a coin flip on the emitter.
+        for footprint in ["TO-92", "TO92-3", "Package_TO_SOT_THT:TO-92"] {
+            assert!(
+                rules
+                    .role_for_pad(footprint, Some(ComponentKind::BjtNpn), 3, "1")
+                    .is_none(),
+                "{footprint} must not take the SOT-23 pad order"
+            );
+        }
+    }
+
+    /// `gpio_of_role`'s `module` arm is the Arduino NANO's d-number table, and it
+    /// used to SWALLOW every role on any module: a non-`d` role returned None
+    /// outright, so a Pro Micro's port-named pins were silently unbound and the
+    /// keyboard matrix hanging off them was invisible.
+    ///
+    /// The two mappings genuinely disagree, which is why the Pro Micro cannot just
+    /// use d-numbers: D5 is PD5 on a Nano and PC6 on a Pro Micro; D8 is PB0 there
+    /// and PB4 here. So the module arm now tries the Nano table and falls THROUGH
+    /// to the standard port parser, and both boards get the right port bit.
+    #[test]
+    fn a_module_role_named_by_its_port_falls_through_the_nano_d_number_table() {
+        // The Nano's own roles, unchanged: d0..d7 are port D, d8..d13 port B.
+        assert_eq!(gpio_of_role("d0_rx", true), Some(('D', 0)));
+        assert_eq!(gpio_of_role("d5_pwm", true), Some(('D', 5)));
+        assert_eq!(gpio_of_role("d8", true), Some(('B', 0)));
+        assert_eq!(gpio_of_role("d13_sck", true), Some(('B', 5)));
+        assert_eq!(gpio_of_role("a2", true), None, "A2 is not a port pin here");
+        assert_eq!(apin_gpio_of_role("a2", true), Some(('C', 2)));
+        assert_eq!(apin_gpio_of_role("a6", true), None, "A6/A7 are ADC-only");
+        assert_eq!(adc_of_role("a3", true), Some(3));
+
+        // The Pro Micro's roles, which are port names and must now resolve ON a
+        // module. Every one of these is a key row or column on a split keyboard.
+        for (role, want) in [
+            ("pd3_txd1", ('D', 3)),
+            ("pd1_sda", ('D', 1)),
+            ("pc6", ('C', 6)),
+            ("pe6", ('E', 6)),
+            ("pb4_adc11", ('B', 4)),
+            ("pb6_adc13", ('B', 6)),
+            ("pf7_adc7", ('F', 7)),
+            ("pf4_adc4", ('F', 4)),
+        ] {
+            assert_eq!(
+                gpio_of_role(role, true),
+                Some(want),
+                "{role} must resolve to {want:?} on a module"
+            );
+            // And identically off a module: the port parser is the same one.
+            assert_eq!(gpio_of_role(role, false), Some(want));
+        }
+
+        // The ADC channel comes from the role's own digits, which on this part are
+        // NOT the port bit: PD4 is channel 8, PB4 is channel 11, PF7 is channel 7.
+        assert_eq!(adc_of_role("pd4_adc8", true), Some(8));
+        assert_eq!(adc_of_role("pb4_adc11", true), Some(11));
+        assert_eq!(adc_of_role("pf7_adc7", true), Some(7));
+        // A port pin with no ADC channel must claim none.
+        assert_eq!(adc_of_role("pc6", true), None);
+        assert_eq!(adc_of_role("pe6", true), None);
+
+        // Non-roles still resolve to nothing rather than to port 0.
+        for role in ["vcc", "gnd", "raw", "reset", ""] {
+            assert_eq!(gpio_of_role(role, true), None, "{role} is not a GPIO");
+        }
+    }
+
+    /// An active-high load switch must CONDUCT on a high control, and the role
+    /// names in its pin map are what decide that.
+    ///
+    /// `bind_analog_switch`'s single-throw path senses the INVERTED control when the
+    /// second terminal it picks is the role named `s0`, because on an SPDT part `s0`
+    /// is the normally-closed throw (`role_from_pinfunction` maps a pin named NC
+    /// onto it for exactly that reason). For a single active-high load switch that
+    /// is backwards: the modelled rail is off when the silicon is on, and nothing
+    /// warns, because from the binder's point of view everything resolved.
+    ///
+    /// So the load-switch entries name their terminals `in_out_a`/`in_out_b`, and
+    /// this test asserts the CONSEQUENCE rather than the spelling: the stamped
+    /// switch closes above the threshold and opens below it. The spelling itself is
+    /// pinned in the models suite; what is checked here is that the spelling buys
+    /// the polarity.
+    /// The powered-oscillator caveat must key on the WIRING, not on whether the
+    /// footprint string happens to contain the word "oscillator".
+    ///
+    /// `crystal_value` matches a bare frequency with no footprint constraint, so a
+    /// TCXO in an Eagle-style land resolves to the crystal class and reaches the
+    /// `Skipped` branch. `Skipped` is `is_ignored()`: it leaves the resolve
+    /// denominator and produces no assumption. Keying the caveat on the KiCad
+    /// library's spelling meant such a part was skipped in total silence, which is
+    /// also a REGRESSION: before the crystal branch existed it failed
+    /// `parse_value("40MHz")` and came out `Unresolved`, i.e. disclosed. Measured on a
+    /// corpus board: renaming the footprint alone moved it from 52 mentions under
+    /// `--check --plain` to zero.
+    ///
+    /// A pin on a resolved supply rail is what separates the two kinds and it does not
+    /// depend on any string: a powered oscillator has one, a quartz blank never does.
+    /// The bare-crystal half of this test is the half that keeps the report quiet, and
+    /// two real corpus boards (corne-cherry's "GNDR" ground, lily58's shield pads on
+    /// the load-cap nets) are why the discriminator is not a count of non-ground nets.
+    #[test]
+    fn a_powered_oscillator_is_disclosed_by_its_wiring_not_by_its_footprint_string() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+
+        // (footprint, does pad 4 sit on a 3.3 V rail, must warn)
+        for (footprint, on_rail, expect_warning) in [
+            // The case that regressed: an Eagle land, powered.
+            ("complib:OSC_SMD_3225_4P", true, true),
+            // The KiCad spelling still works, rail or no rail.
+            ("Oscillator:Oscillator_SMD_2520_4Pin", false, true),
+            // A four-pad QUARTZ CRYSTAL: no rail, no oscillator in the name. Silent.
+            ("Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm", false, false),
+        ] {
+            let mut c = comp("X1", "40MHz");
+            c.footprint = footprint.to_string();
+            c.pins = vec![pin("1", 1), pin("2", 0), pin("3", 2), pin("4", 3)];
+
+            let mut circuit = Circuit::new();
+            let xin = circuit.node("XIN");
+            let clk = circuit.node("CLK_OUT");
+            let rail = circuit.node("+3V3");
+            let node_of = move |net: Option<i64>| match net {
+                Some(1) => Some(xin),
+                Some(2) => Some(clk),
+                Some(3) => Some(rail),
+                Some(0) => Some(NodeId::GROUND),
+                _ => None,
+            };
+            let mut power_nets = HashMap::new();
+            if on_rail {
+                power_nets.insert("+3V3".to_string(), 3.3);
+            }
+
+            let mut q = ComponentQuery::new(None, Some(c.value.clone()), Some(c.footprint.clone()));
+            q.mpn = Some(c.value.clone());
+            let model = lib
+                .resolve(&q)
+                .model
+                .unwrap_or_else(|| panic!("{footprint} must resolve to a crystal entry"));
+
+            let (outcome, warning, _) = bind_component(
+                &c,
+                &model,
+                Confidence::Exact,
+                &mut circuit,
+                &node_of,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                false,
+                &power_nets,
+                pin_rules,
+            );
+            assert!(
+                matches!(outcome, BindOutcome::Skipped { .. }),
+                "{footprint} is high impedance either way: {outcome:?}"
+            );
+            if expect_warning {
+                let w = warning.unwrap_or_else(|| {
+                    panic!(
+                        "{footprint} (on_rail={on_rail}) is a powered oscillator excluded \
+                         from the resolve denominator with nothing said about it"
+                    )
+                });
+                assert!(
+                    w.starts_with(Assumption::PARTIAL_MODEL_MARKER),
+                    "the caveat must be marked so it reaches the evidence map: {w}"
+                );
+            } else {
+                assert!(
+                    warning.is_none(),
+                    "{footprint} is a quartz blank; a caveat here is a false entry that \
+                     costs the true ones their audience: {warning:?}"
+                );
+            }
+        }
+    }
+
+    /// A regulator whose entry names an enable must say that the enable is not
+    /// modelled, and a three-terminal regulator that has none must stay silent.
+    ///
+    /// `bind_vreg` stamps an UNCONDITIONAL ideal source on the output net. It never
+    /// reads `en` or `shdn`, so a board that holds its regulator off still reads as
+    /// having that rail present at full voltage, and the report counted the part as
+    /// resolved with nothing said. That is the silent-wrongness direction: the rail
+    /// is asserted rather than withheld, and a downstream check that passes because
+    /// the rail is "present" is measuring the model, not the board.
+    ///
+    /// This was unreachable before `entry_warning`: `bind_vreg` had no warning
+    /// channel at all, so nothing an entry or the binder knew about a regulator could
+    /// reach a reader.
+    #[test]
+    fn a_regulator_says_its_enable_is_not_modelled_and_a_plain_one_says_nothing() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+
+        // (value, expects a caveat). The LM7805 is the control: a genuine
+        // three-terminal regulator with no enable pin to leave unmodelled.
+        for (value, expects_enable_caveat) in [("XC6204B332MR", true), ("LM7805", false)] {
+            let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+            q.mpn = Some(value.to_string());
+            let model = lib
+                .resolve(&q)
+                .model
+                .unwrap_or_else(|| panic!("{value} must resolve"));
+
+            let pad_for = |role: &str| -> Option<String> {
+                model
+                    .pins
+                    .iter()
+                    .find(|(_, r)| r.as_str() == role)
+                    .map(|(pad, _)| pad.clone())
+            };
+            let mut c = comp("U1", value);
+            let mut pins = vec![pin(&pad_for("out").expect("an out pad"), 1)];
+            if let Some(inp) = pad_for("in") {
+                pins.push(pin(&inp, 2));
+            }
+            if let Some(gnd) = pad_for("gnd").or_else(|| pad_for("vss")) {
+                pins.push(pin(&gnd, 0));
+            }
+            // The enable is wired to GROUND, i.e. this regulator is held OFF.
+            if let Some(en) = pad_for("en").or_else(|| pad_for("shdn")) {
+                pins.push(pin(&en, 0));
+            }
+            c.pins = pins;
+
+            let mut circuit = Circuit::new();
+            let (out, inn) = (circuit.node("RAIL_OUT"), circuit.node("RAIL_IN"));
+            let node_of = move |net: Option<i64>| match net {
+                Some(1) => Some(out),
+                Some(2) => Some(inn),
+                Some(0) => Some(NodeId::GROUND),
+                _ => None,
+            };
+
+            let (outcome, warning, _) = bind_component(
+                &c,
+                &model,
+                Confidence::Exact,
+                &mut circuit,
+                &node_of,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                false,
+                &HashMap::new(),
+                pin_rules,
+            );
+            assert!(
+                !matches!(outcome, BindOutcome::Unresolved { .. }),
+                "{value} did not bind: {outcome:?}"
+            );
+
+            if expects_enable_caveat {
+                let w = warning.unwrap_or_else(|| {
+                    panic!(
+                        "{value} names an enable, is stamped as an unconditional source, \
+                         and says nothing about it"
+                    )
+                });
+                assert!(
+                    w.starts_with(Assumption::PARTIAL_MODEL_MARKER),
+                    "the caveat must be marked so it reaches the evidence map, not \
+                     only the bind report: {w}"
+                );
+                assert!(
+                    w.contains("not modelled") && w.contains("OFF"),
+                    "the caveat must say what is unmodelled and what it costs: {w}"
+                );
+            } else {
+                assert!(
+                    warning.is_none(),
+                    "{value} has no enable to leave unmodelled, so a caveat here is \
+                     noise: {warning:?}"
+                );
+            }
+        }
+    }
+
+    /// A `digital` entry's own caveat has to reach a reader. The dispatch arm used to
+    /// hard-code `None`, so an entry that modelled a pad map and nothing else could
+    /// describe that in the database and be heard by nobody.
+    #[test]
+    fn a_logic_entry_that_models_only_a_pad_map_discloses_it() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+        let value = "FT231X-Q";
+
+        let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+        q.mpn = Some(value.to_string());
+        let model = lib.resolve(&q).model.expect("FT231X resolves");
+
+        let mut c = comp("U2", value);
+        c.pins = vec![pin("12", 1), pin("3", 0), pin("17", 2), pin("20", 1)];
+        let mut circuit = Circuit::new();
+        let (vcc, txd) = (circuit.node("V3V3"), circuit.node("MCU_RX"));
+        let node_of = move |net: Option<i64>| match net {
+            Some(1) => Some(vcc),
+            Some(2) => Some(txd),
+            Some(0) => Some(NodeId::GROUND),
+            _ => None,
+        };
+
+        let (outcome, warning, _) = bind_component(
+            &c,
+            &model,
+            Confidence::Exact,
+            &mut circuit,
+            &node_of,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            false,
+            &HashMap::new(),
+            pin_rules,
+        );
+        assert!(
+            matches!(outcome, BindOutcome::Digital { .. }),
+            "the bridge binds as digital: {outcome:?}"
+        );
+        let w = warning.expect(
+            "a digital entry carrying a `warning` param must surface it; the dispatch \
+             arm used to discard it",
+        );
+        assert!(
+            w.starts_with(Assumption::PARTIAL_MODEL_MARKER) && w.contains("USB stack"),
+            "the caveat must be marked and must name the gap: {w}"
+        );
+    }
+
+    /// When an entry NAMES which pads are the switched path and the board wired only
+    /// one of them, no path may be stamped at all.
+    ///
+    /// The fallback used to scan for two arbitrary non-power roles instead.
+    /// `is_power_role` matches only vcc/vdd/vss/gnd, so on a PCA9306 the VREF and SDA
+    /// pads were all candidates: a board leaving one SCL pad open got ~25 Ohm stamped
+    /// between VREF1 and SDA1, a path on no real board, while the entry's own
+    /// disclosure said the modelled channel was SCL1<->SCL2. A confident caveat
+    /// describing a fabricated path is worse than either mistake alone.
+    #[test]
+    fn a_switch_with_one_terminal_unwired_stamps_nothing_rather_than_bridging_other_pads() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+        let value = "PCA9306";
+
+        let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+        q.mpn = Some(value.to_string());
+        let model = lib.resolve(&q).model.expect("PCA9306 resolves");
+
+        // Everything EXCEPT pad 3 (SCL1, the modelled channel's low side): the
+        // enable, ground, both VREFs and both SDA pads are wired, and pad 6 (SCL2) is
+        // wired too. Only one of the two named terminals is missing.
+        let mut c = comp("U3", value);
+        c.pins = vec![
+            pin("1", 0),
+            pin("2", 3),
+            pin("4", 4),
+            pin("5", 5),
+            pin("6", 1),
+            pin("7", 6),
+            pin("8", 2),
+        ];
+        let mut circuit = Circuit::new();
+        let scl2 = circuit.node("SCL_HI");
+        let en = circuit.node("EN");
+        let vref1 = circuit.node("VREF1");
+        let sda1 = circuit.node("SDA1");
+        let sda2 = circuit.node("SDA2");
+        let vref2 = circuit.node("VREF2");
+        let node_of = move |net: Option<i64>| match net {
+            Some(1) => Some(scl2),
+            Some(2) => Some(en),
+            Some(3) => Some(vref1),
+            Some(4) => Some(sda1),
+            Some(5) => Some(sda2),
+            Some(6) => Some(vref2),
+            Some(0) => Some(NodeId::GROUND),
+            _ => None,
+        };
+
+        let before = circuit.devices.len();
+        let (outcome, warning, _) = bind_component(
+            &c,
+            &model,
+            Confidence::Exact,
+            &mut circuit,
+            &node_of,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            false,
+            &HashMap::new(),
+            pin_rules,
+        );
+        assert_eq!(
+            circuit.devices.len(),
+            before,
+            "no switch may be stamped: every remaining pad pair is a fabricated path"
+        );
+        assert!(
+            matches!(outcome, BindOutcome::Unresolved { .. }),
+            "an unwired terminal is an open switch, disclosed as such: {outcome:?}"
+        );
+        let w = warning.expect("an open switch warns");
+        assert!(
+            w.contains("terminal"),
+            "the warning must say a named terminal is missing: {w}"
+        );
+    }
+
+    /// A switch entry that models only part of the part must say so on a surface a
+    /// reader sees, not in a TOML comment.
+    ///
+    /// `bind_analog_switch`'s single-throw path stamps exactly ONE switch. Three
+    /// entries are bound through it with a real gap left inside: the TXS0108E has
+    /// eight channels and one is modelled, the PCA9306 has two and one is modelled,
+    /// and the TPS2104 is a two-input mux whose IN1 path is not stamped. Each
+    /// returns `BindOutcome::Behavioral`, which counts as RESOLVED, so if the gap
+    /// travels only as a comment the board reads as fully handled and the report
+    /// says nothing at all. `BindReport::warnings` walks every row and the report
+    /// prints it, so the entry's `warning` param is the channel; this asserts it is
+    /// wired up and that the entries carry it.
+    ///
+    /// The negative half matters as much: a part the entry models COMPLETELY must
+    /// stay silent, or the warning list becomes noise a reader learns to skip.
+    #[test]
+    fn a_partly_modelled_switch_discloses_the_part_it_leaves_out() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+
+        // (value, a phrase the disclosure must contain) and then the silent ones.
+        let partial = [
+            ("TXS0108E", "eight"),
+            ("PCA9306", "SDA"),
+            ("TPS2104", "IN1"),
+            // Not a partial CHANNEL: an assumption in the match rule. The bare part
+            // number names no enable-polarity option, and an entry that guesses one
+            // owes the reader the same disclosure as one that models half a part.
+            ("TPS22916YFP", "active-high"),
+        ];
+        // The silent control. MIC94090's value string names its polarity, so nothing
+        // is assumed and nothing should be said.
+        let complete = ["MIC94090C6"];
+
+        for (value, phrase) in partial
+            .iter()
+            .map(|(v, p)| (*v, Some(*p)))
+            .chain(complete.iter().map(|v| (*v, None)))
+        {
+            let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+            q.mpn = Some(value.to_string());
+            let model = lib
+                .resolve(&q)
+                .model
+                .unwrap_or_else(|| panic!("{value} must resolve"));
+
+            // Wire the pads BY ROLE out of the entry's own map, so this test does
+            // not restate a pin map that another test already owns.
+            let pad_for = |role: &str| -> String {
+                model
+                    .pins
+                    .iter()
+                    .find(|(_, r)| r.as_str() == role)
+                    .map(|(pad, _)| pad.clone())
+                    .unwrap_or_else(|| panic!("{value} names no `{role}` pad"))
+            };
+            let mut c = comp("U1", value);
+            c.pins = vec![
+                pin(&pad_for("in_out_a"), 1),
+                pin(&pad_for("in_out_b"), 2),
+                pin(&pad_for("ctrl"), 3),
+                pin(&pad_for("vss"), 0),
+            ];
+
+            let mut circuit = Circuit::new();
+            let (a, b, ctrl) = (
+                circuit.node("SWITCHED"),
+                circuit.node("RAIL"),
+                circuit.node("ENABLE"),
+            );
+            let node_of = move |net: Option<i64>| match net {
+                Some(1) => Some(a),
+                Some(2) => Some(b),
+                Some(3) => Some(ctrl),
+                Some(0) => Some(NodeId::GROUND),
+                _ => None,
+            };
+
+            let (outcome, warning, _) = bind_component(
+                &c,
+                &model,
+                Confidence::Exact,
+                &mut circuit,
+                &node_of,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                false,
+                &HashMap::new(),
+                pin_rules,
+            );
+            assert!(
+                !matches!(outcome, BindOutcome::Unresolved { .. }),
+                "{value} did not bind: {outcome:?}"
+            );
+
+            match phrase {
+                Some(phrase) => {
+                    let w = warning.unwrap_or_else(|| {
+                        panic!(
+                            "{value} binds as resolved with only part of it modelled \
+                             and says nothing; add a `warning` param to the entry"
+                        )
+                    });
+                    assert!(
+                        w.contains("U1") && w.contains(phrase),
+                        "{value}'s disclosure must name the reference and the gap \
+                         ({phrase:?}): {w}"
+                    );
+                }
+                None => assert!(
+                    warning.is_none(),
+                    "{value} is modelled completely; a warning here trains readers to \
+                     ignore the list: {warning:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn an_active_high_load_switch_conducts_on_a_high_control() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+
+        // (value, the pad that is the switched OUTPUT, the pad that is the INPUT,
+        //  the pad that is the control)
+        for (value, out_pad, in_pad, ctrl_pad, gnd_pad) in [
+            ("TPS22916YFP", "A1", "A2", "B2", "B1"),
+            ("MIC94090C6", "1", "4", "6", "2"),
+            ("TPS2104", "4", "3", "1", "2"),
+        ] {
+            let mut c = comp("U1", value);
+            c.pins = vec![
+                pin(out_pad, 1),
+                pin(in_pad, 2),
+                pin(ctrl_pad, 3),
+                pin(gnd_pad, 0),
+            ];
+
+            let mut circuit = Circuit::new();
+            let out = circuit.node("SWITCHED");
+            let inn = circuit.node("RAIL");
+            let ctrl = circuit.node("ENABLE");
+            let node_of = move |net: Option<i64>| match net {
+                Some(1) => Some(out),
+                Some(2) => Some(inn),
+                Some(3) => Some(ctrl),
+                Some(0) => Some(NodeId::GROUND),
+                _ => None,
+            };
+
+            let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+            q.mpn = Some(value.to_string());
+            let model = lib
+                .resolve(&q)
+                .model
+                .unwrap_or_else(|| panic!("{value} must resolve"));
+
+            let (outcome, _, _) = bind_component(
+                &c,
+                &model,
+                Confidence::Exact,
+                &mut circuit,
+                &node_of,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                false,
+                &HashMap::new(),
+                pin_rules,
+            );
+            assert!(
+                !matches!(outcome, BindOutcome::Unresolved { .. }),
+                "{value} did not bind: {outcome:?}"
+            );
+
+            let sw = circuit
+                .devices
+                .iter()
+                .find_map(|d| match d {
+                    Device::VSwitch {
+                        a,
+                        b,
+                        ctrl_p,
+                        ctrl_n,
+                        von,
+                        voff,
+                        ..
+                    } => Some((*a, *b, *ctrl_p, *ctrl_n, *von, *voff)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{value} stamped no switch"));
+            let (a, b, ctrl_p, ctrl_n, von, voff) = sw;
+
+            // The switch must be BETWEEN the rail and the switched net, not to
+            // ground and not from the control line.
+            let terminals = [a, b];
+            assert!(
+                terminals.contains(&out) && terminals.contains(&inn),
+                "{value}: the switch must bridge the rail and the switched net, \
+                 got {a:?} to {b:?}"
+            );
+            assert!(
+                !terminals.contains(&NodeId::GROUND) && !terminals.contains(&ctrl),
+                "{value}: a switch terminal landed on ground or on the control line"
+            );
+
+            // The polarity. `von`/`voff` are thresholds on (ctrl_p - ctrl_n), so
+            // work out which way round the binder wired the sense and demand that
+            // a HIGH control closes it.
+            let sense_is_control = ctrl_p == ctrl && ctrl_n == NodeId::GROUND;
+            let sense_is_inverted = ctrl_n == ctrl && ctrl_p == NodeId::GROUND;
+            assert!(
+                sense_is_control || sense_is_inverted,
+                "{value}: the control sense is wired to neither the control nor its \
+                 inverse ({ctrl_p:?} - {ctrl_n:?})"
+            );
+            assert!(
+                sense_is_control,
+                "{value}: the switch senses the INVERTED control, so it conducts \
+                 when the enable is LOW. This part is active high; a terminal is \
+                 almost certainly named `s0`."
+            );
+            assert!(
+                von > 0.0 && voff > 0.0 && von > voff,
+                "{value}: an active-high switch needs positive thresholds with \
+                 von above voff, got von = {von}, voff = {voff}"
+            );
+        }
+    }
+
+    /// A regulator's pin NAMES are portable and its pad NUMBERS are not, and
+    /// `role_from_pinfunction` had no arm for the kind, so a board that spelled
+    /// VIN/VOUT/GND/CE on its pads had that evidence thrown away.
+    ///
+    /// The XC6204 is the case: Torex's own table gives SOT-25 as 1 = VIN / 4 = NC
+    /// and SOT-89-5 as 4 = VIN / 1 = NC, so pads 1 and 4 trade places between two
+    /// packages of the same part, and whichever the DB entry chose was wrong for
+    /// the other. The board's own pinfunction settles it.
+    #[test]
+    fn a_regulator_binds_by_pin_name_when_the_board_gives_one() {
+        for (function, role) in [
+            ("VIN", "in"),
+            ("vin", "in"),
+            ("IN", "in"),
+            ("VOUT", "out"),
+            ("OUT", "out"),
+            ("GND", "gnd"),
+            ("VSS", "gnd"),
+            ("CE", "en"),
+            ("EN", "en"),
+            ("FB", "fb"),
+            ("ADJ", "fb"),
+            ("NC", "nc"),
+        ] {
+            assert_eq!(
+                role_from_pinfunction(ComponentKind::Vreg, function).as_deref(),
+                Some(role),
+                "a vreg pin named {function} is the {role} role"
+            );
+        }
+
+        // SHDN is the same PIN as EN with the OPPOSITE sense, and the invariant that
+        // matters is that it never becomes `en`: a model that gates on that role
+        // would read a shutdown as an enable and report a dead rail as live. It gets
+        // its own role rather than nothing at all, so a board naming the pad is read
+        // from its pin function instead of falling through to pin-rule guessing, and
+        // `bind_vreg` treats either spelling as "an enable exists and is not
+        // modelled".
+        for function in ["SHDN", "shutdown", "nSHDN"] {
+            let role = role_from_pinfunction(ComponentKind::Vreg, function);
+            assert_eq!(
+                role.as_deref(),
+                Some("shdn"),
+                "{function} is the shutdown role"
+            );
+            assert_ne!(
+                role.as_deref(),
+                Some("en"),
+                "{function} must never be read as an active-high enable"
+            );
+        }
+
+        // And a name that means nothing on a regulator stays unmapped rather than
+        // being forced into the nearest role.
+        for function in ["A", "B", "SDA", "P07", "OUT_B", ""] {
+            assert_eq!(
+                role_from_pinfunction(ComponentKind::Vreg, function),
+                None,
+                "{function} is not a regulator role"
+            );
+        }
     }
 
     fn pin(number: &str, net: i64) -> Pin {

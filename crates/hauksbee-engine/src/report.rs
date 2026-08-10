@@ -63,7 +63,18 @@ impl BindOutcome {
             BindOutcome::Mcu { backend } => format!("mcu {backend}"),
             BindOutcome::PowerRail { volts } => format!("rail {volts:.2}V"),
             BindOutcome::Skipped { reason } => format!("skipped ({reason})"),
-            BindOutcome::Unresolved { reason } => format!("UNRESOLVED ({reason})"),
+            // The marker is stripped here too, and this was the last surface carrying
+            // it. A named abstention's `reason` arrives with its two halves joined by
+            // `UNLOCKED_BY_MARKER`; the bind table truncates before reaching it, but
+            // the TUI puts this whole label into a part's detail line, so it showed
+            // the reader the plumbing. `result.rs`'s own test asserts the marker never
+            // reaches a reader, and this label is a reader's.
+            BindOutcome::Unresolved { reason } => {
+                let reason = reason
+                    .split_once(hauksbee_ir::evidence::Assumption::UNLOCKED_BY_MARKER)
+                    .map_or(reason.as_str(), |(because, _)| because.trim());
+                format!("UNRESOLVED ({reason})")
+            }
         }
     }
 
@@ -241,10 +252,20 @@ impl BindReport {
     }
 
     /// All warnings raised during binding.
+    ///
+    /// [`Assumption::PARTIAL_MODEL_MARKER`] is stripped here: it is routing for
+    /// `BoardEvidence::from_bound`, which lifts a partial-model warning into an
+    /// assumption so it reaches `--plain` and `--json` too, and it has no business
+    /// in the printed line.
     pub fn warnings(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.rows
-            .iter()
-            .filter_map(|r| r.warning.as_deref().map(|w| (r.reference.as_str(), w)))
+        self.rows.iter().filter_map(|r| {
+            let w = r.warning.as_deref()?;
+            Some((
+                r.reference.as_str(),
+                w.strip_prefix(hauksbee_ir::evidence::Assumption::PARTIAL_MODEL_MARKER)
+                    .unwrap_or(w),
+            ))
+        })
     }
 
     /// Every pin-role GUESS warning: `(reference, message)` for each pad whose

@@ -51,6 +51,7 @@ pub mod profile;
 pub mod schema;
 pub mod sensor_spec;
 pub mod spice_input;
+pub mod unmodelled;
 pub mod validation;
 pub mod value;
 
@@ -74,9 +75,11 @@ pub use sensor_spec::{
     Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError,
 };
 pub use spice_input::SpiceCard;
+pub use unmodelled::{UnmodelledNote, UnmodelledPart, UnmodelledTable};
 
 /// Built-in pin-role inference rules, embedded at compile time.
 static BUILTIN_PIN_RULES_TOML: &str = include_str!("../db/pin_rules.toml");
+static BUILTIN_UNMODELLED_TOML: &str = include_str!("../db/unmodelled.toml");
 
 // ── Embedded database files ───────────────────────────────────────────────────
 
@@ -291,6 +294,10 @@ pub struct ModelLibrary {
     /// Pin-role inference rules (built-in seed + user `pin_rules.toml` files).
     /// User rules are prepended so they override the built-ins.
     pin_rules: PinRuleTable,
+    /// Named abstentions: parts the library knows it cannot model, each with the
+    /// input that would unlock it. Consulted ONLY on the no-model path, and it
+    /// can change nothing but the disclosure text.
+    unmodelled: UnmodelledTable,
 }
 
 use matcher::CompiledEntry;
@@ -302,6 +309,7 @@ impl ModelLibrary {
             entries: Vec::new(),
             spice: Vec::new(),
             pin_rules: PinRuleTable::empty(),
+            unmodelled: UnmodelledTable::empty(),
         }
     }
 
@@ -317,6 +325,9 @@ impl ModelLibrary {
         lib.pin_rules
             .load_toml_str(BUILTIN_PIN_RULES_TOML, false)
             .unwrap_or_else(|e| panic!("built-in pin_rules.toml failed to load: {e}"));
+        lib.unmodelled
+            .load_toml_str(BUILTIN_UNMODELLED_TOML, false)
+            .unwrap_or_else(|e| panic!("built-in unmodelled.toml failed to load: {e}"));
         lib
     }
 
@@ -325,6 +336,15 @@ impl ModelLibrary {
     /// pin-function role.
     pub fn pin_rules(&self) -> &PinRuleTable {
         &self.pin_rules
+    }
+
+    /// The named-abstention table (built-in plus any user `unmodelled.toml`).
+    ///
+    /// Consulted by the binder ONLY when nothing resolved, and only to replace the
+    /// disclosure's two generic sentences with specific ones. It cannot make a part
+    /// bind; see `unmodelled.rs` for why that containment is the point.
+    pub fn unmodelled(&self) -> &UnmodelledTable {
+        &self.unmodelled
     }
 
     /// Lazily-initialised shared built-in library.
@@ -508,6 +528,28 @@ impl ModelLibrary {
             // rules override the built-ins. Everything else is model entries.
             if name == "pin_rules" || src.contains("[[pin_rules]]") {
                 if let Err(e) = self.pin_rules.load_toml_str(&src, true) {
+                    errors.push(ModelError::PinRules {
+                        file: name,
+                        message: e,
+                    });
+                }
+                continue;
+            }
+            // An `unmodelled.toml` (or any file carrying an `[[unmodelled]]`
+            // array) is loaded into the abstention table, prepended so a user can
+            // override a built-in abstention's text.
+            //
+            // The `contains` half is deliberately narrower than the `[[pin_rules]]`
+            // dispatch above: it also requires the file to carry NO `[[models]]`
+            // array. These DB files are heavily commented, and a models file that
+            // merely MENTIONS the token in prose would otherwise be routed here and
+            // lose every model in it, silently. A file with both arrays keeps its
+            // models and its abstentions are ignored, which is the safe half of an
+            // ambiguous case; naming the file `unmodelled.toml` always works.
+            let is_unmodelled_file = name == "unmodelled"
+                || (src.contains("[[unmodelled]]") && !src.contains("[[models]]"));
+            if is_unmodelled_file {
+                if let Err(e) = self.unmodelled.load_toml_str(&src, true) {
                     errors.push(ModelError::PinRules {
                         file: name,
                         message: e,

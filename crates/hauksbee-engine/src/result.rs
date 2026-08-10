@@ -28,6 +28,7 @@
 use serde::Serialize;
 
 use hauksbee_extract::{DrcReport, ViolationKind};
+use hauksbee_ir::evidence::Assumption;
 
 use crate::report::{BindOutcome, BindReport};
 
@@ -107,12 +108,38 @@ pub struct UnresolvedActive {
     pub reference: String,
     pub value: String,
     /// Why it could not be bound (e.g. "no model; left open").
+    ///
+    /// Never carries a routing marker. The binder joins a named abstention's two
+    /// halves into one `reason` string with [`Assumption::UNLOCKED_BY_MARKER`], the
+    /// way `Assumption::open_part` expects, and this surface splits it the same way
+    /// rather than handing the reader plumbing.
     pub reason: String,
+    /// For a named abstention, the input that would let the tool model this part.
+    ///
+    /// Its own field rather than a sentence glued onto `reason`, because this is the
+    /// actionable half and `--json` is the surface a pipeline reads: a consumer that
+    /// wants to tell someone what to upload should not have to parse prose.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unlocked_by: Option<String>,
     /// What leaving it open does to the analysis, in one plain line.
     pub consequence: String,
     /// True when this part is an active IC (reference prefix U/IC/MCU): the kind
     /// of part whose absence makes analog/AC/thermal results untrustworthy.
     pub active_ic: bool,
+}
+
+/// Split a binder string on an in-band routing marker, returning the prose and the
+/// marked tail.
+///
+/// The binder has one string channel per row and two things to say on some rows, so
+/// it joins them with a marker constant that every consumer is meant to split on.
+/// Defined here rather than reaching for `split_once` inline so that the "marker
+/// never reaches a reader" rule has one implementation on this surface.
+fn split_marker(raw: &str, marker: &str) -> (String, Option<String>) {
+    match raw.split_once(marker) {
+        Some((head, tail)) => (head.trim().to_string(), Some(tail.trim().to_string())),
+        None => (raw.to_string(), None),
+    }
 }
 
 /// The bind report, summarised by role rather than a single flat percentage.
@@ -179,10 +206,18 @@ impl BindSummary {
             // Active-path unresolved: the binder already decided this part is on
             // a connected net (it set `warning`). Annotate the consequence.
             if unresolved && row.warning.is_some() {
-                let reason = match &row.outcome {
+                let raw = match &row.outcome {
                     BindOutcome::Unresolved { reason } => reason.clone(),
                     _ => String::new(),
                 };
+                // SPLIT, don't pass through. `unresolved_outcome` joins the two
+                // halves of a `db/unmodelled.toml` abstention with
+                // `UNLOCKED_BY_MARKER` because the binder has one `reason` channel;
+                // every consumer is expected to split it. This one used to copy the
+                // string verbatim, so the JSON surface, which is the one a CI
+                // pipeline parses, was the only reader that got the marker text in
+                // its face.
+                let (reason, unlocked_by) = split_marker(&raw, Assumption::UNLOCKED_BY_MARKER);
                 let consequence = if active_ic {
                     format!(
                         "{} is an active IC left OPEN; analog/AC/thermal results on its nets are NOT trustworthy",
@@ -198,6 +233,7 @@ impl BindSummary {
                     reference: row.reference.clone(),
                     value: row.value.clone(),
                     reason,
+                    unlocked_by,
                     consequence,
                     active_ic,
                 });
@@ -221,7 +257,19 @@ impl BindSummary {
                 resolved_but_open_active.push(UnresolvedActive {
                     reference: row.reference.clone(),
                     value: row.value.clone(),
-                    reason: row.warning.clone().unwrap_or_default(),
+                    // Belt and braces: `is_open_pin_warning` gates this bucket and no
+                    // partial-model text matches its tokens today, but a warning is a
+                    // warning and none of them may arrive here wearing a marker.
+                    reason: row
+                        .warning
+                        .as_deref()
+                        .map(|w| {
+                            w.strip_prefix(Assumption::PARTIAL_MODEL_MARKER)
+                                .unwrap_or(w)
+                                .to_string()
+                        })
+                        .unwrap_or_default(),
+                    unlocked_by: None,
                     consequence: format!(
                         "{} is a resolved active IC with open/undriven pins on the live circuit; analog/AC/thermal results on its nets are NOT fully trustworthy",
                         row.reference
@@ -1993,6 +2041,82 @@ mod tests {
     use super::*;
     use hauksbee_extract::{DrcFinding, Item, ItemKind};
 
+    /// No routing marker may reach the JSON surface.
+    ///
+    /// The binder has one `reason` channel per row and two things to say when
+    /// `db/unmodelled.toml` names an abstention: what blocks the model, and what
+    /// would unlock it. It joins them with `UNLOCKED_BY_MARKER`, and every consumer
+    /// is expected to split. `Assumption::open_part` does. This surface used to copy
+    /// the string verbatim, so `--json`, the one a CI pipeline parses, was the only
+    /// reader handed the marker text and the two halves re-merged into one field.
+    ///
+    /// Both markers are checked, because there are two and the rule is the same for
+    /// each: they are plumbing between the binder and the report builders.
+    #[test]
+    fn no_routing_marker_reaches_the_json_surface() {
+        let unlocked = "the strap state for this board, or a schematic naming the pin";
+        let mut report = BindReport::default();
+        report.push(BindRow {
+            reference: "U201".to_string(),
+            value: "Si53301".to_string(),
+            model_id: None,
+            confidence: Confidence::Unresolved,
+            source: None,
+            outcome: BindOutcome::Unresolved {
+                reason: format!(
+                    "the output format is strap-selected and it is the driven level \
+                     that is not known{}{unlocked}",
+                    Assumption::UNLOCKED_BY_MARKER
+                ),
+            },
+            // A `warning` is what puts the row on the active path at all.
+            warning: Some("U201 (Si53301): active part left open".to_string()),
+            guesses: Vec::new(),
+        });
+
+        let summary = BindSummary::from_report(&report);
+        let row = summary
+            .active_path_unresolved
+            .first()
+            .expect("an unresolved active part is reported");
+
+        assert!(
+            !row.reason.contains(Assumption::UNLOCKED_BY_MARKER.trim()),
+            "the marker is plumbing and must not reach the reader: {}",
+            row.reason
+        );
+        assert!(
+            !row.reason.contains(unlocked),
+            "the unlocking input belongs in its own field, not glued onto the \
+             reason: {}",
+            row.reason
+        );
+        assert_eq!(
+            row.unlocked_by.as_deref(),
+            Some(unlocked),
+            "the actionable half must survive the split, in its own field"
+        );
+
+        // And an ordinary reason with no marker passes through whole.
+        let mut plain = BindReport::default();
+        plain.push(BindRow {
+            reference: "U9".to_string(),
+            value: "MYSTERY".to_string(),
+            model_id: None,
+            confidence: Confidence::Unresolved,
+            source: None,
+            outcome: BindOutcome::Unresolved {
+                reason: "no model matched".to_string(),
+            },
+            warning: Some("U9 (MYSTERY): active part left open".to_string()),
+            guesses: Vec::new(),
+        });
+        let plain = BindSummary::from_report(&plain);
+        let row = plain.active_path_unresolved.first().expect("reported");
+        assert_eq!(row.reason, "no model matched");
+        assert!(row.unlocked_by.is_none(), "nothing to unlock, nothing said");
+    }
+
     #[test]
     fn eagle_auto_named_elements_are_not_active_ics() {
         // Measured on SparkFun's SAMD51 Thing Plus: 69 references start with U,
@@ -2144,6 +2268,7 @@ mod tests {
 
     fn active_ic(reference: &str) -> UnresolvedActive {
         UnresolvedActive {
+            unlocked_by: None,
             reference: reference.to_string(),
             value: "IC".to_string(),
             reason: "all I/O pins open".to_string(),
