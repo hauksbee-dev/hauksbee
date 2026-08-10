@@ -559,14 +559,14 @@ overlap in the same 0.349 mm band on both layers. The shipped fabrication data \
 splits the layers regardless: in copper_top.gbr the two fills are separate \
 bodies 8.236 mm apart at their closest, and in copper_bottom.gbr they are one \
 6378-vertex region with no channel along the seam, so on the back layer the \
-copper is joined. The file proves the join is deliberate: the AGND pour that \
-abuts carries `isolate="0.00030625"`, a hand-set \
-override on one of nine ground pours, where six ask for 0.3048 mm and two set \
-nothing. WHY it is there is inference (an analogue return has to reach digital \
-ground somewhere, and this is where the layout does it), and the finding does \
-not rest on it: two named nets are in contact, which is what the check reports. \
-Hence known_good = false, which says the gate cannot grade its silence on this \
-directory, not that the board is defective.
+copper is joined, and erasing the only two GND vias near the seam leaves that \
+connection intact, so it is the pours meeting rather than a via standing in. The \
+files record a near-zero `isolate="0.00030625"` on the abutting pour, one of nine \
+ground pours (six ask for 0.3048 mm, two set nothing), carried unchanged across \
+five consecutive revisions. Deliberate is an inference from that pattern, not a \
+proof, and the finding does not rest on it: two named nets are in contact, which \
+is what the check reports. Hence known_good = false, which says the gate cannot \
+grade its silence on this directory, not that the board is defective.
 """
 expect = [
   "hardware/V3.4.5/emonTx V3.4.5.brd",
@@ -685,8 +685,9 @@ expect = [
   "hardware/hackrf-one/hackrf-one.kicad_sch",
 ]
 
-# A 10 MHz-to-6 GHz signal generator: three PLLs, a TCXO, an OCXO reference
-# input, RF shield cans, and 373 footprints on four layers. It reached the corpus
+# An RF signal-generator design: an LMX2572 wideband synthesiser, an Si53301
+# clock IC, an EFM32PG22 MCU, a TCXO, an external reference input, Laird shield
+# cans, and 373 footprints on four layers. It reached the corpus
 # the way the ODrive attempt layout did, by being flagged: the external-pool
 # iteration `qc/evidence/runs/2026-08-09-external-01.json` drew it, hauksbee
 # reported six copper shorts, and the adjudication (see the gold row in
@@ -714,7 +715,8 @@ violations, the same net pairs and the same pad anchors, and the project's \
 MWGEN-G1.kicad_pro sets `shorting_items` and `clearance` to `error` with an \
 empty drc_exclusions list, so the design's own rule set forbids every one of \
 them. The entry earns its place regardless: an RF instrument at 373 footprints, \
-with shield cans and three PLL sections, is coverage nothing else here supplies.
+with shield cans and a wideband synthesiser section, is coverage nothing else \
+here supplies.
 """
 expect = [
   "MWGEN-G1.kicad_pcb",

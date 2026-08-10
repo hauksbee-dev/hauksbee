@@ -194,12 +194,22 @@ re-verified; the settings are parsed, drive this reasoning, and are disclosed
 verbatim on pour findings. Pour-to-copper pairs are therefore *not checked*
 (rather than checked and found clean), and same-rank pours that approach
 without ring overlap are not distance-checked either, since the fill extent
-near the boundary depends on those settings. The one
-construct the settings cannot make safe under any derivation **is** checked:
-two overlapping
-same-rank pours of different signals have no arbitration (Eagle pours both, a
-physical short on the fabricated board, and Eagle's own DRC flags the overlap),
-and that short is reported with the pour settings disclosed on the finding.
+near the boundary depends on those settings.
+
+One pour-to-pour construct **is** checked. Two overlapping same-rank pours of
+different signals get no arbitration from their rank, but the yielding pour is
+still carved back by its own `isolate`, so an outline overlap on its own is not a
+short. What is reported is an overlap where the smaller `isolate` is below one
+micrometre, meaning nothing in the file asks for a gap at all, and the pour
+settings are disclosed on the finding. This was narrowed on 2026-08-09 against
+the emonTx V3.4.5's own fabrication output, which shows the same outline overlap
+resolving to separate copper on the layer where both pours hold `isolate="0.3048"`
+and to one body on the layer where one holds `0.00030625`
+([`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md)).
+The cost is stated with it: an overlap at or above that isolate is silent even if
+a CAM run would merge it, and a sub-rule but non-zero isolate is not reported as
+a clearance finding either, because both answers need the fill
+([`../about/LIMITATIONS.md`](../about/LIMITATIONS.md)).
 
 ### Deliberate ties exempted locally
 
@@ -417,7 +427,8 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
   pour-to-copper pairs are not checked (the fidelity caveat above explains
   why a fill Eagle derives from the stored settings would not violate, and
   why the outline must not stand in for it); overlapping same-rank pours of
-  different signals ARE reported as shorts. Wires, vias and pads against
+  different signals are reported as shorts only when the smaller `isolate`
+  is below one micrometre, so nothing in the file asks for a gap. Wires, vias and
   each other are fully covered. KiCad pours, which do carry the computed
   fill, are covered.
 - **Eagle multilayer.** The Eagle reader spans through-hole pads and vias
