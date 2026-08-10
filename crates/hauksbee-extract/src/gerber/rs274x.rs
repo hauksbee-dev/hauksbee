@@ -225,9 +225,12 @@ fn contour_bounds(c: &[(f64, f64)]) -> [f64; 4] {
 /// A void becomes extra contours on every pour it sits inside, which is exactly
 /// what [`Shape::MultiPolygon`] already means: even-odd containment reads the
 /// void's interior as empty and the copper around it as copper. Even-odd does
-/// most of the work by itself: a thermal relief's separate arc voids leave the
-/// spokes standing, so the pad stays on the pour exactly as fabricated, and an
-/// annular void's inner rim leaves its copper island standing.
+/// most of the work by itself: a thermal relief drawn as separate straight-segment
+/// voids leaves the spokes standing, so the pad stays on the pour exactly as
+/// fabricated, and an annular void's inner rim leaves its copper island standing.
+/// (A relief drawn with ARCS is refused instead, along with every other arc-bearing
+/// clear region, so nothing is cut and the pad stays on the pour by a different
+/// route: through the whole annulus of copper rather than through the spokes.)
 ///
 /// This is not a general polygon boolean, so it is imprecise, and the shape of
 /// that imprecision is the whole safety argument. **Appending a contour flips
@@ -323,7 +326,22 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     const ENCLOSE_GRID_VERTS: usize = 2000;
     const ENCLOSE_CELL_BUDGET: usize = 64 << 20;
     let enclose_side_ceiling = {
-        let per_pour = ENCLOSE_CELL_BUDGET / regions.len().max(1);
+        // Divided by the pours that could take a GRID, not by every pour on the
+        // film. Dividing by all of them let regions that are never gridded derate
+        // the ones that are, and a coarse grid means every pad lands in the
+        // boundary band and pays the exact test: on a plane with a 40000-vertex
+        // outline and 3000 antipads, 500 unrelated four-vertex fill regions made
+        // the cut 37 times slower for byte-identical output. A film that draws its
+        // traces as filled regions AND its plane negatively is exactly the shape
+        // this reader exists for.
+        let gridded = originals
+            .iter()
+            .filter(|cs| cs.iter().map(Vec::len).sum::<usize>() >= ENCLOSE_GRID_VERTS)
+            .count();
+        let per_pour = ENCLOSE_CELL_BUDGET / gridded.max(1);
+        // The lower clamp wins over the division, so past about 16000 gridded pours
+        // the budget stops being a bound and each still takes 64 cells a side. That
+        // needs a film whose geometry alone is orders larger than its grids.
         ((per_pour as f64).sqrt() as usize).clamp(64, 2048)
     };
     let mut enclose_grids: Vec<Option<Option<super::geo::PolyGrid>>> =

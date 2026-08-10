@@ -349,29 +349,47 @@ pub fn reconstruct(
             // turns it into ONE board-sized shape carrying a contour per antipad,
             // exactly the case the grid exists for.
             const GRID_VERT_THRESHOLD: usize = 2000;
-            let grid_contours: Vec<(usize, Vec<Vec<(f64, f64)>>)> = regions
-                .iter()
-                .filter_map(|&rgi| {
-                    let contours = match &prims[rgi].shape {
-                        Shape::Polygon { pts, .. } => vec![pts.clone()],
-                        Shape::MultiPolygon { contours } => contours.clone(),
-                        Shape::Capsule(_) => return None,
-                    };
-                    let verts: usize = contours.iter().map(Vec::len).sum();
-                    (verts >= GRID_VERT_THRESHOLD).then_some((rgi, contours))
-                })
-                .collect();
+            // A MultiPolygon pour's contours are borrowed, not copied. Those are the
+            // board-sized ones, a cut negative plane being exactly a multi-contour
+            // pour, so cloning them held the layer's largest geometry twice over for
+            // the whole pass. A `Polygon` has to be wrapped in a one-contour slice
+            // to be gridded at all, so those alone are materialised, and they are the
+            // small ones.
+            let mut owned: Vec<(usize, Vec<Vec<(f64, f64)>>)> = Vec::new();
+            let mut borrowed: Vec<(usize, &[Vec<(f64, f64)>])> = Vec::new();
+            for &rgi in &regions {
+                match &prims[rgi].shape {
+                    Shape::Polygon { pts, .. } => {
+                        if pts.len() >= GRID_VERT_THRESHOLD {
+                            owned.push((rgi, vec![pts.clone()]));
+                        }
+                    }
+                    Shape::MultiPolygon { contours } => {
+                        if contours.iter().map(Vec::len).sum::<usize>() >= GRID_VERT_THRESHOLD {
+                            borrowed.push((rgi, contours.as_slice()));
+                        }
+                    }
+                    Shape::Capsule(_) => {}
+                }
+            }
+            let n_gridded = owned.len() + borrowed.len();
             // Every gridded pour's grid is alive at once, and a 2048-a-side grid is
             // 4.2 MB of cells, so a layer of many detailed pours has to share a
             // budget rather than each take the ceiling. 64 M cells is 64 MB for the
             // layer; below about fifteen gridded pours nothing is given up.
             const CELL_BUDGET: usize = 64 << 20;
             let side_ceiling = {
-                let per_pour = CELL_BUDGET / grid_contours.len().max(1);
+                let per_pour = CELL_BUDGET / n_gridded.max(1);
+                // The lower clamp wins over the division, so past about 16000
+                // gridded pours the budget stops being a bound and each still takes
+                // 64 cells a side. That needs a film whose own geometry is orders
+                // larger than its grids.
                 ((per_pour as f64).sqrt() as usize).clamp(64, 2048)
             };
-            let region_grids: HashMap<usize, super::geo::PolyGrid> = grid_contours
+            let region_grids: HashMap<usize, super::geo::PolyGrid> = owned
                 .iter()
+                .map(|(rgi, cs)| (*rgi, cs.as_slice()))
+                .chain(borrowed.iter().copied())
                 .map(|(rgi, contours)| {
                     let verts: usize = contours.iter().map(Vec::len).sum();
                     // Resolution scales with vertex count, so detail buys cells,
@@ -395,7 +413,7 @@ pub fn reconstruct(
                     // affordable because the scanline buckets its edges by row (see
                     // `PolyGrid::new`); without that the build alone was 3.2 s.
                     let cells = (verts / 4).clamp(64, side_ceiling);
-                    (*rgi, super::geo::PolyGrid::new(contours, cells))
+                    (rgi, super::geo::PolyGrid::new(contours, cells))
                 })
                 .collect();
             for &gi in members {

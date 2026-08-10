@@ -568,14 +568,14 @@ Inkplate 6 to 18. Cutting the voids gives 284 and 181.
 A void becomes an extra contour on the pour it sits inside, which is what
 `Shape::MultiPolygon` already means: even-odd containment reads the void's
 interior as empty and the copper around it as copper. Even-odd does most of
-the work by itself: a thermal relief's separate arc-shaped voids leave the
-spokes standing, so the pad stays on the pour exactly as fabricated, and an
-annular void's inner rim leaves its copper island standing, and that island is
+the work by itself: a thermal relief drawn as separate straight-segment voids
+leaves the spokes standing, so the pad stays on the pour exactly as
+fabricated, and an annular void's inner rim leaves its copper island standing, and that island is
 then moved out of the pour's primitive into its own, because connectivity
 unions per primitive and an island left inside the pour's shape is shorted
 straight back to the plane. An island is freed only when no other void's
-bounds overlap it; one that another void may have touched stays a contour of
-the pour, over-connected. A void is cut
+bounds overlap it and it does not lie over a hole the pour was drawn with; one
+that either might have touched stays a contour of the pour, over-connected. A void is cut
 from every `Region` primitive whose own contours, as drawn, contain every
 vertex of the void, and which was painted **before** it, gerber being a
 painter's model. A void already covered whole by an earlier void is skipped,
