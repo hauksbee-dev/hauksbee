@@ -449,12 +449,18 @@ theta_ja_c_per_w = 83.5         # RthJA, 14-pin N (PDIP), Thermal Information
 # +/-3 mV typ, +/-15 mV max); several entries elsewhere in this file conflate them
 # and this one does not.
 #
-# DELIBERATELY NOT MODELLED: the propagation delay is left unstated because the
-# datasheet's own figure is load- and overdrive-dependent and it publishes it as a
-# curve rather than a table row (the part is a 24 us-class nanopower comparator,
-# not a fast one, so a wrong single number here would matter). Also absent: the
-# 100 nA-class input bias current, the rail-to-rail input common-mode range
-# (V- - 0.1 to V+ + 0.1), and the short-circuit currents.
+# `tpd_s` IS THE SLOWEST TABULATED ROW, and an earlier version of this entry
+# carried no tpd at all on the false claim that the sheet publishes only curves.
+# It does publish curves, AND Section 6.5 tabulates tPHL and tPLH at four points:
+#   24 us   VS = 6.5 V, overdrive 100 mV      32 us   VS = 6.5 V, overdrive 50 mV
+#   28-35 us VS = 0.9 V, overdrive 100 mV     40 us   VS = 0.9 V, overdrive 50 mV
+# 40 us is the 0.9 V / 50 mV corner, which is the same conservative corner the
+# output levels above are taken from, so the entry is internally consistent: a
+# board driving this comparator harder than 50 mV of overdrive gets a real part
+# that is up to 40% faster than the model.
+#
+# DELIBERATELY NOT MODELLED: the 100 nA-class input bias current, the rail-to-rail
+# input common-mode range (V- - 0.1 to V+ + 0.1), and the short-circuit currents.
 [[models]]
 id = "tlv3691"
 kind = "comparator"
@@ -475,6 +481,8 @@ out_hi     = 3.230   # 3.3 V rail minus the 0.9 V-row UPPER drop, which is 70 mV
                      # and not the 35 mV of the lower rail: the sheet's two drops
                      # differ by a factor of two and are not interchangeable
 hysteresis = 0.017   # VHYS typ, the datasheet's own row (NOT the offset voltage)
+tpd_s      = 4.0e-5  # tPHL/tPLH at VS = 0.9 V, overdrive 50 mV: the slowest row.
+                     # See the note above for all four.
 supply_static_ua = 0.075   # IQ typ 75 nA at 25 C (150 nA max at 25 C, 200 nA
                            # over -40 to 125 C)
 

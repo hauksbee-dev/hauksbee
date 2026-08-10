@@ -76,14 +76,15 @@ kind = "analog_switch"
 description = "74LVC1G66 single bilateral analog switch, 5-lead SC-70/SOT-23/SOT-353 (TI and Nexperia, one pinout)"
 
 [models.match]
-# The bare JEDEC number, any vendor prefix, and the FIVE-LEAD package codes:
-# TI's DBV (SOT-23-5), DCK (SC70-5) and DRL, Nexperia's GW (SOT-353) and
-# GV (SOT-753). The six-lead codes are excluded here and handled by the entry
-# below, because they insert n.c. at pad 5 and move VCC to 6.
+# The bare JEDEC number, any vendor prefix, and the FIVE-LEAD package codes.
+# TI SCES323R: DBV (SOT-23-5), DCK (SC70-5), DRL. Nexperia Rev 14.1 Table 1:
+# GW (TSSOP5, SOT353-1), GV (SC-74A, SOT753), GZ (XSON5, SOT8065-1). The six-lead
+# codes are excluded here and handled by the entry below, because they insert n.c.
+# at pad 5 and move VCC to 6.
 value_re = """(?ix) ^
     (SN|NL|ST|MC|TC)?          # vendor prefix, optional
     74LVC1G66
-    (DBV|DCK|DRL|GW|GV)?       # five-lead package codes only
+    (DBV|DCK|DRL|GW|GV|GZ)?    # five-lead package codes only
     R?                         # reel suffix
     ([-.,][A-Z0-9.,]*)?        # packing code; the matcher rewrites ',' to '.'
 $"""
@@ -91,12 +92,22 @@ $"""
 [models.params]
 # TI SCES323R Section 5.8 Analog Switch Characteristics, and Nexperia Rev. 14.1
 # Table 8, which agree within their tolerances.
-ron  = 6.5       # RON typ at VCC = 3.0 to 3.6 V (Nexperia's near-rail figure;
-                 # TI quotes 7 Ohm at 5 V, which is the same switch)
+ron  = 6.5       # Nexperia Rev 14.1 Table 8, RON typ at VCC = 3.0 to 3.6 V.
+                 # TI's nearest row is 7.5 Ohm typ (15 max) at VCC = 3 V,
+                 # IS = 24 mA; its table has NO 5 V row at all (the rows are
+                 # 1.65 / 2.3 / 3 / 4.5 V, giving 125 / 35 / 7.5 / 5.5 Ohm typ).
+                 # So the two vendors agree to about 1 Ohm at a 3.3 V rail rather
+                 # than exactly, and this is Nexperia's number.
 roff = 1.1e7     # from Nexperia IS(OFF) 0.5 uA max at VCC = 5.5 V. Derived from an
                  # output-side leakage figure, so this one is genuinely a
                  # resistance and not a floor picked for solver comfort.
-vth  = 2.0       # C/E-pin VIH min at VCC = 2.7 to 3.6 V (VIL max is 0.8 V)
+vth  = 2.31      # The HIGHER of the two vendors' control thresholds at a 3.3 V
+                 # rail, which is the conservative choice: the modelled switch then
+                 # needs at least as much control voltage as either real part.
+                 # TI SCES323R gives VIH = 0.7 x VCC over VCC = 3 to 3.6 V, which
+                 # is 2.31 V at 3.3 V; Nexperia Rev 14.1 gives a flat 2.0 V min
+                 # over 2.7 to 3.6 V. Taking Nexperia's 2.0 V would model a TI part
+                 # closing 0.3 V before it really does.
 
 [models.pins]
 # The five-lead map both datasheets give. `in_out_a`/`in_out_b` and NOT `com`/`s0`:
@@ -109,8 +120,14 @@ vth  = 2.0       # C/E-pin VIH min at VCC = 2.7 to 3.6 V (VIL max is 0.8 V)
 "5" = "vcc"
 
 [models.ratings]
-max_pin_current_a = 0.05   # ISW / IIK / IOK, +/-50 mA
-max_voltage_v = 6.5        # VCC abs max
+max_pin_current_a = 0.05   # ISW / IIK / ISK, +/-50 mA (both vendors)
+# 6.0 V, NOT 6.5. TI SCES323R splits its abs-max supply BY PACKAGE: 6 V for DCK
+# and DBV, 6.5 V only for DRL/DRY/YZP/DSF. Nexperia's Table 5 gives a flat 6.5 V.
+# This entry accepts DCK and DBV, so the tightest limit among the packages it can
+# bind is 6 V, and recording 6.5 here would be half a volt UNSAFE for the two most
+# common ones. The six-lead entry below can carry 6.5 because none of its packages
+# are the 6 V ones.
+max_voltage_v = 6.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The SIX-LEAD packages of the same die. Identical in every respect except that
@@ -126,12 +143,14 @@ description = "74LVC1G66 single bilateral analog switch, 6-lead USON/X2SON/XSON6
 # assumed five-lead by the entry above, which is the commoner part by a wide
 # margin. A board fitting a six-lead part and writing only the bare number gets
 # the five-lead map, and the symptom is a `vcc` role on a no-connect pad.
-value_re = "(?i)^(SN|NL|ST|MC|TC)?74LVC1G66(DRY|DSF|GS|GX)R?([-.,][A-Z0-9.,]*)?$"
+# TI SCES323R: DRY (USON-6), DSF (X2SON-6). Nexperia Rev 14.1 Table 1: GM
+# (SOT886), GN (SOT1115), GS (SOT1202), all three XSON6.
+value_re = "(?i)^(SN|NL|ST|MC|TC)?74LVC1G66(DRY|DSF|GM|GN|GS)R?([-.,][A-Z0-9.,]*)?$"
 
 [models.params]
-ron  = 6.5
+ron  = 6.5       # same die and the same rows as the five-lead entry above
 roff = 1.1e7
-vth  = 2.0
+vth  = 2.31      # same reasoning as above: the higher of the two vendors' figures
 
 [models.pins]
 "1" = "in_out_a"
@@ -143,6 +162,8 @@ vth  = 2.0
 
 [models.ratings]
 max_pin_current_a = 0.05
+# 6.5 V is correct HERE: TI's 6.5 V abs-max group is exactly DRL/DRY/YZP/DSF, and
+# Nexperia's flat limit is 6.5 V, so every package this entry accepts carries it.
 max_voltage_v = 6.5
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -267,11 +288,11 @@ roff = 5.0e7     # NOT A DATASHEET FIGURE. Conservative floor from ISHDN
 vth  = 1.2       # EN VIH min, active-high ordering option; see the note above
 [models.pins]
 # Pinout, TSOT25 (5-pin). Pin 5 is IN; the ISET pin does not exist on this part.
-"1" = "com"      # OUT
+"1" = "in_out_a" # OUT. NOT `com`: see the control-polarity note below.
 "2" = "vss"      # GND
 "3" = "flg"      # open-drain fault flag
-"4" = "ctrl"     # EN
-"5" = "s0"       # IN
+"4" = "ctrl"     # EN, active high on this ordering option
+"5" = "in_out_b" # IN. NOT `s0`, for the same reason.
 [models.ratings]
 # The absolute-maximum table states only "load current: internal limited" and
 # gives no numeric pin-current destruction threshold, so do not invent one.
@@ -297,12 +318,12 @@ roff = 5.0e7     # NOT A DATASHEET FIGURE; same conservative floor, see above
 vth  = 1.2       # EN VIH min, active high (the A suffix)
 [models.pins]
 # Pinout, TSOT26 (6-pin): the ISET pin is what the extra pin buys.
-"1" = "com"      # OUT
+"1" = "in_out_a" # OUT. NOT `com`: see the control-polarity note below.
 "2" = "vss"      # GND
 "3" = "flg"
-"4" = "ctrl"     # EN
+"4" = "ctrl"     # EN, active high (the A suffix)
 "5" = "iset"     # RLIM to GND sets the limit: ILIM(A) = 6800 / RLIM(Ohm)
-"6" = "s0"       # IN
+"6" = "in_out_b" # IN. NOT `s0`, for the same reason.
 [models.ratings]
 # As for AP22815, the absolute-maximum table gives no numeric load-current max.
 max_voltage_v = 6.0
@@ -387,12 +408,24 @@ vth  = 1.5       # EN threshold. TI publishes no VIH/VIL for EN; 1.5 V is the
                  # one voltage the datasheet actually commits to for this pin.
 [models.pins]
 # DCT / DCU / DQE pinout (identical numbering across all three).
+# ONLY THE SCL CHANNEL IS STAMPED, and the role names say which. This part has two
+# independent pass gates (SCL1<->SCL2 and SDA1<->SDA2) sharing one EN, and the
+# binder's multi-gate path needs a `ctrl_<n>` per gate, which a pad-to-role map
+# cannot supply from a single EN pad. So one channel gets the switch-terminal names
+# and the other gets plain names that no binder path can pick.
+#
+# The previous map named pad 3 (SCL1) `s0` and pad 5 (SDA2) `com`, which is not
+# merely one channel of two: those two pads are on DIFFERENT channels, so the
+# single-throw path bridged SCL1 to SDA2 and fabricated a cross-channel short that
+# does not exist on any board. It was also inverted, for the `s0` reason below.
 "1" = "vss"      # GND
 "2" = "vref1"    # low-side reference
-"3" = "s0"       # SCL1
-"4" = "s1"       # SDA1
-"5" = "com"      # SDA2
-"6" = "com2"     # SCL2
+"3" = "in_out_b" # SCL1, the modelled channel's low side
+"4" = "sda1"     # SDA1. Deliberately not a switch-terminal role: the second gate
+                 # is not stamped, and a name the binder recognises as a throw
+                 # would be a claim this entry does not make.
+"5" = "sda2"     # SDA2, likewise
+"6" = "in_out_a" # SCL2, the modelled channel's high side
 "7" = "vref2"    # high-side reference
 "8" = "ctrl"     # EN, active high
 [models.ratings]
@@ -453,26 +486,34 @@ roff = 1.0e9     # NOT A DATASHEET FIGURE; conservative floor
 vth  = 2.145     # OE VIH min = 0.65 x VCCA, evaluated at VCCA = 3.3 V
 [models.pins]
 # PW (TSSOP-20).
-"1"  = "s0"     # A1
+# ONE CHANNEL OF EIGHT IS STAMPED, A1<->B1, and only that pair carries
+# switch-terminal names. The other seven are named plainly so no binder path can
+# pick them: the multi-gate path needs a `ctrl_<n>` per gate and this part has one
+# OE for all eight, which a pad-to-role map cannot express.
+#
+# The previous map named every A pin `s0`..`s7` and every B pin `com`..`com7`. The
+# single-throw path picked `com`/`s0`, which IS the A1/B1 pair, so the channel was
+# right; what was wrong was the polarity, for the `s0` reason below.
+"1"  = "in_out_b" # A1, the modelled channel's A side
 "2"  = "vcca"
-"3"  = "s1"     # A2
-"4"  = "s2"     # A3
-"5"  = "s3"     # A4
-"6"  = "s4"     # A5
-"7"  = "s5"     # A6
-"8"  = "s6"     # A7
-"9"  = "s7"     # A8
-"10" = "ctrl"   # OE, active high
-"11" = "vss"    # GND
-"12" = "com7"   # B8
-"13" = "com6"   # B7
-"14" = "com5"   # B6
-"15" = "com4"   # B5
-"16" = "com3"   # B4
-"17" = "com2"   # B3
-"18" = "com1"   # B2
+"3"  = "a2"       # A2..A8 and B2..B8: named, not stamped. See above.
+"4"  = "a3"
+"5"  = "a4"
+"6"  = "a5"
+"7"  = "a6"
+"8"  = "a7"
+"9"  = "a8"
+"10" = "ctrl"     # OE, active high
+"11" = "vss"      # GND
+"12" = "b8"
+"13" = "b7"
+"14" = "b6"
+"15" = "b5"
+"16" = "b4"
+"17" = "b3"
+"18" = "b2"
 "19" = "vccb"
-"20" = "com"    # B1
+"20" = "in_out_a" # B1, the modelled channel's B side
 [models.ratings]
 max_pin_current_a = 0.05   # IO abs max
 max_voltage_v = 6.5        # VCCB abs max (VCCA is 4.6 V)
@@ -529,11 +570,19 @@ theta_ja_c_per_w = 88.9    # PW / TSSOP-20
 # which leaves the default control-HIGH polarity in place. `com`/`s0` would read
 # more naturally for a load switch and would be silently inverted.
 #
-# (The AP22815 and AP22615A entries above predate this note and do use `com`/`s0`
-# while documenting an active-high enable, so they carry the inversion this note
-# describes. Correcting them changes the behaviour of boards already in the
-# corpus, so it is left to a commit that can measure that; it is recorded here so
-# the next reader does not copy them.)
+# EVERY SINGLE-THROW ENTRY IN THIS FILE NOW OBEYS THIS, and four of them did not
+# when the rule was first written down: AP22815, AP22615A, PCA9306 and TXS0108E all
+# named `com`/`s0` while documenting an active-high enable, so all four modelled
+# their switched path off exactly when the silicon has it on. Two of them had a
+# second problem: PCA9306's `com` and `s0` sat on DIFFERENT channels, so the
+# stamped switch was a cross-channel short between SCL1 and SDA2 that exists on no
+# board. They are corrected above, and
+# `no_single_throw_switch_names_the_control_low_throw` in the models suite is the
+# mechanical guard, so the next entry cannot reintroduce it.
+#
+# A TRUE SPDT part is different and keeps `s0`/`s1`: there the control-low sense is
+# correct, because `s0` is the normally-closed throw. The guard therefore keys on
+# `s0` WITHOUT `s1`, which is exactly the single-throw shape.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TPS22916: TI 2 A ultra-low-leakage load switch, DSBGA-4 (YFP).
@@ -736,8 +785,9 @@ description = "TPS2104 dual-input power mux, SOT-23-5 (only the IN2/PMOS throw i
 value_re = "(?i)^TPS2104[A-Z0-9-]*$"
 
 [models.params]
-ron  = 1.3       # IN2-OUT (PMOS) typ at TJ = 25 C, VI = 5 V (2.4 Ohm at 125 C).
-                 # The IN1-OUT NMOS path is 250 mOhm and is not stamped.
+ron  = 1.3       # IN2-OUT (PMOS) typ at TJ = 25 C, VI = 5 V. At TJ = 125 C the
+                 # same row is 1.5 typ / 2.4 MAX, so 2.4 is a maximum and not the
+                 # hot typical. The IN1-OUT NMOS path is 250 mOhm and is not stamped.
 roff = 1.0e9     # NO DATASHEET BASIS: the sheet publishes no output leakage. This
                  # is the engine's ideal-open value. See the note above.
 vth  = 2.0       # EN VIH min, 2.7 V <= VI <= 5.5 V (VIL max 0.8 V)
