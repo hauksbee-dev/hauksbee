@@ -3864,8 +3864,8 @@ pub mod eagle_drc {
                         // crossing track and every isolated foreign pad into a
                         // false short. Two overlapping same-rank pours of
                         // different signals are the one pair the settings can
-                        // leave touching, but only when a pour's own `isolate`
-                        // is zero; see the rank check below.
+                        // leave touching, and only when an `isolate` is under
+                        // `POUR_MERGE_ISOLATE_MM`; see the rank check below.
                         if !cutout {
                             pours.push(Pour {
                                 net,
@@ -4052,11 +4052,12 @@ pub mod eagle_drc {
         // ── Pour-to-pour rank arbitration ────────────────────────────────────
         // Differing ranks are arbitrated (the higher-numbered pour carves
         // around the lower), so they stay silent. Same-rank pours of different
-        // signals whose OUTLINES overlap are not, on their own, a short: the
-        // yielding pour is still carved back by its own `isolate`, and the
-        // outline says nothing about where the fill lands. What this pass treats
-        // as reaching copper is an overlap where a pour's `isolate` is zero, so
-        // nothing in the file asks for a gap.
+        // signals whose OUTLINES overlap are not, on their own, a short: with
+        // equal rank the file names no yielder, but whichever pour gives way is
+        // carved back by its own `isolate`, and the outline says nothing about
+        // where the fill lands. What this pass treats as reaching copper is an
+        // overlap where the smaller `isolate` is under
+        // `POUR_MERGE_ISOLATE_MM`, so nothing in the file asks for a gap.
         //
         // The emonTx V3.4.5 (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`) is the
         // measurement behind that: GND and AGND carry same-rank pours whose

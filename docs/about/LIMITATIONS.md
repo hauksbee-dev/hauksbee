@@ -347,7 +347,8 @@ the *computed* fill polygon is absent, because Eagle re-derives it on every
 ratsnest / CAM run. That derivation is what keeps the fill out of the
 pour-to-copper short test: Eagle carves max(`isolate`, the applicable
 design-rule / net-class clearance) around every foreign-net wire, pad and via
-(an `isolate` below the rules distance is ignored), thermal spokes only remove
+(an `isolate` below the rules distance is ignored there; the pour-to-POUR case
+below is measured to behave differently), thermal spokes only remove
 same-net copper, and orphan removal only deletes fill pockets. Every setting
 keeps or widens gaps, so a correctly derived fill cannot short or crowd foreign
 copper in the same file. Treating the drawn outline as solid copper instead
@@ -362,11 +363,12 @@ boundary depends on those settings. The argument above says a fill Eagle
 derives from these settings would not violate; a hand-edited file whose fill
 was never re-derived is outside it.
 
-One pour-to-pour construct IS checked, and it was narrowed on 2026-08-09 after
-being measured against real fabrication output. Two overlapping same-rank pours
-of different signals get no arbitration from their rank, but the yielding pour is
-still carved back by its own `isolate`, so the outline overlap alone does not put
-copper in contact. What is reported is an overlap where the smaller `isolate` is
+One pour-to-pour construct IS checked, and it was narrowed after being measured
+against real fabrication output. Two overlapping same-rank pours of different
+signals get no arbitration from their rank, and the file names no yielder either,
+but whichever pour gives way is carved back by its own `isolate`, so the outline
+overlap alone does not put copper in contact. The check reads the smaller of the
+two, as the conservative choice. What is reported is an overlap where the smaller `isolate` is
 below one micrometre (`POUR_MERGE_ISOLATE_MM`), meaning nothing in the file asks
 for a gap at all. The measurement is in
 [`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md):
