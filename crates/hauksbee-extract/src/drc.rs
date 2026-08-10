@@ -3006,7 +3006,7 @@ pub mod eagle_drc {
             ///
             /// Against foreign TRACKS, PADS and VIAS, Eagle applies
             /// max(isolate, design-rule / class clearance), so 0 means "rules
-            /// only" and the fill can never crowd them. Against another POUR it
+            /// only" and the fill can never crowd them. Against another POUR
             /// the emonTx V3.4.5 does not behave that way: it pours at
             /// `isolate="0.00030625"` against a GND pour under an 8 mil
             /// `mdWireWire` rule, and its own CAM output emits the two as one
