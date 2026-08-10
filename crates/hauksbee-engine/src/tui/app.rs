@@ -31,15 +31,17 @@ const COSIM_SECONDS: f64 = 2.0;
 /// firmware auto-detection and naming); `board_text` is its already-read text
 /// (so we reuse the exact bytes the caller validated); `models_dir` layers an
 /// extra model directory exactly as the CLI does; `firmware` is an optional
-/// explicit ELF/HEX for co-sim.
+/// explicit ELF/HEX for co-sim; `schematic` is an optional companion Eagle `.sch`
+/// (the `--schematic` flag), whose declared net ties qualify the DRC's shorts.
 pub fn run(
     board_path: &Path,
     board_text: &str,
     models_dir: Option<&Path>,
     firmware: Option<PathBuf>,
+    schematic: Option<&Path>,
 ) -> anyhow::Result<()> {
     // Build the model on the SAME analysis path the --json/text surfaces use.
-    let state = build_state(board_path, board_text, models_dir)?;
+    let state = build_state(board_path, board_text, models_dir, schematic)?;
 
     // Firmware: explicit arg wins; otherwise auto-detect a sibling .elf.
     let firmware = firmware.or_else(|| cosim::autodetect_firmware(board_path));
@@ -60,6 +62,7 @@ pub fn build_state(
     board_path: &Path,
     board_text: &str,
     models_dir: Option<&Path>,
+    schematic: Option<&Path>,
 ) -> anyhow::Result<AppState> {
     // A `.kicad_sch` references sibling sub-sheets, so it must load by path.
     let board = if board_path.extension().and_then(|e| e.to_str()) == Some("kicad_sch") {
@@ -74,7 +77,18 @@ pub fn build_state(
     let summary = BindSummary::from_report(&bound.report);
 
     // DRC reads copper geometry from the board text (same as --drc / frontdoor).
-    let drc = ExtractedBoard::drc(board_text).unwrap_or_default();
+    let mut drc = ExtractedBoard::drc(board_text).unwrap_or_default();
+    // And the same companion schematic the report surfaces read, so the dashboard
+    // cannot call a declared star ground a serious short while `--json` on the
+    // same board calls it a note. This module's own doc promises that parity.
+    let board_is_eagle = board_text
+        .chars()
+        .take(512)
+        .collect::<String>()
+        .contains("<eagle");
+    if let Ok(Some(ties)) = crate::schematic_ties::resolve(board_path, schematic, board_is_eagle) {
+        ties.apply(&mut drc);
+    }
     let drc_structured = DrcStructured::from_report(&drc);
 
     // SI = the signal-integrity static checks (with geometry text). lint = the
