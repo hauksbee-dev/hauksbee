@@ -16,6 +16,7 @@ pub mod bind;
 pub mod check;
 pub mod ci_artifacts;
 pub mod cosim;
+pub mod coverage;
 pub mod drc;
 pub mod lint;
 pub mod si;

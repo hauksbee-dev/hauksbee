@@ -522,6 +522,22 @@ pub struct AppState {
     /// shown results from a different chip than the one on the board.
     pub backend_substituted: Option<String>,
 
+    /// Every co-sim coverage caveat the running (or finished) co-sim has
+    /// disclosed, from the one enumeration in [`crate::reports::coverage`] that
+    /// the batch surfaces' wording comes from. Fed from each [`CosimUpdate`], so
+    /// this pane and `hauksbee run --json` describe the same run in the same
+    /// words rather than the pane reading quiet over a dropped ADC channel.
+    ///
+    /// Rendered in two places: a persistent count line at the TOP of the co-sim
+    /// pane (above the GPIO table, so it cannot be pushed off by UART), and the
+    /// full sentences in the `c` overlay.
+    coverage: Vec<crate::reports::coverage::CoverageCaveat>,
+    /// When true, the co-sim coverage overlay (`c`) is open.
+    pub coverage_open: bool,
+    /// First caveat row shown in the coverage overlay (it scrolls with ↑/↓,
+    /// because ten classes of full sentence do not fit one modal).
+    pub coverage_scroll: usize,
+
     /// ref → connected net names (for the part detail view).
     part_nets: HashMap<String, Vec<String>>,
     /// net name → connected refs (for the net detail view).
@@ -764,6 +780,11 @@ impl AppState {
             // Populated by the caller (Track B) once the requested-vs-modelled
             // part comparison is available; no substitution known at build time.
             backend_substituted: None,
+            // No co-sim has run yet, so there is nothing to disclose. Filled by
+            // `set_coverage` from the co-sim stream.
+            coverage: Vec::new(),
+            coverage_open: false,
+            coverage_scroll: 0,
             part_nets,
             net_parts,
             focus: Pane::Findings,
@@ -790,6 +811,64 @@ impl AppState {
     /// from a different chip than the board's.
     pub fn set_chip_substitution(&mut self, message: impl Into<String>) {
         self.backend_substituted = Some(message.into());
+    }
+
+    // ── Co-sim coverage caveats ──────────────────────────────────────────────
+
+    /// Replace the coverage caveats with the running co-sim's latest snapshot.
+    /// Replace, not extend: the list is recomputed whole at every chunk from the
+    /// scheduler, so appending would multiply one caveat by the chunk count.
+    pub fn set_coverage(&mut self, caveats: Vec<crate::reports::coverage::CoverageCaveat>) {
+        self.coverage = caveats;
+        // A shrinking list (a new run starting) must not leave the overlay
+        // scrolled past its end.
+        if self.coverage_scroll >= self.coverage.len() {
+            self.coverage_scroll = self.coverage.len().saturating_sub(1);
+        }
+    }
+
+    /// The caveats, in the shared enumeration's order.
+    pub fn coverage(&self) -> &[crate::reports::coverage::CoverageCaveat] {
+        &self.coverage
+    }
+
+    /// How many caveats name something the run could not do. The number on the
+    /// pane's banner.
+    pub fn coverage_hole_count(&self) -> usize {
+        crate::reports::coverage::hole_count(&self.coverage)
+    }
+
+    /// How many caveats are resolution statements rather than holes (the
+    /// per-core timing-coverage class). Counted apart so a healthy run does not
+    /// wear a red number for stating its own edge resolution.
+    pub fn coverage_note_count(&self) -> usize {
+        self.coverage.len() - self.coverage_hole_count()
+    }
+
+    /// Toggle the coverage overlay. Available from any pane (the caveats are
+    /// about the run, not about a selected row) and only when there is something
+    /// to show, so `c` never opens an empty modal.
+    pub fn toggle_coverage(&mut self) {
+        if self.coverage.is_empty() {
+            return;
+        }
+        self.coverage_open = !self.coverage_open;
+        if self.coverage_open {
+            self.coverage_scroll = 0;
+        }
+    }
+
+    /// Scroll the coverage overlay one caveat down / up, clamped.
+    pub fn coverage_scroll_down(&mut self) {
+        if self.coverage_open && self.coverage_scroll + 1 < self.coverage.len() {
+            self.coverage_scroll += 1;
+        }
+    }
+
+    pub fn coverage_scroll_up(&mut self) {
+        if self.coverage_open {
+            self.coverage_scroll = self.coverage_scroll.saturating_sub(1);
+        }
     }
 
     // ── Navigation (the unit-testable core) ──────────────────────────────────
@@ -887,9 +966,9 @@ impl AppState {
         }
     }
 
-    /// True when any detail overlay is open (finding OR part/net).
+    /// True when any detail overlay is open (finding, part/net, or coverage).
     pub fn any_overlay_open(&self) -> bool {
-        self.detail_open || self.left_detail_open
+        self.detail_open || self.left_detail_open || self.coverage_open
     }
 
     /// Close every open overlay. Returns true if one was actually open (so the
@@ -898,6 +977,7 @@ impl AppState {
         let was_open = self.any_overlay_open();
         self.detail_open = false;
         self.left_detail_open = false;
+        self.coverage_open = false;
         was_open
     }
 
@@ -1608,6 +1688,81 @@ mod tests {
             }
             other => panic!("expected a Net detail, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn coverage_overlay_only_opens_when_there_is_something_to_disclose() {
+        use crate::reports::coverage::CoverageInputs;
+        use crate::scheduler::AdcDrop;
+        let mut st = sample_state();
+
+        // Nothing disclosed: `c` is a no-op, so it can never open an empty modal
+        // that a user then has to escape from.
+        assert!(st.coverage().is_empty());
+        st.toggle_coverage();
+        assert!(!st.coverage_open, "no caveats, no overlay");
+        assert!(!st.any_overlay_open());
+
+        // A real caveat: the overlay opens, counts as an overlay (so the event
+        // loop treats it as modal), and closes with the others.
+        st.set_coverage(
+            CoverageInputs {
+                adc_dropped: vec![AdcDrop {
+                    mcu_ref: "U1".to_string(),
+                    channel: 4,
+                    net: "/VSENSE".to_string(),
+                    parts: Vec::new(),
+                }],
+                ..Default::default()
+            }
+            .caveats(),
+        );
+        assert_eq!(st.coverage_hole_count(), 1);
+        assert_eq!(st.coverage_note_count(), 0);
+        st.toggle_coverage();
+        assert!(st.coverage_open);
+        assert!(st.any_overlay_open());
+        // One caveat, so scrolling cannot walk off the end in either direction.
+        st.coverage_scroll_down();
+        assert_eq!(st.coverage_scroll, 0);
+        st.coverage_scroll_up();
+        assert_eq!(st.coverage_scroll, 0);
+        assert!(st.close_overlays());
+        assert!(!st.coverage_open);
+    }
+
+    #[test]
+    fn a_new_runs_shorter_caveat_list_does_not_leave_the_overlay_past_its_end() {
+        use crate::reports::coverage::CoverageInputs;
+        use crate::scheduler::AdcDrop;
+        let drop = |channel: u8| AdcDrop {
+            mcu_ref: "U1".to_string(),
+            channel,
+            net: format!("/VSENSE{channel}"),
+            parts: Vec::new(),
+        };
+        let mut st = sample_state();
+        st.set_coverage(
+            CoverageInputs {
+                adc_dropped: vec![drop(1), drop(2), drop(3)],
+                ..Default::default()
+            }
+            .caveats(),
+        );
+        st.toggle_coverage();
+        st.coverage_scroll_down();
+        st.coverage_scroll_down();
+        assert_eq!(st.coverage_scroll, 2);
+        // A second run discloses less. The scroll must land inside the new list
+        // rather than pointing past it at a caveat that no longer exists.
+        st.set_coverage(
+            CoverageInputs {
+                adc_dropped: vec![drop(1)],
+                ..Default::default()
+            }
+            .caveats(),
+        );
+        assert_eq!(st.coverage_scroll, 0);
     }
 
     #[test]

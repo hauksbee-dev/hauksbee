@@ -741,6 +741,31 @@ pub fn timing_limitation_message(mcu_ref: &str, limitation: &str) -> String {
     format!("MCU {mcu_ref}: {limitation}")
 }
 
+/// The one-line resolution statement for a [`TimingCoverage`] row: the edge
+/// timestamp uncertainty, the narrowest pulse guaranteed observable, the chunk
+/// actually run, and whether the stamps are cycle-exact or poll-boundary.
+///
+/// Shared for the same reason as [`watchdog_limitation_message`]: the `hauksbee
+/// run` default-text timing-coverage table and the interactive surfaces' coverage
+/// caveats (`reports::coverage`) must not word one core's resolution two ways.
+/// The leading indent belongs to the text table and is added there, not here.
+pub fn timing_coverage_line(t: &TimingCoverage) -> String {
+    format!(
+        "{} ({}): edge timestamps ±{:.3} us; pulses >= {:.3} us guaranteed; \
+         {:.3} us chunk; {} stamps",
+        t.mcu_ref,
+        t.backend,
+        t.timestamp_precision_s * 1e6,
+        t.minimum_guaranteed_pulse_s * 1e6,
+        t.chunk_s * 1e6,
+        if t.cycle_exact {
+            "cycle-exact"
+        } else {
+            "poll-boundary"
+        },
+    )
+}
+
 /// The one-line finding the same four batch surfaces emit for an entry of
 /// [`Scheduler::watchdog_resets`]. Same shared-wording discipline as
 /// [`watchdog_limitation_message`] and [`AdcDrop::message`].
