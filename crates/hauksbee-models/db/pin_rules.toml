@@ -58,14 +58,31 @@ kind = "diode"
 pad_count = 2
 roles = { "1" = "cathode", "2" = "anode" }
 
-# ── SOT-23 BJT ────────────────────────────────────────────────────────────────
+# ── SOT-23 / SOT-323 / SC-70 three-terminal ───────────────────────────────────
 # The KiCad SOT-23 transistor pinout (Package_TO_SOT_SMD:SOT-23) is
 # 1=base, 2=emitter, 3=collector, the convention KiCad's Q_NPN_BEC / Q_PNP_BEC
-# symbols and the SOT-23 footprint use.
+# symbols and the SOT-23 footprint use. SOT-323 (SC-70-3) is the same outline
+# shrunk and carries the same pad order, so the four rules below share one
+# footprint pattern.
+#
+# THE PATTERN IS SPELLED LOOSELY ON PURPOSE, and `pad_count = 3` is what keeps
+# it honest. It used to be `SOT-23(?:$|[^-0-9])`, which reads every KiCad
+# footprint name correctly and NONE of the ones other CAD tools write: Eagle
+# libraries spell the same package `SOT23-3`, `SOT23-3@1` (the `@n` is Eagle's
+# duplicate-package suffix) and `SOT323`, and every three-terminal transistor on
+# an Eagle board therefore reached the binder with no electrode roles at all and
+# was reported as "MOSFET pins not all connected" — an open circuit in place of
+# a conducting switch. Dropping the hyphen requirement makes the pattern also
+# touch `SOT-23-5` and `SOT-23-6`, which is harmless: those have five and six
+# pads, and a rule only fires when the pad count matches exactly.
+#
+# TO-92 is deliberately absent. It is also a three-terminal transistor package
+# but its pad order is not this one (E-B-C, and vendors disagree about which
+# way round), so a guess there would be a coin flip on the emitter.
 [[pin_rules]]
 id = "bjt_sot23_b1_e2_c3"
 description = "SOT-23 BJT: pad1=base, pad2=emitter, pad3=collector"
-footprint_re = "SOT-23(?:$|[^-0-9])"
+footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
 kind = "bjt_npn"
 pad_count = 3
 roles = { "1" = "base", "2" = "emitter", "3" = "collector" }
@@ -73,17 +90,17 @@ roles = { "1" = "base", "2" = "emitter", "3" = "collector" }
 [[pin_rules]]
 id = "bjt_sot23_b1_e2_c3_pnp"
 description = "SOT-23 BJT (PNP): pad1=base, pad2=emitter, pad3=collector"
-footprint_re = "SOT-23(?:$|[^-0-9])"
+footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
 kind = "bjt_pnp"
 pad_count = 3
 roles = { "1" = "base", "2" = "emitter", "3" = "collector" }
 
-# ── SOT-23 MOSFET ─────────────────────────────────────────────────────────────
+# ── SOT-23 / SOT-323 / SC-70 MOSFET ───────────────────────────────────────────
 # KiCad SOT-23 MOSFET (Q_NMOS_GSD / Q_PMOS_GSD): 1=gate, 2=source, 3=drain.
 [[pin_rules]]
 id = "nmos_sot23_g1_s2_d3"
 description = "SOT-23 N-MOSFET: pad1=gate, pad2=source, pad3=drain"
-footprint_re = "SOT-23(?:$|[^-0-9])"
+footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
 kind = "nmos"
 pad_count = 3
 roles = { "1" = "gate", "2" = "source", "3" = "drain" }
@@ -91,7 +108,7 @@ roles = { "1" = "gate", "2" = "source", "3" = "drain" }
 [[pin_rules]]
 id = "pmos_sot23_g1_s2_d3"
 description = "SOT-23 P-MOSFET: pad1=gate, pad2=source, pad3=drain"
-footprint_re = "SOT-23(?:$|[^-0-9])"
+footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
 kind = "pmos"
 pad_count = 3
 roles = { "1" = "gate", "2" = "source", "3" = "drain" }
