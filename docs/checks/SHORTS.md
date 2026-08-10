@@ -150,7 +150,7 @@ face, swapping its side-specific copper 1↔16.
 | SMD pad (`<smd>` in a package) | Rect polygon (+ corner radius) | single layer (1 by default, flipped by mirror); `roundness` (0..100 %) carried as a corner-radius inflation on an inset rect, like KiCad roundrect; `rot` honoured |
 | Board rectangle (`<rectangle>` on copper) | Rect polygon | rotated by `rot` |
 | Board circle (`<circle>` on copper) | Annulus (covering capsule ring), or a solid disc when `width` is 0 | the stroke band is the copper; the interior is bare board (Eagle fills only zero-width circles) |
-| Signal polygon / pour (`<polygon>`) | settings parsed; a same-rank overlap with another signal's pour is shorted only when the smaller `isolate` is below 1 um; fill **excluded from the pour-to-copper test** | see the honesty caveat below |
+| Signal polygon / pour (`<polygon>`) | settings parsed; a same-rank overlap with another signal's pour is shorted, at a measured 4-of-6 accuracy; fill **excluded from the pour-to-copper test** | see the honesty caveat below |
 
 Package copper is placed with the full element transform: position rotated by the
 element's `rot` (CCW, y-up). A mirrored (`MR`) element negates local X and uses
@@ -196,29 +196,28 @@ a pour finding's `Item::owner` field, which the report does not render (see belo
 without ring overlap are not distance-checked either, since the fill extent
 near the boundary depends on those settings.
 
-One pour-to-pour construct **is** checked. Two overlapping same-rank pours of
-different signals get no arbitration from their rank, and the file names no
-yielder either, but whichever pour gives way is carved back by its own `isolate`,
-so an outline overlap on its own is not a short. What is reported is an overlap where the smaller `isolate` is below one
-micrometre, meaning nothing in the file asks for a gap at all. The pour settings
-ride along on the finding's `Item::owner` field, which `drc_probe` prints and the
-tests assert. No user surface shows it. `--drc` renders through
-`DrcStructured::render` (nets, layer, gap, location), `--drc --plain` through
-`plain_drc_structured` (nets, layer, location), and `--drc --json` serialises
-`DrcShort`, which has no owner field; the `isolate` string appears in none of the
-three, so a reader of the report does not see what triggered the finding. That is a gap, and it bites hardest on the false positive below. This was narrowed against the emonTx
-V3.4.5's own fabrication output, which shows the same outline overlap
-resolving to separate copper on the layer where both pours hold `isolate="0.3048"`
-and to one body on the layer where one holds `0.00030625`
+One pour-to-pour construct **is** checked: two overlapping same-rank pours of
+different signals get no arbitration from their rank, and the overlap is reported.
+
+That rule over-reports, and by how much is measured rather than estimated. The
+emonTx revision family ships copper gerbers beside its `.brd`, so its six
+layer-instances can be scored by asking whether any filled region of a layer
+contains vias of both nets: the rule is right about four, flagging the three layers
+where the nets really do share copper and over-reporting two top layers where the
+outlines overlap and nothing bridges them
 ([`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md)).
-The costs are stated with it, and one of them is a measured false positive rather
-than a risk: a near-zero `isolate` is necessary but not sufficient for the fills
-to meet, and the same upstream's V3.4.0 revision has both top-layer pours at the
-near-zero value with their fills apart, which this check flags anyway. An overlap
-at or above the threshold is likewise silent even if a CAM run would merge it, and
-a sub-rule non-zero isolate is not reported as a clearance finding either. All
-three need Eagle's fill reconstructed, which is not implemented
+Narrowing it by `isolate` was implemented and reverted: `isolate` is necessary but
+not sufficient for two pours to merge, so the narrowing fixed one over-report and
+silenced a layer where a trace genuinely joins the nets. Removing the over-reports
+needs Eagle's fill reconstructed, which is not implemented
 ([`../about/LIMITATIONS.md`](../about/LIMITATIONS.md)).
+
+The pour settings ride along on the finding's `Item::owner` field, which
+`drc_probe` prints and the tests assert, but no user surface shows it: `--drc`
+renders through `DrcStructured::render` (nets, layer, gap, location), `--drc
+--plain` through `plain_drc_structured` (nets, layer, location), and `--drc --json`
+serialises `DrcShort`, which has no owner field. So a reader of the report sees
+neither what the overlap was made of nor that this class over-reports.
 
 ### Deliberate ties exempted locally
 
@@ -436,8 +435,8 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
   pour-to-copper pairs are not checked (the fidelity caveat above explains
   why a fill Eagle derives from the stored settings would not violate, and
   why the outline must not stand in for it); overlapping same-rank pours of
-  different signals are reported as shorts only when the smaller `isolate`
-  is below one micrometre, so nothing in the file asks for a gap. Wires, vias and
+  different signals are reported as shorts, which over-reports at a measured
+  rate (4 of 6 scored instances right). Wires, vias and
   each other are fully covered. KiCad pours, which do carry the computed
   fill, are covered.
 - **Eagle multilayer.** The Eagle reader spans through-hole pads and vias

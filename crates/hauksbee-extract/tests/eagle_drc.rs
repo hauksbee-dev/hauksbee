@@ -1107,12 +1107,11 @@ fn explicit_cross_class_matrix_entry_is_applied() {
 // Copper pours. The .brd stores the requested outline plus its pour settings;
 // the computed fill (with isolate antipads) is derived data. Foreign copper
 // inside an outline is NOT a short (Eagle carves around it). Two overlapping
-// same-rank pours of different signals get no rank arbitration, but the
-// pour that gives way is still carved back by its own `isolate`, so the overlap
-// is reported only when that isolate is under a micrometre. That is necessary but
-// not sufficient for the fills to actually meet, which is measured and recorded
-// in `docs/evidence/KNOWN_FAULTS_VALIDATION.md` and
-// `docs/about/LIMITATIONS.md`.
+// same-rank pours of different signals get no rank arbitration and ARE reported.
+// That rule over-reports, at a rate measured against real fabrication output in
+// `docs/evidence/KNOWN_FAULTS_VALIDATION.md` (right about four of six
+// layer-instances); narrowing it by `isolate` was tried and reverted there,
+// because it fixed one over-report and created a worse miss.
 // ---------------------------------------------------------------------------
 
 fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
@@ -1127,17 +1126,11 @@ fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
 }
 
 #[test]
-fn overlapping_same_rank_pours_are_a_short_when_a_pour_asks_for_no_gap() {
-    // The B pour carries no `isolate` attribute, which is Eagle's zero, and the
-    // pour-to-pour pass treats that as asking for no gap. Note what that rests
-    // on: the emonTx measurement was taken at 0.00030625, not at 0, so carrying
-    // it down to an absent attribute is an extrapolation, and it is the more
-    // suspicious direction because absent `isolate` means "rules only" against a
-    // foreign TRACK or PAD (`foreign_copper_inside_a_pour_outline_stays_silent`
-    // below is that case). It is kept because reporting a contact that is not
-    // there costs a user less than missing one that is, and because no board in
-    // the corpus has the construct at all
-    // (`docs/about/LIMITATIONS.md` records both halves).
+fn overlapping_same_rank_pours_of_different_nets_are_a_short() {
+    // Pour settings ride along on the finding so a reader can see what the
+    // overlap was made of. They do not gate it: whether two overlapping pours
+    // end up in contact is a property of the fill, which the `.brd` does not
+    // carry (see `docs/about/LIMITATIONS.md`).
     let signals = format!(
         r#"
 <signal name="A">{}</signal>
@@ -1164,63 +1157,6 @@ fn overlapping_same_rank_pours_are_a_short_when_a_pour_asks_for_no_gap() {
             && f.item_a.owner.contains("orphans on"),
         "pour settings are disclosed on the finding, got {:?}",
         f.item_a.owner
-    );
-}
-
-#[test]
-fn same_rank_pour_overlap_stays_silent_when_both_pours_keep_an_isolate() {
-    // The two-sided pair with the test below, and the reason this whole check
-    // keys on `isolate` rather than on the outline overlap. The emonTx V3.4.5
-    // overlaps its GND and AGND pour outlines in an identical band on both
-    // copper layers; the fabrication gerbers shipped beside the .brd show the
-    // top-layer pair (both at isolate 0.3048) as two separate filled regions
-    // and the bottom-layer pair (one at 0.00030625) as one. Reading the
-    // outline overlap as copper flagged the top layer too, and the board's own
-    // CAM output says there is nothing there.
-    let signals = format!(
-        r#"
-<signal name="GND">{}</signal>
-<signal name="AGND">{}</signal>
-"#,
-        pour(r#" rank="1" isolate="0.3048""#, 0.0, 0.0, 10.0, 10.0),
-        pour(r#" rank="1" isolate="0.3048""#, 5.0, 5.0, 15.0, 15.0),
-    );
-    let report = drc("", "", &signals);
-    assert!(
-        report.findings.is_empty(),
-        "each pour holds 0.3048 mm off the other, so the fills do not meet: {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone(), f.gap_mm))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn same_rank_pour_overlap_is_a_short_when_one_isolate_is_zeroed() {
-    // The other side: the same overlap, with one pour's isolate driven to the
-    // emonTx V3.4.5's own 0.00030625 mm. Three tenths of a micrometre of
-    // separation is no separation, and on that board this is the pour pair the
-    // gerbers show merged into a single filled region. A genuine join of two
-    // unrelated nets must still be reported.
-    let signals = format!(
-        r#"
-<signal name="GND">{}</signal>
-<signal name="AGND">{}</signal>
-"#,
-        pour(r#" rank="1" isolate="0.3048""#, 0.0, 0.0, 10.0, 10.0),
-        pour(r#" rank="1" isolate="0.00030625""#, 5.0, 5.0, 15.0, 15.0),
-    );
-    let report = drc("", "", &signals);
-    assert_short(&report, "AGND", "GND");
-    let f = report.shorts().next().unwrap();
-    assert!(
-        f.item_a.owner.contains("isolate 0.00030625")
-            || f.item_b.owner.contains("isolate 0.00030625"),
-        "the zeroed isolate that made the join is named on the finding, got {:?} / {:?}",
-        f.item_a.owner,
-        f.item_b.owner
     );
 }
 
