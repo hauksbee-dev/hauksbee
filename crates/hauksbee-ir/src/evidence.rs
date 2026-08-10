@@ -1741,6 +1741,15 @@ pub enum ArtifactKind {
     KiCadSchematic,
     KiCadNetlist,
     EagleBoard,
+    // An Eagle `.sch` (XML, Eagle 6+), read as a companion to a `.brd` for the
+    // net ties it declares. Distinct from `KiCadSchematic` because it is not a
+    // netlist source: nothing binds or simulates from it.
+    //
+    // Deliberately a plain comment, not a doc comment: schemars lifts a doc
+    // comment on one unit variant into a `oneOf` branch of its own, which
+    // restructures the PUBLISHED enum in `hauksbee-run-report.schema.json` for
+    // no gain. Every other variant here is undocumented for the same reason.
+    EagleSchematic,
     AltiumPcbDoc,
     GerberArchive,
     OdbPlusPlus,

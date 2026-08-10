@@ -504,6 +504,22 @@ pub struct Item {
     pub owner: String,
 }
 
+/// A schematic's declaration that the two nets of a finding are joined on
+/// purpose, attached to the finding it qualifies.
+///
+/// This never removes a finding. The copper contact was measured and stays
+/// measured; this records that the design says the contact is intended, which is
+/// the difference between a defect and a star ground. See
+/// [`DrcReport::qualify_with_declared_ties`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclaredTie {
+    /// The declaration in the schematic's own vocabulary, naming the symbols and
+    /// the net, e.g. `AGND7 wired to SUPPLY6 in net GND`.
+    pub declaration: String,
+    /// The companion input it was read from, as the user named it.
+    pub source: String,
+}
+
 /// One short / clearance finding between two different nets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrcFinding {
@@ -530,6 +546,10 @@ pub struct DrcFinding {
     /// The two primitives that came closest.
     pub item_a: Item,
     pub item_b: Item,
+    /// Set when a companion schematic declares these two nets deliberately
+    /// tied. The geometry above is unchanged; this qualifies what it means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_tie: Option<DeclaredTie>,
 }
 
 /// The full DRC report for a board.
@@ -566,6 +586,26 @@ pub struct DrcReport {
     /// would assert "nothing was suppressed" about a run that never measured it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_pad_overlaps_suppressed: Option<usize>,
+    /// Set on a format whose deliberate net ties can be DECLARED in a companion
+    /// schematic this run was not handed. Names the unlocking upload, so a short
+    /// that stays serious says what input would settle it rather than leaving the
+    /// reader to guess. Cleared by
+    /// [`DrcReport::qualify_with_declared_ties`], which replaces it with
+    /// [`Self::declared_tie_source`].
+    ///
+    /// Eagle only, and for a concrete reason: an Eagle `.brd` carries no net-tie
+    /// field at all, so a `.brd`-only run genuinely cannot tell a star ground
+    /// from a solder bridge. A `.kicad_pcb` carries `net_tie_pad_groups`, so its
+    /// ties are already declared in the file the DRC was given and no companion
+    /// is missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tie_declaration_hint: Option<String>,
+    /// Set once a companion schematic has been read: which file, and how many
+    /// declarations it carried. Present even when it qualified nothing, because
+    /// "the schematic declares no tie here" is a real result and differs from
+    /// never having looked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_tie_source: Option<String>,
 }
 
 /// The newest `.kicad_pcb` format version hauksbee's copper extraction is
@@ -622,6 +662,80 @@ impl DrcReport {
 
     pub fn is_clean(&self) -> bool {
         self.short_count() == 0
+    }
+
+    /// Shorts between two nets NO schematic declares tied: the ones that are
+    /// still claims of a defect.
+    ///
+    /// This is the gating set. [`Self::shorts`] stays the full set, because a
+    /// declared tie is still copper joining two differently named nets and the
+    /// report must keep showing it; what changes is that it no longer fails a
+    /// build. A run with no schematic qualifies nothing, so the two are equal and
+    /// behaviour is unchanged.
+    pub fn undeclared_shorts(&self) -> impl Iterator<Item = &DrcFinding> {
+        self.shorts().filter(|f| f.declared_tie.is_none())
+    }
+
+    pub fn undeclared_short_count(&self) -> usize {
+        self.undeclared_shorts().count()
+    }
+
+    /// Shorts a companion schematic accounted for, in report order.
+    pub fn declared_tie_shorts(&self) -> impl Iterator<Item = &DrcFinding> {
+        self.shorts().filter(|f| f.declared_tie.is_some())
+    }
+
+    /// Attach a companion schematic's declarations to the shorts they cover, and
+    /// record the schematic as this report's tie source.
+    ///
+    /// RECLASSIFY, NOT DELETE. Every finding survives with its layer, location
+    /// and measured gap intact; a covered one gains a [`DeclaredTie`] that the
+    /// renderers turn into an informational note. Deleting it would hide that
+    /// two differently named nets share copper, which is a fact about the board
+    /// the user is entitled to see whether or not it was intended.
+    ///
+    /// Matching is by net-name pair only. That is what the schematic declares
+    /// and all it declares: a supply symbol says "these two nets meet", not
+    /// "they meet at this coordinate". Requiring the declaration to also predict
+    /// a location would reject every real star ground, and inventing a location
+    /// from it would be a claim the schematic does not make.
+    ///
+    /// Clearance findings are untouched: they are near-misses, not contacts, so
+    /// there is nothing about them a tie could excuse.
+    ///
+    /// Returns how many shorts were qualified.
+    pub fn qualify_with_declared_ties(
+        &mut self,
+        source: &str,
+        ties: &[crate::eagle_sch::DeclaredNetTie],
+    ) -> usize {
+        let mut qualified = 0;
+        for finding in &mut self.findings {
+            if finding.kind != ViolationKind::Short {
+                continue;
+            }
+            let Some(tie) = ties
+                .iter()
+                .find(|t| t.covers(&finding.net_a_name, &finding.net_b_name))
+            else {
+                continue;
+            };
+            finding.declared_tie = Some(DeclaredTie {
+                declaration: tie.describe(),
+                source: source.to_string(),
+            });
+            qualified += 1;
+        }
+        self.declared_tie_source = Some(format!(
+            "{source} ({} declared net tie{}, {qualified} copper contact{} qualified)",
+            ties.len(),
+            if ties.len() == 1 { "" } else { "s" },
+            if qualified == 1 { "" } else { "s" },
+        ));
+        // The schematic was supplied, so the "you have not supplied it" hint is
+        // no longer true and must not survive alongside the source.
+        self.tie_declaration_hint = None;
+        qualified
     }
 
     /// Disclosure for the Zone-versus-Pad overlap class, when this run
@@ -2522,6 +2636,8 @@ fn sweep_buckets(
         primitive_count: buckets.by_layer.values().map(Vec::len).sum(),
         version_warning: None,
         zone_pad_overlaps_suppressed: Some(0),
+        tie_declaration_hint: None,
+        declared_tie_source: None,
     };
 
     // De-dup findings on the same net pair + layer + rounded location, so a
@@ -2575,6 +2691,7 @@ fn sweep_buckets(
             required_clearance_mm,
             item_a,
             item_b,
+            declared_tie: None,
         });
     };
 
@@ -4107,6 +4224,7 @@ pub mod eagle_drc {
                         .effective_clearance(&name_of(a.net), &name_of(b.net)),
                     item_a,
                     item_b,
+                    declared_tie: None,
                 });
             }
         }
@@ -4117,6 +4235,22 @@ pub mod eagle_drc {
                 .then(a.net_b.cmp(&b.net_b))
                 .then(a.layer.cmp(&b.layer))
         });
+        // An Eagle `.brd` has no net-tie field, so on this format alone a short
+        // between two named nets cannot be told from a deliberate tie without the
+        // schematic. Name that upload on every short this path reports; the
+        // caller clears the hint by supplying the `.sch`
+        // (`DrcReport::qualify_with_declared_ties`). Set only when there is a
+        // short to qualify: a clean board has no claim needing an input.
+        if report.short_count() > 0 {
+            report.tie_declaration_hint = Some(
+                "an Eagle .brd records no net ties, so a deliberate tie (a star ground drawn as \
+                 one net's supply symbol placed on another's) is indistinguishable here from a \
+                 defect. Supply the board's Eagle .sch alongside it, then re-run: a contact the \
+                 schematic declares is reported as a note naming the symbols instead of a serious \
+                 short."
+                    .to_string(),
+            );
+        }
         report
     }
 

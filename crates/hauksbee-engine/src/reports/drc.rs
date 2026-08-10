@@ -31,6 +31,7 @@ pub fn emit(
     strict: bool,
     verbose: bool,
     inputs: &[JsonInputEvidence],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
     let mut report = if altium_present {
         ExtractedBoard::altium_drc(raw)?
@@ -43,6 +44,9 @@ pub fn emit(
             kicad_pro_clearance_rules(board_path, board),
         )?
     };
+    // The companion schematic's declarations, applied before waivers and before
+    // anything reads the findings. Reclassifies, never deletes.
+    let schematic_contribution = schematic_ties.map(|ties| ties.apply(&mut report));
     // Waivers, same semantics as `--check`: a short the board's owner overruled
     // for a stated reason must come out of THIS gate too, or the same board is
     // green under `--check --strict` and red under `--drc --strict`. The key
@@ -74,6 +78,15 @@ pub fn emit(
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
     .with_input_artifact(board_path, raw, input_kind)?;
+    // The schematic contributed to the verdict, so it enters the inventory with
+    // its own hash and what it did. A reader who sees a contact reported as a
+    // declared tie must be able to find the file that declared it.
+    let evidence = match (schematic_ties, &schematic_contribution) {
+        (Some(ties), Some(contribution)) => {
+            evidence.with_schematic_artifact(&ties.path, &ties.raw, contribution.clone())?
+        }
+        _ => evidence,
+    };
     let structured = DrcStructured::from_report(&report);
     let mut maps = evidence.maps_for_drc(&structured)?;
     let coverage = evidence.check_coverage_map("drc", "DRC input coverage")?;
