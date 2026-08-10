@@ -374,7 +374,12 @@ fn seg_contour_dist(a: (f64, f64), b: (f64, f64), pts: &[(f64, f64)]) -> f64 {
 /// boundary. A query is then an O(1) grid lookup, falling back to the exact
 /// even-odd test only for the few points that land in a boundary cell.
 pub struct PolyGrid<'a> {
-    pts: &'a [(f64, f64)],
+    /// The contours the grid classifies. Even-odd across ALL of them, so one
+    /// grid describes a plain polygon (one contour) and a pour with hundreds of
+    /// voids cut out of it alike. A negative-drawn plane is exactly the second
+    /// shape, and it is board-sized: leaving multi-contour pours to the exact
+    /// test made every primitive on the layer pay the pour's whole vertex count.
+    contours: &'a [Vec<(f64, f64)>],
     minx: f64,
     miny: f64,
     inv_cell: f64,
@@ -385,14 +390,15 @@ pub struct PolyGrid<'a> {
 }
 
 impl<'a> PolyGrid<'a> {
-    /// Build a grid for `pts`. `target_cells` is the rough number of cells along
-    /// the longer axis (more = finer = fewer exact fallbacks, more build cost).
-    pub fn new(pts: &'a [(f64, f64)], target_cells: usize) -> Self {
+    /// Build a grid for `contours`. `target_cells` is the rough number of cells
+    /// along the longer axis (more = finer = fewer exact fallbacks, more build
+    /// cost).
+    pub fn new(contours: &'a [Vec<(f64, f64)>], target_cells: usize) -> Self {
         let mut minx = f64::INFINITY;
         let mut miny = f64::INFINITY;
         let mut maxx = f64::NEG_INFINITY;
         let mut maxy = f64::NEG_INFINITY;
-        for &(x, y) in pts {
+        for &(x, y) in contours.iter().flatten() {
             minx = minx.min(x);
             miny = miny.min(y);
             maxx = maxx.max(x);
@@ -404,11 +410,14 @@ impl<'a> PolyGrid<'a> {
         let nx = (((maxx - minx) * inv_cell).ceil() as usize + 1).max(1);
         let ny = (((maxy - miny) * inv_cell).ceil() as usize + 1).max(1);
 
-        // Mark cells the polygon boundary passes through as boundary (2): a
+        // Mark cells any contour's boundary passes through as boundary (2): a
         // query landing here falls back to the exact even-odd test.
         let mut cells = vec![0u8; nx * ny];
-        let n = pts.len();
-        if n >= 2 {
+        for pts in contours {
+            let n = pts.len();
+            if n < 2 {
+                continue;
+            }
             let mut j = n - 1;
             for i in 0..n {
                 Self::stamp_edge(&mut cells, nx, ny, minx, miny, inv_cell, pts[j], pts[i]);
@@ -417,25 +426,32 @@ impl<'a> PolyGrid<'a> {
         }
         // Classify the non-boundary cells exactly, by *scanline parity* rather
         // than by per-cell even-odd (which would be O(cells x vertices)). For
-        // each grid row we intersect the polygon edges with the row's centre
+        // each grid row we intersect every contour's edges with the row's centre
         // line once (O(vertices)), sort the crossing x's, and fill the spans
-        // between consecutive crossings as inside. This is exact (no flood-fill
-        // leakage) and costs O(rows x vertices) total. Cells already marked
-        // boundary keep their exact-test flag.
-        if n >= 3 {
+        // between consecutive crossings as inside. Crossings of ALL contours go
+        // into one sorted list, which is what makes the parity even-odd over the
+        // whole shape: a hole's two crossings close the span its outer opened.
+        // This is exact (no flood-fill leakage) and costs O(rows x vertices).
+        // Cells already marked boundary keep their exact-test flag.
+        if contours.iter().any(|c| c.len() >= 3) {
             let mut xs: Vec<f64> = Vec::new();
             for gy in 0..ny {
                 let yc = miny + (gy as f64 + 0.5) / inv_cell;
                 xs.clear();
-                let mut j = n - 1;
-                for i in 0..n {
-                    let (xi, yi) = pts[i];
-                    let (xj, yj) = pts[j];
-                    if (yi > yc) != (yj > yc) {
-                        let x = (xj - xi) * (yc - yi) / (yj - yi) + xi;
-                        xs.push(x);
+                for pts in contours {
+                    let n = pts.len();
+                    if n < 3 {
+                        continue;
                     }
-                    j = i;
+                    let mut j = n - 1;
+                    for i in 0..n {
+                        let (xi, yi) = pts[i];
+                        let (xj, yj) = pts[j];
+                        if (yi > yc) != (yj > yc) {
+                            xs.push((xj - xi) * (yc - yi) / (yj - yi) + xi);
+                        }
+                        j = i;
+                    }
                 }
                 xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 // Inside the spans [xs[0],xs[1]], [xs[2],xs[3]], ...
@@ -457,7 +473,7 @@ impl<'a> PolyGrid<'a> {
         }
 
         PolyGrid {
-            pts,
+            contours,
             minx,
             miny,
             inv_cell,
@@ -492,7 +508,7 @@ impl<'a> PolyGrid<'a> {
         }
     }
 
-    /// Is `(px, py)` inside the polygon? O(1) grid lookup, exact test only on a
+    /// Is `(px, py)` inside the shape? O(1) grid lookup, exact test only on a
     /// boundary cell.
     pub fn contains(&self, px: f64, py: f64) -> bool {
         let gx = ((px - self.minx) * self.inv_cell) as isize;
@@ -503,8 +519,33 @@ impl<'a> PolyGrid<'a> {
         match self.cells[gy as usize * self.nx + gx as usize] {
             0 => false,
             1 => true,
-            _ => point_in_polygon(px, py, self.pts),
+            _ => point_in_contours(px, py, self.contours),
         }
+    }
+
+    /// Could any contour's boundary pass through this bounding box?
+    ///
+    /// A boundary edge that cuts a primitive's copper necessarily crosses a cell
+    /// the primitive's bounds cover, and every cell an edge crosses is stamped
+    /// boundary, so `false` is a sound refusal: nothing there to penetrate. The
+    /// point is to keep the exact poly-poly distance off the hot path, which on a
+    /// board-sized pour every primitive's bounds would otherwise reach.
+    pub fn near_boundary(&self, b: [f64; 4]) -> bool {
+        let cx0 = (((b[0] - self.minx) * self.inv_cell).floor() as isize).max(0);
+        let cy0 = (((b[1] - self.miny) * self.inv_cell).floor() as isize).max(0);
+        let cx1 = (((b[2] - self.minx) * self.inv_cell).ceil() as isize).min(self.nx as isize - 1);
+        let cy1 = (((b[3] - self.miny) * self.inv_cell).ceil() as isize).min(self.ny as isize - 1);
+        if cx1 < cx0 || cy1 < cy0 {
+            return false;
+        }
+        for gy in cy0..=cy1 {
+            for gx in cx0..=cx1 {
+                if self.cells[gy as usize * self.nx + gx as usize] == 2 {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -523,7 +564,8 @@ mod tests {
             (2.0, 4.0),
             (0.0, 4.0),
         ];
-        let grid = PolyGrid::new(&poly, 32);
+        let ring = vec![poly.clone()];
+        let grid = PolyGrid::new(&ring, 32);
         for i in 0..50 {
             for j in 0..50 {
                 let x = i as f64 * 0.1 - 0.5;
