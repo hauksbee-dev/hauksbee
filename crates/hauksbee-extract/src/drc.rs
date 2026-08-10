@@ -4052,17 +4052,20 @@ pub mod eagle_drc {
         // The emonTx V3.4.5 (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`) is the
         // measurement behind that: GND and AGND carry same-rank pours whose
         // outlines overlap in the same 0.349 mm band on BOTH copper layers at
-        // the corner where the finding sits (the B.Cu AGND edge then slopes
-        // away, narrowing the band to 0.222 mm at the far end),
-        // and the fabrication gerbers the upstream ships beside the `.brd`
-        // disagree between the two. On the top layer, where AGND pours with
-        // `isolate="0.3048"`, the two pours are separate copper bodies (a
-        // flood-fill of `copper_top.gbr` from inside the AGND pour never
-        // reaches the GND pour). On the bottom, where the same AGND net pours
-        // with `isolate="0.00030625"`, they are one contiguous body. Same file,
-        // same nets, same overlap, same rank: `isolate` is the whole
-        // difference, so it, not the outline overlap, is what this test keys
-        // on.
+        // the corner where the finding sits, and the fabrication gerbers the
+        // upstream ships beside the `.brd` disagree between the two. On the top
+        // layer, where AGND pours with `isolate="0.3048"`, the two fills are
+        // separate copper bodies 8.236 mm apart at their closest. On the bottom,
+        // where the same net pours with `isolate="0.00030625"`, they are one
+        // contiguous body. So the outline overlap plainly does not decide it.
+        //
+        // Keying on `isolate` is an inference on top of that, and a narrow one:
+        // it is the only pour-fill setting in the file that can grant a pour
+        // permission to keep no gap, and it sits on exactly the pour that abuts.
+        // The 8.236 mm on the top layer is crowding, not a 0.3048 mm antipad, so
+        // that layer shows pours with a working isolate ending up apart without
+        // showing the isolate is what put them there. The evidence doc keeps the
+        // measured and inferred halves separate.
         for (i, a) in pours.iter().enumerate() {
             for b in pours.iter().skip(i + 1) {
                 if a.layer != b.layer
