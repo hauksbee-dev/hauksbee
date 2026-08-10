@@ -55,6 +55,16 @@
 #                      upstream that keeps its design one level down.
 #   unpack             optional: an archive inside the fetched tree that IS the
 #                      board. Its contents replace everything else.
+#   firmware           optional: a firmware image in the fetched tree to drop
+#                      alongside this board, so the release gate exercises the
+#                      firmware-hardware interaction instead of static analysis
+#                      alone. Relative to the board's directory, like `expect`.
+#   firmware_expect    optional: "cosim" (default), the report must co-simulate
+#                      the image, or "load-only", this build has no target for
+#                      that MCU so the image must be identified and the reason
+#                      named. Only meaningful with `firmware`. Both are read by
+#                      qc/unseen_boards.py, not by the fetch; see
+#                      docs/ci/RELEASE_BOARD_GATES.md.
 #   license_confirmed  optional: false keeps the board out of the default fetch.
 #   license_note       optional: how the licence was established, when the SPDX
 #                      id alone does not say.
@@ -1043,7 +1053,12 @@ url = "https://github.com/clockworkpi/uConsole"
 rev = "53a05efca806ca024aab4fbfd28a680688c2541c"
 license = "unconfirmed"
 license_confirmed = false
-axes = ["gerber-only", "handheld", "no-mcu", "medium"]
+# NOT `no-mcu`, despite the compute being a socketed CM4 module. That axis is the
+# single switch that exempts a package from the release gate's reconstruction
+# floor, and it exists for passive low-net boards. This is a full handheld
+# mainboard (display, audio, USB, keyboard, power), so a one-net report on it is
+# a collapse and the floor should say so.
+axes = ["gerber-only", "handheld", "medium"]
 expect = ["PCB/CPI_3.14_Mainboard_V5_Gerber.7z"]
 
 [[board]]
@@ -1053,6 +1068,8 @@ url = "https://github.com/clockworkpi/uConsole"
 rev = "53a05efca806ca024aab4fbfd28a680688c2541c"
 license = "unconfirmed"
 license_confirmed = false
+# `no-mcu` is right here: the adapter is a passive interposer between two
+# connectors, which is the case the exemption was written for.
 axes = ["gerber-only", "handheld", "no-mcu", "small"]
 expect = ["PCB/RPI CM4 to CPI v3.14 Adapter.zip"]
 
