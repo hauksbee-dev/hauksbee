@@ -437,11 +437,19 @@ impl<'a> PolyGrid<'a> {
         // for every row is O(rows x vertices), and rows scale with the vertex
         // count, so a plane with 6084 annular antipads (each a 64-gon plus a 32-gon
         // rim, ~600k vertices over 2048 rows) spent 3.2 s here. Bucketing makes it
-        // O(vertices + rows spanned + cells), and an antipad spans two or three
-        // rows.
+        // O(vertices + rows swept + cells): each EDGE of an antipad's outline spans
+        // two or three rows, which is the quantity the cost sums over.
         if contours.iter().any(|c| c.len() >= 3) {
             let row_of = |y: f64| -> isize { ((y - miny) * inv_cell).floor() as isize };
-            let mut rows: Vec<Vec<(f64, f64, f64, f64)>> = vec![Vec::new(); ny];
+            // One copy of each non-horizontal edge, plus the row it becomes active
+            // in and the row it expires after: an active-edge sweep. Pushing a copy
+            // of an edge into every row it spans is O(vertices x rows) MEMORY, and
+            // rows scale with the vertex count, so a comb-shaped pour whose fingers
+            // each span the board height (2048 fingers, 8192 vertices) took 396 MB
+            // here. An edge is now stored once.
+            let mut edges: Vec<(f64, f64, f64, f64)> = Vec::new();
+            let mut expires: Vec<usize> = Vec::new();
+            let mut starts: Vec<Vec<usize>> = vec![Vec::new(); ny];
             for pts in contours {
                 let n = pts.len();
                 if n < 3 {
@@ -457,16 +465,23 @@ impl<'a> PolyGrid<'a> {
                     let (lo, hi) = if a.1 < b.1 { (a.1, b.1) } else { (b.1, a.1) };
                     let r0 = row_of(lo).clamp(0, ny as isize - 1) as usize;
                     let r1 = row_of(hi).clamp(0, ny as isize - 1) as usize;
-                    for r in r0..=r1 {
-                        rows[r].push((a.0, a.1, b.0, b.1));
-                    }
+                    starts[r0].push(edges.len());
+                    edges.push((a.0, a.1, b.0, b.1));
+                    expires.push(r1);
                 }
             }
+            let mut active: Vec<usize> = Vec::new();
             let mut xs: Vec<f64> = Vec::new();
-            for (gy, edges) in rows.iter().enumerate() {
+            for gy in 0..ny {
+                active.extend(starts[gy].iter().copied());
+                active.retain(|&e| expires[e] >= gy);
+                if active.is_empty() {
+                    continue;
+                }
                 let yc = miny + (gy as f64 + 0.5) / inv_cell;
                 xs.clear();
-                for &(ax, ay, bx, by) in edges {
+                for &e in &active {
+                    let (ax, ay, bx, by) = edges[e];
                     if (ay > yc) != (by > yc) {
                         xs.push((bx - ax) * (yc - ay) / (by - ay) + ax);
                     }
