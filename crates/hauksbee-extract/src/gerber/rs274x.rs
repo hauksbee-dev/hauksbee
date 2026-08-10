@@ -16,14 +16,13 @@
 //!     flattened to capsules), D02 move, D03 flash.
 //!   - **Regions** (G36/G37): the accumulated contour becomes a filled polygon
 //!     (a pour / copper fill).
-//!   - **Polarity** (LPD/LPC): clear (LPC) primitives erase copper. For
-//!     *connectivity* we treat the board as additive: a thermal-relief or
-//!     antipad clearing a sliver inside a pour does not disconnect the net the
-//!     way it would change a rendered image. We therefore skip clear primitives
-//!     for connectivity (documented limitation: a deliberately split pour drawn
-//!     as one dark fill minus a clear gap is read as still-connected). KiCad's
-//!     fills are emitted as separate dark regions, so this is rarely wrong in
-//!     practice.
+//!   - **Polarity** (LPD/LPC): clear (LPC) geometry erases copper, and is CUT
+//!     rather than skipped. A film drawn negatively (Altium's default for a
+//!     plane) is one board-sized dark region plus hundreds of clear antipads and
+//!     thermal gaps, so a reader that discards the clears sees a solid sheet and
+//!     merges every net on the board. Each void becomes a hole contour on the
+//!     pours it lies inside; see [`apply_clears`] for the exact rule and the
+//!     invariant that keeps every imprecision on the over-connected side.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
@@ -317,10 +316,12 @@ fn apply_clears(out: &mut [CopperPrim], clears: &[Clear]) {
             let Shape::MultiPolygon { contours } = shape else {
                 continue;
             };
+            let mut indices = Vec::with_capacity(clear.contours.len());
             for c in &clear.contours {
-                applied[slot].insert(contours.len(), contour_bounds(c));
+                indices.push(contours.len());
                 contours.push(c.clone());
             }
+            applied[slot].insert(indices, cb);
         }
     }
 }
@@ -340,18 +341,27 @@ fn contours_enclose(outer: &[Vec<(f64, f64)>], inner: &[Vec<(f64, f64)>]) -> boo
     })
 }
 
-/// A uniform grid over one pour's bounds holding the voids already cut from it,
-/// keyed by contour index into the pour's contour list.
+/// A uniform grid over one pour's bounds holding the voids already cut from it.
 ///
-/// A void can only be swallowed by an earlier void that overlaps it, so the
-/// already-void probe only has to look in the cells the candidate covers. Cells
-/// hold indices in insertion order and are visited in a fixed cell order, so the
-/// answer does not depend on anything but the film.
+/// The unit of storage is a whole void, not a contour: a void with a hole (an
+/// annular clear flash) removes copper only under its RING, so asking whether a
+/// candidate sits inside its outer boundary is the wrong question. Indexing
+/// contours separately answered yes for a later void at the ring's centre, which
+/// the ring had deliberately left standing, and skipped the cut that should have
+/// removed it, keeping the pad on the pour.
+///
+/// A void can only be swallowed by an earlier void whose bounds contain it, and
+/// such a void necessarily covers the candidate's own min-corner cell, so one
+/// bucket holds every candidate. Buckets hold entries in insertion order, so the
+/// answer depends on nothing but the film.
 struct VoidIndex {
     origin: (f64, f64),
     cell: (f64, f64),
-    /// `RES * RES` buckets of `(contour index, contour bounds)`.
+    /// `RES * RES` buckets of `(void id, void bounds)`.
     cells: Vec<Vec<(usize, [f64; 4])>>,
+    /// Per void id, the contour indices it occupies in the pour's contour list.
+    /// The first is its outer boundary, the rest its holes.
+    units: Vec<Vec<usize>>,
 }
 
 impl VoidIndex {
@@ -364,6 +374,7 @@ impl VoidIndex {
             origin: (bounds[0], bounds[1]),
             cell: (w / Self::RES as f64, h / Self::RES as f64),
             cells: Vec::new(),
+            units: Vec::new(),
         }
     }
 
@@ -379,14 +390,18 @@ impl VoidIndex {
         )
     }
 
-    fn insert(&mut self, idx: usize, b: [f64; 4]) {
+    /// Register a void occupying `indices` in the pour's contour list, bounded
+    /// by `b`.
+    fn insert(&mut self, indices: Vec<usize>, b: [f64; 4]) {
         if self.cells.is_empty() {
             self.cells = vec![Vec::new(); Self::RES * Self::RES];
         }
+        let id = self.units.len();
+        self.units.push(indices);
         let (x0, y0, x1, y1) = self.span(b);
         for cy in y0..=y1 {
             for cx in x0..=x1 {
-                self.cells[cy * Self::RES + cx].push((idx, b));
+                self.cells[cy * Self::RES + cx].push((id, b));
             }
         }
     }
@@ -396,9 +411,6 @@ impl VoidIndex {
         if self.cells.is_empty() {
             return &[];
         }
-        // A void containing `b` covers every cell `b` covers, b's own min-corner
-        // cell included, so that one cell holds every candidate and no other
-        // cell can hold one this misses.
         let (x0, y0, ..) = self.span(b);
         &self.cells[y0 * Self::RES + x0]
     }
@@ -407,6 +419,10 @@ impl VoidIndex {
 /// Is this void already covered whole by ONE void cut earlier from the same
 /// pour? Then there is no copper left to remove, and appending it again would
 /// flip the overlap back to copper under even-odd.
+///
+/// "Covered" means inside the earlier void's REMOVED area, even-odd over its own
+/// contours, so the copper island an annular void leaves standing does not count
+/// as covered.
 fn already_void(
     shape: &Shape,
     applied: &VoidIndex,
@@ -416,17 +432,19 @@ fn already_void(
     let Shape::MultiPolygon { contours: all } = shape else {
         return false;
     };
-    applied.candidates(bounds).iter().any(|&(idx, ab)| {
-        bounds[0] >= ab[0]
-            && bounds[1] >= ab[1]
-            && bounds[2] <= ab[2]
-            && bounds[3] <= ab[3]
-            && all.get(idx).is_some_and(|prev| {
-                contours
-                    .iter()
-                    .flatten()
-                    .all(|&(x, y)| point_in_polygon(x, y, prev))
-            })
+    applied.candidates(bounds).iter().any(|&(id, ab)| {
+        if bounds[0] < ab[0] || bounds[1] < ab[1] || bounds[2] > ab[2] || bounds[3] > ab[3] {
+            return false;
+        }
+        let prev: Vec<Vec<(f64, f64)>> = applied.units[id]
+            .iter()
+            .filter_map(|&i| all.get(i).cloned())
+            .collect();
+        !prev.is_empty()
+            && contours
+                .iter()
+                .flatten()
+                .all(|&(x, y)| super::geo::point_in_contours(x, y, &prev))
     })
 }
 
@@ -532,8 +550,22 @@ struct Plotter<'a> {
     /// side of any CONCAVE stretch of a void's boundary, so a clear region with
     /// one cannot be trusted to erase only what the film erased.
     region_has_arc: bool,
-    /// Current load polarity. Clear (LPC) primitives are skipped (see header).
+    /// Current load polarity. Clear (LPC) geometry is banked as a void and cut
+    /// from the copper beneath it (see [`apply_clears`]).
     dark: bool,
+    /// Is the object transform (`%LS%` scaling, `%LR%` rotation, `%LM%`
+    /// mirroring) the identity?
+    ///
+    /// The plotter does not apply them, which only ever misplaces or misshapes
+    /// ADDITIVE copper. A clear image is another matter: a `2x1` rectangle under
+    /// `%LS0.5*%` really clears `1x0.5`, so subtracting the unscaled rectangle
+    /// erases copper the film kept, which is the one thing this reader must not
+    /// do. While a transform is loaded, clears are refused outright. The three
+    /// are tracked separately because they load independently: one flag would let
+    /// a later `%LR0*%` clear the memory of an active `%LS0.5*%`.
+    scale_identity: bool,
+    rotation_identity: bool,
+    mirror_identity: bool,
     /// Arc interpolation quadrant mode. `false` = multi-quadrant (G75, the
     /// modern default and what KiCad emits): I/J are signed vectors to the
     /// centre. `true` = single-quadrant (G74, legacy CAM dialects): I/J are
@@ -628,6 +660,9 @@ impl<'a> Plotter<'a> {
             region_dark: true,
             region_has_arc: false,
             dark: true,
+            scale_identity: true,
+            rotation_identity: true,
+            mirror_identity: true,
             single_quadrant: false,
             sr: None,
             cur_aper_function: None,
@@ -645,8 +680,17 @@ impl<'a> Plotter<'a> {
         self.add_clear_contours(shape_contours(shape));
     }
 
+    /// Is the object transform the identity? Only then may a clear image, which
+    /// this plotter draws untransformed, be trusted to subtract.
+    fn identity_transform(&self) -> bool {
+        self.scale_identity && self.rotation_identity && self.mirror_identity
+    }
+
     /// Record a set of contours painted under clear polarity as one void.
     fn add_clear_contours(&mut self, contours: Vec<Vec<(f64, f64)>>) {
+        if !self.identity_transform() {
+            return;
+        }
         let contours: Vec<Vec<(f64, f64)>> =
             contours.into_iter().filter(|c| c.len() >= 3).collect();
         if contours.is_empty() {
@@ -711,6 +755,18 @@ impl<'a> Plotter<'a> {
             },
             Command::ExtendedCode(ExtendedCode::LoadPolarity(p)) => {
                 self.dark = matches!(p, Polarity::Dark);
+            }
+            // The object transforms. Not applied (see `identity_transform`), but
+            // tracked, because a transform we ignore must not be allowed to
+            // subtract the untransformed image.
+            Command::ExtendedCode(ExtendedCode::LoadScaling(s)) => {
+                self.scale_identity = (s.scale - 1.0).abs() < f64::EPSILON;
+            }
+            Command::ExtendedCode(ExtendedCode::LoadRotation(r)) => {
+                self.rotation_identity = r.rotation.abs() < f64::EPSILON;
+            }
+            Command::ExtendedCode(ExtendedCode::LoadMirroring(m)) => {
+                self.mirror_identity = matches!(m, gerber_types::Mirroring::None);
             }
             Command::ExtendedCode(ExtendedCode::StepAndRepeat(sr)) => match sr {
                 StepAndRepeat::Open {
@@ -925,9 +981,11 @@ impl<'a> Plotter<'a> {
                             }
                         }
                     }
-                } else if let (InterpolationMode::Linear, Some(width)) =
-                    (self.interp, self.declared_line_width())
-                {
+                } else if let (InterpolationMode::Linear, Some(width), true) = (
+                    self.interp,
+                    self.declared_line_width(),
+                    self.identity_transform(),
+                ) {
                     // Under clear polarity the same stroke SCRAPES copper out of
                     // whatever is beneath it (how some exporters draw a plane's
                     // splits), so it is banked as a void rather than painted.
@@ -959,15 +1017,13 @@ impl<'a> Plotter<'a> {
                 }
                 if self.dark {
                     self.flash();
-                } else if self.aperture_image_is_exact() {
+                } else if let Some(shape) = self.flash_shape_for_clear() {
                     // A clear flash is an antipad: the classic way a negative
                     // plane film states "no copper here". Banked as a void, but
-                    // only when the aperture's image is reproduced exactly (see
-                    // `aperture_image_is_exact`); an over-approximated image may
-                    // add copper, never erase it.
-                    if let Some(shape) = self.flash_shape() {
-                        self.add_clear(&shape);
-                    }
+                    // only when the aperture's image is reproduced faithfully
+                    // enough to subtract with; an over-approximated image may add
+                    // copper, never erase it.
+                    self.add_clear(&shape);
                 }
             }
         }
@@ -1018,6 +1074,10 @@ impl<'a> Plotter<'a> {
     /// and split a conductor that is really whole. Standard apertures are
     /// polygonized INSCRIBED, so they under-remove, which is the safe
     /// direction.
+    ///
+    /// An aperture the document does not define is not exact either, and neither
+    /// is an aperture BLOCK (`%AB`): this plotter does not implement blocks, so a
+    /// block code resolves to nothing here and must not be trusted to subtract.
     fn aperture_image_is_exact(&self) -> bool {
         !matches!(
             self.aperture.and_then(|a| self.doc.apertures.get(&a)),
@@ -1025,10 +1085,29 @@ impl<'a> Plotter<'a> {
         )
     }
 
+    /// The image to subtract for a clear flash, or `None` when this aperture's
+    /// image is not reproduced faithfully enough to erase copper with.
+    fn flash_shape_for_clear(&self) -> Option<Shape> {
+        if !self.identity_transform() || !self.aperture_image_is_exact() {
+            return None;
+        }
+        let (shape, rim_escaped) = self.flash_image()?;
+        // A hole almost as wide as its aperture pushes the circumscribed rim
+        // outside the outer boundary, where even-odd would read the excursion as
+        // a void over untouched pour copper.
+        (!rim_escaped).then_some(shape)
+    }
+
     /// The image the current aperture paints at the current point, independent
     /// of polarity. Dark flashes push it as copper; clear flashes bank it as a
     /// void, so both need the same geometry.
     fn flash_shape(&self) -> Option<Shape> {
+        self.flash_image().map(|(shape, _)| shape)
+    }
+
+    /// The aperture image, plus whether a circumscribed hole rim escaped the
+    /// outer boundary (only ever true under clear polarity; see `with_hole`).
+    fn flash_image(&self) -> Option<(Shape, bool)> {
         let code = self.aperture?;
         let ap = self.doc.apertures.get(&code)?;
         let (cx, cy) = (self.x, self.y);
@@ -1067,13 +1146,25 @@ impl<'a> Plotter<'a> {
             } else {
                 1.0 / (std::f64::consts::PI / 32.0).cos()
             };
-        let with_hole = |outer: Vec<(f64, f64)>| -> Shape {
+        // The two contours are read even-odd, not as a guaranteed
+        // `outer minus rim`, so a circumscribed rim that pokes OUTSIDE the outer
+        // boundary would flip parity out there and, on a clear flash, erase pour
+        // copper the aperture never covered. A hole almost as wide as its
+        // aperture does exactly that (a 2 mm square with a 1.999 mm hole puts the
+        // rim's vertices at radius 1.0043). When it does, the clear image is not
+        // exact and the caller must refuse it; see `flash_shape_for_clear`.
+        let rim_escapes = |outer: &[(f64, f64)], rim: &[(f64, f64)]| -> bool {
+            rim.iter().any(|&(x, y)| !point_in_polygon(x, y, outer))
+        };
+        let mut rim_escaped = false;
+        let mut with_hole = |outer: Vec<(f64, f64)>| -> Shape {
             let rim: Vec<(f64, f64)> = (0..32)
                 .map(|k| {
                     let a = k as f64 * std::f64::consts::TAU / 32.0;
                     (cx + rim_r * a.cos(), cy + rim_r * a.sin())
                 })
                 .collect();
+            rim_escaped |= rim_escapes(&outer, &rim);
             Shape::MultiPolygon {
                 contours: vec![outer, rim],
             }
@@ -1187,7 +1278,7 @@ impl<'a> Plotter<'a> {
                 }
             }
         };
-        Some(shape)
+        Some((shape, rim_escaped))
     }
 
     fn flash(&mut self) {
@@ -1799,6 +1890,67 @@ G37*
         assert_eq!(n_contours, 2, "an exact clear stroke cuts");
         assert!(!is_copper(10.0, 10.0), "the stroke's path is void");
         assert!(is_copper(4.0, 10.0), "the copper either side stands");
+    }
+
+    #[test]
+    fn a_clear_under_an_unapplied_object_transform_erases_nothing() {
+        // `%LS`, `%LR` and `%LM` transform the object being painted, and this
+        // plotter does not apply them. Ignoring a transform only ever misplaces
+        // ADDITIVE copper; a 2x1 rectangle flashed clear under `%LS0.5*%` really
+        // clears 1x0.5, so subtracting the unscaled rectangle erases copper the
+        // film kept. Refused while any transform is loaded, and cutting again
+        // once it is back to the identity.
+        for transform in ["%LS0.500000*%\n", "%LR90.000000*%\n", "%LMX*%\n"] {
+            let (n, is_copper) = pour_of(&negative_pour(
+                "%ADD10R,2.000000X1.000000*%\n",
+                &format!("{transform}D10*\nX10000000Y10000000D03*\n"),
+            ));
+            assert_eq!(n, 1, "a transformed clear must not cut: {transform}");
+            assert!(is_copper(10.0, 10.0), "the pour stays whole: {transform}");
+        }
+        // Reset to the identity and the same flash cuts again, so the refusal is
+        // the transform's doing and not the aperture's.
+        let (n, is_copper) = pour_of(&negative_pour(
+            "%ADD10R,2.000000X1.000000*%\n",
+            "%LS0.500000*%\n%LS1.000000*%\nD10*\nX10000000Y10000000D03*\n",
+        ));
+        assert_eq!(n, 2);
+        assert!(!is_copper(10.0, 10.0));
+    }
+
+    #[test]
+    fn a_hole_almost_as_wide_as_its_aperture_erases_nothing() {
+        // The circumscribed rim of a clear flash's hole is only safe while it
+        // stays INSIDE the outer boundary. The two contours are read even-odd,
+        // not as a guaranteed `outer minus rim`, so a rim poking out flips parity
+        // over untouched pour copper and erases it. A 2 mm square with a 1.999 mm
+        // hole puts the rim's vertices at radius 1.0043, outside the square.
+        let (n, is_copper) = pour_of(&negative_pour(
+            "%ADD10R,2.000000X2.000000X1.999000*%\n",
+            "D10*\nX10000000Y10000000D03*\n",
+        ));
+        assert_eq!(n, 1, "the rim escapes the aperture, so nothing is cut");
+        assert!(
+            is_copper(11.002, 10.0),
+            "the copper outside the square stands"
+        );
+    }
+
+    #[test]
+    fn a_void_inside_an_earlier_voids_island_is_still_cut() {
+        // The already-void probe asks whether the candidate sits in an earlier
+        // void's REMOVED area, not merely inside its outer boundary. An annular
+        // clear leaves a copper island at its centre; a later solid clear over
+        // that island has real copper to remove. Treating the ring's outer
+        // boundary as the covered area skipped the second cut and left the island
+        // on the pour, which is exactly the merge this reader exists to break.
+        let (n, is_copper) = pour_of(&negative_pour(
+            "%ADD10C,6.000000X2.000000*%\n%ADD11C,2.000000*%\n",
+            "D10*\nX10000000Y10000000D03*\nD11*\nX10000000Y10000000D03*\n",
+        ));
+        assert_eq!(n, 4, "the ring's two contours plus the solid disc");
+        assert!(!is_copper(10.0, 10.0), "the island is cut away in turn");
+        assert!(is_copper(14.5, 10.0), "the pour beyond the void stands");
     }
 
     #[test]
