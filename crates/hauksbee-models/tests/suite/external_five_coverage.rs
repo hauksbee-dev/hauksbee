@@ -1202,3 +1202,94 @@ fn each_abstention_names_its_unlocking_input_and_binds_nothing() {
         );
     }
 }
+
+/// The third of these sweeps, and the one whose absence a reviewer was right to
+/// call out: a SINGLE-THROW analog switch must not name a terminal `s0`.
+///
+/// `bind_analog_switch`'s single-throw path decides its control polarity from the
+/// ROLE NAMES. If the second terminal it picks is the role named `s0`, it senses
+/// the INVERTED control and closes the switch when the control is LOW. That is
+/// correct for a true SPDT part, where `s0` is the normally-closed throw. On a
+/// single-throw part with an active-high enable it models the switched path off
+/// exactly when the silicon has it on, and nothing warns, because every role the
+/// binder wanted was present. `BindOutcome::Behavioral` with no warning: the part
+/// reports as bound and the report says nothing.
+///
+/// Four entries were in that state when this sweep was written (AP22815, AP22615A,
+/// PCA9306, TXS0108E), two of them additionally bridging pads on DIFFERENT channels.
+/// They are fixed; this is what stops the next entry reintroducing it.
+///
+/// THE RULE keys on `s0` WITHOUT `s1`, which is exactly the single-throw shape: a
+/// part that names both throws reaches the true-SPDT branch, where `s0` means what
+/// the binder thinks it means. It also requires the two terminals a single-throw
+/// entry does name to be pickable, so an entry cannot pass by naming nothing.
+#[test]
+fn no_single_throw_switch_names_the_control_low_throw() {
+    #[derive(serde::Deserialize)]
+    struct DbFile {
+        #[serde(default)]
+        models: Vec<hauksbee_models::ModelEntry>,
+    }
+
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
+    let mut checked = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+
+    let mut files: Vec<_> = std::fs::read_dir(&db)
+        .expect("the db directory is part of the crate")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+        .collect();
+    files.sort();
+
+    for path in files {
+        let text = std::fs::read_to_string(&path).expect("readable db file");
+        let Ok(parsed) = toml::from_str::<DbFile>(&text) else {
+            continue;
+        };
+        for m in parsed.models {
+            if m.kind != ComponentKind::AnalogSwitch {
+                continue;
+            }
+            checked += 1;
+            let roles: std::collections::HashSet<&str> =
+                m.pins.values().map(String::as_str).collect();
+            let file = path.file_name().unwrap().to_string_lossy();
+
+            // A true SPDT names both throws and is fine.
+            if roles.contains("s0") && !roles.contains("s1") {
+                failures.push(format!(
+                    "{file}: {} names `s0` with no `s1`, so it binds through the \
+                     single-throw path, which senses the INVERTED control and \
+                     conducts when the enable is LOW. If this part's enable is \
+                     active high, rename its two terminals in_out_a / in_out_b.",
+                    m.id
+                ));
+                continue;
+            }
+            // And an entry that names neither pair has nothing for the binder to
+            // stamp between, which would fall to the scan-two-nodes fallback and
+            // pick whatever the board happened to wire.
+            let has_pair = (roles.contains("in_out_a") && roles.contains("in_out_b"))
+                || (roles.contains("com") && (roles.contains("s0") || roles.contains("s1")))
+                || (roles.contains("in_out_1a") && roles.contains("in_out_1b"));
+            if !has_pair {
+                failures.push(format!(
+                    "{file}: {} names no switch-terminal pair, so the binder falls \
+                     back to picking two arbitrary non-power nodes",
+                    m.id
+                ));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "single-throw switches with an inverted control sense:\n    {}",
+        failures.join("\n    ")
+    );
+    assert!(
+        checked >= 8,
+        "only {checked} analog_switch entries were swept; the database has more"
+    );
+}

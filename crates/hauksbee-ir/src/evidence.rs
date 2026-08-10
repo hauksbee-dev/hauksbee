@@ -739,15 +739,6 @@ impl Assumption {
         built
     }
 
-    /// An unresolved part defaulted to an open circuit. `reason` is the
-    /// binder's or extractor's data fragment for why nothing bound (for
-    /// Altium boards, the `value_unresolved` property lands here).
-    ///
-    /// ```
-    /// use hauksbee_ir::evidence::Assumption;
-    /// let a = Assumption::open_part("U2", "XC6206", "no model matched");
-    /// assert!(a.replacement().contains("U2"));
-    /// ```
     /// Separates the two halves of a named abstention inside the binder's single
     /// `reason` string: what blocks the model, and what would unlock it.
     ///
@@ -757,6 +748,15 @@ impl Assumption {
     /// whole.
     pub const UNLOCKED_BY_MARKER: &'static str = " Unlocked by: ";
 
+    /// An unresolved part defaulted to an open circuit. `reason` is the
+    /// binder's or extractor's data fragment for why nothing bound (for
+    /// Altium boards, the `value_unresolved` property lands here).
+    ///
+    /// ```
+    /// use hauksbee_ir::evidence::Assumption;
+    /// let a = Assumption::open_part("U2", "XC6206", "no model matched");
+    /// assert!(a.replacement().contains("U2"));
+    /// ```
     pub fn open_part(reference: &str, value: &str, reason: &str) -> Self {
         // A NAMED ABSTENTION arrives as one string carrying both halves, joined by
         // [`UNLOCKED_BY_MARKER`]: the binder has one `reason` channel to the report

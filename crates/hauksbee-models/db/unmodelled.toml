@@ -42,7 +42,10 @@
 # wrong for four of the five formats.
 [[unmodelled]]
 id = "si53301"
-value_re = "(?i)^Si5330[0-9]"
+# Anchored to the part whose datasheet was read. The Si53302/3/4/5/6/7 siblings
+# differ in output count and would each need their own reading; a sentence written
+# from the Si53301's sheet must not be asserted about them.
+value_re = "(?i)^Si53301"
 because = """
 The Si53301's output electrical format is strap-selected per bank (SFOUTA/SFOUTB \
 choose between LVDS, LVPECL, CML, HCSL and LVCMOS), and those formats have \
@@ -75,7 +78,9 @@ LVDS and LVPECL properly instead of collapsing them to a single-ended pair.
 # not enough on its own to make an honest entry.
 [[unmodelled]]
 id = "lmx2572"
-value_re = "(?i)^LMX257[0-9]"
+# Anchored to the examined part. The LMX2571/2/3/4/5/6/7 differ in frequency range
+# and output configuration, and the sentence below names "the LMX2572's outputs".
+value_re = "(?i)^LMX2572"
 because = """
 The LMX2572's outputs are AC-coupled differential RF pairs specified as a power \
 into a matched load, not as logic levels, and this library has no \
@@ -129,7 +134,10 @@ thresholds are all published and transcribed in the note beside this entry.
 # substitute part either.
 [[unmodelled]]
 id = "bfp181"
-value_re = "(?i)^BFP18[0-9]"
+# Anchored to the examined part. The `because` below asserts "the datasheet lists
+# only SOT143", which was checked for the BFP181 alone; the BFP180/182/183/184
+# siblings have their own sheets and their own packages.
+value_re = "(?i)^BFP181"
 because = """
 Two things block it. Infineon's BFP181 datasheet publishes maximum ratings, noise \
 figure and S-parameters but NO SPICE parameter set (their RF model library is \
