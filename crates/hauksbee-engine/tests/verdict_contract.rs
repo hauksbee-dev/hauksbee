@@ -23,8 +23,15 @@
 //!    surface, so the bind gate that invalidates `--lint`/`--si`/`--check`/
 //!    `--usb-c` leaves the copper (`--drc`) and descriptive (`--report`)
 //!    surfaces alone, on both the exit code and the verdict field. The CI
-//!    artifacts (JUnit, SARIF, GitHub annotations) carry the same verdict,
-//!    including through the co-sim rewrite and its refusal rewrite.
+//!    artifacts follow it as far as they can today: the GitHub annotations
+//!    agree on every gating run, and JUnit/SARIF agree on the `invalid` route
+//!    (whose blockers are gate-grade `serious` evidence findings), through the
+//!    co-sim rewrite and its refusal rewrite. They do NOT yet agree on the
+//!    widened `fail` route: JUnit/SARIF grade a testcase failure on
+//!    `severity == "serious"` alone, so a run that gates on a medium lint
+//!    finding or on co-sim faults is red in its exit code and its verdict and
+//!    still archives `failures="0"`. Closing that needs a per-finding gating
+//!    flag rather than a severity word, so it is deliberately not pinned here.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -47,9 +54,11 @@ fn fully_covered_board() -> PathBuf {
         .join("../hauksbee-ci/examples/boards/power_resistor.kicad_pcb")
 }
 
-/// A board carrying two real copper shorts, so the copper surface has a
-/// verdict of its own to agree with.
-fn shorted_board() -> PathBuf {
+/// The example board that carries two real copper shorts (so the copper surface
+/// has a `fail` verdict of its own to agree with) AND a control net its
+/// firmware drives high from reset (so `--strict-boot` has an advisory to
+/// escalate).
+fn boot_gate_board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb")
 }
@@ -551,10 +560,10 @@ fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
         xml.contains("INVALID evidence:"),
         "the bind blocker reaches the test report as a gate-grade entry:\n{xml}"
     );
-    let root = xml.lines().nth(1).unwrap_or_default();
     assert!(
-        !root.contains("failures=\"0\"") || !root.contains("errors=\"0\""),
-        "the JUnit root must not read all-green beside an invalid JSON verdict: {root}"
+        !junit_all_green(&xml),
+        "the JUnit root must not read all-green beside an invalid JSON verdict: {}",
+        junit_root(&xml)
     );
 }
 
@@ -689,7 +698,7 @@ fn drc_strict_exit_agrees_with_the_copper_verdict_the_bind_gate_never_touches() 
     );
     // ...and that exit 0 is not a dead gate: a board with real shorts reads
     // `fail` and exits 2 on the same surface.
-    assert_gate_matches_verdict(&["--drc"], &shorted_board(), "fail");
+    assert_gate_matches_verdict(&["--drc"], &boot_gate_board(), "fail");
 }
 
 #[test]
@@ -976,8 +985,7 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
     // refusal alone would erase real electrical faults from the test report a
     // pipeline archives. The refusing run's artifact must be a SUPERSET of the
     // complete run's.
-    let board =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cosim_fault_led.kicad_pcb");
+    let board = fixture("cosim_fault_led.kicad_pcb");
     let dir = tempfile::tempdir().expect("tempdir");
     let complete = dir.path().join("complete.xml");
     let out = run(&[
@@ -1089,8 +1097,7 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
 #[cfg(feature = "avr")]
 #[test]
 fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
-    let b = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
+    let b = boot_gate_board();
     let fw = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/firmware/boot_gate_a/boot_gate.hex");
     if !fw.exists() {

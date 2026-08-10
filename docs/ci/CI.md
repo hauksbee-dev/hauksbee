@@ -1184,6 +1184,11 @@ exit code was printed beside. Disarming a gate does not rewrite the document:
 without `--strict`, and under `--thermal --no-strict-thermal`, a refusing
 verdict still prints beside exit 0. `--report` has no gate at all.
 
+Two co-sim paths deliberately keep exit 3 over a `fail` document, because there
+the run is not analysable even though it observed faults: an aborted analog
+solve (the faults may come from the windows the solve failed on) and a runtime
+timing refusal. Everywhere else an armed gate and its verdict agree.
+
 ## Limitations
 
 - The MCU co-sim runs on three backends, each co-simming its own cores (no
