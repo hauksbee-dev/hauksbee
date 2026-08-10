@@ -225,30 +225,40 @@ fn contour_bounds(c: &[(f64, f64)]) -> [f64; 4] {
 ///
 /// A void becomes extra contours on every pour it sits inside, which is exactly
 /// what [`Shape::MultiPolygon`] already means: even-odd containment reads the
-/// void's interior as empty and the copper around it as copper. This is not a
-/// general polygon boolean, and the places it stops short all stop short in the
-/// same direction, leaving copper standing:
+/// void's interior as empty and the copper around it as copper. Even-odd does
+/// most of the work by itself: a thermal relief's separate arc voids leave the
+/// spokes standing, so the pad stays on the pour exactly as fabricated, and an
+/// annular void's inner rim leaves its copper island standing.
+///
+/// This is not a general polygon boolean, so it is imprecise, and the shape of
+/// that imprecision is the whole safety argument. **Appending a contour flips
+/// the even-odd parity inside it, so wherever a void lands on copper the film
+/// really kept, the parity flips from empty to COPPER, not the other way.** A
+/// void placed imperfectly therefore leaves a phantom speck of pour, which reads
+/// as over-connection: the same direction as the bug this fixes, recoverable,
+/// and never a fabricated break in a conductor that is really whole. What that
+/// argument depends on is the void's own GEOMETRY never being larger than the
+/// void the film cleared, which is why over-approximated clear images are
+/// refused outright (see `aperture_image_is_exact`, `declared_line_width`, and
+/// the arc refusals in `close_region` and the clear-stroke branch).
+///
+/// The deliberate limits, all of which leave copper standing:
 ///
 ///   - A void is cut only from `Region` primitives. Pours are what negative
 ///     films void; a clear laid over a track or a pad is not how any exporter
 ///     draws a break, and scanning every flash for every void is quadratic on
 ///     boards where neither is small.
-///   - A void is cut only from a pour that ENCLOSES it entirely, judged against
-///     that pour's OWN contours as it was drawn. A void straddling a pour's
-///     edge would need a true clip; leaving that copper standing errs toward
-///     over-connection on a case no exporter produces, rather than erasing
-///     copper on a guess.
+///   - A void is cut only from a pour whose OWN contours, as it was drawn,
+///     contain every vertex of the void. That rejects a void whose corner falls
+///     outside the pour; a void whose vertices all sit in copper while an edge
+///     crosses out would need a true clip, and by the parity argument above the
+///     part that crosses out reads as copper.
 ///   - A void is cut only from copper painted BEFORE it (gerber is a painter's
 ///     model), and from EVERY enclosing pour, not just one: a void inside two
 ///     overlapping pours has to void both, or the other one fills it back in.
 ///   - A void already covered whole by an earlier void is skipped: that copper
-///     is gone, and re-cutting it would flip it back to copper under even-odd.
-///     Voids that only PARTIALLY overlap do flip their intersection back to
-///     copper; that reads as an extra speck of pour, i.e. over-connection, the
-///     same direction as every other limit here.
-///   - Even-odd does the rest: a thermal relief's separate arc voids leave the
-///     spokes standing, so the pad stays on the pour exactly as fabricated, and
-///     an annular void's inner rim leaves its copper island standing.
+///     is gone, and re-cutting it would flip it back to copper. Voids that only
+///     PARTIALLY overlap do flip their intersection back to copper.
 fn apply_clears(out: &mut [CopperPrim], clears: &[Clear]) {
     if clears.is_empty() {
         return;
@@ -381,15 +391,16 @@ impl VoidIndex {
         }
     }
 
-    /// Every void whose bounds could contain `b`, without duplicates.
-    fn candidates(&self, b: [f64; 4]) -> Vec<(usize, [f64; 4])> {
+    /// Every void whose bounds could contain `b`, each listed once.
+    fn candidates(&self, b: [f64; 4]) -> &[(usize, [f64; 4])] {
         if self.cells.is_empty() {
-            return Vec::new();
+            return &[];
         }
-        // A void containing `b` covers b's own min-corner cell, so that single
-        // cell holds every candidate.
+        // A void containing `b` covers every cell `b` covers, b's own min-corner
+        // cell included, so that one cell holds every candidate and no other
+        // cell can hold one this misses.
         let (x0, y0, ..) = self.span(b);
-        self.cells[y0 * Self::RES + x0].clone()
+        &self.cells[y0 * Self::RES + x0]
     }
 }
 
@@ -405,7 +416,7 @@ fn already_void(
     let Shape::MultiPolygon { contours: all } = shape else {
         return false;
     };
-    applied.candidates(bounds).into_iter().any(|(idx, ab)| {
+    applied.candidates(bounds).iter().any(|&(idx, ab)| {
         bounds[0] >= ab[0]
             && bounds[1] >= ab[1]
             && bounds[2] <= ab[2]
@@ -516,6 +527,11 @@ struct Plotter<'a> {
     /// here so a clear (LPC) region is dropped like a clear draw/flash, instead
     /// of being materialized as phantom additive copper.
     region_dark: bool,
+    /// Did the current region's boundary carry a circular (G02/G03) segment?
+    /// An arc is flattened into inscribed chords, which cut across the copper
+    /// side of any CONCAVE stretch of a void's boundary, so a clear region with
+    /// one cannot be trusted to erase only what the film erased.
+    region_has_arc: bool,
     /// Current load polarity. Clear (LPC) primitives are skipped (see header).
     dark: bool,
     /// Arc interpolation quadrant mode. `false` = multi-quadrant (G75, the
@@ -610,6 +626,7 @@ impl<'a> Plotter<'a> {
             interp: InterpolationMode::Linear,
             region: None,
             region_dark: true,
+            region_has_arc: false,
             dark: true,
             single_quadrant: false,
             sr: None,
@@ -677,6 +694,7 @@ impl<'a> Plotter<'a> {
                 GCode::RegionMode(true) => {
                     // A region takes the polarity in effect when it opens.
                     self.region_dark = self.dark;
+                    self.region_has_arc = false;
                     // One (empty) current contour; further contours are opened
                     // by D02 moves while the region is open.
                     self.region = Some(vec![Vec::new()]);
@@ -808,8 +826,15 @@ impl<'a> Plotter<'a> {
         if base.is_empty() && base_clears.is_empty() {
             return;
         }
-        for iy in 0..block.repeat_y {
-            for ix in 0..block.repeat_x {
+        // Copy order is the spec's, not the loop's convenience: "Blocks are
+        // copied first in the positive Y direction and then in the positive X
+        // direction" (Gerber Layer Format Specification 2021.02, 4.12). Order is
+        // the painter's order, so it decides the image wherever repeats overlap
+        // and the cell mixes dark and clear objects: an X-fastest loop let a
+        // void from one copy erase copper that the spec's later copy restores,
+        // which is the one direction this reader must never fabricate.
+        for ix in 0..block.repeat_x {
+            for iy in 0..block.repeat_y {
                 if ix == 0 && iy == 0 {
                     continue; // the base cell is already emitted in place
                 }
@@ -865,6 +890,7 @@ impl<'a> Plotter<'a> {
                         InterpolationMode::Linear => vec![(ex, ey)],
                         InterpolationMode::ClockwiseCircular
                         | InterpolationMode::CounterclockwiseCircular => {
+                            self.region_has_arc = true;
                             let (ox, oy) = self.offset_mm(offset);
                             let ccw =
                                 matches!(self.interp, InterpolationMode::CounterclockwiseCircular);
@@ -1023,14 +1049,29 @@ impl<'a> Plotter<'a> {
         }
         .map(|h| h * s)
         .filter(|h| *h > 0.0);
-        let with_hole = |outer: Vec<(f64, f64)>, hole: f64| -> Shape {
-            // The hole rim as a 32-gon. Inscribed, so it under-cuts the hole
-            // by <0.5% of its radius: erring toward copper, never toward
-            // inventing emptiness where the annular ring is.
+        // The hole rim as a 32-gon, sized so the polygon errs toward COPPER for
+        // the polarity that is painting.
+        //
+        // Dark: inscribed, under-cutting the hole by <0.5% of its radius, so the
+        // annular ring reads slightly wide rather than the hole reading wide.
+        //
+        // Clear: the reverse, because the hole of a clear flash is the copper
+        // ISLAND the void leaves standing (the aperture hole is bare board, so
+        // the film clears nothing there). An inscribed rim would shrink that
+        // island and eat copper the film never cleared, which fabricates a break
+        // in a conductor that is really whole. Circumscribing puts the rim
+        // outside the true hole, so the island reads slightly wide.
+        let rim_r = hole_mm.unwrap_or(0.0) / 2.0
+            * if self.dark {
+                1.0
+            } else {
+                1.0 / (std::f64::consts::PI / 32.0).cos()
+            };
+        let with_hole = |outer: Vec<(f64, f64)>| -> Shape {
             let rim: Vec<(f64, f64)> = (0..32)
                 .map(|k| {
                     let a = k as f64 * std::f64::consts::TAU / 32.0;
-                    (cx + hole / 2.0 * a.cos(), cy + hole / 2.0 * a.sin())
+                    (cx + rim_r * a.cos(), cy + rim_r * a.sin())
                 })
                 .collect();
             Shape::MultiPolygon {
@@ -1040,7 +1081,7 @@ impl<'a> Plotter<'a> {
         let shape = match ap {
             Aperture::Circle(Circle { diameter, .. }) => match hole_mm {
                 None => Shape::disc(cx, cy, diameter * s / 2.0),
-                Some(h) => {
+                Some(_) => {
                     // The outer rim as a 64-gon (radius error < 0.13%).
                     let r = diameter * s / 2.0;
                     let outer: Vec<(f64, f64)> = (0..64)
@@ -1049,13 +1090,13 @@ impl<'a> Plotter<'a> {
                             (cx + r * a.cos(), cy + r * a.sin())
                         })
                         .collect();
-                    with_hole(outer, h)
+                    with_hole(outer)
                 }
             },
             Aperture::Rectangle(Rectangular { x, y, .. }) => {
                 let rect = rect_polygon(cx, cy, x * s, y * s, 0.0);
                 match (hole_mm, rect) {
-                    (Some(h), Shape::Polygon { pts, .. }) => with_hole(pts, h),
+                    (Some(_), Shape::Polygon { pts, .. }) => with_hole(pts),
                     (_, rect) => rect,
                 }
             }
@@ -1085,7 +1126,7 @@ impl<'a> Plotter<'a> {
                     None => Shape::Capsule(capsule),
                     // A holed obround polygonizes its stadium boundary so the
                     // hole contour can be carried alongside it.
-                    Some(hole) => with_hole(stadium_outline(&capsule), hole),
+                    Some(_) => with_hole(stadium_outline(&capsule)),
                 }
             }
             Aperture::Polygon(GPolygon {
@@ -1102,7 +1143,7 @@ impl<'a> Plotter<'a> {
                     rotation.unwrap_or(0.0),
                 );
                 match (hole_mm, poly) {
-                    (Some(h), Shape::Polygon { pts, .. }) => with_hole(pts, h),
+                    (Some(_), Shape::Polygon { pts, .. }) => with_hole(pts),
                     (_, poly) => poly,
                 }
             }
@@ -1320,7 +1361,15 @@ impl<'a> Plotter<'a> {
         // underneath it once the whole film is plotted. A negative-drawn pour
         // IS its voids; without them the film is a solid slab.
         if !self.region_dark {
-            self.add_clear_contours(contours);
+            // ... unless its boundary carries an arc. The flattening is
+            // inscribed, which stays inside a CONVEX stretch of the boundary but
+            // cuts across the copper on a CONCAVE one (the inner rim of an
+            // annular or thermal-sector void), so the void it describes can be
+            // larger than the void the film cleared. Same refusal, and the same
+            // reason, as the clear circular STROKE.
+            if !self.region_has_arc {
+                self.add_clear_contours(contours);
+            }
             return;
         }
         // Contours that enclose no area (a stray D02 with no draws, a lone
@@ -1646,6 +1695,14 @@ M02*
         assert!(is_copper(10.0, 10.0), "the island inside the rim is copper");
         assert!(!is_copper(12.0, 10.0), "the ring itself is void");
         assert!(is_copper(14.5, 10.0), "the pour outside the void is copper");
+        // And the island is at least as big as the hole. A 32-gon INSCRIBED in
+        // the 2 mm hole would leave the island 0.48% short of its rim, eating
+        // copper the film never cleared; for a void the rim is circumscribed, so
+        // a point on the true rim reads as copper.
+        assert!(
+            is_copper(11.0, 10.0),
+            "the island reaches the hole's true rim"
+        );
     }
 
     #[test]
@@ -1708,6 +1765,21 @@ G37*
             (
                 "%ADD10C,1.000000*%\n",
                 "G75*\nG03*\nD10*\nX14000000Y10000000D02*\nX6000000Y10000000I-4000000J0D01*\n",
+            ),
+            // A clear REGION with an arc on its boundary. Inscribed chords stay
+            // inside a convex stretch but cut across the copper on a concave one.
+            (
+                "",
+                "\
+G75*
+G36*
+X14000000Y10000000D02*
+G03*
+X6000000Y10000000I-4000000J0D01*
+G01*
+X14000000Y10000000D01*
+G37*
+",
             ),
         ];
         for (apertures, body) in refused {
