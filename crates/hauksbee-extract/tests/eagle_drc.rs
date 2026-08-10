@@ -1106,9 +1106,12 @@ fn explicit_cross_class_matrix_entry_is_applied() {
 // ---------------------------------------------------------------------------
 // Copper pours. The .brd stores the requested outline plus its pour settings;
 // the computed fill (with isolate antipads) is derived data. Foreign copper
-// inside an outline is NOT a short (Eagle carves around it), but two
-// overlapping same-rank pours of different signals have no arbitration:
-// Eagle pours both and its own DRC flags the overlap.
+// inside an outline is NOT a short (Eagle carves around it). Two overlapping
+// same-rank pours of different signals get no rank arbitration and ARE reported.
+// That rule over-reports, at a rate measured against real fabrication output in
+// `docs/evidence/KNOWN_FAULTS_VALIDATION.md` (right about four of six
+// layer-instances); narrowing it by `isolate` was tried and reverted there,
+// because it fixed one over-report and created a worse miss.
 // ---------------------------------------------------------------------------
 
 fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
@@ -1124,6 +1127,10 @@ fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
 
 #[test]
 fn overlapping_same_rank_pours_of_different_nets_are_a_short() {
+    // Pour settings ride along on the finding so a reader can see what the
+    // overlap was made of. They do not gate it: whether two overlapping pours
+    // end up in contact is a property of the fill, which the `.brd` does not
+    // carry (see `docs/about/LIMITATIONS.md`).
     let signals = format!(
         r#"
 <signal name="A">{}</signal>

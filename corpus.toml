@@ -533,6 +533,84 @@ license = "CC-BY-SA-4.0"
 axes = ["kicad5", "power-electronics", "stm32", "small"]
 expect = ["control-pcb/BMS-5s.kicad_pcb", "power-pcb/Switch-N-Sense.kicad_pcb"]
 
+# Here for its fabrication output as much as its design file. `subdir` keeps only
+# V3.4.5, whose `GERBERS .../CAMOutputs/GerberFiles/` directory holds the copper
+# Eagle actually computed from pours the `.brd` only describes: an Eagle `.brd`
+# omits the fill a `.kicad_pcb` carries, so gerbers shipped beside one are how a
+# pour question gets an answer instead of an argument. Other corpus entries ship
+# gerbers too, including Eagle ones (the SparkFun Pro Micro panel's `.GTL` sits
+# beside its `.brd` and has 240 poured regions); what is particular here is that
+# the fill in question is the subject of an adjudicated finding. See the emonTx row
+# in `docs/evidence/KNOWN_FAULTS_VALIDATION.md`, and the two-sided test it drives
+# in `crates/hauksbee-extract/tests/known_faults.rs`.
+[[board]]
+id = "emontx3"
+name = "OpenEnergyMonitor emonTx V3.4.5 energy monitor"
+url = "https://github.com/openenergymonitor/EmonTx3"
+rev = "411de96187900f694f9e8fefd7ba9a6e30ad99aa"
+license = "GPL-3.0"
+license_note = "LICENSE at this revision is the GPL-3.0 text"
+axes = ["eagle", "power-electronics", "rf", "avr", "small"]
+subdir = "hardware/V3.4.5"
+known_good = false
+known_good_note = """
+Adjudicated, not pending: GND and AGND are in contact on BOTH copper layers, and \
+hauksbee reports both. The shipped gerbers settle it by net attribution: on the \
+back layer the two pours abut along the seam, and on the front layer a \
+770-vertex filled region near U1 holds five GND vias and the AGND via at \
+(81.915, 47.498), joined by a trace. (The front-layer POURS are 8.236 mm apart, \
+which is true and answers a question about pours rather than about the layer.) \
+The tie is declared, not inferred: emonTx V3.4.5.sch wires the AGND supply \
+symbol AGND7 to the GND supply symbol SUPPLY6 in one segment of net GND, absent \
+in V3.4.0 and present from V3.4.1. So both findings are true about the copper and \
+wrong to be SERIOUS, and the class fix is net-tie recognition that can read a tie \
+declared in the .sch, which the Eagle DRC path is not given. Hence \
+known_good = false, which says the gate cannot grade its silence on this \
+directory, not that the board is defective.
+"""
+expect = [
+  "hardware/V3.4.5/emonTx V3.4.5.brd",
+  "hardware/V3.4.5/emonTx V3.4.5.sch",
+  "hardware/V3.4.5/GERBERS emonTx V3.4.5_2021-04-07/CAMOutputs/GerberFiles/copper_top.gbr",
+  "hardware/V3.4.5/GERBERS emonTx V3.4.5_2021-04-07/CAMOutputs/GerberFiles/copper_bottom.gbr",
+]
+
+# The same product, three revisions earlier, kept for one measurement: V3.4.0 sets
+# BOTH of its top-layer ground pours to isolate="0.00030625" where V3.4.5 sets one,
+# and its shipped gerbers show those two fills as SEPARATE copper. That makes the
+# near-zero isolate necessary but not sufficient for a merge, which is what sank a
+# proposed narrowing of the pour-to-pour check, and makes that check's flag on this
+# layer a known false positive. The test pins it so the error is visible in CI
+# rather than only in prose.
+[[board]]
+id = "emontx3_v340"
+name = "OpenEnergyMonitor emonTx V3.4 (the both-layers-near-zero pour revision)"
+url = "https://github.com/openenergymonitor/EmonTx3"
+rev = "411de96187900f694f9e8fefd7ba9a6e30ad99aa"
+dest = "emontx3_v340"
+license = "GPL-3.0"
+license_note = "LICENSE at this revision is the GPL-3.0 text"
+axes = ["eagle", "power-electronics", "avr", "small"]
+subdir = "hardware/V3.4.0"
+known_good = false
+known_good_note = """
+Adjudicated, and the awkward half of it: hauksbee reports GND <-> AGND on both \
+copper layers here, and the top-layer one is WRONG. Both top pours carry \
+isolate="0.00030625" with overlapping outlines, so the check fires, but labelling \
+the copper in the shipped emonTxV3.4_GERBERS export and attributing each body by \
+the .brd's own GND-net and AGND-net items finds NO component holding both nets on \
+that layer. The bottom-layer finding is real. This revision is also the reason a \
+proposed narrowing of the rule was reverted: a near-zero isolate is necessary but \
+not sufficient for two pours to merge, and V3.4.0 is the proof. Kept in the corpus \
+because a measured false positive is worth more to the next reader than a clean \
+story: see the emonTx section of docs/evidence/KNOWN_FAULTS_VALIDATION.md and \
+docs/about/LIMITATIONS.md.
+"""
+expect = [
+  "hardware/V3.4.0/emonTx V3.4.brd",
+  "hardware/V3.4.0/emonTxV3.4_GERBERS.zip",
+]
+
 # ---------------------------------------------------------------------------
 # Motor drivers
 # ---------------------------------------------------------------------------
@@ -641,6 +719,47 @@ subdir = "hardware/hackrf-one"
 expect = [
   "hardware/hackrf-one/hackrf-one.kicad_pcb",
   "hardware/hackrf-one/hackrf-one.kicad_sch",
+]
+
+# An RF signal-generator design: an LMX2572 wideband synthesiser, an Si53301
+# clock IC, an EFM32PG22 MCU, a TCXO, an external reference input, Laird shield
+# cans, and 373 footprints on four layers. It reached the corpus
+# the way the ODrive attempt layout did, by being flagged: the external-pool
+# iteration `qc/evidence/runs/2026-08-09-external-01.json` drew it, hauksbee
+# reported six copper shorts, and the adjudication (see the gold row in
+# `docs/evidence/KNOWN_FAULTS_VALIDATION.md`) found all six real. It is pinned
+# here so the row is reproducible from this repository.
+[[board]]
+id = "mwgen_g1"
+name = "MWGEN-G1 microwave signal generator"
+url = "https://github.com/MR-DOS/MWGEN-G1"
+rev = "2fc77c9068534ed38f275337907b41942ff4621d"
+license = "GPL-3.0"
+license_note = "LICENSE at this revision is the GPL-3.0 text"
+axes = ["kicad6", "rf", "instrument", "large"]
+known_good = false
+known_good_note = """
+Adjudicated, not pending: six pad-to-pad copper shorts on F.Cu, all of them the \
+oversized pads of two footprints planted on top of tighter neighbours. D503, an \
+SMAJ48CA TVS in an SMA body with 2.5 x 1.8 mm pads, overlaps D203 pad 1 \
+(GND <-> REFOUT_SEC, -0.150 mm), D202 and D203 pad 3 (REFIN_GND <-> \
+Net-(D202-Pad3), -0.060 mm at two places) and the inner pads of C205 and R204 \
+(REFIN_GND <-> REFIN, -0.015 mm at two places); the Laird BMI-S-205-F shield-can \
+fence pad on J206 overlaps FB204 pad 1 (GND <-> Net-(FB204-Pad1)). KiCad 9.0.3's \
+own `kicad-cli pcb drc` on the same file reports the same six shorting_items \
+violations, the same net pairs and the same pad anchors, and the project's \
+MWGEN-G1.kicad_pro sets `shorting_items` and `clearance` to `error` with an \
+empty drc_exclusions list, so the design's own rule set forbids every one of \
+them. The entry earns its place regardless, though not for novelty: hackrf_one is \
+also an RF instrument with a Laird shield frame and a wideband synthesiser. What \
+this one adds is a KiCad 6 layout whose own DRC output disagrees with nothing we \
+report, six recorded pad overlaps to regress against, and a placement-collision \
+shape the rest of the corpus does not contain.
+"""
+expect = [
+  "MWGEN-G1.kicad_pcb",
+  "MWGEN-G1.kicad_sch",
+  "MWGEN-G1.kicad_pro",
 ]
 
 # ---------------------------------------------------------------------------
