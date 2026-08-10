@@ -23,12 +23,12 @@ use std::path::Path;
 use crate::report::{BindOutcome, BindReport};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::evidence::{
-    ArtifactId, ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionSource,
-    CausalPathIndex, Contribution, CrossCheck, EntityKind, EntityRef, ErrorBudget, EvidenceError,
-    EvidenceMap, EvidenceRegistry, EvidenceStatus, IgnoredInput, IntegrationMethod,
-    IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, ModelSource, ModelSourceTier,
-    ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate, Scope, Subject,
-    SubjectSet, TimeWindow, ValueOrigin, WindowMethod,
+    ArtifactId, ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionId,
+    AssumptionSource, CausalPathIndex, Contribution, CrossCheck, EntityKind, EntityRef,
+    ErrorBudget, EvidenceError, EvidenceMap, EvidenceRegistry, EvidenceStatus, IgnoredInput,
+    IntegrationMethod, IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, ModelSource,
+    ModelSourceTier, ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate,
+    Scope, Subject, SubjectSet, TimeWindow, ValueOrigin, WindowMethod,
 };
 use hauksbee_models::Confidence;
 use sha2::{Digest, Sha256};
@@ -136,6 +136,89 @@ fn uncovered_windows(
     Ok(out)
 }
 
+/// The open-part assumptions for one bind report: one per DISTINCT claim, not
+/// one per unresolved row.
+///
+/// A row-per-assumption loop assumed every unresolved row carries its own
+/// identity, and two real boards proved otherwise. A KiCad mainboard places four
+/// footprints with a blank designator, a blank value and one shared reason, so
+/// all four minted the same id. A gerber job whose placements are reconstructed
+/// from a fabrication report gives every reconstructed pad one name, so twenty-two
+/// rows minted `open-part:Via`. Either way [`EvidenceRegistry::new`] rejected the
+/// second one and the run aborted before it produced a report at all.
+///
+/// The rows that collided were not distinct gaps described badly: they were the
+/// SAME sentence about parts the run cannot tell apart. So they collapse to one
+/// claim that states the count, which discloses every part (the honesty rule: an
+/// open part must still be disclosed) while dropping rows that repeated one
+/// another word for word. Rows that only share a designator and genuinely differ
+/// stay separate, told apart by an ordinal.
+///
+/// Identity comes from the assumption the row actually mints, never from a second
+/// copy of the id crate's normalisation rules, so the two cannot drift. Ordering
+/// is bind-row order, which follows `board.components`, so the ids are identical
+/// on every run of the same input.
+fn open_part_assumptions(report: &BindReport) -> Vec<Assumption> {
+    // The claim a row makes, keyed by EVERY sentence a reader would see plus the id.
+    // Two rows merge only when a reader could not tell the resulting entries apart.
+    //
+    // `replacement` has to be in the key, and leaving it out was an honesty bug
+    // rather than an optimisation: `open_part` splits a NAMED ABSTENTION out of the
+    // reason and routes the "unlocked by" half into `replacement`, so two rows that
+    // agree on what and why can still name DIFFERENT inputs that would close them.
+    // Keyed on statement and because alone, those merged and only the first row's
+    // unlocking input reached the report, which loses the one thing the reader could
+    // have acted on for the second part.
+    type Claim = (AssumptionId, String, String, String, String);
+    let mut order: Vec<Claim> = Vec::new();
+    let mut groups: BTreeMap<Claim, (usize, String, String, String)> = BTreeMap::new();
+    for row in &report.rows {
+        let BindOutcome::Unresolved { reason } = &row.outcome else {
+            continue;
+        };
+        let probe = Assumption::open_part(&row.reference, &row.value, reason);
+        let key = (
+            probe.id().clone(),
+            probe.statement().to_string(),
+            probe.because().to_string(),
+            probe.consequence().to_string(),
+            probe.replacement().to_string(),
+        );
+        match groups.get_mut(&key) {
+            Some((count, _, _, _)) => *count += 1,
+            None => {
+                order.push(key.clone());
+                groups.insert(
+                    key,
+                    (1, row.reference.clone(), row.value.clone(), reason.clone()),
+                );
+            }
+        }
+    }
+    // A designator carrying more than one distinct claim needs its claims told
+    // apart; one carrying a single claim keeps the bare `open-part:R7` contract.
+    let mut claims_per_id: BTreeMap<&AssumptionId, usize> = BTreeMap::new();
+    for (id, ..) in &order {
+        *claims_per_id.entry(id).or_default() += 1;
+    }
+    let mut ordinals: BTreeMap<&AssumptionId, usize> = BTreeMap::new();
+    let mut out = Vec::with_capacity(order.len());
+    for key in &order {
+        let (count, reference, value, reason) = &groups[key];
+        let ordinal = if claims_per_id[&key.0] > 1 {
+            let next = ordinals.entry(&key.0).or_default();
+            *next += 1;
+            Some(*next)
+        } else {
+            None
+        };
+        out.push(Assumption::open_part_group(
+            reference, value, reason, *count, ordinal,
+        ));
+    }
+    out
+}
+
 impl BoardEvidence {
     /// Build from the actual board incidence and the bind report that produced
     /// the live circuit. Reader coverage notes enter as board-scoped
@@ -147,11 +230,7 @@ impl BoardEvidence {
         today: RunDate,
     ) -> Result<Self, EvidenceError> {
         let mut assumptions = Vec::new();
-        for row in &report.rows {
-            if let BindOutcome::Unresolved { reason } = &row.outcome {
-                assumptions.push(Assumption::open_part(&row.reference, &row.value, reason));
-            }
-        }
+        assumptions.extend(open_part_assumptions(report));
         // A part bound to a generic estimated-fallback model is running on
         // invented ratings. Recorded here rather than only in the CI report's
         // coverage_warnings, so it reaches every surface that renders the evidence
@@ -1428,5 +1507,260 @@ mod partial_model_tests {
              assumption's own sentence: {}",
             x1.because()
         );
+    }
+}
+
+/// Open parts whose rows cannot be told apart.
+///
+/// Both fixtures here are distilled from boards that aborted the run before it
+/// produced any report: a KiCad mainboard revision carrying four footprints with
+/// a blank designator, and a gerber job whose placements were reconstructed from a
+/// fabrication report so that every one of them was named "Via". The external
+/// boards themselves stay out of the repo; what is reproduced is the row shape
+/// that collided, which is the whole cause.
+#[cfg(test)]
+mod duplicate_open_part_tests {
+    use super::*;
+    use crate::report::BindRow;
+
+    fn unresolved(reference: &str, value: &str, reason: &str) -> BindRow {
+        BindRow {
+            reference: reference.to_string(),
+            value: value.to_string(),
+            model_id: None,
+            confidence: Confidence::Exact,
+            source: None,
+            outcome: BindOutcome::Unresolved {
+                reason: reason.to_string(),
+            },
+            warning: None,
+            guesses: Vec::new(),
+        }
+    }
+
+    fn board() -> ExtractedBoard {
+        ExtractedBoard {
+            name: "duplicate-open-part-fixture".to_string(),
+            nets: Vec::new(),
+            components: Vec::new(),
+        }
+    }
+
+    fn open_part_claims(report: &BindReport) -> Vec<Assumption> {
+        let evidence = BoardEvidence::from_bound(&board(), report, &[], RunDate::unknown())
+            .expect("evidence builds");
+        evidence
+            .assumptions()
+            .iter()
+            .filter(|a| a.kind() == hauksbee_ir::evidence::AssumptionKind::OpenPart)
+            .cloned()
+            .collect()
+    }
+
+    /// The ARDEP2 mainboard shape: four footprints with no designator, no value
+    /// and one shared reason. Every field an assumption could carry is identical,
+    /// so the four rows minted one id and the run died on
+    /// `duplicate assumption id open-part:unnamed-...`.
+    ///
+    /// One claim now covers them, and it STATES THE COUNT. That is the honesty
+    /// requirement: collapsing four identical rows to "an unnamed part is treated
+    /// as an open circuit" would have hidden three parts, and the reader would
+    /// have no way to know. The count is the disclosure.
+    #[test]
+    fn four_indistinguishable_unnamed_parts_become_one_claim_that_counts_them() {
+        let mut report = BindReport::default();
+        for _ in 0..4 {
+            report.push(unresolved("", "", "no model matched"));
+        }
+        let open = open_part_claims(&report);
+
+        assert_eq!(
+            open.len(),
+            1,
+            "four identical claims are one claim: {:?}",
+            open.iter().map(Assumption::statement).collect::<Vec<_>>()
+        );
+        assert!(
+            open[0].statement().contains('4'),
+            "the count is the disclosure and it is missing: {}",
+            open[0].statement()
+        );
+        assert!(
+            open[0].statement().contains("unnamed parts"),
+            "an unnamed group has no designator to name: {}",
+            open[0].statement()
+        );
+        // Still disclosed as an open part, not quietly downgraded.
+        assert!(
+            open[0].statement().contains("open circuit"),
+            "an open part must still be disclosed as open: {}",
+            open[0].statement()
+        );
+    }
+
+    /// The miniFOC gerber shape: the job ships a fabrication testpoint report whose
+    /// "Name" column is the literal string "Via" on every row, so the placement
+    /// reader reconstructed many parts sharing one designator and the second one
+    /// minted a duplicate `open-part:Via`.
+    ///
+    /// The designator survives in the id, because it is real and citeable; what
+    /// collapses is the repetition.
+    #[test]
+    fn many_parts_sharing_one_designator_become_one_counted_claim() {
+        let mut report = BindReport::default();
+        for _ in 0..22 {
+            report.push(unresolved("Via", "", "no model matched"));
+        }
+        let open = open_part_claims(&report);
+
+        assert_eq!(open.len(), 1, "one designator, one identical claim");
+        assert_eq!(
+            open[0].id().as_str(),
+            "open-part:Via",
+            "a single claim on a named designator keeps the bare id contract"
+        );
+        assert!(
+            open[0].statement().contains("22"),
+            "the count is the disclosure and it is missing: {}",
+            open[0].statement()
+        );
+        assert!(
+            open[0].statement().contains("Via"),
+            "the designator the board actually carries must appear: {}",
+            open[0].statement()
+        );
+    }
+
+    /// The other side of the fix, and the one that makes it a fix rather than a
+    /// silencer: parts that are genuinely different must stay different. Two
+    /// distinct designators are two assumptions, and so are two DIFFERENT claims
+    /// that happen to share one designator.
+    #[test]
+    fn genuinely_distinct_open_parts_are_never_collapsed() {
+        let mut report = BindReport::default();
+        report.push(unresolved("R7", "10k", "no model matched"));
+        report.push(unresolved("R8", "47k", "no model matched"));
+        let open = open_part_claims(&report);
+        assert_eq!(open.len(), 2, "two real parts are two gaps");
+        assert_ne!(open[0].id(), open[1].id());
+        let ids: Vec<&str> = open.iter().map(|a| a.id().as_str()).collect();
+        assert!(
+            ids.contains(&"open-part:R7") && ids.contains(&"open-part:R8"),
+            "ordinary named parts keep their plain ids: {ids:?}"
+        );
+
+        // Same designator, different claim: two gaps, told apart by an ordinal
+        // rather than merged. Only the id carries it; the sentence must not invent
+        // a designator the board does not have.
+        let mut shared = BindReport::default();
+        shared.push(unresolved("Via", "10k", "no model matched"));
+        shared.push(unresolved("Via", "47k", "no model matched"));
+        let open = open_part_claims(&shared);
+        assert_eq!(
+            open.len(),
+            2,
+            "two different claims on one designator stay two: {:?}",
+            open.iter().map(Assumption::statement).collect::<Vec<_>>()
+        );
+        assert_ne!(open[0].id(), open[1].id(), "{}", open[0].id());
+        for a in &open {
+            assert!(
+                !a.statement().contains('#'),
+                "the ordinal is an id disambiguator, not prose: {}",
+                a.statement()
+            );
+        }
+
+        // And a blank designator with two different REASONS is two gaps too. The
+        // statements are identical there, so only the whole claim tells them apart.
+        let mut reasons = BindReport::default();
+        reasons.push(unresolved("", "", "no model matched"));
+        reasons.push(unresolved("", "", "the footprint carries no value"));
+        let open = open_part_claims(&reasons);
+        assert_eq!(
+            open.len(),
+            2,
+            "two unnameable parts with different reasons are two gaps: {:?}",
+            open.iter().map(Assumption::because).collect::<Vec<_>>()
+        );
+        assert_ne!(open[0].id(), open[1].id());
+    }
+
+    /// Merging must not swallow the one thing the reader could act on. A NAMED
+    /// ABSTENTION carries an "unlocked by" half that becomes the assumption's
+    /// replacement sentence, so two rows can agree on what is open and why while
+    /// naming DIFFERENT inputs that would close them. Those are two claims: merging
+    /// them kept the count honest but reported only the first input, leaving the
+    /// second part's remediation unrecoverable from the report.
+    #[test]
+    fn rows_naming_different_unlocking_inputs_stay_separate_claims() {
+        let marker = Assumption::UNLOCKED_BY_MARKER;
+        let mut report = BindReport::default();
+        report.push(unresolved(
+            "R7",
+            "10k",
+            &format!("no model matched{marker}add a datasheet for ACME-1"),
+        ));
+        report.push(unresolved(
+            "R7",
+            "10k",
+            &format!("no model matched{marker}add a datasheet for ACME-2"),
+        ));
+        let open = open_part_claims(&report);
+
+        assert_eq!(
+            open.len(),
+            2,
+            "two different unlocking inputs are two claims: {:?}",
+            open.iter().map(Assumption::replacement).collect::<Vec<_>>()
+        );
+        let fixes: Vec<&str> = open.iter().map(Assumption::replacement).collect();
+        assert!(
+            fixes.iter().any(|f| f.contains("ACME-1")),
+            "the first unlocking input went missing: {fixes:?}"
+        );
+        assert!(
+            fixes.iter().any(|f| f.contains("ACME-2")),
+            "the second unlocking input went missing: {fixes:?}"
+        );
+        assert_ne!(open[0].id(), open[1].id());
+    }
+
+    /// Ids are cited in acknowledgment files and diffed across runs, so the same
+    /// input must mint the same bytes every time. Counting and ordinals are both
+    /// derived from bind-row order, never from a hash map's iteration order or a
+    /// process-wide counter, and this is what pins that down.
+    #[test]
+    fn assumption_ids_are_byte_identical_across_runs() {
+        let build = || {
+            let mut report = BindReport::default();
+            // Every shape at once: a group, a plain part, and a shared designator
+            // carrying two different claims.
+            for _ in 0..3 {
+                report.push(unresolved("", "", "no model matched"));
+            }
+            report.push(unresolved("R7", "10k", "no model matched"));
+            report.push(unresolved("Via", "10k", "no model matched"));
+            report.push(unresolved("Via", "47k", "no model matched"));
+            for _ in 0..5 {
+                report.push(unresolved("Via", "", "no model matched"));
+            }
+            let evidence = BoardEvidence::from_bound(&board(), &report, &[], RunDate::unknown())
+                .expect("evidence builds");
+            evidence
+                .assumptions()
+                .iter()
+                .map(|a| a.id().as_str().to_string())
+                .collect::<Vec<_>>()
+        };
+        let first = build();
+        assert_eq!(first, build(), "assumption ids drifted between runs");
+        assert_eq!(first, build(), "assumption ids drifted between runs");
+        // The registry would have rejected a repeat, but assert it directly so a
+        // future change cannot make the ids unique only by accident.
+        let mut sorted = first.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), first.len(), "duplicate ids: {first:?}");
     }
 }
