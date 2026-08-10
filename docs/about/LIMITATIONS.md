@@ -360,11 +360,30 @@ checked and found clean), and same-rank pours that approach each other without
 ring overlap are not distance-checked either, since the fill extent near the
 boundary depends on those settings. The argument above says a fill Eagle
 derives from these settings would not violate; a hand-edited file whose fill
-was never re-derived is outside it. The one construct the settings cannot make
-safe under any derivation IS checked: two
-overlapping same-rank pours of different signals have no arbitration (Eagle
-pours both, a physical short, and its own DRC flags the overlap), and the
-Eagle path reports that short with the pour settings disclosed on the finding.
+was never re-derived is outside it.
+
+One pour-to-pour construct IS checked, and it was narrowed on 2026-08-09 after
+being measured against real fabrication output. Two overlapping same-rank pours
+of different signals get no arbitration from their rank, but the yielding pour is
+still carved back by its own `isolate`, so the outline overlap alone does not put
+copper in contact. What is reported is an overlap where the smaller `isolate` is
+below one micrometre (`POUR_MERGE_ISOLATE_MM`), meaning nothing in the file asks
+for a gap at all. The measurement is in
+[`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md):
+the emonTx V3.4.5 overlaps its GND and AGND pour outlines in the same band on
+both copper layers, and the gerbers it ships beside the `.brd` show the pair
+separate on the layer where both pours hold `isolate="0.3048"` and joined on the
+layer where one holds `0.00030625`.
+
+**The false-negative class that buys.** An overlap whose smaller `isolate` is at
+or above one micrometre is now silent, and the fill is still never reconstructed,
+so a pour pair that a CAM run merges anyway is not caught. Nor is a sub-rule but
+non-zero `isolate` reported as a clearance finding, because answering that needs
+the fill. The band where the threshold sits is bounded by measurement only from
+the two values that one board supplies (0.00030625 merges, 0.3048 does not); the
+micrometre inside that band is a manufacturing judgement, not a documented Eagle
+boundary, and a second board that merged at a wider `isolate` would move it.
+
 That overlap keys on the polygons' vertex rings: same-rank pours whose rings
 miss by less than their drawn boundary stroke widths are not flagged, and
 pinning whether Eagle treats a stroke graze as overlap needs an
