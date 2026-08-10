@@ -748,6 +748,87 @@ impl Assumption {
     /// whole.
     pub const UNLOCKED_BY_MARKER: &'static str = " Unlocked by: ";
 
+    /// Marks a bind warning as a PARTIAL-MODEL disclosure, so it becomes evidence
+    /// rather than only a line on the bind report.
+    ///
+    /// The distinction matters because the two kinds of bind warning have
+    /// different audiences. Most are diagnostics about the BOARD ("gate 3 missing
+    /// a connection"), and the bind report is the right and only place for them.
+    /// A partial-model warning is a statement about the TOOL: the part bound, so it
+    /// counts as resolved and no `open_part` assumption is built for it, and yet
+    /// some of what the part does was not modelled. That belongs on every surface
+    /// that renders the evidence map (`--plain`, `--json`, the web front door), not
+    /// only on `--report`, for the same reason the estimated-fallback rows are
+    /// lifted into assumptions in `BoardEvidence::from_bound`.
+    ///
+    /// Written by the binder at the front of the warning, read by `from_bound`, and
+    /// stripped by `BindReport::warnings` so the printed line is unchanged.
+    pub const PARTIAL_MODEL_MARKER: &'static str = "[partial model] ";
+
+    /// A part that bound, and counts as resolved, with some of what it does left
+    /// unmodelled: one channel of a multi-channel switch, one throw of a mux, an
+    /// oscillator's supply draw and driven output.
+    ///
+    /// A named constructor rather than a bare `reduced_fidelity` because this is a
+    /// different claim from "a generic fallback produced these numbers". The numbers
+    /// this part DID produce are as good as any other curated entry's; what is
+    /// missing is a piece of the part. Saying "indicative numbers" about it would
+    /// misdescribe the gap and send the reader looking in the wrong place.
+    ///
+    /// [`Scope::Board`] AND NOT `part_scope`, deliberately. Part scope would be more
+    /// precise and would stop a power mux's missing throw from being cited by a
+    /// conclusion about an unrelated I2C net. It is not used because the error it
+    /// risks is the wrong one: whether a given conclusion truly depends on the
+    /// unmodelled half of a part is not something the traversal can answer from a
+    /// part reference, and a conclusion that quietly stops citing this would be
+    /// under-disclosure, which this project treats as strictly worse than noise.
+    /// Board scope is also what the estimated-fallback assumptions alongside this one
+    /// already use, so the two kinds of model-fidelity caveat behave alike.
+    ///
+    /// ```
+    /// use hauksbee_ir::evidence::Assumption;
+    /// let a = Assumption::partial_model("U5", "TXS0108E", "one channel of eight is modelled", "");
+    /// assert!(a.statement().contains("U5 (TXS0108E)"));
+    /// assert!(a.because().starts_with("One channel of eight"));
+    /// ```
+    pub fn partial_model(reference: &str, value: &str, gap: &str, replacement: &str) -> Self {
+        let subject = fragment(reference);
+        let subject_text = if value.trim().is_empty() {
+            or_else(reference, "an unnamed part").to_string()
+        } else {
+            format!(
+                "{} ({})",
+                or_else(reference, "an unnamed part"),
+                value.trim()
+            )
+        };
+        let gap = or_else(gap, "only part of what this part does");
+        Self::build(
+            AssumptionKind::ReducedFidelity,
+            AssumptionSource::Binder,
+            &subject,
+            Scope::Board,
+            format!("{subject_text} is modelled only in part."),
+            // The gap arrives as a whole sentence from the model entry or the
+            // binder, so it stands on its own here rather than being wedged into a
+            // carrier phrase: "The model covers <gap>" reads as nonsense the moment
+            // the gap says what IS modelled rather than what is not, and both
+            // phrasings occur across the entries that carry one.
+            sentence_or(&gap, "only part of what this part does is modelled"),
+            format!(
+                "{subject_text} counts as a resolved part, so nothing else on this \
+                 report flags it, but any result that depends on the unmodelled part \
+                 of it is not evidence."
+            ),
+            sentence_or(
+                replacement,
+                "model the rest of the part, or treat results that depend on it as \
+                 unanswered",
+            ),
+            None,
+        )
+    }
+
     /// An unresolved part defaulted to an open circuit. `reason` is the
     /// binder's or extractor's data fragment for why nothing bound (for
     /// Altium boards, the `value_unresolved` property lands here).

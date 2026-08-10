@@ -188,6 +188,33 @@ impl BoardEvidence {
                  manufacturer part number on the component",
             ));
         }
+        // A PARTIAL-MODEL warning becomes evidence. These rows bound, so they are
+        // counted as resolved and no `open_part` assumption exists for them, and one
+        // of them (a packaged oscillator) is `Skipped` and therefore leaves the
+        // resolve denominator entirely. Without this the disclosure lived only on
+        // `--report`, and `--plain`, `--json` and the web front door said nothing at
+        // all about a part the tool had only half modelled. Every row, not
+        // `non_ignored()`, for exactly that reason.
+        for row in &report.rows {
+            let Some(warning) = row.warning.as_deref() else {
+                continue;
+            };
+            let Some(rest) = warning.strip_prefix(Assumption::PARTIAL_MODEL_MARKER) else {
+                continue;
+            };
+            // The producers all write "REF (VALUE): gap", which is what the bind
+            // report needs; the assumption carries the subject in its own fields, so
+            // the prefix comes back off here rather than being said twice.
+            let gap = rest
+                .strip_prefix(&format!("{} ({}): ", row.reference, row.value))
+                .unwrap_or(rest);
+            assumptions.push(Assumption::partial_model(
+                &row.reference,
+                &row.value,
+                gap,
+                "",
+            ));
+        }
         let mut reader_contributions = Vec::new();
         let mut reader_ignored = Vec::new();
         let mut reader_cross_checks = Vec::new();
@@ -1271,4 +1298,135 @@ fn documented_default(warning: Option<&str>) -> Option<(String, String)> {
         return Some(("vout".into(), value));
     }
     None
+}
+
+#[cfg(test)]
+mod partial_model_tests {
+    use super::*;
+    use crate::report::BindRow;
+
+    fn row(reference: &str, outcome: BindOutcome, warning: Option<&str>) -> BindRow {
+        BindRow {
+            reference: reference.to_string(),
+            value: "PART".to_string(),
+            model_id: Some("some_entry".to_string()),
+            confidence: Confidence::Exact,
+            source: None,
+            outcome,
+            warning: warning.map(str::to_string),
+            guesses: Vec::new(),
+        }
+    }
+
+    /// A partial-model warning must become an ASSUMPTION, because that is what
+    /// reaches `--plain`, `--json` and the web front door; the bind report's own
+    /// warning list reaches only `--report`.
+    ///
+    /// This is the honesty rule the project already applied once to the
+    /// estimated-fallback rows in this same function. It matters most for the
+    /// `Skipped` row below: `Skipped` is `is_ignored()`, so the part leaves the
+    /// resolve denominator AND gets no `open_part` assumption, which means that
+    /// without this lift a board whose only clock source is a packaged oscillator
+    /// read as MORE fully handled than one the tool admitted it could not model.
+    /// Measured before the lift existed: a corpus board's oscillator appeared 121
+    /// times under `--report --plain` and ZERO times under `--check --plain` or
+    /// `--check --json`.
+    ///
+    /// The negative rows are half the test: an ordinary bind warning is a
+    /// diagnostic about the BOARD and belongs on the bind report only. If every
+    /// warning became evidence, the evidence map would fill with wiring notes and
+    /// the reader would learn to skip it.
+    #[test]
+    fn a_partial_model_warning_becomes_evidence_and_an_ordinary_one_does_not() {
+        let marker = Assumption::PARTIAL_MODEL_MARKER;
+        let mut report = BindReport::default();
+        report.push(row(
+            "X1",
+            BindOutcome::Skipped {
+                reason: "crystal or packaged oscillator".to_string(),
+            },
+            Some(&format!(
+                "{marker}X1 (PART): its supply draw and its driven clock are not modelled"
+            )),
+        ));
+        report.push(row(
+            "U5",
+            BindOutcome::Behavioral {
+                device: "vswitch".to_string(),
+            },
+            Some(&format!(
+                "{marker}U5 (PART): one channel of eight is modelled"
+            )),
+        ));
+        // Ordinary warnings: a board diagnostic, and a row with no warning at all.
+        report.push(row(
+            "U6",
+            BindOutcome::Behavioral {
+                device: "vswitch".to_string(),
+            },
+            Some("U6 (PART): analog-switch gate(s) 3 missing a connection, left open"),
+        ));
+        report.push(row(
+            "U7",
+            BindOutcome::Behavioral {
+                device: "vswitch".to_string(),
+            },
+            None,
+        ));
+
+        let board = ExtractedBoard {
+            name: "partial-model-fixture".to_string(),
+            nets: Vec::new(),
+            components: Vec::new(),
+        };
+        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
+            .expect("evidence builds");
+
+        let lifted: Vec<&str> = evidence
+            .assumptions()
+            .iter()
+            .filter(|a| a.statement().contains("modelled only in part"))
+            .map(|a| a.statement())
+            .collect();
+        assert_eq!(
+            lifted.len(),
+            2,
+            "exactly the two marked rows become evidence, got: {lifted:?}"
+        );
+        assert!(
+            lifted.iter().any(|h| h.contains("X1")) && lifted.iter().any(|h| h.contains("U5")),
+            "the skipped oscillator and the part-modelled switch must both be there: \
+             {lifted:?}"
+        );
+
+        // The marker is routing, not prose: it must not survive into anything a
+        // reader sees, on either surface.
+        for a in evidence.assumptions() {
+            for text in [a.statement(), a.because(), a.consequence(), a.replacement()] {
+                assert!(
+                    !text.contains(marker.trim()),
+                    "the routing marker leaked into user-facing text: {text}"
+                );
+            }
+        }
+        for (_, w) in report.warnings() {
+            assert!(
+                !w.contains(marker.trim()),
+                "the routing marker leaked into the printed bind warning: {w}"
+            );
+        }
+        // And the gap text is not repeated with the reference glued on the front:
+        // the assumption carries the subject in its own field.
+        let x1 = evidence
+            .assumptions()
+            .iter()
+            .find(|a| a.statement().contains("X1"))
+            .expect("X1 assumption");
+        assert!(
+            !x1.because().contains("X1 (PART):"),
+            "the REF (VALUE) prefix belongs to the bind report line, not the \
+             assumption's own sentence: {}",
+            x1.because()
+        );
+    }
 }

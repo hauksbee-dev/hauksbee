@@ -2036,7 +2036,12 @@ max_pin_current_a = 0.005  # input current on any pin, +/-5 mA
 #   VCC   = 0.8 to 3.6 V
 #   VIH   = 2.0 V min      (VCC = 3.0 to 3.6 V; 0.65 x VCC in the 1.1-1.95 V bucket)
 #   VIL   = 0.9 V max      (VCC = 3.0 to 3.6 V; 0.35 x VCC in the 1.1-1.95 V bucket)
-#   VOH   = VCC - 0.1 V min at IOH = -20 uA; 2.6 V typ at VCC = 3 V, IOH = -4 mA
+#   VOH   = VCC - 0.1 V min at IOH = -20 uA; 2.6 V MIN at VCC = 3 V, IOH = -4 mA
+#           (2.55 V min over -40 to 85 C). SCES766C's VOH block has MIN / TYP / MAX
+#           sub-columns and every VOH figure sits under MIN: the sheet publishes no
+#           typical VOH at all. An earlier version of this note called 2.6 a typ,
+#           which invites the next reader to assume headroom above it that the
+#           datasheet does not grant.
 #   VOL   = 0.1 V max at IOL = 20 uA; 0.44 V max at VCC = 3 V, IOL = 4 mA
 #   tpd   = 2.4 ns typ (1 ns min, 3.5 ns max) at VCC = 3.3 V +/- 0.3 V, CL = 5 pF
 #   ICC   = 0.5 uA at TA = 25 C and 0.9 uA over -40 to 85 C, VI = GND or VCC,
@@ -2065,7 +2070,10 @@ description = "TI SN74AUP3G34 triple non-inverting buffer, VSSOP-8, 3.3V levels"
 value_re = "(?i)^SN74AUP3G34(DCU|DQE)R?$"
 
 [models.params]
-voh   = 2.6      # typ at VCC = 3 V, IOH = -4 mA (VCC - 0.1 V min unloaded)
+voh   = 2.55     # MIN at VCC = 3 V, IOH = -4 mA over -40 to 85 C. The 25 C-only
+                 # min is 2.6; the operating-range figure is the one to hold a
+                 # board to, and it is 50 mV lower. Not a typical: see the note
+                 # above. Unloaded the min is VCC - 0.1 V at IOH = -20 uA.
 vol   = 0.44     # max at VCC = 3 V, IOL = 4 mA (0.1 V max at 20 uA)
 vih   = 2.0      # min, VCC = 3.0 to 3.6 V
 vil   = 0.9      # max, VCC = 3.0 to 3.6 V
@@ -2270,12 +2278,15 @@ description = "TI TCA9535 16-bit I2C I/O expander, WQFN-24 (pad map and levels; 
 # VCC on 21). A "TCA9535PWR" bound here would have its supply and ground on two
 # port pins.
 #
-# The optional `A` is accepted UNSOURCED, which is worth flagging: SCPS201E
-# documents no TCA9535A and no datasheet for one was findable (TI's "A" address
-# variant exists on the 8-bit TCA9534/TCA9534A). If such a part exists it is
-# overwhelmingly likely to be an address variant on this same pinout, which is why
-# the letter is tolerated rather than refused, but nothing here verifies it.
-value_re = "(?i)^TCA9535A?(RTW|RGE)R?$"
+# THE OPTIONAL `A` IS GONE. An earlier version of this regex accepted TCA9535A on
+# the reasoning that if such a part existed it would probably be an address variant
+# on this same pinout. "Probably" is not a pin map. SCPS201E (August 2009, revised
+# May 2022) contains no occurrence of the string "9535A" anywhere, so there is no
+# document behind the letter; TI's "A" address variant exists on the 8-bit
+# TCA9534/TCA9534A, which is a different part. A board writing TCA9535A now resolves
+# to nothing and is disclosed as an open part, which is the correct answer for a
+# part number no datasheet describes.
+value_re = "(?i)^TCA9535(RTW|RGE)R?$"
 
 [models.params]
 # Evaluated at VCC = 3.3 V. See the note above.
