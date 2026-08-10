@@ -995,15 +995,37 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
         "--seconds",
         "0.05",
         "--strict",
+        "--json",
         "--junit",
         refused.to_str().unwrap(),
         "--sarif",
         refused_sarif.to_str().unwrap(),
     ]);
+    // This run both refuses (no firmware activity to vouch for) and found real
+    // faults, and `fail` outranks `invalid`: the exit code is 2, matching the
+    // verdict its own document printed, while the refusal stays on stderr and
+    // in the artifacts.
+    assert_eq!(
+        json_verdict(&out).0,
+        "fail",
+        "raised faults are a judgement the run CAN make"
+    );
     assert_eq!(
         out.status.code(),
-        Some(3),
-        "a strict co-sim that saw zero activity refuses with the invalid code; stderr: {}",
+        Some(2),
+        "the findings code, not invalid-for-analysis; stderr: {}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("zero net toggles"),
+        "the refusal is not silenced by the fault gate taking the exit:\n{}",
+        stderr(&out)
+    );
+    // A gating run under GitHub Actions still leaves stdout as exactly one JSON
+    // document: the workflow annotations are stderr, not report content.
+    assert!(
+        stderr(&out).lines().any(|l| l.starts_with("::error ")),
+        "the gate annotated the run:\n{}",
         stderr(&out)
     );
     let xml = std::fs::read_to_string(&refused).expect("junit");
@@ -1047,5 +1069,55 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
         err.lines()
             .any(|l| l.starts_with("::error ") && l.contains("invalid for analysis")),
         "the refusal reaches the GitHub annotation surface:\n{err}"
+    );
+}
+
+/// `--strict-boot` is a gate like any other, so under it the boot advisory is
+/// gate-grade for the co-sim document too. Needs real firmware (the advisory
+/// only speaks when the MCU actually ran), so it rides the AVR fixture the
+/// boot-advisory CLI test uses and skips when that firmware is not built.
+#[cfg(feature = "avr")]
+#[test]
+fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
+    let b = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
+    let fw = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/firmware/boot_gate_a/boot_gate.hex");
+    if !fw.exists() {
+        eprintln!("skipping: boot_gate_a firmware not built");
+        return;
+    }
+    let base = [
+        "run",
+        b.to_str().unwrap(),
+        "--firmware",
+        fw.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--json",
+    ];
+    // Advisory only: exit 0 and a verdict that says so.
+    let out = run(&base);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    assert_eq!(
+        json_verdict(&out).0,
+        "pass",
+        "the boot advisory does not gate without --strict-boot"
+    );
+    // Escalated: exit 2 AND `fail` in the document that exit was printed beside.
+    let mut args = base.to_vec();
+    args.push("--strict-boot");
+    let out = run(&args);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "--strict-boot escalates the advisory; stderr: {}",
+        stderr(&out)
+    );
+    assert_eq!(
+        json_verdict(&out).0,
+        "fail",
+        "and the document must not read `pass` beside that exit 2"
     );
 }

@@ -58,24 +58,39 @@ and failure parse the same way:
 | `serious_count` | int | number of serious findings (DRC shorts + co-sim stress faults + serious lint/SI) |
 | `actionable_count` | int | findings a user can act on (serious + warnings + clearance groups) |
 
-`verdict` is `"fail"` when `serious_count > 0`. It is `"invalid"` when
-nothing is serious but an analysis that ran could not be judged (AC or
-thermal reported `valid:false`). Otherwise it is `"pass"`. DRC shorts are
-excluded from `serious_count` when the board is newer than the validated
-copper extraction (a `drc.version_warning` is set). This is the same
-carve-out the exit gate makes.
+`verdict` is `"fail"` when `serious_count > 0`, or when the emitting surface's
+own `--strict` gate fails on a finding the `serious` severity does not carry
+(`--lint` gates on medium-severity findings, `--si` on any finding, the co-sim
+surface on any raised fault; `--strict-boot` adds the boot advisory). It is
+`"invalid"` when nothing gates but the run-level claim could not be judged: a
+top-level `refusal`, AC or thermal reporting `valid:false`, undermined
+run-level evidence, or unbound verdict-critical parts on a model-dependent
+surface. Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`,
+and it matches the exit code a `--strict` run of the same command produces
+(2 / 3 / 0). DRC shorts are excluded from `serious_count` when the board is
+newer than the validated copper extraction (a `drc.version_warning` is set).
+This is the same carve-out the exit gate makes.
 
-A `"pass"` can be **qualified**. When current-carrying / active parts have no
-model (an open power FET, an unresolved main IC), the lint/SI/check surfaces
-add a `notes` entry (kind `coverage`) whose message begins `INCONCLUSIVE:`,
-naming the count, the parts, and the unlocking input. The same parts are in
-`bind.active_path_unresolved[]` (an unresolved power FET appears there with
-`active_ic: false`, so do not filter on `active_ic` when looking for them) or
+When current-carrying / active parts have no model (an open power FET, an
+unresolved main IC), the lint/SI/check surfaces add a `notes` entry (kind
+`coverage`) whose message begins `INCONCLUSIVE:`, naming the count, the parts,
+and the unlocking input. The same parts are in `bind.active_path_unresolved[]`
+(an unresolved power FET appears there with `active_ic: false`, so do not
+filter on `active_ic` when looking for them) or
 `bind.resolved_but_open_active[]`, and the evidence spine carries the typed
-`open_part` assumptions on affected claims. Read `verdict: "pass"` together
-with those fields: a pass over unmodelled critical parts is not a clean bill.
-The note is prose honesty only, it never changes `ok`, `verdict`, or the exit
-code (`docs/ci/CI.md` states that boundary).
+`open_part` assumptions on affected claims. On the model-dependent surfaces
+(`--lint`, `--si`, `--check`, `--resources`, the bare machine report, the
+CC-scoped `--usb-c` claim and the co-sim report) those parts also make
+`verdict` read `invalid`, and a `--strict` run of the same command exits 3 to
+match: a clean result there would be vacuous. The copper (`--drc`) and
+descriptive (`--report`) surfaces are exempt, on both the verdict and the exit
+code: copper reads the layout, and `--report` describes the binding rather than
+judging it (`docs/ci/CI.md` states that boundary).
+
+A `"pass"` can still be **qualified** rather than refused: `--thermal
+--no-strict-thermal` returns `valid:true` and exit 0 while keeping its
+PARTIAL-coverage caveat in `notes`. Read `verdict: "pass"` together with
+`notes` and the `bind` fields, never on its own.
 
 ## Sections
 
