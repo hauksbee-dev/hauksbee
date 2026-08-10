@@ -71,7 +71,8 @@ pub fn emit(
     // The verdict blockers: current-carrying / active parts with no model. A
     // lint that came back clean over an unbound power FET or main IC must say
     // INCONCLUSIVE (naming them, and what unlocks a conclusive verdict) rather
-    // than a clean bill, on every surface. Exit codes are unchanged.
+    // than a clean bill, on every surface. Without --strict the exit code is
+    // unchanged; under it these blockers exit 3, matching the verdict field.
     let blockers =
         crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
     match mode {

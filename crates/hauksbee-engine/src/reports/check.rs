@@ -132,7 +132,8 @@ pub fn emit(
     // The verdict blockers: unmodelled current-carrying / active parts. The
     // lint/SI sections and the closing verdict must read INCONCLUSIVE over
     // them, never a clean bill; the copper (DRC) section reads the layout and
-    // is deliberately exempt. Exit codes are unchanged.
+    // is deliberately exempt. Without --strict the exit code is unchanged;
+    // under it these blockers exit 3, matching the verdict field.
     let blockers = crate::result::unmodelled_critical_refs(&summary);
     // This surface's own exit gate, computed before anything renders so the
     // machine document can state the same outcome the exit code will. It is
