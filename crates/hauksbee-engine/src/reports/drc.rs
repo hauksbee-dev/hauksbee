@@ -147,8 +147,9 @@ pub fn emit(
         && (coverage_undermined || crate::result::run_level_undermined(evidence.maps(), |_| false))
     {
         // Not `exit_invalid_for_analysis`: that helper annotates bind blockers,
-        // and this surface has none by construction (the bind gate does not
-        // reach copper), so it would be a no-op wrapper here.
+        // and this surface names none (the bind gate does not reach copper,
+        // whatever the board's own bind state is), so it would be a no-op
+        // wrapper here.
         std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())

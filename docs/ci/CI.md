@@ -1155,19 +1155,21 @@ Q1, ...)" instead of a clean bill, and the same sentence rides the JSON
 `notes` (kind `coverage`). Without `--strict` the exit code stays 0: prose
 honesty and exit-code policy are deliberately separate contracts, and making
 INCONCLUSIVE alone exit non-zero would change what `--lint` and `--si` mean to
-every pipeline that calls them without `--strict`. Under `--strict` those
-same model-dependent surfaces exit 3, because their machine `verdict` field
-already reads `invalid` for the unbound part and an exit code that disagreed
-with the document beside it would give a pipeline two answers. The copper
-(`--drc`) and descriptive (`--report`) surfaces are exempt on both: copper
-reads the layout and owes nothing to device models, and `--report` describes
-the binding rather than judging it, so it never gates and its verdict never
-turns the incomplete binding it prints into a refusal.
+every pipeline that calls them without `--strict`. Under `--strict` those same
+model-dependent surfaces exit 3, because their machine `verdict` field reads
+`invalid` for the unbound part and an exit code that disagreed with the document
+beside it would give a pipeline two answers. If the run ALSO gates on a
+finding, `fail` outranks the unbound part on both: verdict `fail`, exit 2.
+
+The copper (`--drc`) and descriptive (`--report`) surfaces are exempt on both:
+copper reads the layout and owes nothing to device models, and `--report`
+describes the binding rather than judging it, so it never gates and its verdict
+never turns the incomplete binding it prints into a refusal.
 
 Exit 1 and exit 2 are worth keeping apart in a pipeline: 1 means your input was
-never analysed, 2 means it was analysed and the board is at fault. A CI step that
-treats both as "hardware failed" will report a broken file path as a broken
-board.
+never analysed, 2 means it was analysed and the board is at fault. A CI step
+that treats both as "hardware failed" will report a broken file path as a
+broken board.
 
 What `--strict` gates on, per report: `--drc` true copper shorts (clearance
 notes never gate), `--lint` high/medium findings, `--si` any real finding,
@@ -1188,17 +1190,24 @@ without `--strict`), so reading it there is at worst incomplete. On the co-sim
 path it is misleading: the zero-activity refusal is only constructed under
 `--strict` and the boot advisory is only gate-grade under `--strict-boot`, so
 neither reaches the document until its flag is passed (whatever else the run
-found on its own, such as bind blockers or raised faults, is there either way). In the other direction,
-`--thermal --no-strict-thermal` opts out of the PARTIAL-coverage escalation
-permanently, so that document can read `invalid` at exit 0 whatever else is
-passed; a thermal table with no usable coverage at all still exits 3 through the
-flag. Run the gate you intend to gate on. `--report` has no gate of its own; a
-board with no component placement still refuses before any surface renders.
+found on its own, such as bind blockers or raised faults, is there either way).
+In the other direction, `--thermal --no-strict-thermal` opts out of the
+PARTIAL-coverage escalation permanently, so that document can read `invalid` at
+exit 0 whatever else is passed; a thermal table with no usable coverage at all
+still exits 3 through the flag. Run the gate you intend to gate on. `--report`
+has no gate of its own; a board with no component placement still refuses before
+any surface renders.
 
 Two co-sim paths deliberately keep exit 3 over a `fail` document, because there
 the run is not analysable even though it observed faults: an aborted analog
 solve (the faults may come from the windows the solve failed on) and a runtime
-timing refusal. Everywhere else an armed gate and its verdict agree.
+timing refusal. Everywhere else an armed gate and its verdict agree, including
+the zero-activity refusal, which yields to the faults it saw (exit 2) because
+the analog solve behind them was sound. These three resolve the same collision
+differently on purpose, per what the run could actually judge; note that
+`hauksbee-ci` merges codes ACROSS specs the other way (3 > 2, above), because
+there the question is which spec's result is least trustworthy rather than what
+one run concluded.
 
 ## Limitations
 

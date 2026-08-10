@@ -1008,6 +1008,29 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
             stderr(&out)
         );
     }
+    // Exactly once, not once per call site. With an artifact flag the same
+    // blockers are reachable from both the artifact writer and the gating exit,
+    // and a duplicate spends one of GitHub's ten annotations per type per step
+    // on a line the reader has already seen.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
+    let out = run_in_actions(&[
+        "run",
+        unbound.to_str().unwrap(),
+        "--check",
+        "--json",
+        "--strict",
+        "--junit",
+        dir.path().join("out.xml").to_str().unwrap(),
+    ]);
+    let err = stderr(&out);
+    assert_eq!(
+        err.lines()
+            .filter(|l| l.starts_with("::error ") && l.contains("evidence undermined"))
+            .count(),
+        1,
+        "the blocker annotation fires once, not once per call site:\n{err}"
+    );
 }
 
 #[test]

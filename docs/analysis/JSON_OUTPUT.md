@@ -55,7 +55,7 @@ and failure parse the same way:
 |---|---|---|
 | `ok` | bool | `true` iff `verdict == "pass"` |
 | `verdict` | string | `"pass"` \| `"fail"` \| `"invalid"` (see below) |
-| `serious_count` | int | number of `serious` findings (DRC shorts, a destroyed part in co-sim, high-severity lint/SI). A co-sim overcurrent or overtemperature grades `warning` and is counted by its surface's gate instead, see `verdict` below |
+| `serious_count` | int | number of `serious` findings (DRC shorts, a destroyed part in co-sim, high-severity lint/SI). A co-sim fault that did not destroy the part grades `warning` and is counted by its surface's gate instead, see `verdict` below |
 | `actionable_count` | int | findings a user can act on (serious + warnings + clearance groups) |
 
 `verdict` is `"fail"` when `serious_count > 0`, or when the emitting surface's
