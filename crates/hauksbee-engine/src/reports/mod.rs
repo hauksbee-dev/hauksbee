@@ -165,12 +165,26 @@ pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
     std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS)
 }
 
-/// The mandatory last word of every `--strict` gate: name WHY the process is
-/// about to exit 2, then exit. Exit 2 with no line saying why reads as a tool
+/// The mandatory last word of the eight report gate sites that route through
+/// here: `--lint`, `--resources`, `--check`, bare `--json`, `--drc`, `--si`,
+/// `--usb-c`, and the co-sim fault gate in `commands::run`. Name WHY the process
+/// is about to exit 2, then exit. Exit 2 with no line saying why reads as a tool
 /// crash, and `--plain --strict` used to print a "not a failure" verdict while
-/// failing. Stream per house style: the line is part of the report on the
-/// text/plain surfaces (stdout); under `--json` stdout must stay one JSON
-/// document, so it goes to stderr.
+/// failing.
+///
+/// Not every exit 2 in the binary comes through here, so do not read this as the
+/// exit-2 chokepoint. Three other paths exit 2 with a message of their own:
+/// `--strict-boot` in `commands::run` prints a `BOOT HAZARD` line per held-high
+/// net (its subjects are nets, not the `<check> <subject>` items this helper
+/// formats), `hauksbee models lint` exits 2 on its own finding count, and
+/// `hauksbee sim` uses `EXIT_MALFORMED_DECK`. Two more reach exit 2 without a
+/// message of their own: the usage guards in `main`, which are not gates, and
+/// `hauksbee reproduce`, which forwards a replayed run's code verbatim. The
+/// exit-code contract itself is in docs/ci/CI.md.
+///
+/// Stream per house style: the line is part of the report on the text/plain
+/// surfaces (stdout); under `--json` stdout must stay one JSON document, so it
+/// goes to stderr.
 pub fn strict_gate_exit(mode: OutputMode, items: &[String]) -> ! {
     // --plain promised prose a non-engineer can read; a failure line full of
     // rule ids ("drc-short", "crystal_load_cap") breaks that promise at the

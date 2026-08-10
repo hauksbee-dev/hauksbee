@@ -436,12 +436,13 @@ above over a `field`.) Each peripheral's `state()` in
   controllers at all, and `rp2040.soc.toml` declares none for SPI because the
   vendored PL022 bit-bangs onto GPIO pins and never dispatches to a registered
   `ISPIPeripheral`, so a bridge there would see nothing. Either way a slave
-  bound to a controller-less bus is recorded UNEXERCISED, surfaced on every
-  report surface, and a CI `peripheral` assertion against it FAILS. Under QEMU, hauksbee-ci emits a
-  loud warning that an `[[peripheral]]` bus slave or a `[[sensor]]` is a
-  NO-OP on that backend, and the shipped ESP32 I2C proof instead rides the
-  machine's own emulated tmp105, into which the scheduler pushes the modeled
-  LM75's temperature each chunk. The per-coupling table in
+  bound to a controller-less bus is recorded UNEXERCISED, surfaced on all four
+  batch report surfaces (run text, `--plain`, `--json`, hauksbee-ci, but not the
+  TUI), and a CI `peripheral` assertion against it FAILS. Under QEMU,
+  hauksbee-ci emits a loud warning that an `[[peripheral]]` bus slave or a
+  `[[sensor]]` is a NO-OP on that backend, and the shipped ESP32 I2C proof
+  instead rides the machine's own emulated tmp105, into which the scheduler
+  pushes the modeled LM75's temperature each chunk. The per-coupling table in
   [MCU.md](MCU.md) is the authority.
 - **Bit-bang is push-backend only.** Byte-level interception of the hardware
   TWI/SPI peripherals is the main path everywhere. A software bit-banged bus
