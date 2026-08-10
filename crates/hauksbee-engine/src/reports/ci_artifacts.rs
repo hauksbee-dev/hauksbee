@@ -64,6 +64,20 @@ pub fn github_blocker_annotation(blockers: &[String]) {
     );
 }
 
+/// GitHub error annotation for a whole-run refusal (the exit-3 documents the
+/// JUnit `<error>` and the SARIF `hauksbee/invalid-for-analysis` result carry),
+/// so the annotation surface cannot stay silent on a run the other two
+/// artifacts show red. No-op outside GitHub Actions.
+pub fn github_refusal_annotation(refusal: &Refusal) {
+    if std::env::var_os("GITHUB_ACTIONS").is_none() {
+        return;
+    }
+    eprintln!(
+        "::error title=hauksbee invalid for analysis::{}",
+        refusal.render_text().replace('\n', "%0A")
+    );
+}
+
 /// GitHub annotations for evidence that is not entitled to a clean result.
 pub fn github_evidence_annotations(maps: &[hauksbee_ir::evidence::EvidenceMap]) {
     github_evidence_annotations_with_gate(maps, |_| true)

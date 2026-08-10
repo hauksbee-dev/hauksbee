@@ -29,7 +29,12 @@ pub fn emit(
     )?;
     match mode {
         OutputMode::Json => {
+            // Descriptive, never gating: `--strict` does not reach this
+            // surface, so its verdict must not read `invalid` where the exit
+            // code will always be 0. The binding facts stay in the evidence
+            // array and the bind summary, both rendered in full.
             let report = JsonReport::new(&bound.name, summary)
+                .describing_only()
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             println!("{}", report.to_json());
