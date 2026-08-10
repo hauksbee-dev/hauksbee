@@ -623,6 +623,14 @@ voids and the board-sized sheet came back.
 Where nesting depth IS valid is inside one `G36`/`G37` statement, whose
 contours do not cross, so a clear region is split into its connected pieces at
 the moment it is banked, each piece's outer boundary first and its holes after.
+Containment there is judged from a constructed interior point, never a vertex:
+`point_in_polygon` is half-open, so a hole whose loop starts at a point it
+shares with its outer, which boolean-op CAM emits routinely, answered inside or
+outside by drawing orientation alone. And the pieces of one clear image are
+only meaningful together, so a piece may not be skipped as already-void once a
+sibling of its own statement has been cut from that pour: cutting a ring's
+outer while dropping the piece that restores its island erases copper the film
+kept.
 That statement may legally carry several disjoint islands in any order, and
 treating everything after the first contour as a hole is a guess about draw
 order: a second disjoint void in one statement was cancelled outright, and an
