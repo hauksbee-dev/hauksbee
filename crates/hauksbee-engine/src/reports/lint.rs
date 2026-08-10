@@ -117,7 +117,7 @@ pub fn emit(
     // the verdict-critical set only, never through any open passive's per-net
     // map, so --strict cannot exit 3 where the verdict field says pass.
     if strict && !blockers.is_empty() {
-        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        super::exit_invalid_for_analysis(&blockers);
     }
     Ok(())
 }
@@ -253,7 +253,7 @@ pub fn emit_resources(
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
                 .with_bind_verdict_gate()
-                // Same gate as `--lint` below, so the same widening applies.
+                // Same gate as `--lint` above, so the same widening applies.
                 .with_surface_gate(lint_fails(&report))
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
@@ -316,7 +316,7 @@ pub fn emit_resources(
     // the verdict-critical set only, never through any open passive's per-net
     // map, so --strict cannot exit 3 where the verdict field says pass.
     if strict && !blockers.is_empty() {
-        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        super::exit_invalid_for_analysis(&blockers);
     }
     Ok(())
 }

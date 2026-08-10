@@ -266,7 +266,7 @@ pub fn emit(
     // field says pass.
     let strict_invalid = coverage_undermined || !blockers.is_empty();
     if strict && strict_invalid {
-        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        super::exit_invalid_for_analysis(&blockers);
     }
     Ok(())
 }
@@ -731,7 +731,7 @@ pub fn emit_combined_json(
             .any(|f| f.message == a)
     }) || !blockers.is_empty();
     if strict && strict_invalid {
-        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        super::exit_invalid_for_analysis(&blockers);
     }
     Ok(())
 }

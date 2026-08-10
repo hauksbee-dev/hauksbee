@@ -887,40 +887,50 @@ fn junit_and_sarif_agree_with_a_specialist_surfaces_verdict() {
 fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
     // The third artifact surface, same rule: an error annotation appears with
     // the invalid verdict and nowhere else, so a pull request's checks tab
-    // cannot read clean beside a refused document.
-    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("out.xml");
-    let out = run_in_actions(&[
-        "run",
-        unbound.to_str().unwrap(),
-        "--lint",
-        "--json",
-        "--junit",
-        junit.to_str().unwrap(),
-    ]);
-    let err = stderr(&out);
-    assert!(
-        err.lines()
-            .any(|l| l.starts_with("::error ") && l.contains("Q1") && l.contains("INCONCLUSIVE:")),
-        "an error annotation names the bind blocker in the shared sentence:\n{err}"
-    );
+    // cannot read clean beside a refused document. No `--junit` here on
+    // purpose: the annotation must not be a side effect of asking for an
+    // artifact file, or a pipeline that gates on the exit code alone gets a
+    // silent checks tab.
+    for surface in ["--lint", "--si", "--check", "--resources"] {
+        let unbound = fixture("verdict_fet_unbound.kicad_pcb");
+        let out = run_in_actions(&[
+            "run",
+            unbound.to_str().unwrap(),
+            surface,
+            "--json",
+            "--strict",
+        ]);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "{surface} gates on the bind blocker; stderr: {}",
+            stderr(&out)
+        );
+        let err = stderr(&out);
+        assert!(
+            err.lines().any(|l| l.starts_with("::error ")
+                && l.contains("Q1")
+                && l.contains("INCONCLUSIVE:")),
+            "{surface} annotates the blocker in the shared sentence:\n{err}"
+        );
+        // And stdout stayed exactly one JSON document: a workflow command is
+        // not report content.
+        assert_eq!(json_verdict(&out).0, "invalid");
 
-    let bound = fixture("verdict_fet_bound.kicad_pcb");
-    let junit = dir.path().join("bound.xml");
-    let out = run_in_actions(&[
-        "run",
-        bound.to_str().unwrap(),
-        "--lint",
-        "--json",
-        "--junit",
-        junit.to_str().unwrap(),
-    ]);
-    let err = stderr(&out);
-    assert!(
-        !err.lines().any(|l| l.starts_with("::error ")),
-        "no error annotation on the bound twin:\n{err}"
-    );
+        let bound = fixture("verdict_fet_bound.kicad_pcb");
+        let out = run_in_actions(&[
+            "run",
+            bound.to_str().unwrap(),
+            surface,
+            "--json",
+            "--strict",
+        ]);
+        assert!(
+            !stderr(&out).lines().any(|l| l.starts_with("::error ")),
+            "no error annotation on the bound twin ({surface}):\n{}",
+            stderr(&out)
+        );
+    }
 }
 
 #[test]
@@ -1119,5 +1129,60 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
         json_verdict(&out).0,
         "fail",
         "and the document must not read `pass` beside that exit 2"
+    );
+}
+
+/// `--thermal` gates by default rather than under `--strict`, and its exit code
+/// agrees with its verdict on both sides of that gate. `--no-strict-thermal` is
+/// the documented opt-out, so it is the one place a non-zero-worthy document
+/// deliberately exits 0: the same situation as omitting `--strict` elsewhere,
+/// and the caveat still prints. Pinned so nobody "fixes" the split by
+/// silencing the verdict instead.
+#[test]
+fn thermal_gates_by_default_and_the_opt_out_is_the_only_exit_gap() {
+    let b = fixture("thermal_partial_coverage.kicad_pcb");
+    let base = [
+        "run",
+        b.to_str().unwrap(),
+        "--thermal",
+        "--seconds",
+        "0.05",
+        "--json",
+    ];
+    let out = run(&base);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the default thermal gate; stderr: {}",
+        stderr(&out)
+    );
+    assert_eq!(
+        json_verdict(&out).0,
+        "invalid",
+        "and the document says the same thing the exit code does"
+    );
+
+    let mut args = base.to_vec();
+    args.push("--no-strict-thermal");
+    let out = run(&args);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the opt-out restores exit 0; stderr: {}",
+        stderr(&out)
+    );
+    // The document is NOT rewritten to match: the coverage is still partial and
+    // the evidence still undermined, so the machine verdict still refuses. The
+    // user opted out of the exit code, not out of the truth.
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert_eq!(v["thermal"]["coverage"]["partial"], true);
+    assert!(
+        v["notes"]
+            .as_array()
+            .expect("notes")
+            .iter()
+            .filter_map(|n| n["message"].as_str())
+            .any(|m| m.starts_with("INCONCLUSIVE:")),
+        "the caveat survives the opt-out:\n{v}"
     );
 }

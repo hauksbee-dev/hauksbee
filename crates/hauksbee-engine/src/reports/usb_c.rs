@@ -131,7 +131,7 @@ pub fn emit(
     // Same rule as the other model-dependent surfaces: strict exits 3 for
     // unbound verdict-critical parts, not for any open passive's per-net map.
     if strict && !blockers.is_empty() {
-        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        super::exit_invalid_for_analysis(blockers);
     }
     Ok(())
 }

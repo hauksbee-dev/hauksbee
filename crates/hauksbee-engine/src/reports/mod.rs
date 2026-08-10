@@ -146,6 +146,17 @@ fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
     }
 }
 
+/// The exit-3 twin of [`strict_gate_exit`]: a run that could not be judged
+/// annotates the GitHub checks tab with the reason before exiting, whether or
+/// not `--junit`/`--sarif` were asked for. Without this the annotation surface
+/// was the only silent one on a refused run, because the blocker annotation
+/// rode inside the artifact-writing branch; a reviewer then saw a clean checks
+/// tab beside an exit 3. No-op outside GitHub Actions.
+pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
+    ci_artifacts::github_blocker_annotation(blockers);
+    std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS)
+}
+
 /// The mandatory last word of every `--strict` gate: name WHY the process is
 /// about to exit 2, then exit. Exit 2 with no line saying why reads as a tool
 /// crash, and `--plain --strict` used to print a "not a failure" verdict while

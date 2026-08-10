@@ -1175,12 +1175,14 @@ notes never gate), `--lint` high/medium findings, `--si` any real finding,
 these. On a board format newer than the validated range (KiCad 10+),
 possibly-phantom shorts do not gate. The printed caveat says to cross-check.
 
-Each gate is per surface and agrees with that surface's own machine verdict on
-the same board: `fail` exits 2, `invalid` exits 3, `pass` exits 0. Those gates
-are deliberately wider than the `serious` severity (`--lint` gates on medium
-findings, `--si` on any finding), so a run gating on a `warning`-severity
-finding reads `verdict: "fail"` in the very document its exit code was printed
-beside. `--report` has no gate at all.
+Each gate is per surface, and when it is armed it agrees with that surface's
+own machine verdict on the same board: `fail` exits 2, `invalid` exits 3, `pass`
+exits 0. Those gates are deliberately wider than the `serious` severity
+(`--lint` gates on medium findings, `--si` on any real finding), so a run gating
+on a `warning`-severity finding reads `verdict: "fail"` in the very document its
+exit code was printed beside. Disarming a gate does not rewrite the document:
+without `--strict`, and under `--thermal --no-strict-thermal`, a refusing
+verdict still prints beside exit 0. `--report` has no gate at all.
 
 ## Limitations
 
