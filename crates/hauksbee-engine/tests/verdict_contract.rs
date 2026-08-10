@@ -582,17 +582,29 @@ fn json_verdict(out: &Output) -> (String, bool) {
     )
 }
 
-/// Assert one surface's strict exit code and its own JSON verdict tell the
-/// same story on one board: `invalid` gates with [`EXIT_INVALID`], `fail` with
-/// the findings code 2, `pass` with 0.
-fn assert_gate_matches_verdict(surface: &str, board: &Path, want_verdict: &str) {
+/// Assert a surface's strict exit code and its own JSON verdict tell the same
+/// story about one board: `invalid` exits 3, `fail` exits 2, `pass` exits 0.
+///
+/// `surface` is the selector flags (empty for the default machine report). The
+/// strict half re-reads the verdict out of the very invocation that exited, so
+/// the document and the exit code being compared are the same run's, not two
+/// runs that merely agree.
+fn assert_gate_matches_verdict(surface: &[&str], board: &Path, want_verdict: &str) {
     let b = board.to_str().unwrap();
-    let json = run(&["run", b, surface, "--json"]);
+    let label = if surface.is_empty() {
+        "the default machine report".to_string()
+    } else {
+        surface.join(" ")
+    };
+    let mut args = vec!["run", b];
+    args.extend_from_slice(surface);
+    args.push("--json");
+    let json = run(&args);
     let (verdict, ok) = json_verdict(&json);
     assert_eq!(
         verdict,
         want_verdict,
-        "{surface} on {b} must read {want_verdict}; stderr: {}",
+        "{label} on {b} must read {want_verdict}; stderr: {}",
         stderr(&json)
     );
     assert_eq!(ok, verdict == "pass", "ok must mirror the verdict word");
@@ -601,7 +613,7 @@ fn assert_gate_matches_verdict(surface: &str, board: &Path, want_verdict: &str) 
     assert_eq!(
         json.status.code(),
         Some(0),
-        "{surface} must not gate without --strict; stderr: {}",
+        "{label} must not gate without --strict; stderr: {}",
         stderr(&json)
     );
     let want_code = match want_verdict {
@@ -609,40 +621,60 @@ fn assert_gate_matches_verdict(surface: &str, board: &Path, want_verdict: &str) 
         "fail" => 2,
         _ => 0,
     };
-    let strict = run(&["run", b, surface, "--strict"]);
+    args.push("--strict");
+    let strict = run(&args);
     assert_eq!(
         strict.status.code(),
         Some(want_code),
-        "{surface} --strict must exit {want_code} to match its own '{want_verdict}' verdict; \
+        "{label} --strict must exit {want_code} to match its own '{want_verdict}' verdict; \
          stderr: {}",
         stderr(&strict)
     );
+    assert_eq!(
+        json_verdict(&strict).0,
+        want_verdict,
+        "the document the gating invocation printed must say the same thing its exit code did"
+    );
+}
+
+/// [`assert_gate_matches_verdict`] for the default machine report (a bare
+/// `--json` with no selector), which assembles its own verdict and gate.
+fn assert_bare_json_gate_matches_verdict(board: &Path, want_verdict: &str) {
+    assert_gate_matches_verdict(&[], board, want_verdict);
 }
 
 #[test]
 fn lint_strict_exit_agrees_with_the_lint_verdict_on_both_sides_of_the_bind_gate() {
     assert_gate_matches_verdict(
-        "--lint",
+        &["--lint"],
         &fixture("verdict_fet_unbound.kicad_pcb"),
         "invalid",
     );
-    assert_gate_matches_verdict("--lint", &fixture("verdict_fet_bound.kicad_pcb"), "pass");
+    assert_gate_matches_verdict(&["--lint"], &fixture("verdict_fet_bound.kicad_pcb"), "pass");
 }
 
 #[test]
 fn si_strict_exit_agrees_with_the_si_verdict_on_both_sides_of_the_bind_gate() {
-    assert_gate_matches_verdict("--si", &fixture("verdict_fet_unbound.kicad_pcb"), "invalid");
-    assert_gate_matches_verdict("--si", &fixture("verdict_fet_bound.kicad_pcb"), "pass");
+    assert_gate_matches_verdict(
+        &["--si"],
+        &fixture("verdict_fet_unbound.kicad_pcb"),
+        "invalid",
+    );
+    assert_gate_matches_verdict(&["--si"], &fixture("verdict_fet_bound.kicad_pcb"), "pass");
 }
 
 #[test]
 fn check_strict_exit_agrees_with_the_check_verdict_on_both_sides_of_the_bind_gate() {
     assert_gate_matches_verdict(
-        "--check",
+        &["--check"],
         &fixture("verdict_fet_unbound.kicad_pcb"),
         "invalid",
     );
-    assert_gate_matches_verdict("--check", &fixture("verdict_fet_bound.kicad_pcb"), "pass");
+    assert_gate_matches_verdict(
+        &["--check"],
+        &fixture("verdict_fet_bound.kicad_pcb"),
+        "pass",
+    );
 }
 
 #[test]
@@ -650,10 +682,14 @@ fn drc_strict_exit_agrees_with_the_copper_verdict_the_bind_gate_never_touches() 
     // The exemption, both halves: the unbound FET that invalidates --lint/--si
     // above leaves --drc at `pass` AND at exit 0 under --strict, because copper
     // spacing owes nothing to device models...
-    assert_gate_matches_verdict("--drc", &fixture("verdict_fet_unbound.kicad_pcb"), "pass");
+    assert_gate_matches_verdict(
+        &["--drc"],
+        &fixture("verdict_fet_unbound.kicad_pcb"),
+        "pass",
+    );
     // ...and that exit 0 is not a dead gate: a board with real shorts reads
     // `fail` and exits 2 on the same surface.
-    assert_gate_matches_verdict("--drc", &shorted_board(), "fail");
+    assert_gate_matches_verdict(&["--drc"], &shorted_board(), "fail");
 }
 
 #[test]
@@ -662,63 +698,101 @@ fn usb_c_strict_exit_agrees_with_its_cc_scoped_verdict() {
     // nets, so the bind gate is scoped to them. An unbound FET sitting on CC1
     // invalidates the surface and exits 3 under --strict...
     assert_gate_matches_verdict(
-        "--usb-c",
+        &["--usb-c"],
         &fixture("verdict_usb_c_cc_fet_unbound.kicad_pcb"),
         "invalid",
     );
     // ...while the same unbound FET class on a board with no receptacle at all
     // leaves nothing for the CC claim to be inconclusive about: `pass`, exit 0.
-    assert_gate_matches_verdict("--usb-c", &fixture("verdict_fet_unbound.kicad_pcb"), "pass");
+    assert_gate_matches_verdict(
+        &["--usb-c"],
+        &fixture("verdict_fet_unbound.kicad_pcb"),
+        "pass",
+    );
 }
 
 #[test]
 fn the_report_surface_describes_the_binding_and_never_gates_on_it() {
     // `--report` is a description of what was modelled, not a pass/fail check,
-    // so --strict does not apply to it (reports/bind.rs). Its document still
-    // carries the honest `invalid` when binding is incomplete, because
-    // incomplete binding is precisely this report's subject; what it must never
-    // do is turn that into a failing build.
-    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
-    let out = run(&["run", unbound.to_str().unwrap(), "--report", "--json"]);
-    let (verdict, ok) = json_verdict(&out);
-    assert_eq!(verdict, "invalid", "stderr: {}", stderr(&out));
-    assert!(!ok);
-    // The route matters: `--report` keeps the per-net binding-completeness maps
-    // the specialist surfaces trim, and those are what make it inconclusive.
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
-    assert!(
-        v["evidence"].as_array().expect("evidence").iter().any(|m| {
+    // so `--strict` never reaches it (reports/bind.rs). Its verdict therefore
+    // may not read `invalid` either: incomplete binding is this report's
+    // SUBJECT, printed in full, and binding completeness reaches a verdict only
+    // through the verdict-critical bind gate this surface is exempt from. A
+    // document saying `ok:false` beside a command that always exits 0 hands a
+    // pipeline two answers.
+    for name in [
+        "verdict_fet_unbound.kicad_pcb",
+        "verdict_fet_bound.kicad_pcb",
+    ] {
+        let b = fixture(name);
+        assert_gate_matches_verdict(&["--report"], &b, "pass");
+        // Exempt from the gate is not the same as silent: the per-net binding
+        // evidence the exemption declines to gate on is still in the document
+        // for the unbound board.
+        let out = run(&["run", b.to_str().unwrap(), "--report", "--json"]);
+        let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+        let undermined_binding = v["evidence"].as_array().expect("evidence").iter().any(|m| {
             m["status"] == "undermined"
                 && m["assertion"]
                     .as_str()
                     .is_some_and(|a| a.starts_with("Binding completeness"))
-        }),
-        "the descriptive report says which net it could not bind:\n{v}"
-    );
-    for extra in [None, Some("--strict")] {
-        let mut args = vec!["run", unbound.to_str().unwrap(), "--report"];
-        if let Some(f) = extra {
-            args.push(f);
-        }
-        let out = run(&args);
+        });
         assert_eq!(
-            out.status.code(),
-            Some(0),
-            "--report never gates ({extra:?}); stderr: {}",
-            stderr(&out)
+            undermined_binding,
+            name.contains("unbound"),
+            "the descriptive report still names the net it could not bind ({name}):\n{v}"
         );
     }
-    // Bound twin: the description has nothing left to qualify.
-    let bound = fixture("verdict_fet_bound.kicad_pcb");
-    let out = run(&[
-        "run",
-        bound.to_str().unwrap(),
-        "--report",
-        "--json",
-        "--strict",
-    ]);
-    assert_eq!(json_verdict(&out).0, "pass", "stderr: {}", stderr(&out));
-    assert_eq!(out.status.code(), Some(0));
+}
+
+// ---------------------------------------------------------------------------
+// A surface's own strict gate can be WIDER than the shared `serious` severity:
+// `--lint` gates on medium-severity findings and `--si` on any finding at all,
+// both of which serialize as `warning`/`note`. The verdict field has to know,
+// or the same invocation prints `"verdict":"pass"` and exits 2.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_medium_lint_finding_fails_the_verdict_because_it_fails_the_gate() {
+    let b = fixture("verdict_medium_lint.kicad_pcb");
+    // No finding here is `serious`: the gate grade is the surface's own.
+    let out = run(&["run", b.to_str().unwrap(), "--lint", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert_eq!(v["serious_count"], 0, "{v}");
+    assert!(
+        v["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|f| f["severity"] == "warning" && f["kind"] == "placeholder_value"),
+        "the fixture's gating finding is a medium/warning one:\n{v}"
+    );
+    // ...and yet it gates, so `fail` is the only verdict that can sit beside
+    // the exit code, on every surface whose gate includes it.
+    for surface in [["--lint"], ["--check"]] {
+        assert_gate_matches_verdict(&surface, &b, "fail");
+    }
+    // The bare machine report shares `--check`'s gate.
+    assert_bare_json_gate_matches_verdict(&b, "fail");
+}
+
+#[test]
+fn the_resources_subset_and_the_bare_machine_report_gate_like_their_verdicts() {
+    // Two more routes with verdict/gate code of their own: `--resources` (the
+    // MCU-conflict subset of the lint family) and the default machine report a
+    // bare `--json` produces.
+    assert_gate_matches_verdict(
+        &["--resources"],
+        &fixture("verdict_fet_unbound.kicad_pcb"),
+        "invalid",
+    );
+    assert_gate_matches_verdict(
+        &["--resources"],
+        &fixture("verdict_fet_bound.kicad_pcb"),
+        "pass",
+    );
+    assert_bare_json_gate_matches_verdict(&fixture("verdict_fet_unbound.kicad_pcb"), "invalid");
+    assert_bare_json_gate_matches_verdict(&fixture("verdict_fet_bound.kicad_pcb"), "pass");
 }
 
 // ---------------------------------------------------------------------------
@@ -913,7 +987,8 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
     );
 
     let refused = dir.path().join("refused.xml");
-    let out = run(&[
+    let refused_sarif = dir.path().join("refused.sarif");
+    let out = run_in_actions(&[
         "run",
         board.to_str().unwrap(),
         "--headless",
@@ -922,6 +997,8 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
         "--strict",
         "--junit",
         refused.to_str().unwrap(),
+        "--sarif",
+        refused_sarif.to_str().unwrap(),
     ]);
     assert_eq!(
         out.status.code(),
@@ -945,5 +1022,30 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
         !junit_all_green(&xml),
         "a refused run is not an all-green test report: {}",
         junit_root(&xml)
+    );
+
+    // SARIF is rewritten from the same findings list, so it owes the same
+    // superset plus the refusal rule.
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&refused_sarif).expect("sarif written"))
+            .expect("valid SARIF JSON");
+    let results = doc["runs"][0]["results"].as_array().expect("results array");
+    assert!(
+        results.iter().any(|r| r["ruleId"] == "cosim/overpower"),
+        "the refusal rewrite kept the stress faults in SARIF too:\n{results:?}"
+    );
+    assert!(
+        results
+            .iter()
+            .any(|r| r["ruleId"] == "hauksbee/invalid-for-analysis" && r["level"] == "error"),
+        "and raised the refusal as an error-level result:\n{results:?}"
+    );
+    // The third artifact surface must not be the quiet one: a refusal that
+    // shows red in JUnit and SARIF has to annotate the checks tab as well.
+    let err = stderr(&out);
+    assert!(
+        err.lines()
+            .any(|l| l.starts_with("::error ") && l.contains("invalid for analysis")),
+        "the refusal reaches the GitHub annotation surface:\n{err}"
     );
 }

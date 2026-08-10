@@ -88,6 +88,11 @@ pub fn emit(
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
                 .with_bind_verdict_gate()
+                // `si_fails` is this surface's exit gate and it counts ANY
+                // finding, including the low ones that serialize as `note`, so
+                // the verdict has to know or the document reads `pass` beside
+                // exit 2.
+                .with_surface_gate(si_fails(&report))
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.findings = Some(si_findings_json(&report));

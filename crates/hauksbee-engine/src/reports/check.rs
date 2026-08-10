@@ -134,10 +134,20 @@ pub fn emit(
     // them, never a clean bill; the copper (DRC) section reads the layout and
     // is deliberately exempt. Exit codes are unchanged.
     let blockers = crate::result::unmodelled_critical_refs(&summary);
+    // This surface's own exit gate, computed before anything renders so the
+    // machine document can state the same outcome the exit code will. It is
+    // wider than the `serious` severity on purpose (medium lint findings, any
+    // SI finding), which is why the verdict has to be told about it. An
+    // unvalidated board format (KiCad 10+) yields possibly-phantom shorts and
+    // does not gate; the caveat is printed instead.
+    let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
+    let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
+    let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, summary)
                 .with_bind_verdict_gate()
+                .with_surface_gate(would_gate)
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.drc = Some(drc_structured);
@@ -246,11 +256,6 @@ pub fn emit(
             verdict_line(serious, worth_a_look, &blockers, coverage_undermined)
         );
     }
-    let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-    // Unvalidated board format (KiCad 10+) → its shorts may be phantom; do not
-    // fail the gate on them (the caveat is still printed above).
-    let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
-    let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
         super::strict_gate_exit(mode, &gate_items(drc_gates, &drc, &lint, &si, &usbc));
@@ -689,8 +694,14 @@ pub fn emit_combined_json(
     // command is a lint/SI surface too, and its clean verdict over unmodelled
     // critical parts must carry the same qualification.
     let blockers = crate::result::unmodelled_critical_refs(&combined_summary);
+    let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
+    let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
+    let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     let mut jr = JsonReport::new(&bound.name, combined_summary)
         .with_bind_verdict_gate()
+        // Same widening as `--check`: this route shares its gate, so it must
+        // share the verdict that gate implies.
+        .with_surface_gate(would_gate)
         .with_inputs(inputs)
         .with_evidence(&evidence);
     jr.drc = Some(drc_structured);
@@ -705,9 +716,6 @@ pub fn emit_combined_json(
     // Honour `--strict` on the default machine command: a bare
     // `run <board> --json --strict` must gate a shorted/failing board like the
     // text path does (it silently exited 0 before). Mirror emit()'s gate.
-    let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-    let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
-    let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
         super::strict_gate_exit(
