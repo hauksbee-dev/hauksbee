@@ -533,8 +533,11 @@ license = "CC-BY-SA-4.0"
 axes = ["kicad5", "power-electronics", "stm32", "small"]
 expect = ["control-pcb/BMS-5s.kicad_pcb", "power-pcb/Switch-N-Sense.kicad_pcb"]
 
-# The one board in the corpus that ships its own FABRICATION OUTPUT beside the
-# design file, which is why it is here. `subdir` keeps only V3.4.5, whose
+# The only EAGLE board in the corpus that ships its own fabrication output beside
+# the design file, which is why it is here. Several KiCad entries ship gerbers too
+# (watchy, gb_hardware, olimex_esp32 and more), but a KiCad `.kicad_pcb` already
+# carries its computed pour fill; an Eagle `.brd` does not, so this is the one
+# place an Eagle pour question can be answered from the same upstream. `subdir` keeps only V3.4.5, whose
 # `GERBERS .../CAMOutputs/GerberFiles/` directory holds the copper Eagle
 # actually computed from the pours the `.brd` only describes. That turned an
 # Eagle pour question into a measurement rather than an argument: see the
