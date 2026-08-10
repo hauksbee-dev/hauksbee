@@ -92,15 +92,29 @@ $"""
 [models.params]
 # TI SCES323R Section 5.8 Analog Switch Characteristics, and Nexperia Rev. 14.1
 # Table 8, which agree within their tolerances.
-ron  = 6.5       # Nexperia Rev 14.1 Table 8, RON typ at VCC = 3.0 to 3.6 V.
-                 # TI's nearest row is 7.5 Ohm typ (15 max) at VCC = 3 V,
-                 # IS = 24 mA; its table has NO 5 V row at all (the rows are
-                 # 1.65 / 2.3 / 3 / 4.5 V, giving 125 / 35 / 7.5 / 5.5 Ohm typ).
+ron  = 6.5       # Nexperia Rev 14.1 Table 8, RON(rail) at VI = GND, ISW = 24 mA,
+                 # VCC = 3.0 to 3.6 V: 6.5 Ohm typ (12 max to +85 C). Nexperia
+                 # tabulates THREE on-resistances and they are not interchangeable;
+                 # RON(rail) is the one to use here because a single constant models
+                 # a switch carrying a signal near a rail, while RON(peak) (7.8 typ
+                 # on the same row) is the worst point of the curve.
+                 # TI SCES323R's comparable figure is its plain `ron`, 7.5 Ohm typ
+                 # (15 max) at VCC = 3 V, IS = 24 mA. TI's `ron` rows are
+                 # 1.65 / 2.3 / 3 / 4.5 V giving 12 / 9 / 7.5 / 5.5 Ohm typ, and it
+                 # has NO 5 V row. TI's much larger 125 and 35 Ohm figures at 1.65 V
+                 # and 2.3 V are `ron(p)`, the DCK/DBV PEAK on-resistance, and an
+                 # earlier version of this comment wrongly listed them as `ron`.
                  # So the two vendors agree to about 1 Ohm at a 3.3 V rail rather
                  # than exactly, and this is Nexperia's number.
-roff = 1.1e7     # from Nexperia IS(OFF) 0.5 uA max at VCC = 5.5 V. Derived from an
-                 # output-side leakage figure, so this one is genuinely a
-                 # resistance and not a floor picked for solver comfort.
+roff = 5.5e6     # 5.5 V / 1 uA, from TI SCES323R IS(off) = +/-1 uA MAX at
+                 # VCC = 5.5 V over the full temperature range. Nexperia Rev 14.1
+                 # Table 7 gives the same parameter as +/-0.5 uA, which would be
+                 # 1.1e7, and this entry takes the LEAKIER of the two for the same
+                 # reason `vth` below takes the higher threshold: a part bound by
+                 # this entry may be either vendor's, so the modelled switch must
+                 # not be quieter in the off state than the real part could be.
+                 # Derived from a measured leakage figure either way, so this is a
+                 # real resistance and not a floor picked for solver comfort.
 vth  = 2.31      # The HIGHER of the two vendors' control thresholds at a 3.3 V
                  # rail, which is the conservative choice: the modelled switch then
                  # needs at least as much control voltage as either real part.
@@ -149,7 +163,7 @@ value_re = "(?i)^(SN|NL|ST|MC|TC)?74LVC1G66(DRY|DSF|GM|GN|GS)R?([-.,][A-Z0-9.,]*
 
 [models.params]
 ron  = 6.5       # same die and the same rows as the five-lead entry above
-roff = 1.1e7
+roff = 5.5e6     # same TI IS(off) +/-1 uA at 5.5 V; see the five-lead entry
 vth  = 2.31      # same reasoning as above: the higher of the two vendors' figures
 
 [models.pins]
@@ -406,6 +420,13 @@ roff = 1.0e9     # NOT A DATASHEET FIGURE: this sheet publishes no off-state
 vth  = 1.5       # EN threshold. TI publishes no VIH/VIL for EN; 1.5 V is the
                  # EN level its own RON table is characterised at, so it is the
                  # one voltage the datasheet actually commits to for this pin.
+# `warning` IS THE DISCLOSURE, and it exists because the pin-map note below is not
+# one: `bind_analog_switch` reads this key and the bind report prints it, whereas a
+# TOML comment reaches nobody. The part binds and counts as resolved, so the gap has
+# to travel with it.
+warning = """one pass gate of two is modelled (SCL1<->SCL2, 25.5 Ohm gated by EN); \
+the SDA channel is present on the board but not stamped, so nothing here decides \
+whether SDA is continuous through the translator or what series resistance it sees"""
 [models.pins]
 # DCT / DCU / DQE pinout (identical numbering across all three).
 # ONLY THE SCL CHANNEL IS STAMPED, and the role names say which. This part has two
@@ -484,6 +505,11 @@ ron  = 400.0     # midpoint of the datasheet's stated 300-500 Ohm pass-gate
                  # range; see the note above, this is an interval midpoint
 roff = 1.0e9     # NOT A DATASHEET FIGURE; conservative floor
 vth  = 2.145     # OE VIH min = 0.65 x VCCA, evaluated at VCCA = 3.3 V
+# See the PCA9306 note above for why this is a param and not a comment.
+warning = """one channel of eight is modelled (A1<->B1, 400 Ohm gated by OE); the \
+other seven are not stamped, and the edge-rate one-shots and the 4k/40k dynamic \
+pull-ups are not modelled at all, so this part answers connectivity and series \
+resistance only, never rise time, drive strength or bus contention"""
 [models.pins]
 # PW (TSSOP-20).
 # ONE CHANNEL OF EIGHT IS STAMPED, A1<->B1, and only that pair carries
@@ -791,6 +817,12 @@ ron  = 1.3       # IN2-OUT (PMOS) typ at TJ = 25 C, VI = 5 V. At TJ = 125 C the
 roff = 1.0e9     # NO DATASHEET BASIS: the sheet publishes no output leakage. This
                  # is the engine's ideal-open value. See the note above.
 vth  = 2.0       # EN VIH min, 2.7 V <= VI <= 5.5 V (VIL max 0.8 V)
+# See the PCA9306 note earlier in this file for why this is a param and not a
+# comment.
+warning = """only the IN2 throw is modelled (IN2<->OUT, 1.3 Ohm, closed on a HIGH \
+EN); the IN1 main-input path is not stamped, so with EN low this model leaves OUT \
+open instead of powering it from IN1, and it cannot answer which source is carrying \
+the load"""
 
 [models.pins]
 # Pin Assignment, DBV (SOT-23-5). Cross-checked against the margay datalogger:
