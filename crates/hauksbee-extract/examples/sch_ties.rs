@@ -7,13 +7,16 @@ fn main() {
         eprintln!("usage: sch_ties <board.brd> <schematic.sch>");
         std::process::exit(2);
     };
-    let sch_text = std::fs::read_to_string(&sch).expect("read schematic");
+    // Lossy, matching the product path: real Eagle schematics in the wild are not
+    // all valid UTF-8 (emonTx V3.2.sch is not), and the CLI reads them anyway.
+    let sch_text =
+        String::from_utf8_lossy(&std::fs::read(&sch).expect("read schematic")).into_owned();
     let ties = hauksbee_extract::declared_net_ties(&sch_text).expect("parse schematic");
     println!("declared ties: {}", ties.len());
     for t in &ties {
         println!("  {} <-> {}: {}", t.net, t.tied_net, t.describe());
     }
-    let brd_text = std::fs::read_to_string(&brd).expect("read board");
+    let brd_text = String::from_utf8_lossy(&std::fs::read(&brd).expect("read board")).into_owned();
     let mut report = hauksbee_extract::ExtractedBoard::drc(&brd_text).expect("drc runs");
     println!("shorts: {}", report.short_count());
     println!("hint: {:?}", report.tie_declaration_hint.is_some());

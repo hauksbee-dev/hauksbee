@@ -484,24 +484,53 @@ pub(crate) fn drc_short_findings(
 ) -> Vec<crate::result::JsonFinding> {
     let phantom = drc.version_warning.is_some();
     drc.shorts()
-        .map(|f| crate::result::JsonFinding {
-            check: "drc".to_string(),
-            kind: "short".to_string(),
-            severity: if phantom { "warning" } else { "serious" }.to_string(),
-            nets: vec![f.net_a_name.clone(), f.net_b_name.clone()],
-            location_mm: None,
-            layer: Some(f.layer.clone()),
-            refs: Vec::new(),
-            actionable: true,
-            message: format!(
-                "copper short: {} touches {} on {}",
-                f.net_a_name, f.net_b_name, f.layer
-            ),
-            plain: format!(
-                "two different nets ({} and {}) are touching on layer {}",
-                f.net_a_name, f.net_b_name, f.layer
-            ),
-            fix: None,
+        .map(|f| {
+            // A contact a companion schematic declares deliberate is a note here too.
+            // These findings become the JUnit/SARIF artifacts a CI job reads, and
+            // those must agree with the human, `--json` and TUI surfaces: emitting a
+            // `<failure>` for a declared star ground that `--strict` deliberately does
+            // not gate on would fail the build through the artifact instead, which is
+            // the same wrong answer by a different route.
+            let severity = match (&f.declared_tie, phantom) {
+                (Some(_), _) => "note",
+                (None, true) => "warning",
+                (None, false) => "serious",
+            };
+            crate::result::JsonFinding {
+                check: "drc".to_string(),
+                kind: "short".to_string(),
+                severity: severity.to_string(),
+                nets: vec![f.net_a_name.clone(), f.net_b_name.clone()],
+                location_mm: None,
+                layer: Some(f.layer.clone()),
+                refs: Vec::new(),
+                // Not actionable when the design asks for it: there is nothing for
+                // the reader to go and change.
+                actionable: f.declared_tie.is_none(),
+                message: match &f.declared_tie {
+                    Some(tie) => format!(
+                    "declared net tie: {} and {} are joined in copper on {}, and the schematic \
+                     declares it ({})",
+                    f.net_a_name, f.net_b_name, f.layer, tie.declaration
+                ),
+                    None => format!(
+                        "copper short: {} touches {} on {}",
+                        f.net_a_name, f.net_b_name, f.layer
+                    ),
+                },
+                plain: match &f.declared_tie {
+                    Some(tie) => format!(
+                        "two different nets ({} and {}) are touching on layer {}, which the \
+                     schematic declares on purpose ({})",
+                        f.net_a_name, f.net_b_name, f.layer, tie.declaration
+                    ),
+                    None => format!(
+                        "two different nets ({} and {}) are touching on layer {}",
+                        f.net_a_name, f.net_b_name, f.layer
+                    ),
+                },
+                fix: None,
+            }
         })
         .collect()
 }

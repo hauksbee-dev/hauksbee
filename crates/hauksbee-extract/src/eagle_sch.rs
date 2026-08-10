@@ -139,6 +139,45 @@ struct Segment {
     supply_parts: Vec<String>,
 }
 
+/// Pins seen inside one `<symbol>`, so "is this a supply symbol?" can be decided
+/// once the symbol closes rather than pin by pin.
+///
+/// The single-pin requirement is load-bearing, and getting it wrong is how this
+/// module silences real shorts. Eagle libraries routinely mark an ordinary
+/// component's power pins `direction="sup"`: the `SD-MMC` symbol in
+/// `margay_logger/Hardware/Margay.sch` has 13 pins of which 4 are `sup`, and the
+/// `XBEE` symbol in `emonTx V3.2.sch` has 20 pins of which 2 are. Registering
+/// those as supply symbols made the SD socket and the radio module "declare" a
+/// tie between ground and every net they touch, which would reclassify a genuine
+/// rail-to-ground short into a non-gating note. A real Eagle supply symbol is a
+/// bare marker: one pin, and that pin is `sup`.
+#[derive(Default)]
+struct SymbolPins {
+    total: usize,
+    sup_names: Vec<String>,
+}
+
+impl SymbolPins {
+    /// The net this symbol imposes, or `None` when it is an ordinary component.
+    fn supply_net(&self) -> Option<&str> {
+        if self.total == 1 && self.sup_names.len() == 1 {
+            let name = self.sup_names[0].as_str();
+            // An unnamed pin names no net.
+            return (!name.trim().is_empty()).then_some(name);
+        }
+        None
+    }
+}
+
+/// One `<deviceset>` being scanned, resolved at its closing tag.
+struct DevicesetScan {
+    name: String,
+    gate_symbols: Vec<String>,
+    /// True once any `<device>` names a package: then this is a physical part,
+    /// not a supply marker, whatever its symbol looks like.
+    any_device_has_package: bool,
+}
+
 struct Parsed {
     /// Part name -> the net name its supply symbol imposes. Only supply parts
     /// appear here, so a lookup miss means "an ordinary component".
@@ -153,16 +192,18 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
     let mut reader = Reader::from_str(text);
     reader.config_mut().trim_text(true);
 
-    // (library, symbol) -> the supply net name, from the symbol's `sup` pin.
+    // (library, symbol) -> the supply net name, for symbols that pass BOTH tests
+    // in `SymbolPins` below.
     let mut supply_symbols: HashMap<(String, String), String> = HashMap::new();
-    // (library, deviceset) -> the supply net name, resolved through its gates.
+    // (library, deviceset) -> the supply net name, resolved at `</deviceset>`.
     let mut supply_devicesets: HashMap<(String, String), String> = HashMap::new();
     let mut part_supply: HashMap<String, String> = HashMap::new();
     let mut segments: Vec<Segment> = Vec::new();
 
     let mut cur_library = String::new();
     let mut cur_symbol: Option<String> = None;
-    let mut cur_deviceset: Option<String> = None;
+    let mut cur_symbol_pins = SymbolPins::default();
+    let mut cur_deviceset: Option<DevicesetScan> = None;
     let mut cur_net: Option<String> = None;
     let mut cur_segment: Option<Segment> = None;
     let mut saw_eagle_root = false;
@@ -177,38 +218,47 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                     b"library" => {
                         cur_library = a.get("name").cloned().unwrap_or_default();
                     }
-                    b"symbol" => cur_symbol = a.get("name").cloned(),
+                    b"symbol" => {
+                        cur_symbol = a.get("name").cloned();
+                        cur_symbol_pins = SymbolPins::default();
+                    }
                     b"pin" => {
-                        // The supply marker. `direction="sup"` is Eagle's own
-                        // flag for a supply pin; the pin's NAME is the net.
-                        // Keying on the library name (`supply1`) instead would
-                        // be a naming heuristic and would miss a hand-drawn
-                        // supply symbol in a project library.
-                        if let (Some(symbol), Some("sup"), Some(name)) = (
-                            cur_symbol.as_ref(),
-                            a.get("direction").map(String::as_str),
-                            a.get("name"),
-                        ) {
-                            supply_symbols
-                                .insert((cur_library.clone(), symbol.clone()), name.clone());
+                        // Count EVERY pin, and remember the name of the `sup`
+                        // one. The decision is deferred to `</symbol>` because it
+                        // depends on the total: see `SymbolPins::supply_net`.
+                        if cur_symbol.is_some() {
+                            cur_symbol_pins.total += 1;
+                            if a.get("direction").map(String::as_str) == Some("sup") {
+                                cur_symbol_pins
+                                    .sup_names
+                                    .push(a.get("name").cloned().unwrap_or_default());
+                            }
                         }
                     }
-                    b"deviceset" => cur_deviceset = a.get("name").cloned(),
+                    b"deviceset" => {
+                        cur_deviceset = a.get("name").cloned().map(|name| DevicesetScan {
+                            name,
+                            gate_symbols: Vec::new(),
+                            any_device_has_package: false,
+                        });
+                    }
                     b"gate" => {
                         if let (Some(deviceset), Some(symbol)) =
-                            (cur_deviceset.as_ref(), a.get("symbol"))
+                            (cur_deviceset.as_mut(), a.get("symbol"))
                         {
-                            if let Some(supply) =
-                                supply_symbols.get(&(cur_library.clone(), symbol.clone()))
-                            {
-                                // A multi-gate deviceset is not a supply symbol;
-                                // a supply symbol has exactly one gate. Taking
-                                // the first supply gate is therefore not a
-                                // choice, and `or_insert` keeps it stable if a
-                                // pathological file offers two.
-                                supply_devicesets
-                                    .entry((cur_library.clone(), deviceset.clone()))
-                                    .or_insert_with(|| supply.clone());
+                            deviceset.gate_symbols.push(symbol.clone());
+                        }
+                    }
+                    b"device" => {
+                        // A supply symbol is a schematic-only marker: it has no
+                        // physical part behind it. Eagle writes a real component's
+                        // variants as `<device name=".." package="..">`, and a
+                        // supply symbol's as a bare `<device name="">` with no
+                        // package at all. This is the second, independent test
+                        // that keeps a connector or IC out of the supply set.
+                        if let Some(deviceset) = cur_deviceset.as_mut() {
+                            if a.get("package").is_some_and(|p| !p.trim().is_empty()) {
+                                deviceset.any_device_has_package = true;
                             }
                         }
                     }
@@ -244,8 +294,27 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                 }
             }
             Ok(Event::End(e)) => match e.name().as_ref() {
-                b"symbol" => cur_symbol = None,
-                b"deviceset" => cur_deviceset = None,
+                b"symbol" => {
+                    if let (Some(symbol), Some(net)) =
+                        (cur_symbol.take(), cur_symbol_pins.supply_net())
+                    {
+                        supply_symbols.insert((cur_library.clone(), symbol), net.to_string());
+                    }
+                    cur_symbol_pins = SymbolPins::default();
+                }
+                b"deviceset" => {
+                    if let Some(deviceset) = cur_deviceset.take() {
+                        // Exactly one gate, no packaged device, and that gate's
+                        // symbol passed the pin test. All three, or nothing.
+                        if !deviceset.any_device_has_package && deviceset.gate_symbols.len() == 1 {
+                            let key = (cur_library.clone(), deviceset.gate_symbols[0].clone());
+                            if let Some(supply) = supply_symbols.get(&key) {
+                                supply_devicesets
+                                    .insert((cur_library.clone(), deviceset.name), supply.clone());
+                            }
+                        }
+                    }
+                }
                 b"library" => cur_library.clear(),
                 b"net" => cur_net = None,
                 b"segment" => {
@@ -420,6 +489,118 @@ mod tests {
         assert_eq!(ties[0].tied_net, "GND");
         assert_eq!(ties[0].symbol, "SUPPLY6");
         assert_eq!(ties[0].tied_to, ["AGND7"]);
+    }
+
+    /// A schematic whose library also holds a REAL multi-pin component that marks
+    /// its power pins `direction="sup"`, which is what ordinary Eagle libraries
+    /// do. `nets` is spliced in as written.
+    fn schematic_with_powered_component(nets: &str) -> String {
+        // Shaped after the `SD-MMC` symbol in margay_logger/Hardware/Margay.sch
+        // (13 pins, 4 of them `sup`) and `XBEE` in emonTx V3.2.sch (20 pins, 2
+        // `sup`): a physical part whose supply pins carry the same marker a
+        // supply symbol uses.
+        let component = r#"
+<symbol name="SD-MMC">
+<pin name="DAT2" x="-12.7" y="0" length="short"/>
+<pin name="VDD" x="-12.7" y="-7.62" length="short" direction="sup"/>
+<pin name="VSS1" x="-12.7" y="-10.16" length="short" direction="sup"/>
+<pin name="VSS2" x="-12.7" y="-12.7" length="short" direction="sup"/>
+<pin name="GND" x="-12.7" y="-17.78" length="short" direction="sup"/>
+</symbol>
+"#;
+        let deviceset = r#"
+<deviceset name="SDMMC" prefix="J">
+<gates><gate name="G$1" symbol="SD-MMC" x="0" y="0"/></gates>
+<devices>
+<device name="WR-CRD" package="SD_WURTH_WR-CRD">
+<technologies><technology name=""/></technologies>
+</device>
+</devices>
+</deviceset>
+"#;
+        schematic(nets)
+            .replace("</symbols>", &format!("{component}</symbols>"))
+            .replace("</devicesets>", &format!("{deviceset}</devicesets>"))
+            .replace(
+                "</parts>",
+                "<part name=\"J1\" library=\"supply1\" deviceset=\"SDMMC\" device=\"WR-CRD\"/>\n</parts>",
+            )
+    }
+
+    #[test]
+    fn a_multi_pin_component_with_supply_pins_declares_nothing() {
+        // THE false-negative guard on the recogniser itself. An SD socket sitting
+        // on a signal net must not "declare" that signal tied to GND: doing so
+        // would reclassify a genuine rail-to-ground short into a non-gating note.
+        // Measured on the real files this fixture is modelled on, the earlier
+        // any-`sup`-pin rule invented 6 ties on Margay and 19 on emonTx V3.2,
+        // including 3.3V/GND.
+        let ties = declared_net_ties(&schematic_with_powered_component(
+            // J1's own GND pin on a signal net, with only an ordinary component
+            // beside it. Nothing here is a supply symbol, so nothing is declared.
+            r#"<net name="MISO" class="0">
+<segment><pinref part="J1" gate="G$1" pin="GND"/><pinref part="R1" gate="G$1" pin="1"/></segment>
+</net>"#,
+        ))
+        .expect("parses");
+        assert!(
+            ties.is_empty(),
+            "an SD socket is a component, not a supply symbol: {ties:?}"
+        );
+    }
+
+    #[test]
+    fn a_packaged_deviceset_is_never_a_supply_symbol() {
+        // The second, independent test. Even a ONE-pin symbol whose single pin is
+        // `sup` is not a supply marker if a physical package sits behind it: a
+        // supply symbol is schematic-only. Eagle writes a real part's variants as
+        // `<device name=".." package="..">` and a supply symbol's as a bare
+        // `<device name="">`, which is the discriminator used here.
+        let text = schematic(
+            r#"<net name="GND" class="0">
+<segment><pinref part="TP1" gate="G$1" pin="AGND"/><pinref part="SUPPLY6" gate="GND" pin="GND"/></segment>
+</net>"#,
+        )
+        .replace(
+            "</devicesets>",
+            r#"<deviceset name="TESTPOINT" prefix="TP">
+<gates><gate name="G$1" symbol="AGND" x="0" y="0"/></gates>
+<devices><device name="" package="TP_PAD"><technologies><technology name=""/></technologies></device></devices>
+</deviceset>
+</devicesets>"#,
+        )
+        .replace(
+            "</parts>",
+            "<part name=\"TP1\" library=\"supply1\" deviceset=\"TESTPOINT\" device=\"\"/>\n</parts>",
+        );
+        let ties = declared_net_ties(&text).expect("parses");
+        assert!(
+            ties.is_empty(),
+            "a packaged testpoint declares nothing: {ties:?}"
+        );
+    }
+
+    #[test]
+    fn a_real_supply_symbol_still_declares_beside_a_powered_component() {
+        // And the recogniser is not merely off: with the SD socket present in the
+        // same library, the genuine AGND-on-GND declaration is still found.
+        let ties = declared_net_ties(&schematic_with_powered_component(
+            r#"<net name="GND" class="0">
+<segment>
+<pinref part="SUPPLY6" gate="GND" pin="GND"/>
+<pinref part="AGND7" gate="VR1" pin="AGND"/>
+<pinref part="J1" gate="G$1" pin="GND"/>
+</segment>
+</net>"#,
+        ))
+        .expect("parses");
+        assert_eq!(ties.len(), 1, "got {ties:?}");
+        assert_eq!(ties[0].describe(), "AGND7 wired to SUPPLY6 in net GND");
+        assert_eq!(
+            ties[0].tied_to,
+            ["SUPPLY6"],
+            "J1 is not a supply symbol, so it is not listed as what the tie joins"
+        );
     }
 
     #[test]
