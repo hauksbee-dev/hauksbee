@@ -278,10 +278,18 @@ max_voltage_v = 7.0
 # active-HIGH enable and "B" is active-LOW: AP22815AWT-7 vs AP22815BWT-7,
 # AP22615AWU-7 vs AP22615BWU-7. The corpus value strings are "AP22815" (bare)
 # and "AP22615A", so the AP22615A is unambiguous and the bare AP22815 is not.
-# `vth` below is the active-high VIH either way; a board that fits a B part has
-# the sense of its enable inverted relative to this model, which will show as
-# the switch being off when the board intends it on. That is a visible,
-# diagnosable disagreement rather than a silent one.
+# `vth` below is the active-high VIH either way. An earlier version of this note
+# claimed a B part would merely "show as the switch being off when the board intends
+# it on", i.e. that the failure was in the safe direction. That is half of it. An
+# inverted enable is wrong in BOTH directions and the other one is a phantom rail:
+# when the board drives the enable HIGH to turn a B part OFF, this model closes
+# 40 mOhm and presents the switched rail as live. So the `B` codes are REFUSED by the
+# regex now rather than bound with the wrong polarity, and a board fitting one is
+# disclosed as an open part.
+#
+# The bare "AP22815" the corpus carries names no polarity at all, so binding it is
+# still an assumption. It is bound active-high, the commoner option and the one that
+# board fits, and the `warning` below says so on the report.
 #
 # The AP22615's fitted-RLIM threshold is consumed by the ampacity check; the
 # ideal-switch solver still does not clamp current. The AP22815's fixed
@@ -293,13 +301,24 @@ kind = "analog_switch"
 description = "AP22815 current-limited load switch, 40 mOhm, TSOT25 (Diodes Inc)"
 
 [models.match]
-value_re = "(?i)^AP22815[AB]?[A-Z0-9-]*$"
+# The bare part, or an A-suffixed ordering code. The group REQUIRES the A, so a `B`
+# code cannot slip in through the trailing character class the way it did when this
+# read `^AP22815[AB]?[A-Z0-9-]*$`: there `[AB]?` matched empty and `[A-Z0-9-]*`
+# swallowed "BWT-7".
+value_re = "(?i)^AP22815(A[A-Z0-9-]*)?$"
 
 [models.params]
 ron  = 0.04      # RDS(on) typ @ VIN = 5.0 V, IOUT = 1 A
 roff = 5.0e7     # NOT A DATASHEET FIGURE. Conservative floor from ISHDN
                  # 0.1 uA typ at 5 V, which is 5e7 Ohm of equivalent leakage.
 vth  = 1.2       # EN VIH min, active-high ordering option; see the note above
+# THE POLARITY ASSUMPTION, on a surface a reader meets. `bind_analog_switch` reads
+# this param and both the bind report and the evidence map carry it; the note above
+# reaches nobody who has not opened this file.
+warning = """the bare part number names no enable-polarity ordering option, so this \
+is modelled as the active-high variant; if the board fits an active-low part the \
+switch conducts on exactly the wrong half of the control range, presenting this \
+rail as live when the board has switched it off"""
 [models.pins]
 # Pinout, TSOT25 (5-pin). Pin 5 is IN; the ISET pin does not exist on this part.
 "1" = "in_out_a" # OUT. NOT `com`: see the control-polarity note below.
@@ -653,11 +672,17 @@ description = "TPS22916 load switch, 70 mOhm, DSBGA-4 (TI)"
 # here would conduct on exactly the half of the control range where it is off.
 #
 # The bare "TPS22916YFP" the board carries names no polarity letter at all, so
-# binding it is an assumption that it is one of the active-high options. That
-# assumption is stated rather than hidden, and it follows the AP22815 entry's
-# precedent above: if the board fits an L part, the disagreement shows up as the
-# switch being off when the board intends it on, which is diagnosable. What this
-# regex will not do is accept a code that says active-low out loud.
+# binding it is an assumption that it is one of the active-high options. SLVSDO5F's
+# Device Comparison Table lists six versions, three and three: TPS22916B, C and CN
+# are Active High, and TPS22916BL, CL and CNL are Active Low. This regex will not
+# accept a code that says active-low out loud, and the `warning` below states the
+# assumption for the polarity-less spelling.
+#
+# An earlier version of this note called the mismatch merely "diagnosable", on the
+# grounds that it would show as the switch being off when the board intended it on.
+# That is one half. The other half is a phantom rail: with an L part, a control line
+# driven high to turn the switch OFF closes this model and presents the switched rail
+# as live. The same correction is on the AP22815 entry above.
 value_re = "(?i)^TPS22916(B|C|CN)?(YFP)?R?$"
 
 [models.params]
@@ -667,6 +692,12 @@ roff = 5.0e7     # NOT A DATASHEET FIGURE. Conservative floor from ISD,VIN
                  # 100 nA max at 5.5 V. See the note above.
 vth  = 1.0       # ON pin VIH min, 1 V over the whole 1 to 5.5 V VIN range
                  # (VIL max is 0.35 V)
+# Same disclosure as the AP22815 above, for the same reason: the assumption lives in
+# the match rule, so it has to travel with the bind rather than sit in a comment.
+warning = """the part number carries no polarity letter, so this is modelled as one \
+of the active-high options (B, C, CN); if the board fits an active-low L part the \
+switch conducts on exactly the wrong half of the control range, presenting this \
+rail as live when the board has switched it off"""
 
 [models.pins]
 # Section 5, YFP (DSBGA-4). Bump names, not numbers: the Eagle package on the
@@ -676,7 +707,8 @@ vth  = 1.0       # ON pin VIH min, 1 V over the whole 1 to 5.5 V VIN range
 "A1" = "in_out_a"   # VOUT. NOT `com`: see the control-polarity note above.
 "A2" = "in_out_b"   # VIN. NOT `s0`, for the same reason.
 "B1" = "vss"        # GND
-"B2" = "ctrl"       # ON, active high on every option this entry matches
+"B2" = "ctrl"       # ON. Active high on every LETTERED option this entry matches;
+                    # see `warning` above for the polarity-less spelling.
 
 [models.ratings]
 # Section 6.1 Absolute Maximum Ratings.
@@ -808,7 +840,36 @@ description = "TPS2104 dual-input power mux, SOT-23-5 (only the IN2/PMOS throw i
 # The TPS2105 is the same silicon with the OPPOSITE enable polarity, so it must
 # NOT bind here: with the single-throw model above it would conduct on exactly the
 # wrong half of the control range. The regex pins the trailing 4.
-value_re = "(?i)^TPS2104[A-Z0-9-]*$"
+#
+# THE PACKAGE CODE IS REQUIRED, and it used to be optional. SLVS235A's AVAILABLE
+# OPTIONS table gives this part in TWO packages, SOT-23-5 (DBV) and SOIC-8 (D), with
+# an R suffix for tape and reel, so "TPS2104D" and "TPS2104DR" are real orderable
+# strings that the old `^TPS2104[A-Z0-9-]*$` accepted. The Terminal Functions table
+# numbers them differently in every position that matters:
+#           DBV (this map)      D (SOIC-8)
+#   EN            1                  3
+#   GND           2                  2
+#   IN2           3                  1
+#   OUT           4                7, 8
+#   IN1           5                  5
+#   NC            -                4, 6
+# So a SOIC-8 board bound to this map got `ctrl` on IN2 (a supply rail), `in_out_b`
+# on EN and `in_out_a` on a no-connect, with OUT unmapped entirely: a 1.3 Ohm path
+# stamped between the enable signal and a dead pad, gated by a rail, and carrying
+# this entry's confident `warning` describing a throw that is not there. The
+# single-throw binder's open-terminal guard cannot save it, because both pads it
+# wants do resolve to nets.
+#
+# The regex therefore accepts the bare part and the DBV codes, and REFUSES the D
+# codes: the group requires DBV, so "TPS2104D" and "TPS2104DR" no longer match while
+# "TPS2104" and "TPS2104DBVR" still do. A SOIC-8 board resolves to nothing and is
+# disclosed as an open part; the D pinout wants its own entry when someone needs it.
+#
+# The BARE spelling is what the margay datalogger writes and it names no package, so
+# binding it to the DBV map is an assumption. It is the right default (SOT-23-5 is
+# the commoner part and is what that board fits) and the `warning` below says so, but
+# it is an assumption and not a reading.
+value_re = "(?i)^TPS2104(DBV[A-Z0-9-]*)?$"
 
 [models.params]
 ron  = 1.3       # IN2-OUT (PMOS) typ at TJ = 25 C, VI = 5 V. At TJ = 125 C the
@@ -817,12 +878,15 @@ ron  = 1.3       # IN2-OUT (PMOS) typ at TJ = 25 C, VI = 5 V. At TJ = 125 C the
 roff = 1.0e9     # NO DATASHEET BASIS: the sheet publishes no output leakage. This
                  # is the engine's ideal-open value. See the note above.
 vth  = 2.0       # EN VIH min, 2.7 V <= VI <= 5.5 V (VIL max 0.8 V)
+# The package assumption rides along with the throw disclosure below, because the
+# bare spelling this entry accepts does not say which of the two pinouts it is.
 # See the PCA9306 note earlier in this file for why this is a param and not a
 # comment.
 warning = """only the IN2 throw is modelled (IN2<->OUT, 1.3 Ohm, closed on a HIGH \
 EN); the IN1 main-input path is not stamped, so with EN low this model leaves OUT \
 open instead of powering it from IN1, and it cannot answer which source is carrying \
-the load"""
+the load. A value string with no package code is taken to be the SOT-23-5 (DBV) \
+part; the SOIC-8 has a different pinout and does not bind here"""
 
 [models.pins]
 # Pin Assignment, DBV (SOT-23-5). Cross-checked against the margay datalogger:
