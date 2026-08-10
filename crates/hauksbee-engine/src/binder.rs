@@ -2261,6 +2261,14 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
             "vout" | "out" | "output" | "vo" => "out",
             "gnd" | "vss" | "ground" | "gnd1" => "gnd",
             "ce" | "en" | "enable" => "en",
+            // `shdn` gets its OWN role and is deliberately not folded into `en`: it
+            // is the active-LOW spelling, so a binder that later learns to gate on
+            // the enable must be able to tell the two apart or it will invert half
+            // the library. Mapped rather than omitted so that a board naming the pad
+            // `SHDN` is read from its pin function instead of falling through to
+            // pin-rule guessing; `bind_vreg` treats both as "an enable exists and is
+            // not modelled" and says so.
+            "shdn" | "shutdown" | "nshdn" => "shdn",
             "fb" | "adj" | "feedback" => "fb",
             "nc" => "nc",
             _ => return None,
@@ -6944,8 +6952,14 @@ mod crystal_fallback_tests {
             ("TXS0108E", "eight"),
             ("PCA9306", "SDA"),
             ("TPS2104", "IN1"),
+            // Not a partial CHANNEL: an assumption in the match rule. The bare part
+            // number names no enable-polarity option, and an entry that guesses one
+            // owes the reader the same disclosure as one that models half a part.
+            ("TPS22916YFP", "active-high"),
         ];
-        let complete = ["TPS22916YFP", "MIC94090C6"];
+        // The silent control. MIC94090's value string names its polarity, so nothing
+        // is assumed and nothing should be said.
+        let complete = ["MIC94090C6"];
 
         for (value, phrase) in partial
             .iter()
@@ -7175,15 +7189,26 @@ mod crystal_fallback_tests {
             );
         }
 
-        // SHDN is the same pin as EN with the OPPOSITE sense. It must NOT map to
-        // `en`: a model that ever gates on that role would read a shutdown as an
-        // enable and report a dead rail as live.
-        assert_eq!(
-            role_from_pinfunction(ComponentKind::Vreg, "SHDN"),
-            None,
-            "an active-low shutdown is not an enable"
-        );
-        assert_eq!(role_from_pinfunction(ComponentKind::Vreg, "~{SHDN}"), None);
+        // SHDN is the same PIN as EN with the OPPOSITE sense, and the invariant that
+        // matters is that it never becomes `en`: a model that gates on that role
+        // would read a shutdown as an enable and report a dead rail as live. It gets
+        // its own role rather than nothing at all, so a board naming the pad is read
+        // from its pin function instead of falling through to pin-rule guessing, and
+        // `bind_vreg` treats either spelling as "an enable exists and is not
+        // modelled".
+        for function in ["SHDN", "shutdown", "nSHDN"] {
+            let role = role_from_pinfunction(ComponentKind::Vreg, function);
+            assert_eq!(
+                role.as_deref(),
+                Some("shdn"),
+                "{function} is the shutdown role"
+            );
+            assert_ne!(
+                role.as_deref(),
+                Some("en"),
+                "{function} must never be read as an active-high enable"
+            );
+        }
 
         // And a name that means nothing on a regulator stays unmapped rather than
         // being forced into the nearest role.
