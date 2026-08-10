@@ -355,8 +355,8 @@ copper in the same file. Treating the drawn outline as solid copper instead
 would manufacture false shorts on every trace the fill legitimately carves
 around. To be precise about what is and is not computed: the fill itself is
 never reconstructed and the isolate distance is never numerically re-verified;
-the settings are parsed, drive the reasoning above, and are disclosed verbatim
-on pour findings. Pour-to-copper pairs are therefore *not checked* (rather than
+the settings are parsed, drive the reasoning above, and travel verbatim on a pour
+finding's `Item::owner` field, though `--drc` does not render that field. Pour-to-copper pairs are therefore *not checked* (rather than
 checked and found clean), and same-rank pours that approach each other without
 ring overlap are not distance-checked either, since the fill extent near the
 boundary depends on those settings. The argument above says a fill Eagle
