@@ -398,10 +398,12 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
   nothing suppressed") and `None` ("this payload predates the accounting, so it
   was never measured") are different claims and a serde default of zero would
   turn the second into the first. `None` yields its own note saying so. It is
-  `DrcReport::suppression_note()` renders the disclosure, which every surface
-  prints ahead of any clean claim (the text report as `NOT CHECKED:`, the plain
-  report as a heads-up, JSON as `suppression_note`). Boards where nothing was
-  suppressed get no note. To audit the suppressed class, run KiCad's own DRC.
+  `DrcReport::suppression_note()` renders the disclosure, which all four static
+  surfaces print ahead of any clean claim (the text report as `NOT CHECKED:`, the
+  plain report as a heads-up, JSON as `suppression_note`, and the TUI's copper
+  pane as an info-severity `class_not_checked` finding). The web front door does
+  not read the field. Boards where nothing was suppressed get no note. To audit
+  the suppressed class, run KiCad's own DRC.
 
 - **KiCad 10 and newer: exact native-DRC parity remains unvalidated.** The
   `20260206` name-only net encoding and baked keyhole-antipad contours are now

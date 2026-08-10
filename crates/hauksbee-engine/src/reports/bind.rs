@@ -29,10 +29,14 @@ pub fn emit(
     )?;
     match mode {
         OutputMode::Json => {
-            // Descriptive, never gating: `--strict` does not reach this
-            // surface, so its verdict must not read `invalid` where the exit
-            // code will always be 0. The binding facts stay in the evidence
-            // array and the bind summary, both rendered in full.
+            // Descriptive, non-gating: `emit` takes no `strict` flag and calls
+            // no gate helper, so its verdict must not read `invalid` where the
+            // exit code cannot be 2 or 3. The two codes this path can still
+            // reach are 1, from the `?` on evidence construction, and 3 from
+            // the pre-render placement refusal upstream in `commands::run`,
+            // neither of which is a judgement about the binding. The binding
+            // facts stay in the evidence array and the bind summary, both
+            // rendered in full.
             let report = JsonReport::new(&bound.name, summary)
                 .with_descriptive_only()
                 .with_inputs(inputs)
