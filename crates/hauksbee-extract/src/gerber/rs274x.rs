@@ -338,7 +338,16 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             if !enclosed {
                 continue;
             }
-            if already_void(&out[i].shape, &applied[slot], &clear.contours, cb) {
+            // The already-void skip is a size optimisation and a guard against
+            // flipping copper back on, and it must never be able to drop ONE
+            // piece of a clear image whose other pieces were cut. The pieces of
+            // one image are only meaningful together: cutting a ring's outer
+            // boundary and skipping the piece that restores its island erases
+            // copper the film kept, which is the one thing this reader must not
+            // do. Cutting a redundant piece anyway is the safe error, since an
+            // extra contour can only flip empty back to copper.
+            let sibling_cut = applied[slot].statement_cut(clear.statement);
+            if !sibling_cut && already_void(&out[i].shape, &applied[slot], &clear.contours, cb) {
                 continue;
             }
             let shape = &mut out[i].shape;
@@ -356,7 +365,7 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
                 indices.push(contours.len());
                 contours.push(c.clone());
             }
-            applied[slot].insert(indices, cb);
+            applied[slot].insert(indices, cb, clear.statement);
             cut.push(slot);
         }
     }
@@ -496,6 +505,8 @@ struct VoidIndex {
     /// Per void id, the contour indices it occupies in the pour's contour list.
     /// The first is its outer boundary, the rest its holes.
     units: Vec<Vec<usize>>,
+    /// Clear-image ids that have already had a piece cut from this pour, sorted.
+    statements: Vec<usize>,
 }
 
 impl VoidIndex {
@@ -512,6 +523,7 @@ impl VoidIndex {
             all: Vec::new(),
             cells: Vec::new(),
             units: Vec::new(),
+            statements: Vec::new(),
         }
     }
 
@@ -529,7 +541,15 @@ impl VoidIndex {
 
     /// Register a void occupying `indices` in the pour's contour list, bounded
     /// by `b`.
-    fn insert(&mut self, indices: Vec<usize>, b: [f64; 4]) {
+    /// Has a piece of this clear image already been cut from the pour?
+    fn statement_cut(&self, statement: usize) -> bool {
+        self.statements.binary_search(&statement).is_ok()
+    }
+
+    fn insert(&mut self, indices: Vec<usize>, b: [f64; 4], statement: usize) {
+        if let Err(at) = self.statements.binary_search(&statement) {
+            self.statements.insert(at, statement);
+        }
         let id = self.units.len();
         self.units.push(indices);
         self.all.push((id, b));
@@ -627,18 +647,33 @@ fn already_void(
         return false;
     };
     const NUDGE_MM: f64 = 1e-4;
-    let (cx, cy) = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0);
+    // Each vertex is nudged toward the candidate's own REMOVED area: inward for
+    // the outer boundary, OUTWARD for a hole, because a hole's interior is the
+    // copper island the void leaves standing and is not removed at all. Nudging
+    // everything toward one centre got the annular case backwards, pushing the
+    // hole's vertices into the island where the earlier void reads as
+    // not-removed. A duplicated annular antipad, the commonest construct on a
+    // negative plane, was therefore cut twice, and even-odd flipped its whole
+    // cleared ring back to copper: the pad shorted to the plane.
     let probes: Vec<(f64, f64)> = contours
         .iter()
-        .flatten()
-        .map(|&(x, y)| {
-            let (dx, dy) = (cx - x, cy - y);
-            let len = dx.hypot(dy);
-            if len <= NUDGE_MM {
-                (x, y)
-            } else {
-                (x + dx / len * NUDGE_MM, y + dy / len * NUDGE_MM)
-            }
+        .enumerate()
+        .flat_map(|(k, c)| {
+            let cb = contour_bounds(c);
+            let (cx, cy) = ((cb[0] + cb[2]) / 2.0, (cb[1] + cb[3]) / 2.0);
+            let sign = if k == 0 { 1.0 } else { -1.0 };
+            c.iter().map(move |&(x, y)| {
+                let (dx, dy) = (cx - x, cy - y);
+                let len = dx.hypot(dy);
+                if len <= NUDGE_MM {
+                    (x, y)
+                } else {
+                    (
+                        x + sign * dx / len * NUDGE_MM,
+                        y + sign * dy / len * NUDGE_MM,
+                    )
+                }
+            })
         })
         .collect();
     applied.candidates(bounds).iter().any(|&(id, ab)| {
@@ -818,6 +853,8 @@ struct Plotter<'a> {
     /// are the VOIDS a negative-drawn pour cuts out of itself; see
     /// [`Clear`] and [`apply_clears`].
     clears: Vec<Clear>,
+    /// Next id for [`Clear::statement`]: one per clear image banked.
+    next_clear_statement: usize,
 }
 
 /// One image painted under clear polarity: copper the film removes.
@@ -841,11 +878,18 @@ struct Clear {
     /// already on the film, never copper drawn after it (that is an island
     /// deliberately re-added inside the void).
     painted_before: usize,
+    /// Which clear IMAGE this piece came from. One region statement or one flash
+    /// can split into several pieces, and the pieces of one image are only
+    /// meaningful together: cutting a ring's outer boundary while dropping the
+    /// piece that restores its island erases copper the film kept. See the
+    /// sibling rule in [`apply_clears`].
+    statement: usize,
 }
 
 impl Clear {
     fn translated(&self, dx: f64, dy: f64, painted_before: usize) -> Clear {
         Clear {
+            statement: self.statement,
             contours: self
                 .contours
                 .iter()
@@ -901,6 +945,7 @@ impl<'a> Plotter<'a> {
             obj_component: None,
             out: Vec::new(),
             clears: Vec::new(),
+            next_clear_statement: 0,
         }
     }
 
@@ -945,10 +990,13 @@ impl<'a> Plotter<'a> {
             return;
         }
         let painted_before = self.out.len();
+        let statement = self.next_clear_statement;
+        self.next_clear_statement += 1;
         for piece in group_contours(contours) {
             self.clears.push(Clear {
                 contours: piece,
                 painted_before,
+                statement,
             });
         }
     }
@@ -1027,9 +1075,15 @@ impl<'a> Plotter<'a> {
                     self.ab_depth += 1;
                 }
                 gerber_types::ApertureBlock::Close => {
-                    self.ab_depth = self.ab_depth.saturating_sub(1);
-                    if self.ab_depth == 0 {
-                        self.dark = self.ab_saved_dark;
+                    // Only a close that actually matches an open restores the
+                    // polarity. A stray `%AB*%` in a malformed file otherwise
+                    // reset `dark` to its initial `true` and painted every
+                    // following clear object as copper.
+                    if let Some(d) = self.ab_depth.checked_sub(1) {
+                        self.ab_depth = d;
+                        if d == 0 {
+                            self.dark = self.ab_saved_dark;
+                        }
                     }
                 }
             },
@@ -1843,6 +1897,66 @@ fn group_contours_into_pieces(contours: Vec<Vec<(f64, f64)>>) -> Vec<Shape> {
         .collect()
 }
 
+/// A point strictly INSIDE a simple closed contour.
+///
+/// The nesting classification below cannot use a vertex. `point_in_polygon` is
+/// half-open, so a vertex that a sibling contour's boundary passes exactly through
+/// answers inside or outside depending on the orientation it happens to be drawn
+/// in, and boolean-op CAM routinely starts a hole's loop at a point it shares with
+/// its outer. A hole misread as an outer splits one clear region statement into two
+/// independent voids, the outer is then cut whole and the piece that would restore
+/// the island is swallowed as already-void, and the island copper the film kept is
+/// gone: the one failure this reader must never produce.
+///
+/// The lowest vertex of a simple polygon lies on its convex hull, so its interior
+/// angle is convex and the bisector of the two edges leaving it points into the
+/// interior. A short step along that bisector, a thousandth of the shorter
+/// adjacent edge, therefore lands strictly inside and on no vertex.
+fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
+    let n = poly.len();
+    if n < 3 {
+        return poly.first().copied().unwrap_or((0.0, 0.0));
+    }
+    // Lowest, then leftmost: a convex vertex, and picked without ties.
+    let m = (0..n)
+        .min_by(|&a, &b| {
+            (poly[a].1, poly[a].0)
+                .partial_cmp(&(poly[b].1, poly[b].0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(0);
+    let c = poly[m];
+    let p = poly[(m + n - 1) % n];
+    let q = poly[(m + 1) % n];
+    let unit = |a: (f64, f64)| -> Option<(f64, f64)> {
+        let (dx, dy) = (a.0 - c.0, a.1 - c.1);
+        let len = dx.hypot(dy);
+        (len > 0.0).then(|| (dx / len, dy / len))
+    };
+    let (Some(u), Some(v)) = (unit(p), unit(q)) else {
+        return c;
+    };
+    let (mut bx, mut by) = (u.0 + v.0, u.1 + v.1);
+    let mut blen = bx.hypot(by);
+    if blen < 1e-12 {
+        // The two edges are collinear: step perpendicular to them, upward, which
+        // is the interior side for the lowest vertex.
+        (bx, by) = (-v.1, v.0);
+        blen = bx.hypot(by);
+        if by < 0.0 {
+            (bx, by) = (-bx, -by);
+        }
+        if blen < 1e-12 {
+            return c;
+        }
+    }
+    let short = (p.0 - c.0)
+        .hypot(p.1 - c.1)
+        .min((q.0 - c.0).hypot(q.1 - c.1));
+    let step = short * 1e-3;
+    (c.0 + bx / blen * step, c.1 + by / blen * step)
+}
+
 /// Group closed contours into one bucket per connected piece of copper, each
 /// bucket's OUTER boundary first and its holes after. The classification is the
 /// nesting depth described on [`group_contours_into_pieces`], and its precondition
@@ -1864,9 +1978,10 @@ fn group_contours(contours: Vec<Vec<(f64, f64)>>) -> Vec<Vec<Vec<(f64, f64)>>> {
     // encloses[i] = the contours strictly containing contour i. Only a contour
     // whose bounding box covers i's witness point can be one, which the tree
     // answers directly; the exact test then runs on that handful.
+    let witness: Vec<(f64, f64)> = contours.iter().map(|c| interior_witness(c)).collect();
     let encloses: Vec<Vec<usize>> = (0..n)
         .map(|i| {
-            let (px, py) = contours[i][0];
+            let (px, py) = witness[i];
             let mut hits: Vec<usize> = tree
                 .locate_in_envelope_intersecting(rstar::AABB::from_point([px, py]))
                 .map(|l| l.idx)
@@ -2535,6 +2650,93 @@ G37*
         let island = piece_at(&pieces, 10.0, 10.0).expect("the island is copper");
         let pour = piece_at(&pieces, 18.0, 10.0).expect("the pour is copper");
         assert_ne!(island, pour, "and the island is not the pour's conductor");
+    }
+
+    #[test]
+    fn a_hole_sharing_a_vertex_with_its_outer_is_still_a_hole() {
+        // The nesting classifier used a VERTEX as its containment witness, and
+        // `point_in_polygon` is half-open, so a hole whose loop starts at a point
+        // it shares with its outer answered inside or outside depending on the
+        // orientation it happened to be drawn in. Boolean-op CAM starts both loops
+        // at a shared point routinely. A hole misread as an outer split one clear
+        // region statement into two independent voids; the outer was then cut whole
+        // and the piece that would restore the island was swallowed as
+        // already-void, so the island copper the film kept was GONE. The witness is
+        // a constructed interior point now, and a piece may no longer be skipped
+        // once a sibling of its own statement has been cut.
+        //
+        // Outer square 6..14, hole triangle whose first vertex IS the outer's
+        // (14,14) corner.
+        let pieces = pieces_of(&negative_pour(
+            "",
+            "\
+G36*
+X6000000Y6000000D02*
+X14000000Y6000000D01*
+X14000000Y14000000D01*
+X6000000Y14000000D01*
+X6000000Y6000000D01*
+X14000000Y14000000D02*
+X9000000Y13000000D01*
+X13000000Y9000000D01*
+X14000000Y14000000D01*
+G37*
+",
+        ));
+        assert!(
+            piece_at(&pieces, 12.5, 12.5).is_some(),
+            "the triangle the region leaves standing is copper, not erased"
+        );
+        assert_eq!(
+            piece_at(&pieces, 7.0, 7.0),
+            None,
+            "and the rest of the region is still cut"
+        );
+    }
+
+    #[test]
+    fn an_annular_void_emitted_twice_is_cut_once() {
+        // The hole-less duplicate below is the easy half. An ANNULAR duplicate is
+        // the one that matters, being a through-hole antipad on a plane. The
+        // already-void probe nudged every vertex toward the void's bounding-box
+        // centre, which for a ring IS the hole's centre, so the hole's vertices
+        // went into the island where the earlier void reads as not-removed. The
+        // duplicate was cut again and even-odd flipped the whole cleared ring back
+        // to COPPER, shorting the pad to the plane.
+        let pieces = pieces_of(&negative_pour(
+            "%ADD10C,6.000000X2.000000*%\n",
+            "D10*\nX10000000Y10000000D03*\nX10000000Y10000000D03*\n",
+        ));
+        assert_eq!(
+            piece_at(&pieces, 12.0, 10.0),
+            None,
+            "the ring the film cleared stays clear"
+        );
+        let island = piece_at(&pieces, 10.0, 10.0).expect("the island is copper");
+        let pour = piece_at(&pieces, 14.5, 10.0).expect("the pour is copper");
+        assert_ne!(island, pour, "and is not the pour's conductor");
+    }
+
+    #[test]
+    fn a_stray_aperture_block_close_does_not_reset_the_polarity() {
+        // `%AB*%` with no matching open. Saturating the depth at zero ran the
+        // restore anyway, putting `dark` back to its initial true, so every clear
+        // object after it was painted as copper instead of banked as a void.
+        let (n, is_copper) = pour_of(&negative_pour(
+            "",
+            "\
+%AB*%
+G36*
+X8000000Y8000000D02*
+X12000000Y8000000D01*
+X12000000Y12000000D01*
+X8000000Y12000000D01*
+X8000000Y8000000D01*
+G37*
+",
+        ));
+        assert_eq!(n, 2, "the clear region is still a void");
+        assert!(!is_copper(10.0, 10.0));
     }
 
     #[test]
