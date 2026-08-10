@@ -361,6 +361,15 @@ pub fn reconstruct(
                     (verts >= GRID_VERT_THRESHOLD).then_some((rgi, contours))
                 })
                 .collect();
+            // Every gridded pour's grid is alive at once, and a 2048-a-side grid is
+            // 4.2 MB of cells, so a layer of many detailed pours has to share a
+            // budget rather than each take the ceiling. 64 M cells is 64 MB for the
+            // layer; below about fifteen gridded pours nothing is given up.
+            const CELL_BUDGET: usize = 64 << 20;
+            let side_ceiling = {
+                let per_pour = CELL_BUDGET / grid_contours.len().max(1);
+                ((per_pour as f64).sqrt() as usize).clamp(64, 2048)
+            };
             let region_grids: HashMap<usize, super::geo::PolyGrid> = grid_contours
                 .iter()
                 .map(|(rgi, contours)| {
@@ -376,15 +385,16 @@ pub fn reconstruct(
                     // resolution (scanline parity plus an exact test on a boundary
                     // cell), so this only moves work, never answers.
                     //
-                    // Whole-extraction times for a 100 mm plane with 6084 antipads
-                    // and a pad in each: 3.97 s with the ceiling at 512, 48 ms at
-                    // 2048. With the antipads drawn as ANNULAR clear flashes, the
-                    // shape a real negative plane carries (a 64-gon plus a 32-gon
-                    // rim each, some 600k contour vertices), 59 ms; with 64000 of
-                    // them, 0.60 s. Those last two are only affordable because the
-                    // scanline buckets its edges by row (see `PolyGrid::new`);
-                    // without that the build alone was 3.2 s.
-                    let cells = (verts / 4).clamp(64, 2048);
+                    // Whole-extraction times for a 100 mm plane with 6084
+                    // rectangular antipads and a pad in each: 3.97 s with the
+                    // ceiling at 512, 60 ms at 2048. With the antipads drawn as
+                    // ANNULAR clear flashes, the shape a real negative plane
+                    // carries (a 64-gon plus a 32-gon rim each, some 600k contour
+                    // vertices), 92 ms; 62500 non-overlapping annular ones, each
+                    // leaving an island to free, 2.2 s. Those last two are only
+                    // affordable because the scanline buckets its edges by row (see
+                    // `PolyGrid::new`); without that the build alone was 3.2 s.
+                    let cells = (verts / 4).clamp(64, side_ceiling);
                     (*rgi, super::geo::PolyGrid::new(contours, cells))
                 })
                 .collect();

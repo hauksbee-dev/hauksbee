@@ -300,15 +300,14 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     // in O(1) and is exact, so build one per detailed pour and reuse it. The
     // threshold matches `connect`'s: below it the direct test is cheaper than the
     // build.
+    // Built LAZILY, and only for a pour some void actually reaches. Building one
+    // for every detailed pour up front, and holding them all, cost 4.2 MB apiece
+    // for pours no void ever touches: a film of 300 finely flattened 10000-gon
+    // fill regions and ONE clear stroke paid 1.3 GB and 1.9 s for the 299 grids it
+    // never queried.
     const ENCLOSE_GRID_VERTS: usize = 2000;
-    let enclose_grids: Vec<Option<super::geo::PolyGrid>> = originals
-        .iter()
-        .map(|cs| {
-            let verts: usize = cs.iter().map(Vec::len).sum();
-            (verts >= ENCLOSE_GRID_VERTS)
-                .then(|| super::geo::PolyGrid::new(cs, (verts / 4).clamp(64, 2048)))
-        })
-        .collect();
+    let mut enclose_grids: Vec<Option<Option<super::geo::PolyGrid>>> =
+        (0..regions.len()).map(|_| None).collect();
     // The void contours already cut from each pour, bucketed spatially so the
     // already-void probe below is not a scan of every earlier void. Without the
     // grid a plane carrying tens of thousands of antipads paid O(voids^2) bound
@@ -386,7 +385,13 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             if gb[0] < rb[0] || gb[1] < rb[1] || gb[2] > rb[2] || gb[3] > rb[3] {
                 continue;
             }
-            let enclosed = group.iter().all(|c| match &enclose_grids[slot] {
+            let grid = enclose_grids[slot].get_or_insert_with(|| {
+                let verts: usize = originals[slot].iter().map(Vec::len).sum();
+                (verts >= ENCLOSE_GRID_VERTS).then(|| {
+                    super::geo::PolyGrid::new(&originals[slot], (verts / 4).clamp(64, 2048))
+                })
+            });
+            let enclosed = group.iter().all(|c| match grid {
                 Some(g) => c.contours.iter().flatten().all(|&(x, y)| g.contains(x, y)),
                 None => contours_enclose(&originals[slot], &c.contours),
             });
@@ -418,17 +423,21 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             let Shape::MultiPolygon { contours } = shape else {
                 continue;
             };
-            let mut units: Vec<(Vec<usize>, [f64; 4])> = Vec::with_capacity(group.len());
+            let mut units: Vec<(Vec<usize>, [f64; 4], usize)> = Vec::with_capacity(group.len());
             for clear in group {
                 let mut indices = Vec::with_capacity(clear.contours.len());
                 for c in &clear.contours {
                     indices.push(contours.len());
                     contours.push(c.clone());
                 }
-                units.push((indices, contour_bounds(&clear.contours.concat())));
+                units.push((
+                    indices,
+                    contour_bounds(&clear.contours.concat()),
+                    clear.statement,
+                ));
             }
-            for (indices, b) in units {
-                applied[slot].insert(indices, b);
+            for (indices, b, statement) in units {
+                applied[slot].insert(indices, b, statement);
             }
             cut.push(slot);
         }
@@ -442,15 +451,19 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     // primitive: freeing it twice made two identical shapes that nothing unions
     // (connectivity never unions region to region), i.e. one conductor counted as
     // two.
-    let mut already_freed: Vec<Vec<(f64, f64)>> = Vec::new();
+    // Keyed on the void's identity, its clear image and which of that image's
+    // contours it is, never on the coordinates. Comparing coordinates meant every
+    // island was compared against every island freed so far, and all the islands of
+    // one aperture are the same 32-gon so the length check never short-circuited:
+    // 62500 annular antipads spent 5.4 s in that scan alone.
+    let mut already_freed: std::collections::HashSet<(usize, usize)> =
+        std::collections::HashSet::new();
     for slot in cut {
         let i = regions[slot];
-        for shape in free_ringed_islands(&mut out[i].shape, &applied[slot], &originals[slot]) {
-            if let Shape::Polygon { pts, .. } = &shape {
-                if already_freed.iter().any(|c| c == pts) {
-                    continue;
-                }
-                already_freed.push(pts.clone());
+        for (key, shape) in free_ringed_islands(&mut out[i].shape, &applied[slot], &originals[slot])
+        {
+            if !already_freed.insert(key) {
+                continue;
             }
             // An island is still region copper, no longer the same conductor. It
             // does NOT inherit the pour's X2 identity: `%TO.N` on a pour names the
@@ -500,23 +513,29 @@ fn free_ringed_islands(
     shape: &mut Shape,
     applied: &VoidIndex,
     originals: &[Vec<(f64, f64)>],
-) -> Vec<Shape> {
+) -> Vec<((usize, usize), Shape)> {
     let Shape::MultiPolygon { contours } = shape else {
         return Vec::new();
     };
     // Which contour indices are a void's HOLE (not its outer boundary).
-    let holes: Vec<(usize, usize)> = applied
+    // (void id, contour index, ordinal of that contour within its void).
+    let holes: Vec<(usize, usize, usize)> = applied
         .units
         .iter()
         .enumerate()
-        .flat_map(|(uid, idxs)| idxs.iter().skip(1).map(move |&h| (uid, h)))
+        .flat_map(|(uid, idxs)| {
+            idxs.iter()
+                .enumerate()
+                .skip(1)
+                .map(move |(k, &h)| (uid, h, k))
+        })
         .collect();
     if holes.is_empty() {
         return Vec::new();
     }
     let mut promoted = vec![false; contours.len()];
-    let mut freed: Vec<Shape> = Vec::new();
-    for (uid, h) in holes {
+    let mut freed: Vec<((usize, usize), Shape)> = Vec::new();
+    for (uid, h, ordinal) in holes {
         let Some(contour) = contours.get(h) else {
             continue;
         };
@@ -537,10 +556,13 @@ fn free_ringed_islands(
             continue;
         }
         promoted[h] = true;
-        freed.push(Shape::Polygon {
-            pts: contour.clone(),
-            r: 0.0,
-        });
+        freed.push((
+            (applied.unit_statement[uid], ordinal),
+            Shape::Polygon {
+                pts: contour.clone(),
+                r: 0.0,
+            },
+        ));
     }
     if freed.is_empty() {
         return Vec::new();
@@ -598,6 +620,10 @@ struct VoidIndex {
     /// Per void id, the contour indices it occupies in the pour's contour list.
     /// The first is its outer boundary, the rest its holes.
     units: Vec<Vec<usize>>,
+    /// Per void id, the clear image it is a piece of. Two pours that both enclose
+    /// one void free the same island, and this is what says the two are the same
+    /// copper without comparing float coordinates.
+    unit_statement: Vec<usize>,
 }
 
 impl VoidIndex {
@@ -614,6 +640,7 @@ impl VoidIndex {
             all: Vec::new(),
             cells: Vec::new(),
             units: Vec::new(),
+            unit_statement: Vec::new(),
         }
     }
 
@@ -631,9 +658,10 @@ impl VoidIndex {
 
     /// Register a void occupying `indices` in the pour's contour list, bounded
     /// by `b`.
-    fn insert(&mut self, indices: Vec<usize>, b: [f64; 4]) {
+    fn insert(&mut self, indices: Vec<usize>, b: [f64; 4], statement: usize) {
         let id = self.units.len();
         self.units.push(indices);
+        self.unit_statement.push(statement);
         self.all.push((id, b));
         if self.cells.is_empty() {
             if self.all.len() < Self::GRID_AT {
@@ -2101,13 +2129,11 @@ fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
     if blen < 1e-12 {
         // The two edges are collinear: step perpendicular to them, upward, which
         // is the interior side for the lowest vertex.
+        // `v` is already a unit vector, so this is too.
         (bx, by) = (-v.1, v.0);
-        blen = bx.hypot(by);
+        blen = 1.0;
         if by < 0.0 {
             (bx, by) = (-bx, -by);
-        }
-        if blen < 1e-12 {
-            return c;
         }
     }
     // A thousandth of the shorter adjacent edge, but never less than a millionth of
