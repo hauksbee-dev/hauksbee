@@ -969,24 +969,29 @@ impl Scheduler {
                     // `max_voltage_v` and have it compared against nothing, which
                     // is a rating that reads as enforced and is not.
                     //
-                    // A numbered second pad of the same domain (`vcc2`, `gnd2`,
-                    // `dvdd3`) does not need its own name here: the loop
-                    // deduplicates by NODE, and a board that feeds two pads of one
-                    // domain from two different rails still gets a watch per rail
-                    // through whichever pad carries the bare role.
-                    let direct_supply = matches!(
-                        role.as_str(),
-                        "vcc"
-                            | "avcc"
-                            | "vdd"
-                            | "vdda"
-                            | "dvdd"
-                            | "avdd"
-                            | "iovdd"
-                            | "vddio"
-                            | "vregvdd"
-                            | "5v"
-                    );
+                    // A NUMBERED PAD OF THE SAME DOMAIN MUST BE STRIPPED, and an
+                    // earlier version of this comment claimed otherwise on the
+                    // grounds that "the loop deduplicates by NODE". It does not
+                    // help: `seen_nodes.insert` runs INSIDE the `direct_supply`
+                    // arm, so it only ever sees roles that already matched. A pad
+                    // named `dvdd2` therefore matched nothing and contributed no
+                    // watch, and a rail reaching ONLY numbered pads got none at
+                    // all. That is two of the three DVDD pads on the EFM32PG22
+                    // entry added in this batch, whose own note says a rating
+                    // compared against nothing is worse than no rating.
+                    //
+                    // Stripping a trailing digit run makes `vcc2`, `gnd2`, `dvdd3`
+                    // and `iovdd2` read as their domain. It cannot collide with a
+                    // rail whose NAME ends in a digit and means something else:
+                    // `5v` is in the list verbatim and survives because the strip
+                    // is only applied when the bare form is not already a match.
+                    let bare = role.trim_end_matches(|c: char| c.is_ascii_digit());
+                    let domain = if is_direct_supply_role(role) {
+                        role.as_str()
+                    } else {
+                        bare
+                    };
+                    let direct_supply = is_direct_supply_role(domain);
                     if direct_supply && !node.is_ground() && seen_nodes.insert(node) {
                         supply_watches.push(crate::stress::SupplyWatch {
                             reference: binding.reference.clone(),
@@ -5295,6 +5300,18 @@ fn instantiate_qemu(
     anyhow::bail!(
         "this build of hauksbee-engine was compiled without the `qemu` feature; \
          rebuild with --features qemu to run ESP32 firmware"
+    )
+}
+
+/// Whether a pin role names a pad fed DIRECTLY from a board rail, so the part's
+/// abs-max supply voltage is the ceiling for that node.
+///
+/// A module's `vin`/`raw` is deliberately absent: those feed an on-board regulator
+/// and their ceiling is a different number from the core's.
+fn is_direct_supply_role(role: &str) -> bool {
+    matches!(
+        role,
+        "vcc" | "avcc" | "vdd" | "vdda" | "dvdd" | "avdd" | "iovdd" | "vddio" | "vregvdd" | "5v"
     )
 }
 

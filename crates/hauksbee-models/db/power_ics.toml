@@ -983,13 +983,12 @@ max_voltage_v = 7.0
 #
 # `dropout_v` IS A FAMILY FIGURE, NOT THIS OPTION'S ROW, and that has to be said
 # because every other vreg entry's dropout is its own part's. The 1.8 V table omits
-# the dropout row, as does the 1.25 V one; the options that carry it give, at
-# IOUT = 10 mA over temperature, 110 mV typ at 2.048 V and at 2.5 V, 80 mV at
-# 3.0 V, 65 mV at 3.3 V, 75 mV at 4.096 V and 60 mV at 5.0 V. 0.11 V is the
-# LARGEST of those, so it is the conservative pick from the same die and the same
-# test condition rather than an interpolation into a gap. The datasheet's own
-# headline claim is "low 200 mV dropout" and the worst tabulated maximum is
-# 230 mV.
+# the dropout row, as do the 1.25 V and 2.048 V ones; the options that carry it
+# give, at IOUT = 10 mA over temperature, 110 mV typ at 2.5 V, 80 mV at 3.0 V,
+# 65 mV at 3.3 V, 75 mV at 4.096 V and 60 mV at 5.0 V. 0.11 V is the LARGEST of
+# those, so it is the conservative pick from the same die and the same test
+# condition rather than an interpolation into a gap. The datasheet's own headline
+# claim is "low 200 mV dropout" and the worst tabulated maximum is 230 mV.
 #
 # DELIBERATELY NOT MODELLED: the force/sense pair. OUTF and OUTS are separate
 # pads meant to be shorted at the load so the reference regulates out the trace
@@ -1006,8 +1005,8 @@ description = "MAX6070AAUT18 1.8V precision series voltage reference, +/-0.04%, 
 
 [models.match]
 # The last two digits of the ordering code ARE the output voltage: AUT12 = 1.25 V,
-# AUT18 = 1.8 V, AUT25 = 2.5 V, AUT30 = 3.0 V, AUT33 = 3.3 V, AUT41 = 4.096 V,
-# AUT50 = 5.0 V. Only the 18 binds here, for the reason stated at the head of the
+# AUT18 = 1.8 V, AUT21 = 2.048 V, AUT25 = 2.5 V, AUT30 = 3.0 V, AUT33 = 3.3 V,
+# AUT41 = 4.096 V, AUT50 = 5.0 V. Only the 18 binds here, for the reason at the head of the
 # voltage-option entries in db/vreg.toml: an entry that matched the family would
 # hold a 5 V reference net at 1.8 V.
 #

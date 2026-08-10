@@ -1786,9 +1786,13 @@ vih   = 2.0      # min (LVTTL)
 vil   = 0.8      # max
 supply_static_ua = 8000.0  # ICC1 typ, normal operation (8.4 mA max); USB-suspend
                            # ICC2 is 125 uA and is not the operating figure
-supply_pin = "12"          # VCC, the core supply. The engine's supply leg is one
-gnd_pin    = "3"           # pin pair, and the datasheet gives no VCC/VCCIO split
-                           # of the 8 mA, so it is metered on VCC alone.
+# `supply_pin`/`gnd_pin` record WHICH pads the draw belongs to, for a reader; they
+# are not what the engine meters against. `bind_digital` takes the supply leg's
+# nets from the ROLES (`vcc`/`vdd` and `gnd`/`vss`), which is why pad 12 is named
+# `vcc` and pad 3 `gnd` above. The datasheet gives no VCC/VCCIO split of the 8 mA,
+# so the whole figure sits on the core supply either way.
+supply_pin = "12"          # VCC
+gnd_pin    = "3"
 
 [models.pins]
 # Section 3, QFN-20. Cross-checked against the margay datalogger: pad 18 sits on
@@ -2024,7 +2028,10 @@ max_pin_current_a = 0.005  # input current on any pin, +/-5 mA
 #   VOH   = VCC - 0.1 V min at IOH = -20 uA; 2.6 V typ at VCC = 3 V, IOH = -4 mA
 #   VOL   = 0.1 V max at IOL = 20 uA; 0.44 V max at VCC = 3 V, IOL = 4 mA
 #   tpd   = 2.4 ns typ (1 ns min, 3.5 ns max) at VCC = 3.3 V +/- 0.3 V, CL = 5 pF
-#   ICC   = 0.5 uA typ, 0.9 uA max, VI = GND or VCC, IO = 0
+#   ICC   = 0.5 uA at TA = 25 C and 0.9 uA over -40 to 85 C, VI = GND or VCC,
+#           IO = 0. The datasheet's own feature list calls 0.9 uA "maximum", and
+#           this table gives a limit per temperature range rather than a typical,
+#           so neither figure is a typ.
 #
 # `voh` below is the LOADED figure (2.6 V typ at 4 mA), not the unloaded
 # VCC - 0.1 V, because a buffer's job here is to drive a bus and the loaded
@@ -2052,7 +2059,8 @@ vol   = 0.44     # max at VCC = 3 V, IOL = 4 mA (0.1 V max at 20 uA)
 vih   = 2.0      # min, VCC = 3.0 to 3.6 V
 vil   = 0.9      # max, VCC = 3.0 to 3.6 V
 tpd_s = 2.4e-9   # tpd typ, VCC = 3.3 V +/- 0.3 V, CL = 5 pF (3.5 ns max at 25 C)
-supply_static_ua = 0.5     # ICC typ (0.9 uA max), inputs at a rail, outputs open
+supply_static_ua = 0.5     # ICC at TA = 25 C, inputs at a rail, outputs open. NOT
+                           # a typical: see the note above. 0.9 uA over -40 to 85 C.
 supply_pin = "8"
 gnd_pin    = "4"
 
@@ -2249,8 +2257,13 @@ description = "TI TCA9535 16-bit I2C I/O expander, WQFN-24 (pad map and levels; 
 # in this entry: TI's DB/PW 24-pin maps are NOT this one (they put INT on pin 1,
 # P00 on pin 4, GND on 12 and VCC on 24, against this map's P00 on 1, GND on 9 and
 # VCC on 21). A "TCA9535PWR" bound here would have its supply and ground on two
-# port pins. The TCA9535A shares the pinout and differs only in its fixed address
-# range, so it binds.
+# port pins.
+#
+# The optional `A` is accepted UNSOURCED, which is worth flagging: SCPS201E
+# documents no TCA9535A and no datasheet for one was findable (TI's "A" address
+# variant exists on the 8-bit TCA9534/TCA9534A). If such a part exists it is
+# overwhelmingly likely to be an address variant on this same pinout, which is why
+# the letter is tolerated rather than refused, but nothing here verifies it.
 value_re = "(?i)^TCA9535A?(RTW|RGE)R?$"
 
 [models.params]
@@ -2297,10 +2310,12 @@ gnd_pin    = "9"
                  # high level. Same reasoning as the SR2 entry in db/power_ics.toml.
 "23" = "a1"
 "24" = "a2"
-# The exposed pad. The datasheet's instruction is "connect to a secondary ground
-# or leave open", so a board that grounds it (the MWGEN-G1 does) is following the
-# sheet; naming it `gnd2` means the binder counts that connection rather than
-# reporting the pad as unmodelled.
+# The exposed pad. Its ROLE is datasheet-backed (SCPS201E says to connect it to a
+# secondary ground or leave it open, and the MWGEN-G1 grounds it); its KEY is not.
+# The sheet labels the pad "Exposed Center Pad" and gives it no number, so `"25"`
+# is the CAD convention that both the MWGEN-G1's footprint and its pin function
+# use, exactly as the EFM32PG22 entry's pad 41 is. A board that numbers it
+# differently will not match this row.
 "25" = "gnd2"
 
 [models.ratings]

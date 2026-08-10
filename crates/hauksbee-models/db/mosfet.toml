@@ -1249,10 +1249,16 @@ cgd    = 3.9e-11   # = Crss, 39 pF @ VGS = 0, VDS = -15 V, 1 MHz
 cgs    = 2.59e-10  # = Ciss - Crss = 298 - 39 = 259 pF, same test condition
 
 [models.pins]
-# The datasheet says it outright: "Identical pin-out to SOT-23", and the package
-# drawing gives 1 = Gate, 2 = Source, 3 = Drain. Cross-checked against the margay
-# datalogger, where Q2 has its source on the 3V3 rail and its drain on the
-# FTDI-only rail: a high-side load switch, which requires this pad order.
+# 1 = Gate, 2 = Source, 3 = Drain.
+#
+# The datasheet says "Identical Pin-Out to SOT-23" outright, and that sentence is
+# what carries the numbering: like the DMG3404L above, this sheet's package drawing
+# prints only the letters D / G / S and no pin NUMBERS, in both the Fairchild May
+# 2003 revision cited here and onsemi's current one. So the numbering is the
+# standard reading of the SOT-23 convention the datasheet points at, not a table
+# quoted from it. Cross-checked against the margay datalogger, where Q2 has pad 2
+# on the 3V3 rail and pad 3 on the FTDI-only rail: a high-side load switch, which
+# only works with this pad order.
 "1" = "gate"
 "2" = "source"
 "3" = "drain"

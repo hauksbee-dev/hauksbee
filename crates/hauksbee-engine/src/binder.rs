@@ -1916,8 +1916,10 @@ fn bind_component(
     if model.passive_class == Some(hauksbee_models::schema::PassiveClass::Crystal) {
         return (
             BindOutcome::Skipped {
-                reason: "crystal / resonator / oscillator: high impedance, no \
-                         motional arm and no oscillator core"
+                reason: "crystal, resonator or packaged oscillator: modelled as \
+                         high impedance, with no motional arm and no oscillator \
+                         core, so a powered oscillator's supply draw and its \
+                         driven clock output are absent too"
                     .to_string(),
             },
             None,

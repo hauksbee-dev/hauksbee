@@ -130,11 +130,13 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
 /// assert_eq!(parse_frequency_hz("16 MHz"), Some(16e6));
 /// assert_eq!(parse_frequency_hz("16mhz"), Some(16e6));
 /// assert_eq!(parse_frequency_hz("32.768kHz"), Some(32_768.0));
+/// // A comma is a DECIMAL separator in a frequency, never a thousands grouping.
+/// assert_eq!(parse_frequency_hz("32,768kHz"), Some(32_768.0));
 /// assert_eq!(parse_frequency_hz("600@100MHz"), None);
 /// assert_eq!(parse_frequency_hz("10k"), None);
 /// ```
 pub fn parse_frequency_hz(s: &str) -> Option<f64> {
-    let cleaned = normalise_comma_decimal(&normalise_unicode(s.trim()));
+    let cleaned = normalise_frequency_comma(&normalise_unicode(s.trim()));
     let p = parse_inner(&cleaned)?;
     if p.unit.as_deref() != Some("Hz") {
         return None;
@@ -253,6 +255,38 @@ fn normalise_comma_decimal(s: &str) -> String {
         }
     }
     s.to_string()
+}
+
+/// Normalise a comma in a FREQUENCY, where it is a decimal separator and never a
+/// thousands grouping.
+///
+/// [`normalise_comma_decimal`] reads a single comma followed by three digits as a
+/// thousands separator, which is right for a passive ("4,700uF" is 4700 uF) and a
+/// 1000x ERROR for a frequency: "32,768kHz" is the European spelling of the
+/// 32.768 kHz RTC crystal, and reading it as 32768 kHz puts a watch crystal at
+/// 32.768 MHz. The confusion cannot arise in the other direction either, because a
+/// frequency's magnitude is always below 1000 by construction: the SI prefix does
+/// the scaling, so nobody writes thirty-two thousand kilohertz when they mean
+/// 32.768 MHz.
+///
+/// MULTIPLE commas keep the thousands reading ("1,000,000Hz" is 1 MHz), because
+/// that spelling has no decimal-separator interpretation at all.
+fn normalise_frequency_comma(s: &str) -> String {
+    if s.bytes().filter(|&b| b == b',').count() == 1 {
+        let i = s.find(',').unwrap();
+        let before_digit = s[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_digit());
+        let after_digit = s[i + 1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit());
+        if before_digit && after_digit {
+            return s.replacen(',', ".", 1);
+        }
+    }
+    normalise_comma_decimal(s)
 }
 
 /// True when every comma in `s` is followed by exactly three digits; the
@@ -1118,11 +1152,18 @@ mod tests {
             ("1Hz", 1.0),
             ("8hz", 8.0),
             ("2.4GHz", 2.4e9),
-            // European decimal comma, via the module's existing rule: a 1-2 digit
-            // group after the comma is a decimal. A 3-digit group is thousands
-            // grouping ("12,288MHz" is 12288 MHz), which is that rule's call to
-            // make and not this function's to override.
+            // A comma in a FREQUENCY is a decimal separator whatever the digit
+            // count, which is the one place this function overrides the module's
+            // thousands rule. "32,768kHz" is the European spelling of the RTC
+            // crystal, and the thousands reading would put it at 32.768 MHz: a
+            // 1000x error, in the value the whole crystal path exists to read.
             ("12,5MHz", 12.5e6),
+            ("32,768kHz", 32_768.0),
+            ("32,768 KHZ", 32_768.0),
+            ("12,288MHz", 12.288e6),
+            // MULTIPLE commas keep the thousands reading; that spelling has no
+            // decimal interpretation.
+            ("1,000,000Hz", 1.0e6),
         ] {
             let got = parse_frequency_hz(v)
                 .unwrap_or_else(|| panic!("parse_frequency_hz({v:?}) returned None"));
@@ -1140,6 +1181,24 @@ mod tests {
     /// dangerous case: it is conventionally valued as an impedance AT a frequency,
     /// it sits in SERIES in a power or signal path, and opening it would cut that
     /// path.
+    /// The other side of the comma rule: a PASSIVE keeps the thousands reading, so
+    /// the frequency override cannot leak into the value parser it sits beside.
+    #[test]
+    fn the_frequency_comma_rule_does_not_change_passive_values() {
+        // Thousands grouping, unchanged.
+        check("4,700uF", 4700e-6);
+        check("10,000", 10_000.0);
+        check("1,000,000", 1_000_000.0);
+        // European decimal on a passive, unchanged.
+        check("5,1K", 5_100.0);
+        check("2,2uF", 2.2e-6);
+        check("0,047uF", 0.047e-6);
+        // And a frequency is still refused as a passive magnitude whichever
+        // separator it uses.
+        assert!(parse_value("32,768kHz").is_none());
+        assert!(parse_value("32.768kHz").is_none());
+    }
+
     #[test]
     fn parse_frequency_hz_refuses_everything_that_is_not_a_frequency() {
         for v in [

@@ -537,8 +537,18 @@ impl ModelLibrary {
             }
             // An `unmodelled.toml` (or any file carrying an `[[unmodelled]]`
             // array) is loaded into the abstention table, prepended so a user can
-            // override a built-in abstention's text. Same shape as pin_rules.
-            if name == "unmodelled" || src.contains("[[unmodelled]]") {
+            // override a built-in abstention's text.
+            //
+            // The `contains` half is deliberately narrower than the `[[pin_rules]]`
+            // dispatch above: it also requires the file to carry NO `[[models]]`
+            // array. These DB files are heavily commented, and a models file that
+            // merely MENTIONS the token in prose would otherwise be routed here and
+            // lose every model in it, silently. A file with both arrays keeps its
+            // models and its abstentions are ignored, which is the safe half of an
+            // ambiguous case; naming the file `unmodelled.toml` always works.
+            let is_unmodelled_file = name == "unmodelled"
+                || (src.contains("[[unmodelled]]") && !src.contains("[[models]]"));
+            if is_unmodelled_file {
                 if let Err(e) = self.unmodelled.load_toml_str(&src, true) {
                     errors.push(ModelError::PinRules {
                         file: name,
