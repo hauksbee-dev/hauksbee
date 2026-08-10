@@ -1126,10 +1126,16 @@ fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
 
 #[test]
 fn overlapping_same_rank_pours_of_different_nets_are_a_short() {
-    // The B pour carries no `isolate` attribute, which is Eagle's zero: against
-    // another pour that means no gap is held, so the overlap is copper. (Against
-    // a foreign track or pad, zero means the design rules govern instead, and
-    // `foreign_copper_inside_a_pour_outline_stays_silent` below is that case.)
+    // The B pour carries no `isolate` attribute, which is Eagle's zero, and the
+    // pour-to-pour pass treats that as asking for no gap. Note what that rests
+    // on: the emonTx measurement was taken at 0.00030625, not at 0, so carrying
+    // it down to an absent attribute is an extrapolation, and it is the more
+    // suspicious direction because absent `isolate` means "rules only" against a
+    // foreign TRACK or PAD (`foreign_copper_inside_a_pour_outline_stays_silent`
+    // below is that case). It is kept because reporting a contact that is not
+    // there costs a user less than missing one that is, and because no board in
+    // the corpus has the construct at all
+    // (`docs/about/LIMITATIONS.md` records both halves).
     let signals = format!(
         r#"
 <signal name="A">{}</signal>
