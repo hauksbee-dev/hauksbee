@@ -165,15 +165,20 @@ pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
     std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS)
 }
 
-/// The mandatory last word of the eight `--strict` gate sites that route
-/// through here (`--lint` and `--check` twice each for their two entry points,
-/// plus `--drc`, `--si`, `--usb-c` and the co-sim fault gate): name WHY the
-/// process is about to exit 2, then exit. Exit 2 with no line saying why reads
-/// as a tool crash, and `--plain --strict` used to print a "not a failure"
-/// verdict while failing. One exit-2 gate does NOT come through here: the
-/// `--strict-boot` escalation in `commands::run` prints a `BOOT HAZARD` line
-/// per held-high net and exits directly, because its subjects are nets rather
-/// than the `<check> <subject>` gate items this helper formats.
+/// The mandatory last word of the eight report gate sites that route through
+/// here: `--lint`, `--resources`, `--check`, bare `--json`, `--drc`, `--si`,
+/// `--usb-c`, and the co-sim fault gate in `commands::run`. Name WHY the process
+/// is about to exit 2, then exit. Exit 2 with no line saying why reads as a tool
+/// crash, and `--plain --strict` used to print a "not a failure" verdict while
+/// failing.
+///
+/// Not every exit 2 in the binary comes through here, so do not read this as the
+/// exit-2 chokepoint. Three other paths exit 2 with their own message:
+/// `--strict-boot` in `commands::run` prints a `BOOT HAZARD` line per held-high
+/// net (its subjects are nets, not the `<check> <subject>` items this helper
+/// formats), `hauksbee models lint` exits 2 on its own finding count, and
+/// `hauksbee sim` uses `EXIT_MALFORMED_DECK`. The usage errors in `main` exit 2
+/// too and are not gates at all.
 ///
 /// Stream per house style: the line is part of the report on the text/plain
 /// surfaces (stdout); under `--json` stdout must stay one JSON document, so it

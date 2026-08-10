@@ -374,35 +374,67 @@ interactive TUI does not carry these two; see the next subsection.
 #### Which surface carries a coverage hole
 
 "The four batch report surfaces" above means the `hauksbee run` default text
-summary, `--plain`, `--json`, and the hauksbee-ci report formats: the four that
-render once and exit. The other two co-sim surfaces are the interactive TUI and
-the web front door.
+summary, `--plain`, `--json`, and hauksbee-ci. The counting unit is one column
+per consumer, so hauksbee-ci's human report, JUnit file and GitHub annotations
+are one column here, not three; where a claim is about the CI artifacts
+individually (the waiver disclosure in [CI.md](../ci/CI.md), for instance) they
+are counted separately and the unit is stated there.
 
-There are ten classes of co-sim coverage caveat, and the six surfaces do not all
-carry all ten. Counted from the emitting call sites rather than from intent:
+Two more co-sim surfaces render outside a `run` invocation and are not in the
+matrix below, because they do not read a finished run's caveats:
+
+- `hauksbee models lint` states a part's `watchdog_limitation` and
+  `timing_limitation` from the descriptor, before any run happens. It has no
+  `--json`; its output is text for a person.
+- `hauksbee serve`'s live sim streams frames over a websocket
+  (`hauksbee-server` `SimFrame`). It drives the same scheduler, including the
+  Renode and QEMU backends, and carries none of the ten caveats below. Treat it
+  as a scope, not a report.
+
+Ten classes of per-run co-sim coverage caveat name something the run could not
+do, and the six run-report surfaces do not all carry all ten. Counted from the
+emitting call sites rather than from intent:
 
 | Coverage caveat | default text | `--plain` | `--json` | hauksbee-ci | TUI | web front door |
 |---|---|---|---|---|---|---|
-| dropped ADC injections | yes | yes | yes | yes | no | no |
-| unexercised buses | yes | yes | yes | yes | no | no |
-| watchdog limitation | yes | yes | yes | yes | no | vacuous |
-| watchdog reboots | yes | yes | yes | yes | no | vacuous |
-| timing limitation | yes | yes | yes | yes | no | vacuous |
+| dropped ADC injections | yes | yes | yes | yes | no | no [^avr] |
+| unexercised buses | yes | yes | yes | yes | no | no [^avr] |
+| watchdog limitation | yes | yes | yes | yes | no | no [^avr] |
+| watchdog reboots | yes | yes | yes | yes | no | **no** |
+| timing limitation | yes | yes | yes | yes | no | no [^avr] |
 | per-core timing coverage | yes | no | yes (field) | yes | no | no |
 | short pulses | yes | yes | yes | yes | no | yes |
 | driver contentions | yes | yes | yes | no | no | yes |
 | drive conflicts | no | yes | yes | no | no | yes |
-| heuristic SPI framing | yes | yes | yes | yes | yes | yes |
+| heuristic SPI framing | yes | yes | yes | assertion detail | yes | yes (field) |
 
-"vacuous" means the surface has nothing to report rather than that it hides
-something: the web front door co-sims AVR in-process, and `simavr` states no
-watchdog or timing limitation.
+[^avr]: The web front door co-sims AVR in-process, and on that backend these
+four are structurally empty: `simavr` reports no watchdog and no timing
+limitation, its ADC injection is exact, and it decodes TWI and SPI natively. So
+the gap is unreachable rather than hidden. **Watchdog reboots are the
+exception and a real gap**: simavr's watchdog does bite and `Mcu::watchdog_resets`
+counts the reboots, and the front door renders nothing, so a run whose firmware
+was rebooted mid-window reads quiet there.
+
+"yes (field)" means the caveat arrives as a structured field with no caveat
+sentence attached, so a consumer has to read the field to learn about it.
+"assertion detail" means hauksbee-ci attaches it to a `peripheral` assertion's
+detail line and to the `spi_framing` field, so a spec with no `peripheral`
+assertion gets the field only.
 
 The interactive TUI co-sim pane carries one of the ten, heuristic SPI framing,
 alongside its own analog-validity refusal, failed-chunk count,
 MCU-substitution caveat and firmware-ran signal. So read a coverage hole off
-`hauksbee run` or `hauksbee-ci`, not off the TUI. Closing the TUI's nine gaps
-is tracked work, not a design choice.
+`hauksbee run` or `hauksbee-ci`, not off the TUI or the web front door. The nine
+the TUI does not carry are a gap in the pane, not a judgement that they do not
+apply there: each needs a row in `tui::cosim::CosimUpdate` and a line in the
+pane.
+
+Three further co-sim caveats are deliberately outside this count because they
+are refusals or accuracy statements rather than "the run could not do this":
+the `analog_valid` / failed-window refusal, the `TIMING INVALID:` unmet-contract
+refusal, and the per-window fallback-integration error estimates. Each reaches
+its own surfaces and is documented where it is raised.
 
 | Platform | ADC injection map | I2C controllers | SPI controllers |
 |----------|-------------------|-----------------|-----------------|

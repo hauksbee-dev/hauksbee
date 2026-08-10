@@ -642,9 +642,13 @@ For `check = "ci"`, `kind` is the assertion kind (`voltage`, `no_faults`,
 `boot_coverage`, ...), `nets` matches the assertion's `net`/`supply_net`, and
 `refs` matches its `ref`. A waived assertion failure stays on four surfaces:
 `[WAIVED]` in the terminal report, a `<skipped>` testcase (with the reason) in
-the JUnit file, a `::warning` annotation on GitHub, and the `waived` field under
+the JUnit file, a `::warning` annotation on GitHub (subject to the annotation
+cap, which truncates with an overflow line), and the `waived` field under
 `--json`. It just does not turn the exit code red. The web checks panel is the
-one verdict surface that does not render the waiver reason. An INVALID result (exit 3) can never be waived: a waiver
+gap: it has no waiver concept at all, so a waived failure renders there as a
+plain FAIL and drives the panel headline red beside exit 0. Read the waiver
+state off the terminal, JUnit, GitHub or JSON surface, not off the
+panel. An INVALID result (exit 3) can never be waived: a waiver
 overrules a finding, and an INVALID is the absence of one, so waiving it would
 green an untrustworthy run.
 
@@ -1170,12 +1174,15 @@ never turns the incomplete binding it prints into a refusal.
 Exit 1 and exit 2 are worth keeping apart in a pipeline: 1 means your input was
 never analysed, and 2 usually means it was analysed and the board is at fault.
 The exception is the usage errors listed in the table above, which also exit 2
-and analyse nothing: every invocation the argument parser rejects (two report
-flags at once, an unknown option, any of the nine `conflicts_with`
-declarations), plus two hand-written guards that name the corrected command
-instead of a parse error, for a board file passed with no subcommand and a board
-file passed to `check-code`. A CI step that treats exit 1 and exit 2 alike as
-"hardware failed" will report a broken file path as a broken board.
+and analyse nothing: every invocation the argument parser rejects (an unknown
+option, or any of the declared mutually-exclusive flag pairs such as two report
+flags at once), the two hand-written guards that name the corrected command
+instead of a parse error (a board file passed with no subcommand, and a board
+file passed to `check-code`), and `hauksbee sim`'s malformed-deck exit. Two
+non-usage paths also exit 2 outside `hauksbee run`: `hauksbee models lint` exits
+2 on its own finding count, and `hauksbee-ci run` exits 2 on a spec/board error.
+A CI step that treats exit 1 and exit 2 alike as "hardware failed" will report a
+broken file path as a broken board.
 
 What `--strict` gates on, per report: `--drc` true copper shorts (clearance
 notes never gate), `--lint` high/medium findings, `--si` any real finding,
