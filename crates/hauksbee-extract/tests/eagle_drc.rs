@@ -1127,7 +1127,7 @@ fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
 }
 
 #[test]
-fn overlapping_same_rank_pours_of_different_nets_are_a_short() {
+fn overlapping_same_rank_pours_are_a_short_when_a_pour_asks_for_no_gap() {
     // The B pour carries no `isolate` attribute, which is Eagle's zero, and the
     // pour-to-pour pass treats that as asking for no gap. Note what that rests
     // on: the emonTx measurement was taken at 0.00030625, not at 0, so carrying
