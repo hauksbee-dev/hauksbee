@@ -594,13 +594,19 @@ macro flash becomes the convex hull of its primitives (a fixed disc when it
 cannot be evaluated at all), a draw whose aperture declares no width takes a
 0.1 mm hairline, and a circular draw or a circular region boundary flattens
 into inscribed chords, which stay inside a convex stretch of a boundary but
-cut across the copper on a concave one. Each is correct while it only *adds*
-copper, since a flash that claims a little too much never invents a gap, and
+cut across the copper on a concave one. An aperture block (`%AB`) resolves to
+nothing at all, this plotter not implementing blocks. And the object
+transforms `%LS` / `%LR` / `%LM` are not applied, so a `2x1` rectangle under
+`%LS0.5*%` really clears `1x0.5`. Each is correct while it only *adds* copper,
+since a flash that claims a little too much never invents a gap, and
 destructive the moment it subtracts. Those clears are refused outright.
+
 Standard apertures are polygonized *inscribed*, so they under-remove; the one
 exception is a holed aperture's rim, which for a clear flash bounds the copper
 island the void leaves standing and is therefore **circumscribed** so the
-island reads slightly wide rather than slightly short.
+island reads slightly wide rather than slightly short, and refused when the
+hole is so nearly as wide as its aperture that the circumscribed rim escapes
+the outer boundary.
 
 The remaining limits all leave copper standing: the refusals above, a void
 straddling a pour's edge, a void laid over a track or a pad rather than over a
