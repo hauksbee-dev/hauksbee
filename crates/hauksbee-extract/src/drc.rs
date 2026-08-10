@@ -2798,7 +2798,6 @@ pub mod eagle_drc {
     use quick_xml::events::Event;
     use quick_xml::Reader;
     use std::collections::HashMap;
-
     type Attrs = HashMap<String, String>;
 
     /// A `<polygon>` (signal pour) being streamed: which signal owns it, its
@@ -2968,13 +2967,22 @@ pub mod eagle_drc {
         Polygon {
             width: f64,
             layer: i64,
-            /// Antipad gap the pour keeps around foreign copper (mm). Eagle
-            /// applies max(isolate, design-rule / class clearance); 0 means
-            /// "rules only".
+            /// Antipad gap the pour keeps around foreign copper (mm).
+            ///
+            /// Against foreign TRACKS, PADS and VIAS, Eagle applies
+            /// max(isolate, design-rule / class clearance), so 0 means "rules
+            /// only" and the fill can never crowd them.
+            ///
+            /// Pour-to-POUR it is NOT a sufficient predictor of contact, which is
+            /// measured: the emonTx V3.4.0 pours at 0.00030625 against a GND pour
+            /// under an 8 mil `mdWireWire` rule on both layers, and its shipped
+            /// gerbers show one layer joined and the other not. The value is
+            /// parsed and disclosed on the finding; nothing keys a verdict on it.
             isolate: f64,
-            /// Pour priority. Overlapping same-rank pours of different
-            /// signals are an Eagle DRC error (both get poured: a real short);
-            /// with differing ranks the higher-numbered pour yields.
+            /// Pour priority. With differing ranks the higher-numbered pour
+            /// yields; same-rank pours of different signals get no arbitration
+            /// from the rank, and whether their overlap becomes copper is then
+            /// down to `isolate` (see the pour-to-pour pass in `run`).
             rank: i64,
             /// Thermal-relief spokes on same-net pads (copper removal only).
             thermals: bool,
@@ -3815,11 +3823,10 @@ pub mod eagle_drc {
                         // unchecked, not checked-and-clean), while treating the drawn
                         // outline as solid copper would turn every legitimate
                         // crossing track and every isolated foreign pad into a
-                        // false short. The one construct the settings CANNOT
-                        // make safe is two overlapping same-rank pours of
-                        // different signals: Eagle pours both and flags the
-                        // overlap as a DRC error, so the rank check below does
-                        // the same.
+                        // false short. Two overlapping same-rank pours of
+                        // different signals are the one pair the settings cannot
+                        // make safe on their own; see the rank check below, and
+                        // its measured error rate.
                         if !cutout {
                             pours.push(Pour {
                                 net,
@@ -4004,11 +4011,30 @@ pub mod eagle_drc {
         let mut report = sweep_buckets(buckets, &rules, &no_net, &net_ties, &name_of);
 
         // ── Pour-to-pour rank arbitration ────────────────────────────────────
-        // Two overlapping pours of different signals with the SAME rank have no
-        // arbitration: Eagle pours both (a physical short on the fabricated
-        // board) and its own DRC reports the overlap. Differing ranks are
-        // arbitrated (the higher-numbered pour carves around the lower), so
-        // they stay silent.
+        // Differing ranks are arbitrated (the higher-numbered pour carves around
+        // the lower), so they stay silent. Same-rank pours of different signals
+        // get no arbitration from the rank, and their overlap is reported.
+        //
+        // This is a coarse rule and its error rate is measured, not guessed. The
+        // emonTx revision family (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`)
+        // supplies six layer-instances whose shipped gerbers say whether the two
+        // nets actually share copper, and the rule is right about four: it flags
+        // the three layers where they do, and over-reports two top layers where
+        // the pour outlines overlap but nothing bridges them.
+        //
+        // Keying on `isolate` instead was tried and reverted. It is necessary but
+        // not sufficient for a merge (V3.4.0 has both top pours at 0.00030625 and
+        // their fills apart), it fixes only one of the two over-reports, and it
+        // silences V3.4.5's top layer, where a trace does join the two nets. That
+        // trade is the wrong way round: see SHORT_TOUCH_EPS_MM above on
+        // under-reporting a short being the worst failure this detector has.
+        //
+        // What the over-reports need is Eagle's fill reconstructed from the
+        // outline, the pour settings and the foreign copper, which is not
+        // implemented. What the emonTx findings separately need is net-tie
+        // recognition that can see a tie DECLARED IN THE SCHEMATIC (that board
+        // wires an AGND supply symbol to a GND one from V3.4.1 on), which this
+        // reader cannot: it is handed a `.brd` and the tie is in the `.sch`.
         for (i, a) in pours.iter().enumerate() {
             for b in pours.iter().skip(i + 1) {
                 if a.layer != b.layer

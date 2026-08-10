@@ -255,3 +255,561 @@ fn odrive_v2_attempt_ground_short_flagged_and_final_is_clean() {
         "the final Inverter.PcbDoc is short-clean, so the contrast is real"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MWGEN-G1 pad-overlap gold row. An RF signal-generator design, 373 footprints
+// on four layers, drawn in KiCad 6. Its reference-input corner puts an SMAJ48CA
+// TVS in an SMA body (D503, 2.5 x 1.8 mm pads) on top of two SOT-23 diodes and two
+// hand-solder 0603s, and its Laird BMI-S-205-F shield-can fence pad on J206 on
+// top of a 0603 ferrite bead. Nine pads meet in six different-net pairs as a
+// result.
+//
+// The ground truth is the same shape as the ODrive row's: the design's own rule
+// set forbids the overlaps, and here a second tool agrees on every one. Both
+// halves are recorded rather than described, so neither can rot into a
+// hand-typed list nobody re-derives:
+//
+//   * `mwgen_g1_2fc77c90_kicad_9_0_3_shorts.json` is KiCad 9.0.3's own
+//     `kicad-cli pcb drc` output on this exact revision, its six shorting_items
+//     violations verbatim. This test derives the expected set FROM that file, so
+//     the comparison is against a recording of the other tool, and CI needs no
+//     KiCad installed. That pins hauksbee, not KiCad: a change in KiCad's own
+//     reading is invisible until someone re-runs the recorded command.
+//     `mwgen_g1_2fc77c90_oracle.md` holds the command and the input hash.
+//   * MWGEN-G1.kicad_pro is read here too: shorting_items and clearance are
+//     `error` and `drc_exclusions` is empty, so the design neither loosened the
+//     rule that forbids these overlaps nor recorded an exclusion accepting an
+//     instance of one. (Those severities are KiCad's defaults, not a deliberate
+//     tightening; the same is true of the Altium default the ODrive row rests
+//     on.)
+//
+// The gap magnitudes are hauksbee's own measurements, pinned as a regression
+// guard: KiCad's JSON reports no gap for a shorting_items violation, so they are
+// not part of the agreement.
+// ---------------------------------------------------------------------------
+
+/// One `shorting_items` violation as KiCad recorded it: the net pair and the two
+/// pads, each with its owning footprint, pad number and centre.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RecordedShort {
+    /// Sorted, so it can be compared with hauksbee's unordered pair.
+    nets: [String; 2],
+    layer: String,
+    /// Sorted `"<REF> pad <n>"`, so a wrong pad on the right footprint fails.
+    pads: [String; 2],
+    /// The two pad centres, in file order, as micrometre integers (`Ord`, and
+    /// exact: KiCad writes them to 6 decimal places at most).
+    anchors_um: [(i64, i64); 2],
+}
+
+/// KiCad's recorded verdict on MWGEN-G1, parsed out of the committed report
+/// rather than transcribed.
+///
+/// KiCad states each shorted item as `"Pad <n> [<net>] of <REF> on <LAYER>"`,
+/// which carries the pad number, the net, the footprint and the layer, and gives
+/// the pad centre in `items[].pos`. A violation whose two items disagree on the
+/// layer would be a different kind of finding and panics here rather than being
+/// averaged away.
+fn kicad_recorded_shorts(oracle: &str) -> Vec<RecordedShort> {
+    let json: serde_json::Value =
+        serde_json::from_str(oracle).expect("the recorded KiCad report parses");
+    let mut out = Vec::new();
+    for v in json["violations"].as_array().expect("violations array") {
+        assert_eq!(v["type"], "shorting_items", "the oracle holds only shorts");
+        let mut nets = Vec::new();
+        let mut pads = Vec::new();
+        let mut layers = Vec::new();
+        let mut anchors = Vec::new();
+        for item in v["items"].as_array().expect("items array") {
+            let d = item["description"].as_str().expect("item description");
+            let pad_no = d
+                .strip_prefix("Pad ")
+                .and_then(|r| r.split_once(' '))
+                .map(|(n, _)| n.to_string())
+                .unwrap_or_else(|| panic!("no leading 'Pad <n>' in {d:?}"));
+            let (net, rest) = d
+                .split_once('[')
+                .and_then(|(_, r)| r.split_once(']'))
+                .unwrap_or_else(|| panic!("no [net] in {d:?}"));
+            let rest = rest.trim_start_matches(" of ");
+            let (reference, layer) = rest
+                .split_once(" on ")
+                .unwrap_or_else(|| panic!("no ' on <layer>' in {d:?}"));
+            let um = |v: &serde_json::Value| (v.as_f64().expect("pos is a number") * 1e3) as i64;
+            nets.push(net.to_string());
+            pads.push(format!("{reference} pad {pad_no}"));
+            layers.push(layer.to_string());
+            anchors.push((um(&item["pos"]["x"]), um(&item["pos"]["y"])));
+        }
+        assert_eq!(nets.len(), 2, "a short is between exactly two items");
+        assert_eq!(layers[0], layers[1], "both items on one layer");
+        nets.sort();
+        pads.sort();
+        out.push(RecordedShort {
+            nets: [nets[0].clone(), nets[1].clone()],
+            layer: layers.remove(0),
+            pads: [pads[0].clone(), pads[1].clone()],
+            anchors_um: [anchors[0], anchors[1]],
+        });
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
+    let Some(pcb) = board("mwgen_g1/MWGEN-G1.kicad_pcb") else {
+        return;
+    };
+    let Some(pro) = board("mwgen_g1/MWGEN-G1.kicad_pro") else {
+        return;
+    };
+    hauksbee_testkit::scanned("MWGEN-G1 pad-overlap gold row", 1);
+
+    let recorded = kicad_recorded_shorts(include_str!("mwgen_g1_2fc77c90_kicad_9_0_3_shorts.json"));
+    assert_eq!(
+        recorded.len(),
+        6,
+        "the recording is the six-short report this row was adjudicated on"
+    );
+
+    let text = std::fs::read_to_string(&pcb).expect("read MWGEN-G1 board");
+    let report = hauksbee_extract::ExtractedBoard::drc(&text).expect("drc runs");
+
+    // Key each finding by (sorted net pair, layer, sorted footprint pair). All
+    // six keys are distinct on this board, so a map loses nothing and lets the
+    // gap and the location be checked PER finding: a sorted list of gaps would
+    // pass if two findings swapped their measurements.
+    type Key = ([String; 2], String, [String; 2]);
+    let mut got: std::collections::BTreeMap<Key, (f64, f64, f64)> = Default::default();
+    for s in report.shorts() {
+        let mut nets = [s.net_a_name.clone(), s.net_b_name.clone()];
+        nets.sort();
+        let mut owners = [s.item_a.owner.clone(), s.item_b.owner.clone()];
+        owners.sort();
+        let key = (nets, s.layer.clone(), owners);
+        assert!(
+            got.insert(key.clone(), (s.gap_mm, s.x, s.y)).is_none(),
+            "two findings share the key {key:?}, so per-finding checks would alias"
+        );
+    }
+
+    // KiCad's expected keys come from the recording. The footprint pair is
+    // derived from its "<REF> pad <n>" strings; the location check below pins the
+    // pad number wherever the footprint's two violating pads are further apart
+    // than the 2 mm tolerance: D503's are 4.000 mm and D203's violating pair
+    // (pad 1 to pad 3) is 2.102 mm, so a point on the wrong pad of either fails.
+    // R204's 1.825 mm is inside the tolerance and is not pinned.
+    let want: std::collections::BTreeSet<Key> = recorded
+        .iter()
+        .map(|r| {
+            let mut owners = [
+                r.pads[0].split(" pad ").next().unwrap().to_string(),
+                r.pads[1].split(" pad ").next().unwrap().to_string(),
+            ];
+            owners.sort();
+            (r.nets.clone(), r.layer.clone(), owners)
+        })
+        .collect();
+    assert_eq!(
+        got.keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        want,
+        "hauksbee's shorts must be exactly the set KiCad 9.0.3 recorded"
+    );
+
+    // hauksbee's own measurement of each overlap, keyed so it cannot be satisfied
+    // by the right numbers on the wrong findings. Negative throughout, because
+    // every one is pad copper inside pad copper.
+    let expected: &[(&str, &str, [&str; 2], f64)] = &[
+        (
+            "/Clock reference/Input Clocks/REFIN",
+            "/Clock reference/Input Clocks/REFIN_GND",
+            ["C205", "D503"],
+            -0.015386,
+        ),
+        (
+            "/Clock reference/Input Clocks/REFIN",
+            "/Clock reference/Input Clocks/REFIN_GND",
+            ["D503", "R204"],
+            -0.015386,
+        ),
+        (
+            "/Clock reference/Input Clocks/REFIN_GND",
+            "Net-(D202-Pad3)",
+            ["D202", "D503"],
+            -0.059614,
+        ),
+        (
+            "/Clock reference/Input Clocks/REFIN_GND",
+            "Net-(D202-Pad3)",
+            ["D203", "D503"],
+            -0.059614,
+        ),
+        (
+            "/Clock reference/REFOUT_SEC",
+            "GND",
+            ["D203", "D503"],
+            -0.150001,
+        ),
+        ("GND", "Net-(FB204-Pad1)", ["FB204", "J206"], -0.000001),
+    ];
+    assert_eq!(expected.len(), got.len());
+    for (net_a, net_b, owners, want_gap) in expected {
+        let key = (
+            [net_a.to_string(), net_b.to_string()],
+            "F.Cu".to_string(),
+            [owners[0].to_string(), owners[1].to_string()],
+        );
+        let (gap, _, _) = got
+            .get(&key)
+            .unwrap_or_else(|| panic!("no finding for {key:?}; got {:?}", got.keys()));
+        assert!(
+            *gap < 0.0 && (gap - want_gap).abs() < 1e-6,
+            "{net_a} <-> {net_b} on {owners:?}: measured {gap} mm, expected {want_gap} mm"
+        );
+    }
+
+    // And each contact point must sit on the pads KiCad named, within 2 mm. Where
+    // the two violating pads are further apart than that, this pins WHICH pad:
+    // D503's are 4.000 mm apart and D203's violating pair 2.102 mm, so a point on
+    // the wrong one of either fails. R204's pads are 1.825 mm apart, inside the
+    // tolerance, so there it pins the footprint and the neighbourhood only.
+    for r in &recorded {
+        let mut owners = [
+            r.pads[0].split(" pad ").next().unwrap().to_string(),
+            r.pads[1].split(" pad ").next().unwrap().to_string(),
+        ];
+        owners.sort();
+        let key = (r.nets.clone(), r.layer.clone(), owners);
+        let (_, x, y) = got[&key];
+        for (ax, ay) in r.anchors_um {
+            let d = ((x - ax as f64 / 1e3).powi(2) + (y - ay as f64 / 1e3).powi(2)).sqrt();
+            assert!(
+                d < 2.0,
+                "contact point ({x:.3}, {y:.3}) is {d:.3} mm from KiCad's pad anchor \
+                 ({:.3}, {:.3}) for {:?}",
+                ax as f64 / 1e3,
+                ay as f64 / 1e3,
+                r.pads
+            );
+        }
+    }
+
+    // The design's own rule set, so "forbidden by the file itself" is asserted
+    // rather than asserted-in-prose.
+    let project: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&pro).expect("read MWGEN-G1 project"))
+            .expect("the project file parses");
+    let settings = &project["board"]["design_settings"];
+    assert_eq!(settings["rule_severities"]["shorting_items"], "error");
+    assert_eq!(settings["rule_severities"]["clearance"], "error");
+    assert_eq!(
+        settings["drc_exclusions"]
+            .as_array()
+            .expect("drc_exclusions is a list")
+            .len(),
+        0,
+        "no exclusion records an instance of this being accepted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// emonTx V3.4.5: GND and AGND really are in contact, on both copper layers, and
+// the tie is declared in the schematic.
+//
+// hauksbee reports GND <-> AGND on both layers, and the shipped gerbers say both
+// reports are right about the substance. The oracle here is net attribution over
+// the fabrication data: does any single filled region of a copper layer contain
+// vias of BOTH nets?
+//
+//   * `copper_bottom.gbr`: yes. The two pours abut along the seam and the AGND
+//     pour there carries `isolate="0.00030625"`.
+//   * `copper_top.gbr`: also yes, and this is the part that is easy to get wrong.
+//     The two POUR FILLS on that layer are 8.236 mm apart, so the pours do not
+//     meet; but one 770-vertex dark region near U1 holds five GND vias and an
+//     AGND via at (81.915, 47.498), joined by a trace. Reading only the pours
+//     concludes "no contact on F.Cu", which is false about the layer.
+//
+// The tie is intentional and the schematic says so outright: `emonTx V3.4.5.sch`
+// wires the AGND supply symbol AGND7 (library `supply1`, no package) to the GND
+// supply symbol SUPPLY6 in one segment of net GND. That segment is absent from
+// V3.4.0 and present from V3.4.1 on, the same boundary at which three of the four
+// ground pours were given real isolation. So these findings are a designer's
+// declared ground tie being reported as a short, and the class fix is net-tie
+// recognition that can see a tie declared in the `.sch` -- which this reader
+// cannot, because it is handed the `.brd`. `docs/about/LIMITATIONS.md` records it.
+//
+// This test therefore pins BOTH reports as present, and pins the oracle that says
+// they are about real copper. It does not bless the location hauksbee gives for
+// the F.Cu one, which is the pour-outline crossing rather than the trace.
+// ---------------------------------------------------------------------------
+
+/// Every `G36`/`G37` region fill of a Gerber copper layer, as (ring, dark).
+///
+/// `%LPD*%` adds copper and `%LPC*%` erases, so polarity has to be read before
+/// the `%`-prefixed statements are skipped. Strokes (`D01`) and flashes (`D03`)
+/// are NOT collected: this answers questions about the filled regions only, which
+/// is what the callers below ask.
+fn gerber_dark_regions(text: &str) -> Vec<Vec<(f64, f64)>> {
+    let mut out: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut current: Option<Vec<(f64, f64)>> = None;
+    let (mut cx, mut cy) = (0.0f64, 0.0f64);
+    let mut dark = true;
+    // %FSLAX34Y34%: three integer digits and four fractional, so a raw
+    // coordinate is millimetres * 1e4.
+    assert!(
+        text.contains("%FSLAX34Y34*%") && text.contains("%MOMM*%"),
+        "this reader assumes the Eagle export's own X34Y34 millimetre format"
+    );
+    // Line by line, then statement by statement. Splitting the whole file on `*`
+    // does not work: an extended command is `%...*%`, so its own `*` cuts the
+    // following statement in half and 139 of the top layer's 156 `G36`s arrive
+    // glued to a stray `%` and get skipped as extended commands.
+    for block in text.lines().flat_map(|line| line.split('*')).map(str::trim) {
+        if block.starts_with("G04") {
+            continue;
+        }
+        if block.starts_with("%LPD") {
+            dark = true;
+            continue;
+        }
+        if block.starts_with("%LPC") {
+            dark = false;
+            continue;
+        }
+        if block.starts_with('%') {
+            continue;
+        }
+        if block.ends_with("G36") {
+            current = Some(Vec::new());
+            continue;
+        }
+        if block.ends_with("G37") {
+            if let Some(pts) = current.take() {
+                if pts.len() > 2 && dark {
+                    out.push(pts);
+                }
+            }
+            continue;
+        }
+        let coord = |tag: char, fallback: f64| -> f64 {
+            match block.split(tag).nth(1) {
+                Some(rest) => {
+                    let digits: String = rest
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '-')
+                        .collect();
+                    digits.parse::<f64>().map(|v| v / 1e4).unwrap_or(fallback)
+                }
+                None => fallback,
+            }
+        };
+        let op = if block.ends_with("D01") {
+            1
+        } else if block.ends_with("D02") {
+            2
+        } else {
+            continue;
+        };
+        let (nx, ny) = (coord('X', cx), coord('Y', cy));
+        if let Some(pts) = current.as_mut() {
+            if op == 2 {
+                // A move inside a region statement starts a new contour.
+                if pts.len() > 2 && dark {
+                    out.push(std::mem::take(pts));
+                } else {
+                    pts.clear();
+                }
+                pts.push((nx, ny));
+            } else {
+                pts.push((nx, ny));
+            }
+        }
+        (cx, cy) = (nx, ny);
+    }
+    assert!(
+        !out.is_empty(),
+        "no dark G36 region fills found; this is not the copper layer we think it is"
+    );
+    out
+}
+
+/// Even-odd point-in-ring.
+fn in_ring(pts: &[(f64, f64)], x: f64, y: f64) -> bool {
+    let mut inside = false;
+    for i in 0..pts.len() {
+        let (x1, y1) = pts[i];
+        let (x2, y2) = pts[(i + 1) % pts.len()];
+        if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Vias of one Eagle signal, from the `.brd` text.
+fn eagle_signal_vias(brd: &str, net: &str) -> Vec<(f64, f64)> {
+    // The opening tag carries a `class` attribute, so match the name only.
+    let open = format!("<signal name=\"{net}\"");
+    let start = brd.find(&open).unwrap_or_else(|| panic!("no signal {net}")) + open.len();
+    let body = &brd[start..start + brd[start..].find("</signal>").expect("signal closes")];
+    let mut out = Vec::new();
+    for chunk in body.split("<via ").skip(1) {
+        let num = |tag: &str| -> f64 {
+            let at = chunk
+                .find(tag)
+                .unwrap_or_else(|| panic!("via without {tag}"))
+                + tag.len();
+            chunk[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-' || *c == '.')
+                .collect::<String>()
+                .parse()
+                .expect("numeric via coordinate")
+        };
+        out.push((num("x=\""), num("y=\"")));
+    }
+    assert!(!out.is_empty(), "signal {net} has no vias");
+    out
+}
+
+#[test]
+fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
+    let Some(brd) = board("emontx3/hardware/V3.4.5/emonTx V3.4.5.brd") else {
+        return;
+    };
+    let gerber = |name: &str| {
+        board(&format!(
+            "emontx3/hardware/V3.4.5/GERBERS emonTx V3.4.5_2021-04-07\
+             /CAMOutputs/GerberFiles/{name}"
+        ))
+    };
+    let Some(top) = gerber("copper_top.gbr") else {
+        return;
+    };
+    let Some(bottom) = gerber("copper_bottom.gbr") else {
+        return;
+    };
+    hauksbee_testkit::scanned("emonTx V3.4.5 ground-tie row", 1);
+
+    // The oracle: on each layer, at least one filled region holds vias of both
+    // nets. Read from the fabrication data, independent of anything hauksbee says.
+    let brd_text = std::fs::read_to_string(&brd).expect("read emonTx board");
+    let gnd = eagle_signal_vias(&brd_text, "GND");
+    let agnd = eagle_signal_vias(&brd_text, "AGND");
+    for (path, layer) in [(&top, "F.Cu"), (&bottom, "B.Cu")] {
+        let text = std::fs::read_to_string(path).expect("read gerber");
+        let shared = gerber_dark_regions(&text)
+            .into_iter()
+            .filter(|ring| {
+                gnd.iter().any(|&(x, y)| in_ring(ring, x, y))
+                    && agnd.iter().any(|&(x, y)| in_ring(ring, x, y))
+            })
+            .count();
+        assert!(
+            shared >= 1,
+            "{layer}: expected at least one filled region holding vias of both GND \
+             and AGND, found {shared}"
+        );
+    }
+
+    // The verdict, which must cover both layers.
+    let report = hauksbee_extract::ExtractedBoard::drc(&brd_text).expect("drc runs");
+    let mut layers: Vec<&str> = report
+        .shorts()
+        .map(|s| {
+            let mut nets = [s.net_a_name.as_str(), s.net_b_name.as_str()];
+            nets.sort_unstable();
+            assert_eq!(nets, ["AGND", "GND"], "only the ground pair is in contact");
+            s.layer.as_str()
+        })
+        .collect();
+    layers.sort_unstable();
+    assert_eq!(
+        layers,
+        ["B.Cu", "F.Cu"],
+        "both layers carry the tie and both are reported"
+    );
+
+    // And the schematic declares the tie, which is why these are a net-tie class
+    // rather than a defect: an AGND supply symbol wired to a GND supply symbol.
+    let Some(sch) = board("emontx3/hardware/V3.4.5/emonTx V3.4.5.sch") else {
+        return;
+    };
+    let sch_text = std::fs::read_to_string(&sch).expect("read emonTx schematic");
+    let gnd_net = sch_text
+        .split("<net name=\"GND\"")
+        .nth(1)
+        .expect("a GND net in the schematic");
+    let gnd_net = &gnd_net[..gnd_net.find("</net>").expect("GND net closes")];
+    let tie = gnd_net
+        .split("<segment>")
+        .any(|seg| seg.contains("part=\"AGND7\"") && seg.contains("part=\"SUPPLY6\""));
+    assert!(
+        tie,
+        "the GND net should carry the segment tying AGND7 to SUPPLY6, which is what \
+         makes this a declared tie rather than an accident"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The same check's KNOWN FALSE POSITIVE, pinned deliberately.
+//
+// emonTx V3.4.0 is three revisions earlier and sets BOTH top-layer ground pours
+// to isolate="0.00030625" where V3.4.5 sets one, with the same overlapping
+// outlines. So the pour-to-pour rule fires on both of its layers. The bottom one
+// is right. The top one is WRONG: labelling connected copper in the
+// emonTxV3.4_GERBERS export (registered to the board by its own drill file, all
+// 108 vias inside 30 um) and attributing each body by the `.brd`'s GND-net and
+// AGND-net items puts the AGND body in a different component from the GND body.
+// A near-zero `isolate` is necessary but not sufficient for the fills to meet, so
+// no threshold on `isolate` can fix that. This board is why the narrowing that was
+// once proposed for the pour-to-pour rule was measured and reverted; the scoring is
+// in the evidence doc.
+//
+// This test therefore asserts a result that is partly wrong, on purpose. It is
+// here so the error is a failing assertion away from being noticed rather than a
+// paragraph nobody re-reads: whoever implements fill reconstruction will see this
+// test go red, and the note in `docs/about/LIMITATIONS.md` is the next thing they
+// should edit. The gerber measurement itself is not re-run here, because reading a
+// stroked inch-unit pour needs a raster and net attribution rather than the region
+// walk above; it lives in the evidence doc with its numbers.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn emontx_v340_top_layer_pour_flag_is_a_known_false_positive() {
+    let Some(brd) = board("emontx3_v340/hardware/V3.4.0/emonTx V3.4.brd") else {
+        return;
+    };
+    hauksbee_testkit::scanned("emonTx V3.4.0 known-false-positive row", 1);
+
+    let text = std::fs::read_to_string(&brd).expect("read emonTx V3.4.0 board");
+    let report = hauksbee_extract::ExtractedBoard::drc(&text).expect("drc runs");
+
+    // The input condition that makes the check fire, asserted from the file so the
+    // test cannot drift onto some other reason for the same output.
+    let mut layers: Vec<&str> = report
+        .shorts()
+        .map(|s| {
+            let mut nets = [s.net_a_name.as_str(), s.net_b_name.as_str()];
+            nets.sort_unstable();
+            assert_eq!(nets, ["AGND", "GND"], "only the ground pair fires here");
+            assert!(
+                s.item_a.owner.contains("isolate 0.00030625")
+                    && s.item_b.owner.contains("isolate 0.00030625"),
+                "both pours carry the near-zero isolate on this revision: {:?} / {:?}",
+                s.item_a.owner,
+                s.item_b.owner
+            );
+            s.layer.as_str()
+        })
+        .collect();
+    layers.sort_unstable();
+    assert_eq!(
+        layers,
+        ["B.Cu", "F.Cu"],
+        "both layers flag: B.Cu correctly, F.Cu as the known false positive"
+    );
+}

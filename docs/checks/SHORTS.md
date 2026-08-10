@@ -150,7 +150,7 @@ face, swapping its side-specific copper 1↔16.
 | SMD pad (`<smd>` in a package) | Rect polygon (+ corner radius) | single layer (1 by default, flipped by mirror); `roundness` (0..100 %) carried as a corner-radius inflation on an inset rect, like KiCad roundrect; `rot` honoured |
 | Board rectangle (`<rectangle>` on copper) | Rect polygon | rotated by `rot` |
 | Board circle (`<circle>` on copper) | Annulus (covering capsule ring), or a solid disc when `width` is 0 | the stroke band is the copper; the interior is bare board (Eagle fills only zero-width circles) |
-| Signal polygon / pour (`<polygon>`) | settings parsed; same-rank overlaps shorted; fill **excluded from the pour-to-copper test** | see the honesty caveat below |
+| Signal polygon / pour (`<polygon>`) | settings parsed; a same-rank overlap with another signal's pour is shorted, at a measured 4-of-6 accuracy; fill **excluded from the pour-to-copper test** | see the honesty caveat below |
 
 Package copper is placed with the full element transform: position rotated by the
 element's `rot` (CCW, y-up). A mirrored (`MR`) element negates local X and uses
@@ -190,16 +190,34 @@ keeps or widens gaps, so a correctly derived fill cannot short or crowd foreign
 copper in the same file, while treating the drawn outline as solid copper would
 turn every trace the fill legitimately carves around into a false short. The
 fill itself is never reconstructed and the isolate distance never numerically
-re-verified; the settings are parsed, drive this reasoning, and are disclosed
-verbatim on pour findings. Pour-to-copper pairs are therefore *not checked*
+re-verified; the settings are parsed, drive this reasoning, and travel verbatim on
+a pour finding's `Item::owner` field, which the report does not render (see below). Pour-to-copper pairs are therefore *not checked*
 (rather than checked and found clean), and same-rank pours that approach
 without ring overlap are not distance-checked either, since the fill extent
-near the boundary depends on those settings. The one
-construct the settings cannot make safe under any derivation **is** checked:
-two overlapping
-same-rank pours of different signals have no arbitration (Eagle pours both, a
-physical short on the fabricated board, and Eagle's own DRC flags the overlap),
-and that short is reported with the pour settings disclosed on the finding.
+near the boundary depends on those settings.
+
+One pour-to-pour construct **is** checked: two overlapping same-rank pours of
+different signals get no arbitration from their rank, and the overlap is reported.
+
+That rule over-reports, and by how much is measured rather than estimated. The
+emonTx revision family ships copper gerbers beside its `.brd`, so its six
+layer-instances can be scored by asking whether any filled region of a layer
+contains vias of both nets: the rule is right about four, flagging the three layers
+where the nets really do share copper and over-reporting two top layers where the
+outlines overlap and nothing bridges them
+([`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md)).
+Narrowing it by `isolate` was implemented and reverted: `isolate` is necessary but
+not sufficient for two pours to merge, so the narrowing fixed one over-report and
+silenced a layer where a trace genuinely joins the nets. Removing the over-reports
+needs Eagle's fill reconstructed, which is not implemented
+([`../about/LIMITATIONS.md`](../about/LIMITATIONS.md)).
+
+The pour settings ride along on the finding's `Item::owner` field, which
+`drc_probe` prints and the tests assert, but no user surface shows it: `--drc`
+renders through `DrcStructured::render` (nets, layer, gap, location), `--drc
+--plain` through `plain_drc_structured` (nets, layer, location), and `--drc --json`
+serialises `DrcShort`, which has no owner field. So a reader of the report sees
+neither what the overlap was made of nor that this class over-reports.
 
 ### Deliberate ties exempted locally
 
@@ -417,7 +435,8 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
   pour-to-copper pairs are not checked (the fidelity caveat above explains
   why a fill Eagle derives from the stored settings would not violate, and
   why the outline must not stand in for it); overlapping same-rank pours of
-  different signals ARE reported as shorts. Wires, vias and pads against
+  different signals are reported as shorts, which over-reports at a measured
+  rate (4 of 6 scored instances right). Wires, vias and
   each other are fully covered. KiCad pours, which do carry the computed
   fill, are covered.
 - **Eagle multilayer.** The Eagle reader spans through-hole pads and vias
