@@ -714,7 +714,7 @@ violations, the same net pairs and the same pad anchors, and the project's \
 MWGEN-G1.kicad_pro sets `shorting_items` and `clearance` to `error` with an \
 empty drc_exclusions list, so the design's own rule set forbids every one of \
 them. The entry earns its place regardless: an RF instrument at 373 footprints, \
-shield cans and three PLL sections, is coverage nothing else here supplies.
+with shield cans and three PLL sections, is coverage nothing else here supplies.
 """
 expect = [
   "MWGEN-G1.kicad_pcb",
