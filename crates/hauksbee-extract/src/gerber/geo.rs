@@ -175,12 +175,7 @@ fn on_seg(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> bool {
     q.0 <= p.0.max(r.0) && q.0 >= p.0.min(r.0) && q.1 <= p.1.max(r.1) && q.1 >= p.1.min(r.1)
 }
 
-pub(crate) fn segments_intersect(
-    p1: (f64, f64),
-    p2: (f64, f64),
-    p3: (f64, f64),
-    p4: (f64, f64),
-) -> bool {
+pub fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f64, f64)) -> bool {
     let d1 = orient(p3, p4, p1);
     let d2 = orient(p3, p4, p2);
     let d3 = orient(p1, p2, p3);
@@ -731,47 +726,77 @@ mod tests {
     fn poly_grid_near_boundary_never_misses_a_crossed_cell() {
         // `near_boundary` returning false has to be a SOUND refusal: it is used to
         // skip an exact poly-distance test, so a false negative drops a real
-        // pad-to-pour connection. Brute-force every cell against every edge and
-        // require that each cell an edge genuinely crosses is stamped.
-        let poly: Vec<(f64, f64)> = (0..7)
+        // pad-to-pour connection, which is a fabricated open. Brute-force every cell
+        // against every edge and require that each cell an edge genuinely crosses is
+        // stamped. Swept over resolutions and over a rotated shape WITH a rotated
+        // hole, because a single convex ring at one resolution misses the case the
+        // supercover walk exists for: a near-diagonal edge advancing both cell
+        // coordinates in one step.
+        let rot = |pts: &[(f64, f64)], t: f64, ox: f64, oy: f64| -> Vec<(f64, f64)> {
+            pts.iter()
+                .map(|&(x, y)| {
+                    (
+                        ox + x * t.cos() - y * t.sin(),
+                        oy + x * t.sin() + y * t.cos(),
+                    )
+                })
+                .collect()
+        };
+        let star: Vec<(f64, f64)> = (0..7)
             .map(|k| {
                 let a = 0.37 + k as f64 * std::f64::consts::TAU / 7.0;
-                (3.3 + 9.0 * a.cos(), -1.1 + 9.0 * a.sin())
+                (9.0 * a.cos(), 9.0 * a.sin())
             })
             .collect();
-        let contours = vec![poly.clone()];
-        let grid = PolyGrid::new(&contours, 64);
-        let cell = 1.0 / grid.inv_cell;
-        for gy in 0..grid.ny {
-            for gx in 0..grid.nx {
-                let (x0, y0) = (grid.minx + gx as f64 * cell, grid.miny + gy as f64 * cell);
-                let b = [x0, y0, x0 + cell, y0 + cell];
-                // Does any edge cross this cell?
-                let corners = [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])];
-                let n = poly.len();
-                let mut crossed = false;
-                let mut j = n - 1;
-                for i in 0..n {
-                    for k in 0..4 {
-                        if segments_intersect(poly[j], poly[i], corners[k], corners[(k + 1) % 4]) {
-                            crossed = true;
+        let square = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
+        let hole = [(-3.5, -3.5), (3.5, -3.5), (3.5, 3.5), (-3.5, 3.5)];
+        let shapes: Vec<Vec<Vec<(f64, f64)>>> = vec![
+            vec![rot(&star, 0.0, 3.3, -1.1)],
+            vec![rot(&square, 0.41, 1.7, -2.3), rot(&hole, 0.93, 2.1, -1.9)],
+            vec![rot(&star, 0.79, -1.4, 2.6), rot(&hole, 0.11, -1.2, 2.4)],
+        ];
+        for contours in &shapes {
+            for cells in [16usize, 37, 64, 128] {
+                let grid = PolyGrid::new(contours, cells);
+                let cell = 1.0 / grid.inv_cell;
+                for gy in 0..grid.ny {
+                    for gx in 0..grid.nx {
+                        let (x0, y0) = (grid.minx + gx as f64 * cell, grid.miny + gy as f64 * cell);
+                        let b = [x0, y0, x0 + cell, y0 + cell];
+                        let corners = [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])];
+                        let mut crossed = false;
+                        for poly in contours {
+                            let n = poly.len();
+                            let mut j = n - 1;
+                            for i in 0..n {
+                                for k in 0..4 {
+                                    if segments_intersect(
+                                        poly[j],
+                                        poly[i],
+                                        corners[k],
+                                        corners[(k + 1) % 4],
+                                    ) {
+                                        crossed = true;
+                                    }
+                                }
+                                // An edge wholly inside the cell crosses no side.
+                                if poly[i].0 >= b[0]
+                                    && poly[i].0 <= b[2]
+                                    && poly[i].1 >= b[1]
+                                    && poly[i].1 <= b[3]
+                                {
+                                    crossed = true;
+                                }
+                                j = i;
+                            }
+                        }
+                        if crossed {
+                            assert!(
+                                grid.near_boundary(b),
+                                "cell ({gx},{gy}) at {cells} cells is crossed but not stamped"
+                            );
                         }
                     }
-                    // An edge wholly inside the cell crosses no side.
-                    if poly[i].0 >= b[0]
-                        && poly[i].0 <= b[2]
-                        && poly[i].1 >= b[1]
-                        && poly[i].1 <= b[3]
-                    {
-                        crossed = true;
-                    }
-                    j = i;
-                }
-                if crossed {
-                    assert!(
-                        grid.near_boundary(b),
-                        "cell ({gx},{gy}) is crossed but not stamped"
-                    );
                 }
             }
         }
