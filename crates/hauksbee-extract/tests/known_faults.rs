@@ -410,11 +410,15 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
 // The gerbers upstream ships beside the `.brd` separate them, and this test reads
 // those gerbers rather than trusting the write-up: on F.Cu, where both pours hold
 // isolate="0.3048", a point inside the AGND pour and a point inside the GND pour
-// land in DIFFERENT filled contours; on B.Cu, where the AGND pour carries
-// isolate="0.00030625", the same two points land in the SAME contour. So the
-// oracle is asserted, not described, and if a future fetch landed different
-// fabrication data the test would say so instead of quietly agreeing with
-// whatever the checker now returns.
+// land in DIFFERENT filled contours (8.236 mm apart at their closest); on B.Cu,
+// where the AGND pour carries isolate="0.00030625", the same two points land in
+// the SAME contour. So the oracle is asserted, not described, and if a future
+// fetch landed different fabrication data the test would say so instead of
+// quietly agreeing with whatever the checker now returns.
+//
+// What the oracle settles is which layer has contact. That the isolate is the
+// setting which PERMITTED it is an inference on top, argued in the evidence doc
+// and deliberately not smuggled into this test's assertions.
 //
 // The emontx3 corpus entry is known_good = false because of the B.Cu contact.
 // That is not a claim the board is defective; a silence gate needs boards the
