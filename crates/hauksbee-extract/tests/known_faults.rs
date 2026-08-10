@@ -468,10 +468,10 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
     }
 
     // And each contact point must sit on the pads KiCad named. The tolerance is
-    // 2 mm, which is under half the 4 mm between D503's own two pads, so this
-    // fails if a finding drifts to the other pad of the same footprint: the pad
-    // number KiCad reports is pinned even though hauksbee's finding only names
-    // the footprint.
+    // 2 mm, exactly half the 4 mm between D503's own two pads, so a point on the
+    // wrong one of them is 4 mm from the right anchor and fails: the pad number
+    // KiCad reports is pinned even though hauksbee's finding only names the
+    // footprint.
     for r in &recorded {
         let mut owners = [
             r.pads[0].split(" pad ").next().unwrap().to_string(),
