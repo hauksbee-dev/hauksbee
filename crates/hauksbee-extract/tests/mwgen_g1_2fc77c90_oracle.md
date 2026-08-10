@@ -20,7 +20,9 @@ KiCad command:
   MWGEN-G1.kicad_pcb
 ```
 
-KiCad 9.0.3 reported 1144 error-severity violations and 499 unconnected items.
+The JSON that run produced contains 1144 error-severity violation objects and 499
+unconnected items. (KiCad's console line and the object count can differ by one
+between runs, so the committed number is the one in the file, not the one printed.)
 The per-type tally is in `violation_counts_by_type` in the committed JSON, and
 `shorting_items` is 6 of them. The bulk (503 `clearance`, 199 `silk_overlap`, 199
 `hole_to_hole`, 113 `silk_over_copper`) is the same overcrowding read from other
@@ -44,10 +46,15 @@ the command above reproduces it.
 
 `known_faults.rs::mwgen_g1_pad_overlap_shorts_match_kicads_own_drc` parses this
 file, derives KiCad's expected set of (net pair, layer, footprint pair) from the
-`items[].description` strings, and requires hauksbee's shorts to be exactly that
-set. So the cross-check is pinned in CI without CI needing KiCad installed, and a
-change to either tool's reading of this board fails against a recorded oracle
-rather than against a hand-typed list.
+`items[].description` strings, requires hauksbee's shorts to be exactly that set,
+and requires each hauksbee contact point to lie near both of KiCad's pad anchors
+for the matching violation.
+
+Be precise about what that does and does not enforce. It pins **hauksbee** against
+a frozen recording, so hauksbee drifting away from KiCad's 2026-08-09 verdict
+fails in CI without CI needing KiCad installed. It does not re-run KiCad, so a
+change in KiCad's own reading is invisible until someone re-runs the command above
+and re-records.
 
 The gap magnitudes hauksbee measures (-0.150, -0.060 twice, -0.015 twice, and
 -1e-6 mm) are asserted in the same test. KiCad's JSON does not report gaps for

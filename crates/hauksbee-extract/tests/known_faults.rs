@@ -257,8 +257,8 @@ fn odrive_v2_attempt_ground_short_flagged_and_final_is_clean() {
 }
 
 // ---------------------------------------------------------------------------
-// MWGEN-G1 pad-overlap gold row. A shipped 10 MHz-to-6 GHz signal generator,
-// 373 footprints, drawn in KiCad 6. Its reference-input corner puts an SMAJ48CA
+// MWGEN-G1 pad-overlap gold row. An RF signal-generator design, 373 footprints
+// on four layers, drawn in KiCad 6. Its reference-input corner puts an SMAJ48CA
 // TVS in an SMA body (D503, 2.5 x 1.8 mm pads) on top of two SOT-23 diodes and two
 // hand-solder 0603s, and its Laird BMI-S-205-F shield-can fence pad on J206 on
 // top of a 0603 ferrite bead. Six pads of different nets overlap as a result.
@@ -272,37 +272,60 @@ fn odrive_v2_attempt_ground_short_flagged_and_final_is_clean() {
 //     `kicad-cli pcb drc` output on this exact revision, its six shorting_items
 //     violations verbatim. This test derives the expected set FROM that file, so
 //     the comparison is against a recording of the other tool, and CI needs no
-//     KiCad installed. `mwgen_g1_2fc77c90_oracle.md` records the command, the
-//     input hash, and what was trimmed from the report.
+//     KiCad installed. That pins hauksbee, not KiCad: a change in KiCad's own
+//     reading is invisible until someone re-runs the recorded command.
+//     `mwgen_g1_2fc77c90_oracle.md` holds the command and the input hash.
 //   * MWGEN-G1.kicad_pro is read here too: shorting_items and clearance are
 //     `error` and `drc_exclusions` is empty, so the design neither loosened the
-//     rule that forbids these overlaps nor excepted an instance of it. (Those
-//     severities are KiCad's defaults, not a deliberate tightening; the same is
-//     true of the Altium default the ODrive row rests on.)
+//     rule that forbids these overlaps nor recorded an exclusion accepting an
+//     instance of one. (Those severities are KiCad's defaults, not a deliberate
+//     tightening; the same is true of the Altium default the ODrive row rests
+//     on.)
 //
 // The gap magnitudes are hauksbee's own measurements, pinned as a regression
 // guard: KiCad's JSON reports no gap for a shorting_items violation, so they are
 // not part of the agreement.
 // ---------------------------------------------------------------------------
 
-/// KiCad's recorded verdict on MWGEN-G1: one entry per `shorting_items`
-/// violation, as (sorted net pair, layer, sorted footprint pair).
+/// One `shorting_items` violation as KiCad recorded it: the net pair and the two
+/// pads, each with its owning footprint, pad number and centre.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RecordedShort {
+    /// Sorted, so it can be compared with hauksbee's unordered pair.
+    nets: [String; 2],
+    layer: String,
+    /// Sorted `"<REF> pad <n>"`, so a wrong pad on the right footprint fails.
+    pads: [String; 2],
+    /// The two pad centres, in file order, as micrometre integers (`Ord`, and
+    /// exact: KiCad writes them to 6 decimal places at most).
+    anchors_um: [(i64, i64); 2],
+}
+
+/// KiCad's recorded verdict on MWGEN-G1, parsed out of the committed report
+/// rather than transcribed.
 ///
-/// Parsed out of the committed report rather than transcribed. KiCad states each
-/// shorted item as `"Pad <n> [<net>] of <REF> on <LAYER>"`, which carries all
-/// three fields; a violation whose two items disagree on the layer would be a
-/// different kind of finding and panics here rather than being averaged away.
-fn kicad_recorded_shorts(oracle: &str) -> Vec<([String; 2], String, [String; 2])> {
+/// KiCad states each shorted item as `"Pad <n> [<net>] of <REF> on <LAYER>"`,
+/// which carries the pad number, the net, the footprint and the layer, and gives
+/// the pad centre in `items[].pos`. A violation whose two items disagree on the
+/// layer would be a different kind of finding and panics here rather than being
+/// averaged away.
+fn kicad_recorded_shorts(oracle: &str) -> Vec<RecordedShort> {
     let json: serde_json::Value =
         serde_json::from_str(oracle).expect("the recorded KiCad report parses");
     let mut out = Vec::new();
     for v in json["violations"].as_array().expect("violations array") {
         assert_eq!(v["type"], "shorting_items", "the oracle holds only shorts");
         let mut nets = Vec::new();
-        let mut refs = Vec::new();
+        let mut pads = Vec::new();
         let mut layers = Vec::new();
+        let mut anchors = Vec::new();
         for item in v["items"].as_array().expect("items array") {
             let d = item["description"].as_str().expect("item description");
+            let pad_no = d
+                .strip_prefix("Pad ")
+                .and_then(|r| r.split_once(' '))
+                .map(|(n, _)| n.to_string())
+                .unwrap_or_else(|| panic!("no leading 'Pad <n>' in {d:?}"));
             let (net, rest) = d
                 .split_once('[')
                 .and_then(|(_, r)| r.split_once(']'))
@@ -311,19 +334,22 @@ fn kicad_recorded_shorts(oracle: &str) -> Vec<([String; 2], String, [String; 2])
             let (reference, layer) = rest
                 .split_once(" on ")
                 .unwrap_or_else(|| panic!("no ' on <layer>' in {d:?}"));
+            let um = |v: &serde_json::Value| (v.as_f64().expect("pos is a number") * 1e3) as i64;
             nets.push(net.to_string());
-            refs.push(reference.to_string());
+            pads.push(format!("{reference} pad {pad_no}"));
             layers.push(layer.to_string());
+            anchors.push((um(&item["pos"]["x"]), um(&item["pos"]["y"])));
         }
         assert_eq!(nets.len(), 2, "a short is between exactly two items");
         assert_eq!(layers[0], layers[1], "both items on one layer");
         nets.sort();
-        refs.sort();
-        out.push((
-            [nets[0].clone(), nets[1].clone()],
-            layers.remove(0),
-            [refs[0].clone(), refs[1].clone()],
-        ));
+        pads.sort();
+        out.push(RecordedShort {
+            nets: [nets[0].clone(), nets[1].clone()],
+            layer: layers.remove(0),
+            pads: [pads[0].clone(), pads[1].clone()],
+            anchors_um: [anchors[0], anchors[1]],
+        });
     }
     out.sort();
     out
@@ -339,44 +365,132 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
     };
     hauksbee_testkit::scanned("MWGEN-G1 pad-overlap gold row", 1);
 
-    let want = kicad_recorded_shorts(include_str!("mwgen_g1_2fc77c90_kicad_9_0_3_shorts.json"));
+    let recorded = kicad_recorded_shorts(include_str!("mwgen_g1_2fc77c90_kicad_9_0_3_shorts.json"));
     assert_eq!(
-        want.len(),
+        recorded.len(),
         6,
         "the recording is the six-short report this row was adjudicated on"
     );
 
     let text = std::fs::read_to_string(&pcb).expect("read MWGEN-G1 board");
     let report = hauksbee_extract::ExtractedBoard::drc(&text).expect("drc runs");
-    let mut got: Vec<([String; 2], String, [String; 2])> = report
-        .shorts()
-        .map(|s| {
-            let mut nets = [s.net_a_name.clone(), s.net_b_name.clone()];
-            nets.sort();
-            let mut owners = [s.item_a.owner.clone(), s.item_b.owner.clone()];
+
+    // Key each finding by (sorted net pair, layer, sorted footprint pair). All
+    // six keys are distinct on this board, so a map loses nothing and lets the
+    // gap and the location be checked PER finding: a sorted list of gaps would
+    // pass if two findings swapped their measurements.
+    type Key = ([String; 2], String, [String; 2]);
+    let mut got: std::collections::BTreeMap<Key, (f64, f64, f64)> = Default::default();
+    for s in report.shorts() {
+        let mut nets = [s.net_a_name.clone(), s.net_b_name.clone()];
+        nets.sort();
+        let mut owners = [s.item_a.owner.clone(), s.item_b.owner.clone()];
+        owners.sort();
+        let key = (nets, s.layer.clone(), owners);
+        assert!(
+            got.insert(key.clone(), (s.gap_mm, s.x, s.y)).is_none(),
+            "two findings share the key {key:?}, so per-finding checks would alias"
+        );
+    }
+
+    // KiCad's expected keys come from the recording. The footprint pair is
+    // derived from its "<REF> pad <n>" strings, and the pad NUMBER is pinned
+    // separately below, through the location check.
+    let want: std::collections::BTreeSet<Key> = recorded
+        .iter()
+        .map(|r| {
+            let mut owners = [
+                r.pads[0].split(" pad ").next().unwrap().to_string(),
+                r.pads[1].split(" pad ").next().unwrap().to_string(),
+            ];
             owners.sort();
-            (nets, s.layer.clone(), owners)
+            (r.nets.clone(), r.layer.clone(), owners)
         })
         .collect();
-    got.sort();
     assert_eq!(
-        got, want,
+        got.keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        want,
         "hauksbee's shorts must be exactly the set KiCad 9.0.3 recorded"
     );
 
-    // hauksbee's own measurement of each overlap, to 1 nm. Negative throughout,
-    // because every one is pad copper inside pad copper.
-    let mut gaps: Vec<f64> = report.shorts().map(|s| s.gap_mm).collect();
-    gaps.sort_by(|a, b| a.partial_cmp(b).expect("no NaN gap"));
-    let expected_gaps = [
-        -0.150001, -0.059614, -0.059614, -0.015386, -0.015386, -0.000001,
+    // hauksbee's own measurement of each overlap, keyed so it cannot be satisfied
+    // by the right numbers on the wrong findings. Negative throughout, because
+    // every one is pad copper inside pad copper.
+    let expected: &[(&str, &str, [&str; 2], f64)] = &[
+        (
+            "/Clock reference/Input Clocks/REFIN",
+            "/Clock reference/Input Clocks/REFIN_GND",
+            ["C205", "D503"],
+            -0.015386,
+        ),
+        (
+            "/Clock reference/Input Clocks/REFIN",
+            "/Clock reference/Input Clocks/REFIN_GND",
+            ["D503", "R204"],
+            -0.015386,
+        ),
+        (
+            "/Clock reference/Input Clocks/REFIN_GND",
+            "Net-(D202-Pad3)",
+            ["D202", "D503"],
+            -0.059614,
+        ),
+        (
+            "/Clock reference/Input Clocks/REFIN_GND",
+            "Net-(D202-Pad3)",
+            ["D203", "D503"],
+            -0.059614,
+        ),
+        (
+            "/Clock reference/REFOUT_SEC",
+            "GND",
+            ["D203", "D503"],
+            -0.150001,
+        ),
+        ("GND", "Net-(FB204-Pad1)", ["FB204", "J206"], -0.000001),
     ];
-    assert_eq!(gaps.len(), expected_gaps.len());
-    for (got, want) in gaps.iter().zip(expected_gaps) {
-        assert!(
-            *got < 0.0 && (got - want).abs() < 1e-6,
-            "measured overlap {got} mm, expected {want} mm; all of {gaps:?}"
+    assert_eq!(expected.len(), got.len());
+    for (net_a, net_b, owners, want_gap) in expected {
+        let key = (
+            [net_a.to_string(), net_b.to_string()],
+            "F.Cu".to_string(),
+            [owners[0].to_string(), owners[1].to_string()],
         );
+        let (gap, _, _) = got
+            .get(&key)
+            .unwrap_or_else(|| panic!("no finding for {key:?}; got {:?}", got.keys()));
+        assert!(
+            *gap < 0.0 && (gap - want_gap).abs() < 1e-6,
+            "{net_a} <-> {net_b} on {owners:?}: measured {gap} mm, expected {want_gap} mm"
+        );
+    }
+
+    // And each contact point must sit on the pads KiCad named. The tolerance is
+    // 2 mm, which is under half the 4 mm between D503's own two pads, so this
+    // fails if a finding drifts to the other pad of the same footprint: the pad
+    // number KiCad reports is pinned even though hauksbee's finding only names
+    // the footprint.
+    for r in &recorded {
+        let mut owners = [
+            r.pads[0].split(" pad ").next().unwrap().to_string(),
+            r.pads[1].split(" pad ").next().unwrap().to_string(),
+        ];
+        owners.sort();
+        let key = (r.nets.clone(), r.layer.clone(), owners);
+        let (_, x, y) = got[&key];
+        for (ax, ay) in r.anchors_um {
+            let d = ((x - ax as f64 / 1e3).powi(2) + (y - ay as f64 / 1e3).powi(2)).sqrt();
+            assert!(
+                d < 2.0,
+                "contact point ({x:.3}, {y:.3}) is {d:.3} mm from KiCad's pad anchor \
+                 ({:.3}, {:.3}) for {:?}",
+                ax as f64 / 1e3,
+                ay as f64 / 1e3,
+                r.pads
+            );
+        }
     }
 
     // The design's own rule set, so "forbidden by the file itself" is asserted
@@ -393,7 +507,7 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
             .expect("drc_exclusions is a list")
             .len(),
         0,
-        "no instance of this was reviewed and waived"
+        "no exclusion records an instance of this being accepted"
     );
 }
 
@@ -425,45 +539,69 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
 // tool says nothing about, and here it correctly says something.
 // ---------------------------------------------------------------------------
 
-/// Point-in-fill test over a Gerber layer's region fills (`G36`/`G37`).
+/// Which `G36`/`G37` region fill of a Gerber copper layer encloses a point.
 ///
-/// Returns the index of the enclosing contour, so two points in the same contour
-/// are one copper body and two points in different contours are two. Only the
-/// region primitives are read, which is all the pour fill is: a track that
-/// happened to bridge two pours would be a `D01` stroke and would not show up
-/// here, so a "same contour" answer is specifically about the fills meeting.
-fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<usize> {
-    let mut contours: Vec<Vec<(f64, f64)>> = Vec::new();
+/// Returns `(contour index, dark)`: the index identifies the fill, and `dark` is
+/// the layer polarity in force when it was drawn (`%LPD*%` adds copper, `%LPC*%`
+/// erases). Two points in the same dark contour are in one poured body; two
+/// points in different dark contours are in two.
+///
+/// What this deliberately does NOT model, because the claims made from it are
+/// scoped to match: strokes (`D01`), flashes (`D03`) and arc curvature are
+/// ignored, so it cannot see a track or an annulus bridging two fills, and it
+/// carries no net attribution. The write-up's separate, polarity-and-stroke-aware
+/// raster experiments are where those questions are settled; this is the part
+/// worth pinning in CI, because it is cheap, exact on the vector data, and is the
+/// step the verdict turns on. As a guard against the polarity hole mattering
+/// here, callers assert that no CLEAR contour encloses the probe points.
+fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<(usize, bool)> {
+    // (ring, dark) per region fill, in file order.
+    let mut contours: Vec<(Vec<(f64, f64)>, bool)> = Vec::new();
     let mut current: Option<Vec<(f64, f64)>> = None;
     let (mut cx, mut cy) = (0.0f64, 0.0f64);
+    let mut dark = true;
     // %FSLAX34Y34%: six integer digits, four of them fractional, so a raw
     // coordinate is millimetres * 1e4.
     assert!(
         text.contains("%FSLAX34Y34*%") && text.contains("%MOMM*%"),
         "this reader assumes the Eagle export's own X34Y34 millimetre format"
     );
-    let flush = |cur: &mut Option<Vec<(f64, f64)>>, out: &mut Vec<Vec<(f64, f64)>>| {
-        if let Some(pts) = cur.take() {
-            if pts.len() > 2 {
-                out.push(pts);
+    let flush =
+        |cur: &mut Option<Vec<(f64, f64)>>, out: &mut Vec<(Vec<(f64, f64)>, bool)>, dark: bool| {
+            if let Some(pts) = cur.take() {
+                if pts.len() > 2 {
+                    out.push((pts, dark));
+                }
             }
-        }
-    };
+        };
     // Line by line, then statement by statement. Splitting the whole file on
     // `*` does not work: an extended command is `%...*%`, so its own `*` cuts
     // the following statement in half and 139 of this layer's 156 `G36`s arrive
     // glued to a stray `%` and get skipped as extended commands.
     for block in text.lines().flat_map(|line| line.split('*')).map(str::trim) {
-        if block.starts_with("G04") || block.starts_with('%') {
+        if block.starts_with("G04") {
+            continue;
+        }
+        // Polarity is an extended command, so it has to be read BEFORE the
+        // `%`-prefixed statements are skipped.
+        if block.starts_with("%LPD") {
+            dark = true;
+            continue;
+        }
+        if block.starts_with("%LPC") {
+            dark = false;
+            continue;
+        }
+        if block.starts_with('%') {
             continue;
         }
         if block.ends_with("G36") {
-            flush(&mut current, &mut contours);
+            flush(&mut current, &mut contours, dark);
             current = Some(Vec::new());
             continue;
         }
         if block.ends_with("G37") {
-            flush(&mut current, &mut contours);
+            flush(&mut current, &mut contours, dark);
             continue;
         }
         let coord = |tag: char, fallback: f64| -> f64 {
@@ -490,7 +628,7 @@ fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<usize> {
             if op == 2 {
                 // A move inside a region statement starts a new contour.
                 if pts.len() > 2 {
-                    contours.push(std::mem::take(pts));
+                    contours.push((std::mem::take(pts), dark));
                 } else {
                     pts.clear();
                 }
@@ -501,13 +639,14 @@ fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<usize> {
         }
         (cx, cy) = (nx, ny);
     }
-    flush(&mut current, &mut contours);
+    flush(&mut current, &mut contours, dark);
     assert!(
         !contours.is_empty(),
         "no G36 region fills found; this is not the copper layer we think it is"
     );
-    // Even-odd crossing count.
-    contours.iter().position(|pts| {
+    // Even-odd crossing count. Last enclosing contour wins, because a later
+    // clear region erases what an earlier dark one laid down.
+    let hit = |pts: &Vec<(f64, f64)>| {
         let mut inside = false;
         for i in 0..pts.len() {
             let (x1, y1) = pts[i];
@@ -517,7 +656,12 @@ fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<usize> {
             }
         }
         inside
-    })
+    };
+    contours
+        .iter()
+        .enumerate()
+        .rfind(|(_, (pts, _))| hit(pts))
+        .map(|(i, (_, dark))| (i, *dark))
 }
 
 #[test]
@@ -545,10 +689,19 @@ fn emontx_ground_pour_join_is_flagged_on_the_merged_layer_only() {
     let (agnd, gnd) = ((60.0, 60.0), (10.0, 20.0));
     for (path, layer, want_same) in [(&top, "F.Cu", false), (&bottom, "B.Cu", true)] {
         let text = std::fs::read_to_string(path).expect("read gerber");
-        let a = gerber_fill_contour(&text, agnd.0, agnd.1)
+        let (a, a_dark) = gerber_fill_contour(&text, agnd.0, agnd.1)
             .unwrap_or_else(|| panic!("{layer}: no fill at the AGND probe point"));
-        let g = gerber_fill_contour(&text, gnd.0, gnd.1)
+        let (g, g_dark) = gerber_fill_contour(&text, gnd.0, gnd.1)
             .unwrap_or_else(|| panic!("{layer}: no fill at the GND probe point"));
+        // Both layers carry clear-polarity regions (136 on F.Cu, 99 on B.Cu),
+        // which is why polarity is read at all: a probe landing in one would mean
+        // the enclosing fill had been erased there and the comparison below would
+        // be meaningless. Neither probe does, and this asserts it.
+        assert!(
+            a_dark && g_dark,
+            "{layer}: a probe point sits in a CLEAR region (AGND dark={a_dark}, \
+             GND dark={g_dark}), so it is not in poured copper"
+        );
         assert_eq!(
             a == g,
             want_same,

@@ -2810,19 +2810,23 @@ pub mod eagle_drc {
     /// 0.3048 mm and the rest carry no isolate attribute), and the fabrication
     /// gerbers the upstream ships beside the `.brd` show that pour merged with
     /// the GND pour into a single filled region, while the same net pouring at
-    /// 0.3048 mm on the other layer stays a separate copper body. So 0.00030625
-    /// merges and 0.3048 does not: the threshold belongs strictly between them,
-    /// which is the only part of this the evidence fixes.
+    /// 0.3048 mm on the other layer stays a separate copper body. So on that
+    /// board the pour at 0.00030625 ends up in contact and the pour at 0.3048
+    /// does not.
     ///
-    /// **Chosen.** Those two observations leave three orders of magnitude of
-    /// room, and nothing in the file says where inside it Eagle switches. One
-    /// micrometre is picked on a manufacturing argument rather than a
-    /// file-format one: it is 25x below one mil, the tightest separation a board
-    /// house will quote, so no `isolate` below it can survive etching whatever
-    /// the CAD does with it, and it is ten orders above the f64 noise floor of
-    /// the geometry it is compared against. A second board that merges at, say,
-    /// 0.01 mm would narrow the band and move this number; that measurement has
-    /// not been made.
+    /// **Chosen, twice over.** First, reading that as "the isolate decided it" is
+    /// an inference: the two layers differ in outline, routing and neighbouring
+    /// copper as well as in isolate, and the top layer's fills end up 8.236 mm
+    /// apart, which is crowding rather than a 0.3048 mm antipad. Second, even
+    /// granting the inference, the two values leave three orders of magnitude of
+    /// room and nothing in the file format says where inside it the behaviour
+    /// changes. One micrometre is picked on a manufacturing argument: it is 25x
+    /// below one mil, around the tightest separation board houses quote, so an
+    /// `isolate` below it is not asking for a manufacturable gap; and it is ten
+    /// orders above the f64 noise floor of the geometry it is compared against. A
+    /// board that merged at a wider isolate would narrow the band and move this
+    /// number; that measurement has not been made, and the false negatives this
+    /// leaves are recorded in `docs/about/LIMITATIONS.md`.
     ///
     /// An `isolate` between this and the design rules leaves a gap that is real
     /// but too tight, which is a clearance question about a fill Eagle recomputes
@@ -3003,12 +3007,16 @@ pub mod eagle_drc {
             /// Against foreign TRACKS, PADS and VIAS, Eagle applies
             /// max(isolate, design-rule / class clearance), so 0 means "rules
             /// only" and the fill can never crowd them. Against another POUR it
-            /// does not: the emonTx V3.4.5 pours at `isolate="0.00030625"`
-            /// against a GND pour under an 8 mil `mdWireWire` rule, and its own
-            /// CAM output emits the two as one filled region, which the rules
-            /// floor would have prevented. So the raw value is what the
-            /// pour-to-pour pass reads, and `POUR_MERGE_ISOLATE_MM` is the band
-            /// in which it is taken to mean "no gap at all".
+            /// the emonTx V3.4.5 does not behave that way: it pours at
+            /// `isolate="0.00030625"` against a GND pour under an 8 mil
+            /// `mdWireWire` rule, and its own CAM output emits the two as one
+            /// filled region, where a rules floor would have held them apart. On
+            /// that evidence the pour-to-pour pass reads the raw value, with
+            /// `POUR_MERGE_ISOLATE_MM` as the band in which it is taken to mean
+            /// "no gap at all". Autodesk documents `isolate` as one distance to
+            /// all foreign copper with the rules taking precedence, so this is a
+            /// measurement disagreeing with the general documentation on the
+            /// pour-to-pour case, not a reading of it.
             isolate: f64,
             /// Pour priority. With differing ranks the higher-numbered pour
             /// yields; same-rank pours of different signals get no arbitration
@@ -4077,11 +4085,11 @@ pub mod eagle_drc {
                 {
                     continue;
                 }
-                // Either pour may be the one that yields, and with equal rank
-                // the file does not say which, so the smaller `isolate` is the
-                // smallest gap the overlap can resolve to. An isolate wide
-                // enough to survive fabrication leaves separate copper, however
-                // far the outlines overlap.
+                // With equal rank the file does not say which pour yields, so
+                // take the smaller `isolate`: it is the more conservative of the
+                // two readings, since it is the one that can put copper in
+                // contact. Above the threshold, both readings leave a gap the
+                // fill would have to hold, however far the outlines overlap.
                 if a.isolate.min(b.isolate) >= POUR_MERGE_ISOLATE_MM {
                     continue;
                 }
