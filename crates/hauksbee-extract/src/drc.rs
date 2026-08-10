@@ -680,11 +680,6 @@ impl DrcReport {
         self.undeclared_shorts().count()
     }
 
-    /// Shorts a companion schematic accounted for, in report order.
-    pub fn declared_tie_shorts(&self) -> impl Iterator<Item = &DrcFinding> {
-        self.shorts().filter(|f| f.declared_tie.is_some())
-    }
-
     /// Attach a companion schematic's declarations to the shorts they cover, and
     /// record the schematic as this report's tie source.
     ///

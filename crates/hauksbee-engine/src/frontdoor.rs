@@ -517,6 +517,24 @@ fn analyze_normalized(
     file_name: &str,
     norm: &crate::board_input::NormalizedBoard,
 ) -> (WebReport, hauksbee_extract::DrcReport) {
+    analyze_normalized_with_ties(file_name, norm, None)
+}
+
+/// [`analyze_normalized`] with an optional companion schematic's declared net
+/// ties.
+///
+/// Split out rather than folded into `analyze`, because the two entries have
+/// genuinely different inputs. A file DROPPED on the web UI arrives as bytes with
+/// no filesystem beside it, so there is no companion to read and the report keeps
+/// the "supply the .sch" hint. A `--serve` run was pointed at a path, so the
+/// schematic may be sitting right next to the board, and reading it there is what
+/// keeps the browser report from calling a declared star ground a serious short
+/// while the CLI on the same board calls it a note.
+fn analyze_normalized_with_ties(
+    file_name: &str,
+    norm: &crate::board_input::NormalizedBoard,
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> (WebReport, hauksbee_extract::DrcReport) {
     let is_binary = norm.is_binary();
     let is_gerber = norm.is_gerber();
     let board = &norm.board;
@@ -531,13 +549,16 @@ fn analyze_normalized(
     // (`altium_drc`) for a binary board, the KiCad layout text otherwise. A
     // gerber archive has neither; its DRC section says so below instead of
     // reporting a vacuous "no problems".
-    let drc = if is_binary {
+    let mut drc = if is_binary {
         ExtractedBoard::altium_drc(&norm.raw).unwrap_or_default()
     } else if is_gerber {
         Default::default()
     } else {
         ExtractedBoard::drc(text_view.unwrap_or_default()).unwrap_or_default()
     };
+    if let Some(ties) = schematic_ties {
+        ties.apply(&mut drc);
+    }
     // Render from the grouped structure (single source of truth shared with the
     // CLI text/plain/json surfaces): duplicates collapsed, and gap==rule labelled
     // "at minimum clearance (no margin)" rather than the wrong "below the rule".
@@ -1791,7 +1812,21 @@ fn overall_headline(total: usize, serious: usize, has_heads_up: bool, bind_open:
 /// Serialize an [`analyze`] result to a JSON string for the HTTP layer. Board
 /// bytes are passed raw so binary formats (Altium `.PcbDoc`) survive intact.
 pub fn analyze_json(file_name: &str, contents: &[u8]) -> String {
-    let report = analyze(file_name, contents);
+    analyze_json_with_ties(file_name, contents, None)
+}
+
+/// [`analyze_json`] for a board read from a PATH, where a companion Eagle `.sch`
+/// may sit beside it. Used by `run --serve`, whose preloaded report must agree
+/// with what `--drc` and `--check` say about the same board on disk.
+pub fn analyze_json_with_ties(
+    file_name: &str,
+    contents: &[u8],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> String {
+    let report = match crate::board_input::from_bytes(file_name, contents) {
+        Ok(norm) => analyze_normalized_with_ties(file_name, &norm, schematic_ties).0,
+        Err(e) => unreadable(file_name, e.web_message()),
+    };
     serde_json::to_string(&report).unwrap_or_else(|e| {
         format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}")
     })
