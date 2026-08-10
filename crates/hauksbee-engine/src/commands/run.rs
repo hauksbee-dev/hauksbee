@@ -1054,6 +1054,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
             &text,
             cfg.models_dir.as_deref(),
             cfg.firmware.clone(),
+            cfg.schematic.as_deref(),
         );
     }
 

@@ -277,10 +277,27 @@ and it is found automatically, the same sibling convention the `.kicad_pro`
 clearance lookup uses. The parser (`hauksbee-extract/src/eagle_sch.rs`) reads one
 thing and nothing else: which named nets the schematic declares deliberately tied.
 It is not a schematic extractor, because the `.brd` already carries the netlist.
-A supply symbol is recognised by Eagle's own marker, a library symbol whose pin
-has `direction="sup"`, with the **pin's name** being the net it imposes; a tie is
-claimed only when such a symbol sits on a net whose name differs from its own.
-An ordinary component bridging two nets declares nothing.
+A supply symbol is recognised by Eagle's own marker and two narrowing tests, and
+all three must hold:
+
+1. the library symbol has **exactly one pin**, and that pin carries
+   `direction="sup"`, whose **name** is the net it imposes;
+2. its deviceset has exactly one gate; and
+3. no `<device>` in that deviceset names a **package**, because a supply symbol is
+   a schematic-only marker with no physical part behind it.
+
+Tests 1 and 3 are not decoration, and dropping either one silences real shorts.
+Ordinary Eagle libraries mark a component's power pins `direction="sup"`: the
+`SD-MMC` symbol in `margay_logger/Hardware/Margay.sch` has 13 pins of which 4 are
+`sup`, and `XBEE` in `emonTx V3.2.sch` has 20 of which 2 are. An
+any-`sup`-pin rule made the SD socket and the radio module "declare" ground tied
+to every net they touch: 6 false declarations on Margay and 19 on emonTx V3.2,
+including `3.3V` to `GND`, each of which would reclassify a genuine
+rail-to-ground short into a non-gating note. Measured over the twelve Eagle
+schematic/board pairs available, the three tests together yield declarations on
+exactly the five emonTx revisions that drew the tie (V3.4.1 to V3.4.5) and none
+anywhere else. A packaged testpoint whose symbol is a single `sup` pin is
+likewise not a supply symbol, which is what test 3 is for.
 
 **Reclassified, not deleted.** A covered finding keeps its net pair, layer,
 location and measured gap, and gains the declaration. Its severity drops from
@@ -294,11 +311,31 @@ the user is entitled to whether or not it was intended.
 **No schematic, no silence.** With none supplied, the finding stays `serious` and
 names the schematic as the unlocking upload, on the finding's own `fix` text and
 as a report-level note. And a schematic that declares nothing qualifies nothing:
-matching is by net-name pair against an actual declaration, so supplying a
-schematic can never be a route to silence a short. emonTx V3.4.0, the revision
-before the tie was drawn, declares none and its contacts stay serious even with
-its own schematic supplied. That is the guard the reverted `isolate` narrowing
-failed, and it is a test, not an intention.
+matching is against an actual declaration, so a schematic on its own is not a
+downgrade. emonTx V3.4.0, the revision before the tie was drawn, declares none and
+its contacts stay serious even with its own schematic supplied. That is the guard
+the reverted `isolate` narrowing failed, and it is a test, not an intention.
+
+**Two residual ways a declaration can reach copper it does not describe.** Both
+are recorded rather than claimed away, and both leave the copper contact and the
+`.sch` path visible on every surface, so the report is auditable in each case.
+
+- **No board/schematic identity check.** Matching is by net-name pair, so
+  `--schematic` pointed at a DIFFERENT revision of the same design reclassifies
+  contacts that revision never declared: V3.4.5's schematic supplied against the
+  V3.4.0 board downgrades V3.4.0's contacts. Auto-discovery cannot reach this
+  (it is bound to the board's own basename); it needs the flag and the wrong
+  file. Closing it properly needs a same-design test the `.brd` and `.sch` can
+  both support, which is not implemented.
+- **A declaration is not located.** A supply symbol says two nets meet, not
+  where. So a declared pair is qualified wherever those two nets touch, and a
+  second, accidental bridge on the SAME pair elsewhere is qualified too. The
+  report states how many contacts one declaration covered
+  (`2 copper contacts qualified`) and the remediation text asks the reader to
+  check the join is where the schematic puts it, because a star ground should
+  meet at one point. Eagle records the tie's sheet coordinates, but a schematic
+  coordinate does not map to a board coordinate, so no threshold here would be
+  measured rather than guessed.
 
 **Eagle only, and enforced.** A `.kicad_pcb` declares its ties in the layout the
 DRC already has and a `.kicad_sch` has no construct for a deliberate two-net join

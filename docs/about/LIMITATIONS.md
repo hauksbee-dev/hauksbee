@@ -406,14 +406,31 @@ schematic as the unlocking upload, which is the honest state: an Eagle `.brd`
 records no net ties, so a `.brd`-only run genuinely cannot tell a star ground
 from a solder bridge.
 
-What the pathway deliberately does NOT do is widen. Matching is by net-name pair,
-against a declaration read from Eagle's own supply-symbol construct (a library
-symbol whose pin carries `direction="sup"`, placed on a net its own name does not
-match). A schematic that declares nothing qualifies nothing, so supplying one can
-never be a route to silence a short: V3.4.0 supplies its own schematic and its
-reported contacts stay serious, which is the false-negative guard the reverted
-`isolate` narrowing failed. The two over-reports above are unaffected; they are a
-fill-reconstruction problem, not a declaration problem.
+The recogniser is narrow, and it has to be. A declaration comes from Eagle's own
+supply-symbol construct, admitted only when the library symbol has exactly one pin
+carrying `direction="sup"`, its deviceset has one gate, and no device behind it
+names a package: a supply symbol is a schematic-only marker, not a part. Ordinary
+libraries mark a real component's power pins `sup`, so an any-`sup`-pin rule turned
+an SD socket and an XBEE module into blanket ground exemptions, 6 false
+declarations on `margay_logger` and 19 on emonTx V3.2 including `3.3V` to `GND`,
+each able to reclassify a genuine rail-to-ground short. Over the twelve Eagle
+board/schematic pairs available, the admitted tests declare on exactly the five
+emonTx revisions that drew the tie and nowhere else. A schematic that declares
+nothing qualifies nothing: V3.4.0 supplies its own and its contacts stay serious,
+the false-negative guard the reverted `isolate` narrowing failed. The two pour
+over-reports above are unaffected; they are a fill-reconstruction problem, not a
+declaration problem.
+
+Two residuals stay open, both recorded rather than claimed away, and both leaving
+the copper contact and the schematic's path on every surface so a report can be
+audited. There is **no board/schematic identity check**, so `--schematic` pointed
+at a different revision of the same design reclassifies contacts that revision
+never declared (auto-discovery cannot reach this; it needs the flag and the wrong
+file). And **a declaration is not located**: a supply symbol says two nets meet,
+not where, so a second accidental bridge on the same pair elsewhere is qualified
+too. The report states how many contacts one declaration covered, and the
+remediation text asks the reader to check the join is where the schematic puts it.
+See [`../checks/SHORTS.md`](../checks/SHORTS.md) for both.
 
 Scoped to Eagle. A `.kicad_pcb` declares its ties in the layout the DRC already
 has (`net_tie_pad_groups`, `(attr net_tie)`) and a `.kicad_sch` has no construct
