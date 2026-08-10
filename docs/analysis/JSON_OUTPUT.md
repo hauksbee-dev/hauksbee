@@ -71,9 +71,11 @@ gating run's own document matches its own exit code (2 / 3 / 0). That is not
 the same as predicting a strict run from a non-strict one: on the co-sim path
 the zero-activity and analog-abort refusals are only constructed under
 `--strict`, and the boot advisory is only gate-grade under `--strict-boot`, so
-those documents change with the flag. DRC shorts are excluded from `serious_count` when the board is
-newer than the validated copper extraction (a `drc.version_warning` is set).
-This is the same carve-out the exit gate makes.
+those documents change with the flag.
+
+DRC shorts are excluded from `serious_count` when the board is newer than the
+validated copper extraction (a `drc.version_warning` is set). This is the same
+carve-out the exit gate makes.
 
 When current-carrying / active parts have no model (an open power FET, an
 unresolved main IC), the lint/SI/check surfaces add a `notes` entry (kind

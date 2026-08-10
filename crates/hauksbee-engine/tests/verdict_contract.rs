@@ -1178,7 +1178,9 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
 /// `--strict-boot` is a gate like any other, so under it the boot advisory is
 /// gate-grade for the co-sim document too. Needs real firmware (the advisory
 /// only speaks when the MCU actually ran), so it rides the AVR fixture the
-/// boot-advisory CLI test uses and skips when that firmware is not built.
+/// boot-advisory CLI test uses. That .hex is tracked, so the skip below is belt
+/// and braces for a partial checkout, not an expected outcome: a silent no-op
+/// here means the fixture went missing, not that the test had nothing to do.
 #[cfg(feature = "avr")]
 #[test]
 fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {

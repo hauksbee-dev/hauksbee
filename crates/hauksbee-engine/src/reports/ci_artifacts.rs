@@ -58,9 +58,8 @@ pub fn evidence_findings_with_gate(
 /// At most once per process. Two call sites reach it for the same run: the
 /// artifact writer, which is the only one a NON-gating run reaches at all, and
 /// the invalid-for-analysis exit, which must annotate a gating run whether or
-/// not artifacts were asked for. A run that
-/// passes through both would otherwise spend two of GitHub's ten
-/// annotations-per-type-per-step on the same refusal. The artifact writer runs
+/// not artifacts were asked for. A run that passes through both would otherwise
+/// spend two of GitHub's ten annotations-per-type-per-step on the same refusal. The artifact writer runs
 /// first and names the whole run's blockers, so the surviving annotation is the
 /// widest one: on `--usb-c`, whose exit site names only the CC-scoped subset,
 /// the kept line is the superset rather than that surface's own list.
