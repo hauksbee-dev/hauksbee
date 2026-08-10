@@ -24,6 +24,9 @@ pub struct RunConfig {
     pub bom: Option<std::path::PathBuf>,
     pub bom_columns: Vec<String>,
     pub placement: Option<std::path::PathBuf>,
+    /// Companion Eagle `.sch`, read for the net ties it declares. `None` still
+    /// finds a sibling beside the board; see `crate::schematic_ties::resolve`.
+    pub schematic: Option<std::path::PathBuf>,
     pub firmware: Option<std::path::PathBuf>,
     pub seconds: f64,
     pub headless: bool,
@@ -665,13 +668,49 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
         prebound = Some(b);
     }
 
+    // The companion Eagle `.sch`, if the user named one or one sits beside the
+    // board. Resolved ONCE here, where both `cfg.schematic` and the board path
+    // are in hand, and handed to every report surface: a copper contact the
+    // schematic declares must read the same way under `--check`, `--drc`,
+    // `--json` and the CI artifacts, or the same board is a declared tie on one
+    // surface and a serious short on another.
+    // Same `<eagle>` head sniff the DRC dispatch uses, so "is this an Eagle board"
+    // is decided identically in both places.
+    let board_is_eagle = text
+        .chars()
+        .take(512)
+        .collect::<String>()
+        .contains("<eagle");
+    let schematic_ties =
+        crate::schematic_ties::resolve(&cfg.board, cfg.schematic.as_deref(), board_is_eagle)?;
+    if let Some(ties) = &schematic_ties {
+        if !quiet && !cfg.json {
+            let how = if ties.auto_discovered {
+                "found beside the board"
+            } else {
+                "supplied"
+            };
+            eprintln!(
+                "schematic {} ({how}): {} declared net tie(s)",
+                ties.path.display(),
+                ties.ties.len()
+            );
+        }
+    }
+
     // --junit/--sarif: evaluate the selected surface with the same waiver and
     // gate policy that surface renders. Findings remain in the transaction
     // until the final outcome commits them; co-sim appends its dynamic findings.
     let mut ci_findings: Option<Vec<crate::result::JsonFinding>> = None;
     if cfg.junit.is_some() || cfg.sarif.is_some() {
         let mut findings = crate::reports::check::gather_findings(
-            &cfg.board, &board, &text, &raw, is_altium, &lib,
+            &cfg.board,
+            &board,
+            &text,
+            &raw,
+            is_altium,
+            &lib,
+            schematic_ties.as_ref(),
         )?;
         findings.retain(|finding| ci_check_selected(surface, finding));
         let bound = bind_board(&board, &lib);
@@ -790,6 +829,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
             cfg.strict,
             cfg.verbose,
             &inputs,
+            schematic_ties.as_ref(),
         );
     }
 
@@ -819,6 +859,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
             cfg.strict,
             cfg.verbose,
             &inputs,
+            schematic_ties.as_ref(),
         );
     }
 
@@ -962,6 +1003,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
             &reader_notes,
             cfg.strict,
             &inputs,
+            schematic_ties.as_ref(),
         );
     }
 

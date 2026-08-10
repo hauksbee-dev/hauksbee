@@ -638,6 +638,15 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
     placement: Option<PathBuf>,
 
+    /// Eagle `.sch` companion to an Eagle `.brd`, read for the net ties it
+    /// declares. A `.brd` records none, so a deliberate join (a star ground
+    /// drawn as one net's supply symbol placed on another's) is otherwise
+    /// reported as a serious short. Found automatically beside the board when it
+    /// shares the board's name. KiCad and Altium layouts declare their ties in
+    /// the layout file itself and need no companion here.
+    #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
+    schematic: Option<PathBuf>,
+
     /// Run an embedded example board instead of a file (try `blinky`). The
     /// board is compiled into the binary and materialized under the temp
     /// directory, so this works with no checkout on disk.
@@ -1583,6 +1592,7 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         bom: a.bom,
         bom_columns: a.bom_columns,
         placement: a.placement,
+        schematic: a.schematic,
         firmware: a.firmware,
         asbuilt: a.asbuilt,
         junit: a.junit,

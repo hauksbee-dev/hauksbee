@@ -82,6 +82,9 @@ pub struct BoardEvidence {
     maps: Vec<EvidenceMap>,
     board_artifact: Option<ArtifactId>,
     firmware_artifact: Option<ArtifactId>,
+    /// The companion schematic, when one was read. Cited by every evidence map
+    /// so a reclassified short traces back to the file that declared the tie.
+    schematic_artifact: Option<ArtifactId>,
     supporting_artifacts: Vec<ArtifactId>,
     defaults_by_ref: BTreeMap<String, Vec<DefaultFact>>,
     reader_contributions: Vec<Contribution>,
@@ -640,6 +643,7 @@ impl BoardEvidence {
             maps,
             board_artifact: None,
             firmware_artifact: None,
+            schematic_artifact: None,
             supporting_artifacts: Vec::new(),
             defaults_by_ref,
             reader_contributions,
@@ -711,6 +715,41 @@ impl BoardEvidence {
             detail: "instructions executed by the MCU co-simulation backend".into(),
         }]);
         self.firmware_artifact = Some(self.registry.add_artifact(artifact)?);
+        Ok(self)
+    }
+
+    /// Attach a companion Eagle `.sch` read for the net ties it declares.
+    ///
+    /// The schematic contributed to the verdict, so it belongs in the inventory
+    /// with its own hash: a reader who sees a copper contact reported as a
+    /// declared tie rather than a serious short must be able to see which file
+    /// carried the declaration, and check it. `contribution` says what it
+    /// actually did, including when it declared nothing.
+    pub fn with_schematic_artifact(
+        mut self,
+        path: impl AsRef<Path>,
+        raw: &[u8],
+        contribution: impl Into<String>,
+    ) -> Result<Self, EvidenceError> {
+        let path = path.as_ref();
+        let artifact = ArtifactProvenance::new(
+            path.to_string_lossy(),
+            ArtifactKind::EagleSchematic,
+            ArtifactRole::Schematic,
+            hex_digest(&Sha256::digest(raw)),
+            Vec::new(),
+        )?
+        .with_contributions(vec![Contribution {
+            what: "declared_net_ties".into(),
+            detail: contribution.into(),
+        }])
+        .with_ignored(vec![IgnoredInput {
+            what: "schematic connectivity".into(),
+            why: "the .brd carries the full netlist, so nothing is bound or simulated from the \
+                  schematic; only its declared net ties are read"
+                .into(),
+        }]);
+        self.schematic_artifact = Some(self.registry.add_artifact(artifact)?);
         Ok(self)
     }
 
@@ -1093,9 +1132,14 @@ impl BoardEvidence {
         let traversal = index.traverse_assertion(&scope, check, &assertion, &self.registry)?;
         let mut map =
             EvidenceMap::from_traversal(assertion, traversal, &self.registry, self.today)?;
-        if let Some(artifact) = self.board_artifact {
-            map = map.with_artifacts(&self.registry, [artifact])?;
-        }
+        // The board, plus the companion schematic when one was read. A DRC short
+        // the schematic reclassified states the declaration in its own assertion
+        // text, so a map citing only the layout would source half that sentence to
+        // a file which does not contain it.
+        let artifacts = [self.board_artifact, self.schematic_artifact]
+            .into_iter()
+            .flatten();
+        map = map.with_artifacts(&self.registry, artifacts)?;
         Ok(map)
     }
 
@@ -1124,10 +1168,14 @@ impl BoardEvidence {
             });
         }
         let mut map = self.map_for_nets(assertion.into(), scoped_nets.into_iter().collect())?;
-        let artifacts = [self.board_artifact, self.firmware_artifact]
-            .into_iter()
-            .flatten()
-            .chain(self.supporting_artifacts.iter().copied());
+        let artifacts = [
+            self.board_artifact,
+            self.firmware_artifact,
+            self.schematic_artifact,
+        ]
+        .into_iter()
+        .flatten()
+        .chain(self.supporting_artifacts.iter().copied());
         map = map.with_artifacts(&self.registry, artifacts)?;
         if let Some(budget) = budget {
             map = map.with_error_budget(budget);
@@ -1166,10 +1214,14 @@ impl BoardEvidence {
             scoped_nets.into_iter().collect(),
             Some(("ci", assertion.as_str())),
         )?;
-        let artifacts = [self.board_artifact, self.firmware_artifact]
-            .into_iter()
-            .flatten()
-            .chain(self.supporting_artifacts.iter().copied());
+        let artifacts = [
+            self.board_artifact,
+            self.firmware_artifact,
+            self.schematic_artifact,
+        ]
+        .into_iter()
+        .flatten()
+        .chain(self.supporting_artifacts.iter().copied());
         map = map.with_artifacts(&self.registry, artifacts)?;
         if let Some(budget) = budget {
             map = map.with_error_budget(budget);

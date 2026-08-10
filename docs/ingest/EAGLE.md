@@ -53,10 +53,17 @@ board, so the Eagle path gets the same treatment a KiCad board gets.
 
 ## What it does not extract
 
-- **Eagle schematics (`.sch`)** are not read. The layout alone fully describes
-  the circuit, so this is a gap rather than a blocker: hauksbee's schematic
-  path covers KiCad `.kicad_sch` only. See
-  [`SCHEMATICS.md`](SCHEMATICS.md).
+- **Eagle schematics (`.sch`) are not a netlist source.** The layout alone fully
+  describes the circuit, so nothing is bound or simulated from the schematic;
+  hauksbee's schematic-derived netlist path covers KiCad `.kicad_sch` only. See
+  [`SCHEMATICS.md`](SCHEMATICS.md). One thing IS read from an Eagle `.sch` when it
+  is supplied, because the `.brd` cannot express it: the **net ties the schematic
+  declares** through Eagle's supply-symbol construct. A `.brd` records no net ties
+  at all, so without the schematic a deliberate star ground is reported as a
+  serious short. Pass `--schematic <FILE>`, or leave the `.sch` beside the board
+  under the board's own name and it is found automatically. See
+  [`../checks/SHORTS.md`](../checks/SHORTS.md), "Declared ties read from the
+  schematic".
 - **Board design rules** from the `.brd` are not applied to the DRC, which uses
   its default clearance rather than the board's own rule. Findings are reported
   against that default.

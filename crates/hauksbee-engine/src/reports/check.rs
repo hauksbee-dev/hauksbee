@@ -17,6 +17,7 @@ use super::{kicad_pro_clearance_rules, lint_fails, si_fails, OutputMode};
 
 /// Run the full static suite and print it in `mode`, then (under `strict`) exit
 /// non-zero if any real finding gates.
+#[allow(clippy::too_many_arguments)]
 pub fn emit(
     board_path: &Path,
     board: &ExtractedBoard,
@@ -30,6 +31,7 @@ pub fn emit(
     strict: bool,
     verbose: bool,
     inputs: &[JsonInputEvidence],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
@@ -47,6 +49,20 @@ pub fn emit(
             text,
             kicad_pro_clearance_rules(board_path, board),
         )?
+    };
+
+    // The companion schematic's declarations, applied before anything reads the
+    // findings. Reclassifies, never deletes: a covered contact keeps its layer,
+    // location and measured gap and gains the declaration that qualifies it.
+    let schematic_contribution = schematic_ties.map(|ties| ties.apply(&mut drc));
+    // The schematic contributed to the verdict, so it enters the inventory with
+    // its own hash and what it did. A reader who sees a contact reported as a
+    // declared tie must be able to find the file that declared it.
+    let evidence = match (schematic_ties, &schematic_contribution) {
+        (Some(ties), Some(contribution)) => {
+            evidence.with_schematic_artifact(&ties.path, &ties.raw, contribution.clone())?
+        }
+        _ => evidence,
     };
     let lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };
@@ -349,6 +365,7 @@ pub fn gather_findings(
     raw: &[u8],
     altium_present: bool,
     lib: &ModelLibrary,
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
@@ -358,6 +375,15 @@ pub fn gather_findings(
             kicad_pro_clearance_rules(board_path, board),
         )?
     };
+
+    // The companion schematic's declarations, applied before anything reads the
+    // findings. Reclassifies, never deletes: a covered contact keeps its layer,
+    // location and measured gap and gains the declaration that qualifies it.
+    // This surface produces CI findings only and builds no evidence registry, so
+    // there is no inventory row to add here; the report surfaces above own that.
+    if let Some(ties) = schematic_ties {
+        ties.apply(&mut drc);
+    }
     let mut lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };
     let mut si = crate::checks::engine_si(board, lib, geo_text);
@@ -663,6 +689,7 @@ pub fn emit_combined_json(
     reader_notes: &[String],
     strict: bool,
     inputs: &[JsonInputEvidence],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let evidence = crate::evidence::BoardEvidence::from_bound(
@@ -679,6 +706,19 @@ pub fn emit_combined_json(
             text,
             kicad_pro_clearance_rules(board_path, board),
         )?
+    };
+    // The companion schematic's declarations, applied before anything reads the
+    // findings. Reclassifies, never deletes: a covered contact keeps its layer,
+    // location and measured gap and gains the declaration that qualifies it.
+    let schematic_contribution = schematic_ties.map(|ties| ties.apply(&mut drc));
+    // The schematic contributed to the verdict, so it enters the inventory with
+    // its own hash and what it did. A reader who sees a contact reported as a
+    // declared tie must be able to find the file that declared it.
+    let evidence = match (schematic_ties, &schematic_contribution) {
+        (Some(ties), Some(contribution)) => {
+            evidence.with_schematic_artifact(&ties.path, &ties.raw, contribution.clone())?
+        }
+        _ => evidence,
     };
     let mut lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };

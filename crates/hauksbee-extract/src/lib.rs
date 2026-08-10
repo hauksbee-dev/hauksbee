@@ -41,6 +41,11 @@ mod eagle;
 /// works from destroys the header, and one of those readers will then claim the
 /// file and report invented parts from it.
 pub use eagle::{eagle_binary_message, looks_like_eagle_binary};
+/// Declared net ties from a companion Eagle `.sch`. Not a schematic extractor:
+/// the `.brd` already carries the netlist, and this answers only whether the
+/// designer DECLARED two named nets joined on purpose, which the `.brd` cannot
+/// say and which decides whether a copper contact between them is a defect.
+pub mod eagle_sch;
 pub mod gerber;
 pub mod ipc2581;
 mod ipc356;
@@ -67,9 +72,10 @@ pub mod trace_current;
 
 pub use drc::{
     clearance_rules_from_kicad_pro, drc_from_text, eagle_drc_from_text, is_touching, run_drc,
-    run_drc_with_clearance_rules, ClearanceRules, DrcFinding, DrcReport, Item, ItemKind,
-    NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM, SHORT_TOUCH_EPS_MM,
+    run_drc_with_clearance_rules, ClearanceRules, DeclaredTie, DrcFinding, DrcReport, Item,
+    ItemKind, NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM, SHORT_TOUCH_EPS_MM,
 };
+pub use eagle_sch::{declared_net_ties, looks_like_eagle_schematic, DeclaredNetTie};
 pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
 pub use si::{
     cl_board_pf, cl_series, i2c_rise_time_ns, render_si, routed_length_mm, SiCheck, SiFinding,
