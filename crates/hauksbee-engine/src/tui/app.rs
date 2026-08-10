@@ -266,6 +266,11 @@ fn event_loop(
                 if let Some(sub) = &u.substitution {
                     state.set_chip_substitution(sub.clone());
                 }
+                // Co-sim coverage caveats, from the shared enumeration the
+                // batch surfaces' wording comes from. Held in AppState so the
+                // count banner, the footer hint and the `c` overlay all read one
+                // list, and so the caveats survive the run finishing.
+                state.set_coverage(u.coverage.clone());
                 // Feed the scope's ring buffers from the SAME stream (each drained
                 // update is one time sample). Only probed nets are buffered; this
                 // adds no second co-sim path.
@@ -305,6 +310,21 @@ fn event_loop(
         // (Esc as the meta prefix), so an Alt-modified key while a modal is open
         // is treated as the Esc that was meant to close it, not the action.
         if state.any_overlay_open() {
+            // The coverage overlay is the one overlay whose content can exceed
+            // the modal (ten classes of full sentence), so ↑/↓ scroll it while
+            // it is open. Everything else stays modal-swallowed below.
+            if state.coverage_open
+                && matches!(
+                    key.code,
+                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k')
+                )
+            {
+                match key.code {
+                    KeyCode::Down | KeyCode::Char('j') => state.coverage_scroll_down(),
+                    _ => state.coverage_scroll_up(),
+                }
+                continue;
+            }
             // Two ways to close: an explicit close key (Esc/Enter/q), or an
             // Alt-modified key, many terminals encode a quick `Esc <key>` burst
             // as a single Alt+<key> event (Esc as the meta prefix), so an
@@ -372,6 +392,11 @@ fn event_loop(
             KeyCode::Char('p') => {
                 let _ = state.toggle_probe_selected();
             }
+            // Co-sim coverage detail: the full sentence for every caveat the run
+            // has disclosed. The pane's count banner is the surfacing; this is
+            // where the wording lives, so a narrow pane never has to carry ten
+            // paragraphs. A no-op when there is nothing to disclose.
+            KeyCode::Char('c') => state.toggle_coverage(),
             _ => {}
         }
 

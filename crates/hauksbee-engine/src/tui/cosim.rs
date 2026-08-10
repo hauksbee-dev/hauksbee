@@ -62,22 +62,18 @@ pub struct CosimUpdate {
     /// report surface, so a diverged co-sim no longer looks quiet HERE.
     /// `Default` is `false`, so build every real snapshot through
     /// `build_update` (which sets it) rather than relying on the derive.
-    ///
-    /// It closed one hole, not the class. Of the ten co-sim coverage caveats the
-    /// batch surfaces carry between them (nine of them printed by
-    /// `reports::cosim::run_headless`; drive conflicts ride `--json`/`--plain`
-    /// only), this pane carries exactly one, heuristic SPI framing, alongside
-    /// this flag, the failed-chunk count and the substitution caveat. Dropped
-    /// ADC injections, unexercised buses, watchdog limitations, watchdog
-    /// reboots, timing limitations, per-core timing coverage, short pulses,
-    /// driver contentions and drive conflicts are still silent here and loud
-    /// elsewhere; the matrix is in `docs/cosim/MCU.md`. Adding a caveat to the
-    /// batch surfaces does not add it here.
     pub analog_valid: bool,
-    /// SPI buses still framed by the chunk-boundary heuristic (no CS pin
-    /// resolved and the backend does not frame itself): their transaction
-    /// boundaries are guessed, which the pane says out loud.
-    pub heuristic_spi_buses: Vec<String>,
+    /// Every co-sim coverage caveat this run has accumulated so far, from the
+    /// one enumeration in [`crate::reports::coverage`] that the batch report
+    /// surfaces' wording comes from. The pane renders the WHOLE list (a count
+    /// banner plus the `c` overlay), so a class added to that enumeration
+    /// appears here without a second edit; the previous per-caveat fields were
+    /// how the pane came to carry one of the ten while `hauksbee run` carried
+    /// nine.
+    ///
+    /// Recomputed at every chunk boundary, so a caveat that only becomes true
+    /// mid-run (a watchdog reboot, a contended net) appears as it happens.
+    pub coverage: Vec<crate::reports::coverage::CoverageCaveat>,
     /// Count of chunks whose analog solve failed this run. `0` on a clean run;
     /// non-zero drives the loud invalid line in the pane. Kept alongside
     /// `analog_valid` so the pane can say HOW MANY chunks were held stale.
@@ -260,13 +256,11 @@ fn run_worker(
         // so the pane can refuse rather than present them as trustworthy.
         let analog_valid = engine.scheduler().analog_valid();
         let failed_chunk_count = engine.scheduler().failed_chunk_count();
-        let heuristic_spi_buses: Vec<String> = engine
-            .scheduler()
-            .spi_framing_modes()
-            .into_iter()
-            .filter(|(_, m)| matches!(m, crate::peripherals::spi::SpiFramingMode::Heuristic))
-            .map(|(b, _)| b)
-            .collect();
+        // Coverage caveats through the shared enumeration, never a local rule:
+        // the pane says what `hauksbee run --json` says because it reads the
+        // same list.
+        let coverage =
+            crate::reports::coverage::CoverageInputs::from_scheduler(engine.scheduler()).caveats();
 
         // Move the frame's net voltages into the snapshot; keep a copy so the
         // final `done` update can carry the last frame's voltages too.
@@ -284,7 +278,7 @@ fn run_worker(
             substitution,
             analog_valid,
             failed_chunk_count,
-            heuristic_spi_buses,
+            coverage,
             false,
             net_voltages.clone(),
         );
@@ -304,13 +298,8 @@ fn run_worker(
         .map(|s| s.message());
     let analog_valid = engine.scheduler().analog_valid();
     let failed_chunk_count = engine.scheduler().failed_chunk_count();
-    let heuristic_spi_buses: Vec<String> = engine
-        .scheduler()
-        .spi_framing_modes()
-        .into_iter()
-        .filter(|(_, m)| matches!(m, crate::peripherals::spi::SpiFramingMode::Heuristic))
-        .map(|(b, _)| b)
-        .collect();
+    let coverage =
+        crate::reports::coverage::CoverageInputs::from_scheduler(engine.scheduler()).caveats();
     let _ = tx.send(build_update(
         t,
         &start,
@@ -323,7 +312,7 @@ fn run_worker(
         substitution,
         analog_valid,
         failed_chunk_count,
-        heuristic_spi_buses,
+        coverage,
         true,
         last_voltages,
     ));
@@ -344,7 +333,7 @@ fn build_update(
     substitution: Option<String>,
     analog_valid: bool,
     failed_chunk_count: u64,
-    heuristic_spi_buses: Vec<String>,
+    coverage: Vec<crate::reports::coverage::CoverageCaveat>,
     done: bool,
     net_voltages: HashMap<String, f64>,
 ) -> CosimUpdate {
@@ -360,7 +349,7 @@ fn build_update(
         substitution,
         analog_valid,
         failed_chunk_count,
-        heuristic_spi_buses,
+        coverage,
         done,
         error: None,
         net_voltages,
@@ -652,6 +641,57 @@ mod tests {
         assert_eq!(
             bad.failed_chunk_count, 3,
             "the failed-chunk count reaches the UI snapshot"
+        );
+    }
+
+    #[test]
+    fn build_update_carries_the_coverage_caveats() {
+        // The worker reads the caveats off the scheduler through the shared
+        // enumeration; this is the transport check, that the list survives into
+        // the snapshot the UI thread renders. Both sides: a run with a caveat
+        // carries it, a clean run carries an empty list rather than a stale one.
+        use crate::reports::coverage::{CoverageClass, CoverageInputs};
+        use crate::scheduler::AdcDrop;
+
+        let start = Instant::now();
+        let uart: VecDeque<String> = VecDeque::new();
+        let tracker = NetActivity::default();
+        let build = |coverage: Vec<crate::reports::coverage::CoverageCaveat>| {
+            build_update(
+                0.1,
+                &start,
+                1.0,
+                &uart,
+                "",
+                false,
+                &tracker,
+                false,
+                None,
+                true,
+                0,
+                coverage,
+                false,
+                HashMap::new(),
+            )
+        };
+
+        let caveats = CoverageInputs {
+            adc_dropped: vec![AdcDrop {
+                mcu_ref: "U1".to_string(),
+                channel: 4,
+                net: "/VSENSE".to_string(),
+                parts: Vec::new(),
+            }],
+            ..Default::default()
+        }
+        .caveats();
+        let carried = build(caveats.clone());
+        assert_eq!(carried.coverage, caveats, "the caveat list reaches the UI");
+        assert_eq!(carried.coverage[0].class, CoverageClass::AdcDropped);
+
+        assert!(
+            build(Vec::new()).coverage.is_empty(),
+            "a run with nothing to disclose carries an empty list"
         );
     }
 }
