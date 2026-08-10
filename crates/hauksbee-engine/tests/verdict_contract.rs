@@ -26,7 +26,9 @@
 //!    artifacts follow it as far as they can today: the GitHub annotations
 //!    agree on every run the bind-gate and co-sim-refusal paths own (an
 //!    analysis surface that refuses on its own validity, and an exit 3 for
-//!    undermined coverage alone, name no blockers and annotate nothing), and
+//!    undermined coverage alone, name no blockers and annotate nothing; and
+//!    with an artifact flag the whole-suite artifact writer annotates
+//!    regardless of the selected surface), and
 //!    JUnit/SARIF agree on the `invalid` route
 //!    (whose blockers are gate-grade `serious` evidence findings), through the
 //!    co-sim rewrite and its refusal rewrite. They do NOT yet agree on the
@@ -897,12 +899,13 @@ fn junit_and_sarif_agree_with_a_specialist_surfaces_verdict() {
 
 #[test]
 fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
-    // The third artifact surface, same rule: an error annotation appears with
-    // the invalid verdict and nowhere else, so a pull request's checks tab
-    // cannot read clean beside a refused document. No `--junit` here on
-    // purpose: the annotation must not be a side effect of asking for an
-    // artifact file, or a pipeline that gates on the exit code alone gets a
-    // silent checks tab.
+    // The third artifact surface: an error annotation appears with the invalid
+    // verdict and nowhere else, so a pull request's checks tab cannot read
+    // clean beside a refused document. No `--junit` here on purpose: with an
+    // artifact flag the run annotates from the artifact writer too, which would
+    // pass this test without the gating exit ever annotating anything, and a
+    // pipeline that gates on the exit code alone would still get a silent
+    // checks tab.
     for surface in ["--lint", "--si", "--check", "--resources"] {
         let unbound = fixture("verdict_fet_unbound.kicad_pcb");
         let out = run_in_actions(&[
@@ -1042,13 +1045,7 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
         "the refusal is not silenced by the fault gate taking the exit:\n{}",
         stderr(&out)
     );
-    // A gating run under GitHub Actions still leaves stdout as exactly one JSON
-    // document: the workflow annotations are stderr, not report content.
-    assert!(
-        stderr(&out).lines().any(|l| l.starts_with("::error ")),
-        "the gate annotated the run:\n{}",
-        stderr(&out)
-    );
+
     let xml = std::fs::read_to_string(&refused).expect("junit");
     let refused_cases = junit_testcases(&xml);
     for case in &complete_cases {

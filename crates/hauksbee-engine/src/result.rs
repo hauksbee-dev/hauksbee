@@ -1538,8 +1538,7 @@ pub struct JsonReport {
     /// and the co-sim gate on any raised fault. The findings those gates catch
     /// beyond the shared grade serialize as `warning`/`note`, which is exactly
     /// why the verdict cannot derive them from severity. Without this the same
-    /// invocation
-    /// printed `"verdict":"pass","ok":true` and exited 2, so a consumer gating
+    /// invocation printed `"verdict":"pass","ok":true` and exited 2, so a consumer gating
     /// on the document disagreed with a consumer gating on the exit code. Set
     /// by the surface AFTER its waiver partition, so an overruled finding
     /// neither gates nor flips the verdict. Not serialized: the gate's OUTCOME
