@@ -1180,14 +1180,15 @@ own machine verdict on the same board: `fail` exits 2, `invalid` exits 3, `pass`
 exits 0. Those gates are deliberately wider than the `serious` severity
 (`--lint` gates on medium findings, `--si` on any real finding), so a run gating
 on a `warning`-severity finding reads `verdict: "fail"` in the very document its
-exit code was printed beside. On the static surfaces, disarming a gate does not rewrite the document: without
-`--strict`, and under `--thermal --no-strict-thermal`, a refusing verdict still
-prints beside exit 0, so a cheap non-strict `--json` run predicts what a strict
-one will exit with. Do not read that across to the co-sim path or to
-`--strict-boot`: the zero-activity refusal is only constructed under `--strict`
-and the boot advisory is only gate-grade under `--strict-boot`, so those
-documents read `pass` without the flag and `invalid` / `fail` with it. Run the
-gate you intend to gate on. `--report` has no gate at all.
+exit code was printed beside. Do not use a non-strict run to predict a strict one. On the static surfaces the
+document does not change with the flag (a refusing verdict prints beside exit 0
+without `--strict`), so reading it there is at worst incomplete. Elsewhere it is
+misleading in both directions: the co-sim zero-activity refusal is only
+constructed under `--strict` and the boot advisory is only gate-grade under
+`--strict-boot`, so those documents read `pass` until the flag is passed; and
+`--thermal --no-strict-thermal` is a permanent opt-out rather than a disarmed
+gate, so its `invalid` document stays at exit 0 no matter what else is passed.
+Run the gate you intend to gate on. `--report` has no gate at all.
 
 Two co-sim paths deliberately keep exit 3 over a `fail` document, because there
 the run is not analysable even though it observed faults: an aborted analog

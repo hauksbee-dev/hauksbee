@@ -147,10 +147,12 @@ fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
 }
 
 /// Exit 3 for a bind-blocked run, naming the blockers on the GitHub checks tab
-/// on the way out whether or not `--junit`/`--sarif` were asked for. Before
-/// this the blocker annotation rode inside the artifact-writing branch, so a
-/// pipeline gating on the exit code alone saw a clean checks tab beside an
-/// exit 3.
+/// on the way out whether or not `--junit`/`--sarif` were asked for. The
+/// artifact writer annotates the same blockers for a non-gating run, but it
+/// only runs when an artifact flag is present, so a pipeline gating on the exit
+/// code alone saw a clean checks tab beside an exit 3.
+/// [`ci_artifacts::github_blocker_annotation`] is once-per-process, so a run
+/// that passes through both sites still annotates once.
 ///
 /// Narrower than [`strict_gate_exit`], deliberately: it prints no failure line
 /// (the surfaces that exit 3 already printed their INCONCLUSIVE verdict) and it
