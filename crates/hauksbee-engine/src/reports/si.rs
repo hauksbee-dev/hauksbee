@@ -81,13 +81,20 @@ pub fn emit(
     };
     // The verdict blockers: a clean SI result over an unbound power FET / main
     // IC is a vacuous pass, so every surface says INCONCLUSIVE (count, named
-    // parts, unlocking input) instead of a clean bill. Exit codes unchanged.
+    // parts, unlocking input) instead of a clean bill. Without --strict the exit
+    // code is unchanged; under it these blockers exit 3, matching the verdict.
     let blockers =
         crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
                 .with_bind_verdict_gate()
+                // `si_fails` is this surface's exit gate and it counts every
+                // real finding, including the low ones that serialize as
+                // `note` (its informational computed-value notes are excluded),
+                // so the verdict has to know or the document reads `pass`
+                // beside exit 2.
+                .with_surface_gate(si_fails(&report))
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.findings = Some(si_findings_json(&report));
@@ -147,7 +154,7 @@ pub fn emit(
     // the verdict-critical bind gate exit 3; an open passive's per-net map or
     // a finding's own badge never does.
     if strict && (coverage_undermined || !blockers.is_empty()) {
-        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        super::exit_invalid_for_analysis(&blockers);
     }
     Ok(())
 }

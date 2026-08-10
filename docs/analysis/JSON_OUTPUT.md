@@ -55,27 +55,57 @@ and failure parse the same way:
 |---|---|---|
 | `ok` | bool | `true` iff `verdict == "pass"` |
 | `verdict` | string | `"pass"` \| `"fail"` \| `"invalid"` (see below) |
-| `serious_count` | int | number of serious findings (DRC shorts + co-sim stress faults + serious lint/SI) |
+| `serious_count` | int | number of `serious` findings (DRC shorts, a destroyed part in co-sim, high-severity lint/SI). A co-sim fault that did not destroy the part grades `warning` and is counted by its surface's gate instead, see `verdict` below |
 | `actionable_count` | int | findings a user can act on (serious + warnings + clearance groups) |
 
-`verdict` is `"fail"` when `serious_count > 0`. It is `"invalid"` when
-nothing is serious but an analysis that ran could not be judged (AC or
-thermal reported `valid:false`). Otherwise it is `"pass"`. DRC shorts are
-excluded from `serious_count` when the board is newer than the validated
-copper extraction (a `drc.version_warning` is set). This is the same
+`verdict` is `"fail"` when `serious_count > 0`, or when the emitting surface's
+own `--strict` gate fails on a finding the `serious` severity does not carry
+(`--lint` gates on medium-severity findings, `--si` on any real finding
+including its low ones but not its informational notes, the co-sim surface on
+any raised fault; `--strict-boot` adds the boot advisory). It is `"invalid"`
+when nothing gates but the run-level claim could not be judged: a
+top-level `refusal`, AC or thermal reporting `valid:false`, undermined run-level
+evidence, or unbound verdict-critical parts on a model-dependent surface.
+Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`, and a
+gating run's own document matches its own exit code (2 / 3 / 0). That is not
+the same as predicting a strict run from a non-strict one: on the co-sim path
+the zero-activity and analog-abort refusals are only constructed under
+`--strict`, and the boot advisory is only gate-grade under `--strict-boot`, so
+those documents change with the flag.
+
+DRC shorts are excluded from `serious_count` when the board is newer than the
+validated copper extraction (a `drc.version_warning` is set). This is the same
 carve-out the exit gate makes.
 
-A `"pass"` can be **qualified**. When current-carrying / active parts have no
-model (an open power FET, an unresolved main IC), the lint/SI/check surfaces
-add a `notes` entry (kind `coverage`) whose message begins `INCONCLUSIVE:`,
-naming the count, the parts, and the unlocking input. The same parts are in
-`bind.active_path_unresolved[]` (an unresolved power FET appears there with
-`active_ic: false`, so do not filter on `active_ic` when looking for them) or
+When current-carrying / active parts have no model (an open power FET, an
+unresolved main IC), the lint/SI/check surfaces add a `notes` entry (kind
+`coverage`) whose message begins `INCONCLUSIVE:`, naming the count, the parts,
+and the unlocking input. The same parts are in `bind.active_path_unresolved[]`
+(an unresolved power FET appears there with `active_ic: false`, so do not
+filter on `active_ic` when looking for them) or
 `bind.resolved_but_open_active[]`, and the evidence spine carries the typed
-`open_part` assumptions on affected claims. Read `verdict: "pass"` together
-with those fields: a pass over unmodelled critical parts is not a clean bill.
-The note is prose honesty only, it never changes `ok`, `verdict`, or the exit
-code (`docs/ci/CI.md` states that boundary).
+`open_part` assumptions on affected claims. On the model-dependent surfaces
+(`--lint`, `--si`, `--check`, `--resources`, the bare machine report, the
+CC-scoped `--usb-c` claim and the co-sim report) those parts also make
+`verdict` read `invalid`, and a `--strict` run of the same command exits 3 to
+match: a clean result there would be vacuous. The copper (`--drc`) and
+descriptive (`--report`) surfaces are exempt, on both the verdict and the exit
+code: copper reads the layout, and `--report` describes the binding rather than
+judging it (`docs/ci/CI.md` states that boundary).
+
+Read `verdict` together with `notes` and the `bind` fields, never on its own:
+`thermal.valid: true` under `--thermal --no-strict-thermal` means the table is
+usable, not that the coverage is complete, and the top-level `verdict` can
+still be `invalid` for the undermined evidence behind it while the opt-out
+returns exit 0. That opt-out is one of three places the exit code and the
+verdict deliberately part company, the same way omitting `--strict` leaves a
+`fail` verdict at exit 0. The other two are on the co-sim path: an aborted
+analog solve exits 3 (invalid for analysis) even where the document grades the
+faults it observed as `fail`, because those faults may come from the
+stale-voltage windows the solve failed on; and a runtime timing refusal exits
+3 beside whatever verdict the document already printed. In all three the
+document is the record of what was observed and the exit code is the policy;
+where the gate is armed and the run is analysable they agree.
 
 ## Sections
 
@@ -92,7 +122,7 @@ when the corresponding analysis ran.
 | `ac` | `--ac` | `valid` (+ `reason`), `nets[]` (`{net, points:[[freq,mag_db,phase]]}`), `no_signal_path_nets[]`, `not_found_nets[]`, `coverage` |
 | `thermal` | `--thermal` | `valid` (+ `reason`), `ambient_c`, `devices[]` (`{reference, tj_c, over_limit}`), `coverage` |
 | `boot_gates` | boot-state panel | per-transistor-gate power-up state (informational) |
-| `notes` | at least one note fired | array of `{kind, message}`, bind roles, MCU substitution, coverage caveats; **informational, never gating** |
+| `notes` | at least one note fired | array of `{kind, message}`, bind roles, MCU substitution, coverage caveats. A note never gates on its own; where an `INCONCLUSIVE:` coverage note names unbound verdict-critical parts, the same parts move `verdict` (see above) |
 | `cosim` | a firmware co-sim ran | `CosimJson` (below) |
 | `waived` | a waiver overruled a finding | array of `{check, kind, subject, reason, until}` (below) |
 
