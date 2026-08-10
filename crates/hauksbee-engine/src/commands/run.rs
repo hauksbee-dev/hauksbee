@@ -1969,10 +1969,20 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
                 }
                 // Firmware was already path-validated above; a read error here is
                 // unexpected, so fall back to the board-only report rather than fail.
-                Err(_) => crate::analyze_json(&file_name, report_bytes),
+                Err(_) => crate::frontdoor::analyze_json_with_ties(
+                    &file_name,
+                    report_bytes,
+                    schematic_ties.as_ref(),
+                ),
             }
         }
-        None => crate::analyze_json(&file_name, report_bytes),
+        // The preloaded browser report must read the same as `--drc` on the same
+        // path, so it gets the companion schematic this run already resolved.
+        None => crate::frontdoor::analyze_json_with_ties(
+            &file_name,
+            report_bytes,
+            schematic_ties.as_ref(),
+        ),
     };
     let report_val: serde_json::Value =
         serde_json::from_str(&report_json).unwrap_or(serde_json::Value::Null);
@@ -2022,6 +2032,26 @@ fn capture_manifest(
     ] {
         if let Some(path) = path {
             inputs.push(ManifestInput::new(role, path));
+        }
+    }
+    // The RESOLVED schematic, not just `cfg.schematic`: an auto-discovered
+    // sibling contributes exactly as much as a named one (it can move a short
+    // from serious to a declared tie and flip the strict exit), so a manifest
+    // that omitted it would not replay the run it describes. This also keeps the
+    // manifest agreeing with the evidence inventory, which hashes the same file.
+    //
+    // Resolved here rather than passed in, because the manifest is captured
+    // before the analysis path resolves its own copy. The lookup is a filesystem
+    // read of the board's head plus one sibling stat, and it must agree with the
+    // analysis path's answer, so it goes through the same function.
+    if cfg.example.is_none() {
+        let board_is_eagle = std::fs::read(&cfg.board)
+            .map(|raw| String::from_utf8_lossy(&raw[..raw.len().min(512)]).contains("<eagle"))
+            .unwrap_or(false);
+        if let Ok(Some(ties)) =
+            crate::schematic_ties::resolve(&cfg.board, cfg.schematic.as_deref(), board_is_eagle)
+        {
+            inputs.push(ManifestInput::new("schematic", &ties.path));
         }
     }
     if let Some(path) = firmware_source {
@@ -2116,6 +2146,7 @@ fn capture_manifest(
         cfg.example.is_none().then(|| cfg.board.clone()),
         cfg.bom.clone(),
         cfg.placement.clone(),
+        cfg.schematic.clone(),
         firmware_source.map(std::path::Path::to_path_buf),
         cfg.firmware.clone(),
         cfg.asbuilt.clone(),

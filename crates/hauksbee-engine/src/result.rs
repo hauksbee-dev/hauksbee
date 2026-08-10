@@ -2135,6 +2135,17 @@ impl JsonReport {
         if let Some(drc) = &self.drc {
             if drc.version_warning.is_none() {
                 for s in &drc.shorts {
+                    // A contact a companion schematic declares deliberate is not a
+                    // serious finding and there is nothing to act on, so it must
+                    // not reach the run-level verdict either. This is the field a
+                    // CI consumer reads instead of re-deriving pass/fail from the
+                    // findings, so leaving it out of step would fail the build on
+                    // a declared star ground through `ok`/`verdict` while every
+                    // per-finding surface, the strict gate and the JUnit artifact
+                    // all call it a note.
+                    if s.declared_tie.is_some() {
+                        continue;
+                    }
                     let nets = vec![s.net_a.clone(), s.net_b.clone()];
                     let subject = format!("{} to {} on {}", s.net_a, s.net_b, s.layer);
                     if let Some(w) = waivers.take_waiver("drc", "short", &nets, &[], &subject) {
