@@ -1737,3 +1737,573 @@ gnd_pin    = "9"           # VDDIO (pin 3) / GNDIO (pin 8) carry no metered draw
 # operating range (-40 to +85 C) and a passive storage range, not a junction
 # limit, and no thermal resistance to reach one with.
 max_voltage_v = 4.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FT231XQ: FTDI USB-to-full-speed-serial UART bridge, QFN-20.
+#
+# Source: FTDI "FT231X USB to Full Handshake UART IC" datasheet, FT_000565
+#   Version 1.2 (2013), Section 3 Pin configuration (QFN-20 figure and the
+#   Table 3.x signal descriptions) and Section 6 DC characteristics.
+#
+# TWO SUPPLY DOMAINS, AND THE ONE THAT SETS LOGIC LEVELS IS VCCIO. VCC (pad 12)
+# runs the core at 2.97 to 5.5 V; VCCIO (pad 20) runs the UART I/O ring at 1.62
+# to 3.63 V, and every VOH/VIH figure below is VCCIO's, not VCC's. The datasheet
+# tabulates three separate columns (VCCIO = 3.3, 2.5, 1.8 V) and the 3.3 V one is
+# used here because that is the rail the part's own 3V3OUT regulator produces and
+# what a bus-powered design ties VCCIO to. On a board that feeds VCCIO 1.8 V,
+# VIH becomes 1.6 V and VOH 1.62 V, and this entry would read the bus optimistically.
+#
+# DELIBERATELY NOT MODELLED: the USB device itself. There is no host, no
+# enumeration, no baud-rate divisor and no FIFO, so pads 8/9 (USBDP/USBDM) carry
+# roles and carry nothing else, and TXD never emits a byte. The CBUS pins are
+# EEPROM-configurable (the roles below are the factory defaults, and the margay
+# datalogger's board uses CBUS1/CBUS2 as LED drivers exactly as the defaults
+# intend) so a board that reprograms them has different functions on those pads
+# than the names here suggest. The internal 3V3OUT LDO is not stamped: pad 10 is
+# named `v3v3out` and is not a source, so a board powering VCCIO from it sees no
+# path. That is the biggest gap and it is a `digital`-kind limitation.
+[[models]]
+id = "ft231x"
+kind = "digital"
+description = "FTDI FT231X USB-to-UART bridge, QFN-20 (pad map and VCCIO logic levels; no USB stack)"
+
+[models.match]
+# "FT231XQ" is the QFN-20 ordering code and "FT231XS" the SSOP-20 one; the two
+# have DIFFERENT pin orders, so only the Q (and the bare "FT231X-Q" spelling the
+# margay datalogger uses) may borrow this map. The SSOP part resolves to nothing
+# until it gets its own entry.
+value_re = "(?i)^FT231X[-_ ]?Q([A-Z0-9-]*)?$"
+
+[models.params]
+# Section 6, VCCIO = 3.3 V column. See the note above before trusting these on a
+# board with a lower I/O rail.
+voh   = 2.97     # min, at the table's IOH = 2 mA test current. The four VOH rows
+                 # in that table are DRIVE-STRENGTH settings (4/8/12/16 mA, which
+                 # the EEPROM selects), not load currents, so this is not a claim
+                 # that the pin holds 2.97 V into 16 mA.
+vol   = 0.4      # max, same table and same 2 mA test current
+vih   = 2.0      # min (LVTTL)
+vil   = 0.8      # max
+supply_static_ua = 8000.0  # ICC1 typ, normal operation (8.4 mA max); USB-suspend
+                           # ICC2 is 125 uA and is not the operating figure
+supply_pin = "12"          # VCC, the core supply. The engine's supply leg is one
+gnd_pin    = "3"           # pin pair, and the datasheet gives no VCC/VCCIO split
+                           # of the 8 mA, so it is metered on VCC alone.
+
+[models.pins]
+# Section 3, QFN-20. Cross-checked against the margay datalogger: pad 18 sits on
+# a net named DTR, pads 8/9 on the USB pair, pad 11 tied to the 3.3 V rail
+# (RESET# released), pad 20 on the I/O rail, and the exposed pad on GND.
+"1"  = "rxd"        # UART data in (to the IC)
+"2"  = "ri_n"       # ring indicator input
+"3"  = "gnd"
+"4"  = "dsr_n"      # modem-status input
+"5"  = "dcd_n"      # modem-status input
+"6"  = "cts_n"      # flow-control input
+"7"  = "cbus2"      # configurable; factory default TXLED#
+"8"  = "usbdp"      # USB D+; no USB stack, see above
+"9"  = "usbdm"      # USB D-
+"10" = "v3v3out"    # internal 3.3 V LDO output; NOT stamped as a source
+"11" = "reset_n"    # active-low reset input; tie high for normal operation
+"12" = "vcc"        # core supply, 2.97 to 5.5 V
+"13" = "gnd2"
+"14" = "cbus1"      # configurable; factory default RXLED#
+"15" = "cbus0"      # configurable; factory default TXDEN
+"16" = "cbus3"      # configurable; factory default SLEEP#
+# THE OUTPUTS ARE NOT `y`-PREFIXED, and that is the opposite of what it looks
+# like it should be. `digital::output_roles` stamps a Thevenin driver on every
+# `y`-prefixed role, and for a part with NO `[models.logic]` block nothing ever
+# computes a value for that driver: it stays at its initial 0 V and ENABLED, so a
+# `y`-named output becomes a strong constant LOW on the board's net. On this part
+# that would hold the MCU's UART RX line at ground. There is no USB stack here to
+# compute a TXD value from, so the honest shape is a named pad with no driver,
+# which is what the CH340G and CP2102 entries above do for the same reason.
+"17" = "txd"        # UART data out (not driven; see above)
+"18" = "dtr_n"      # modem-status output
+"19" = "rts_n"      # flow-control output
+"20" = "vccio"      # I/O-ring supply, 1.62 to 3.63 V; sets every level above
+"EP" = "gnd3"       # exposed pad, tied to ground on every board
+
+[models.ratings]
+# Section 5 Absolute maximum ratings. VCCIO's -0.3 to 4.0 V is the TIGHTER of the
+# two supply limits, and there is no per-domain field on this schema, so the tighter
+# one is what is recorded: the 5.5 V figure belongs to VCC alone.
+#
+# NOTHING COMPARES THIS AGAINST A NODE TODAY. The scheduler builds supply-rail
+# watches for `mcu` bindings only, and `digital` is not among the kinds that get
+# whole-device stress meta, so this rating is carried for the report and for
+# whatever consumes it later. The same is true of every `max_voltage_v` on a
+# digital entry in this file; it is said once, here.
+max_voltage_v = 4.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BME280: Bosch combined humidity, pressure and temperature sensor, LGA-8.
+#
+# Source: Bosch Sensortec "BME280 Combined humidity and pressure sensor"
+#   datasheet, document number BST-BME280-DS001-24 on the title page of the copy
+#   read; the page footers of that same file carry the earlier
+#   BST-BME280-DS001-23 / Revision_1.23_012022 stamp, so the two disagree and both
+#   are recorded. Table 35 "Pin description", Table 32 "interface parameters",
+#   Table 5 "Absolute maximum ratings", and the key-parameters list on page 1.
+#
+# SAME SHAPE AS THE BMA423 ABOVE, and the same caveats apply. Two supply
+# domains: VDD (pad 8) is the analog/digital supply, 1.71 to 3.6 V; VDDIO
+# (pad 6) is the I/O supply, 1.2 to 3.6 V, and the logic levels are RATIOMETRIC
+# to VDDIO. The datasheet gives them only as percentages, so the volts below are
+# those percentages evaluated at the 3.3 V that the margay datalogger feeds the
+# part. On a board with a different I/O rail they are wrong by the ratio.
+#
+# DELIBERATELY NOT MODELLED: the register map, therefore also the calibration
+# coefficients, the oversampling modes and the measurement itself. Nothing here
+# makes an I2C read return a pressure. The pathway is the declarative sensor
+# spec (`testdata/sensor-specs/`), exactly as the BMA423 entry says. Naming the
+# pads, the bus roles and the supply draw is all this claims to do.
+[[models]]
+id = "bme280"
+kind = "digital"
+description = "Bosch BME280 humidity/pressure/temperature sensor, LGA-8 (pad map and VDDIO logic levels; no register map)"
+
+[models.match]
+# The BMP280 (no humidity channel) and BME680 (gas) are different dies with
+# different register maps; both are correctly excluded by the anchored number.
+value_re = "(?i)^BME280([-_ ].*)?$"
+
+[models.params]
+# Table 32, evaluated at VDDIO = 3.3 V. The datasheet states all four as
+# PERCENTAGES of VDDIO and never in volts, so these are those percentages times
+# 3.3; see the note above before trusting them on a board with a different I/O rail.
+voh   = 2.64     # Voh 80% VDDIO min, Ioh = 1 mA (row spec'd at VDDIO = 1.62 V;
+                 # the 1.20 V row relaxes to 60%)
+vol   = 0.66     # Vol_SDI 20% VDDIO max, Iol = 3 mA, the I2C row (the SPI SDO row
+                 # is the same 20% at 1 mA; the 1.20 V rows relax to 23%)
+vih   = 2.64     # Vih_si 80% VDDIO min, stated over VDDIO = 1.2 to 3.6 V
+vil   = 0.66     # Vil_si 20% VDDIO max, same range
+supply_static_ua = 3.6     # "3.6 uA @ 1 Hz humidity, pressure and temperature",
+                           # from the key-parameters list on page 1 rather than a
+                           # table row: Table 1 gives the sleep and standby
+                           # currents (0.1 and 0.2 uA typ) and Table 1 the
+                           # per-measurement peaks (340 to 714 uA), and this is the
+                           # duty-cycled figure between them, which is what a
+                           # supply leg should carry. The sheet gives no split
+                           # between the VDD and VDDIO domains.
+supply_pin = "8"           # VDD
+gnd_pin    = "1"           # GND
+
+[models.pins]
+# Table 35 Pin description, LGA-8. NOTE THE NUMBERING DIRECTION: the datasheet's
+# connection diagram runs clockwise in top view, which is the opposite of the
+# usual convention, so this map cannot be re-derived by inspection of a footprint.
+# Cross-checked against the margay datalogger, where pad 2 is tied to the I/O
+# rail (selecting I2C), pad 5 is tied high (address 0x77), pads 3 and 4 are on
+# the SDA/SCL nets and pads 1/7 are grounded: all four agree with this map.
+#
+# SDI and SCK are named in the BUS vocabulary (`sda`/`scl`) rather than the
+# sheet's, for the reason the BMA423 entry above records.
+"1" = "gnd"
+"2" = "csb"     # SPI chip select, active low; tie to VDDIO to select I2C
+"3" = "sda"     # SDI: I2C SDA, or SPI SDI
+"4" = "scl"     # SCK: I2C SCL, or SPI SCK
+"5" = "sdo"     # SPI data out; in I2C, the address select (GND = 0x76,
+                # VDDIO = 0x77)
+"6" = "vddio"   # I/O-domain supply, 1.2 to 3.6 V; sets every level above
+"7" = "gnd2"
+"8" = "vdd"     # analog + digital supply, 1.71 to 3.6 V
+
+[models.ratings]
+# Table 5: -0.3 to +4.25 V on either supply pin, and -0.3 V to VDDIO + 0.3 V on
+# any interface pin. 4.25 V is the ceiling.
+max_voltage_v = 4.25
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TPL5010: TI nano-power system timer with watchdog, SOT-23-6 (DDC).
+#
+# Source: TI "TPL5010 Nano-Power System Timer with Watchdog", SNAS651A, January
+#   2015 - revised September 2018, Section 6 Pin Configuration and Functions and
+#   Section 7.5 Electrical Characteristics.
+#
+# WHAT THE PART IS. A 35 nA timer that pulses WAKE at a resistor-programmed
+# interval and asserts RSTn if the MCU fails to acknowledge with DONE before the
+# next interval: the watchdog half is the point. On the margay datalogger it is
+# the board's only reset source (RSTn goes to the ATmega1284P's RESET, DONE to a
+# port pin, and a 130 kOhm resistor on DELAY sets the interval), so a firmware
+# bug that stops servicing DONE is exactly what this part exists to catch.
+#
+# Datasheet figures used (TA = 25 C, VDD = 2.5 V unless noted):
+#   VDD    = 1.8 to 5.5 V
+#   IDD    = 35 nA typ, 50 nA max, operating
+#          = 200 uA typ, 400 uA max, during the Rext conversion at power-up
+#   VOH    = VDD - 0.3 V min at IOUT = 100 uA (VDD - 0.7 V at 1 mA), WAKE
+#   VOL    = 0.3 V max at 100 uA (0.7 V at 1 mA), WAKE; RSTn VOL 0.3 V at 1 mA
+#   VIH    = 0.7 x VDD min, VIL = 0.3 x VDD max, DONE
+#   VIHM_RST = 1.5 V min, DELAY/M_RST (FIXED volts, not a VDD fraction)
+#   tDDONE = 100 ns min
+#
+# THE LOGIC LEVELS BELOW ARE EVALUATED AT VDD = 3.3 V, the rail the margay feeds
+# it, because WAKE's drive and DONE's thresholds are both VDD-relative and this
+# schema has one number per field. The DELAY/M_RST threshold is NOT VDD-relative
+# and is not carried here at all: there is no field for a second input threshold,
+# and folding a fixed 1.5 V into the same `vih` as a ratiometric 0.7 x VDD would
+# be wrong for both pins.
+#
+# DELIBERATELY NOT MODELLED: the timer. Nothing counts, so WAKE never pulses and
+# RSTn never asserts, which means a co-sim of the margay never sees its watchdog
+# fire. `[models.logic]` has registers and clocks but no free-running time base,
+# so this needs an engine-level periodic source, not a database entry. Also
+# absent: the Rext-to-interval transfer (the 130 kOhm on DELAY), the 200 uA
+# power-up conversion burst, and the one-time manual-reset function the DELAY pin
+# doubles as.
+[[models]]
+id = "tpl5010"
+kind = "digital"
+description = "TI TPL5010 nano-power system timer / watchdog, SOT-23-6 (pad map and levels; the timer itself is not modelled)"
+
+[models.match]
+# "TPL5010DDC" is the SOT-23-6 ordering code the margay writes; "TPL5010DDCR" is
+# the reel form. The TPL5110 is a different part (it switches a load rail through
+# a FET driver instead of asserting a reset) and is correctly excluded.
+value_re = "(?i)^TPL5010[A-Z0-9-]*$"
+
+[models.params]
+# Section 7.5, evaluated at VDD = 3.3 V. See the note above.
+voh   = 3.0      # VDD - 0.3 V min at IOUT = 100 uA, WAKE
+vol   = 0.3      # max at IOUT = 100 uA, WAKE (and RSTn at 1 mA)
+vih   = 2.31     # 0.7 x VDD min, DONE
+vil   = 0.99     # 0.3 x VDD max, DONE
+tpd_s = 1.0e-7   # tDDONE 100 ns min, DONE to the internal acknowledge; the sheet
+                 # gives no typical, so this is the minimum, i.e. the fastest the
+                 # part is allowed to be rather than the speed it is
+supply_static_ua = 0.035   # IDD typ operating, 35 nA (50 nA max)
+supply_pin = "1"
+gnd_pin    = "2"
+
+[models.pins]
+# Section 6 Pin Configuration and Functions, DDC (SOT-23-6). Cross-checked
+# against the margay datalogger: pad 1 on 3V3, pad 3 on the 130 kOhm delay
+# resistor, pad 4 on an MCU port pin, pad 6 on the MCU's reset net, pad 5 unused.
+"1" = "vdd"
+"2" = "gnd"
+"3" = "delay"     # Rext to GND programs the interval; also the manual-reset input
+"4" = "done"      # watchdog acknowledge input from the MCU
+"5" = "wake"      # push-pull wake output. NOT `y`-prefixed: a `y` role on a part
+                  # with no `[models.logic]` block gets an ENABLED driver that
+                  # nothing ever computes a value for, so it would sit at 0 V and
+                  # hold this net low. The timer is not modelled (see above), so
+                  # there is nothing to drive it with and a named pad is the truth.
+"6" = "rst_n"     # open-drain active-low reset output. No `y` prefix and no `voh`
+                  # claim applies to it either: an open-drain pin has no high-side
+                  # drive, and the board's pull-up decides its high level. Same
+                  # reasoning as the SR2 entry in db/power_ics.toml.
+
+[models.ratings]
+# Section 7.1 Absolute Maximum Ratings.
+max_voltage_v = 6.0        # VDD - GND, -0.3 to 6 V
+max_pin_current_a = 0.005  # input current on any pin, +/-5 mA
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SN74AUP3G34: TI triple single-input buffer, VSSOP-8 (DCU).
+#
+# Source: TI "SN74AUP3G34 Triple Buffer Gate", SCES766C, December 2009 - revised
+#   February 2012, Section "Pin Configuration and Functions" (the logic diagram's
+#   note "pin numbers shown are for the DCU and DQE packages"), the Electrical
+#   Characteristics and Switching Characteristics tables, and Absolute Maximum
+#   Ratings.
+#
+# Three INDEPENDENT non-inverting buffers in one package, which is why this entry
+# carries a `[models.logic]` block: unlike every sensor and bridge above it, the
+# whole function is three assignments and the model can state it completely. On
+# the margay datalogger the three gates re-drive SCK, MOSI and the SD card's chip
+# select onto the switched auxiliary rail, so a co-sim that does not propagate
+# them sees the card's bus as never driven.
+#
+# Datasheet figures used. The levels are all VCC-BUCKETED, not single-valued: the
+# tables give a row per VCC range from 0.8 V to 3.6 V. The 3.0 to 3.6 V bucket is
+# used below because the margay powers this part from its 3.3 V auxiliary rail.
+#   VCC   = 0.8 to 3.6 V
+#   VIH   = 2.0 V min      (VCC = 3.0 to 3.6 V; 0.65 x VCC in the 1.1-1.95 V bucket)
+#   VIL   = 0.9 V max      (VCC = 3.0 to 3.6 V; 0.35 x VCC in the 1.1-1.95 V bucket)
+#   VOH   = VCC - 0.1 V min at IOH = -20 uA; 2.6 V typ at VCC = 3 V, IOH = -4 mA
+#   VOL   = 0.1 V max at IOL = 20 uA; 0.44 V max at VCC = 3 V, IOL = 4 mA
+#   tpd   = 2.4 ns typ (1 ns min, 3.5 ns max) at VCC = 3.3 V +/- 0.3 V, CL = 5 pF
+#   ICC   = 0.5 uA typ, 0.9 uA max, VI = GND or VCC, IO = 0
+#
+# `voh` below is the LOADED figure (2.6 V typ at 4 mA), not the unloaded
+# VCC - 0.1 V, because a buffer's job here is to drive a bus and the loaded
+# number is what the receiving pin sees. `vol` is the matching 4 mA max.
+[[models]]
+id = "sn74aup3g34"
+kind = "digital"
+description = "TI SN74AUP3G34 triple non-inverting buffer, VSSOP-8, 3.3V levels"
+
+[models.match]
+# The DCU (VSSOP-8) and DQE (US8) packages, which the datasheet's logic diagram
+# names as the two its pin numbers are "for". The YFP (DSBGA) shares that numbering
+# and is refused here anyway, conservatively, because its pads are lettered on most
+# footprints and this map's keys are digits.
+#
+# THE RSE PACKAGE IS THE ONE THAT MATTERS: its order is 1 = 1Y, 2 = 3A, 3 = 2Y,
+# 4 = GND, 5 = 2A, 6 = 3Y, 7 = 1A, 8 = VCC, which is this map with every input and
+# output transposed. A board naming RSE resolves to nothing rather than crossing all
+# three buffers.
+value_re = "(?i)^SN74AUP3G34(DCU|DQE)R?$"
+
+[models.params]
+voh   = 2.6      # typ at VCC = 3 V, IOH = -4 mA (VCC - 0.1 V min unloaded)
+vol   = 0.44     # max at VCC = 3 V, IOL = 4 mA (0.1 V max at 20 uA)
+vih   = 2.0      # min, VCC = 3.0 to 3.6 V
+vil   = 0.9      # max, VCC = 3.0 to 3.6 V
+tpd_s = 2.4e-9   # tpd typ, VCC = 3.3 V +/- 0.3 V, CL = 5 pF (3.5 ns max at 25 C)
+supply_static_ua = 0.5     # ICC typ (0.9 uA max), inputs at a rail, outputs open
+supply_pin = "8"
+gnd_pin    = "4"
+
+[models.pins]
+# DCU (VSSOP-8). The three gates are NOT laid out in order round the package, and
+# that is the trap this map exists to avoid: 1A's output is pad 7, 2A's is pad 5,
+# 3A's is pad 2. Cross-checked against the margay datalogger three times over,
+# which is what makes this map trustworthy rather than plausible: pad 1 on SCK
+# with pad 7 on SCK_BUF, pad 3 on MOSI with pad 5 on MOSI_BUF, pad 6 on SD_CS
+# with pad 2 on SD_CS_BUF.
+"1" = "a1"
+"2" = "y3"
+"3" = "a2"
+"4" = "gnd"
+"5" = "y2"
+"6" = "a3"
+"7" = "y1"
+"8" = "vcc"
+
+[models.ratings]
+# Absolute Maximum Ratings.
+max_voltage_v = 4.6         # VCC and VI, -0.5 to 4.6 V
+max_pin_current_a = 0.02    # IO continuous, +/-20 mA
+max_current_a = 0.05        # continuous current through VCC or GND, +/-50 mA
+
+[models.logic]
+# Function: three independent non-inverting buffers, Y = A. There is no enable,
+# no tri-state and no shared node, so the whole datasheet function table is these
+# three lines and this model is COMPLETE rather than partial. Output roles are
+# `y`-prefixed so the binder stamps a driver on each.
+inputs  = ["a1", "a2", "a3"]
+outputs = ["y1", "y2", "y3"]
+
+[models.logic.comb]
+"y1" = "a1"
+"y2" = "a2"
+"y3" = "a3"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SN75176A: TI differential bus transceiver (RS-485 / RS-422), SOIC-8.
+#
+# Source: TI "SN75176A/SN75176B Differential Bus Transceivers", SLLS100C, June
+#   1984 - revised October 2022: the pin configuration, Electrical Characteristics
+#   (driver and receiver sections) and Absolute Maximum Ratings.
+#
+# Datasheet figures used (VCC = 5 V, TA = 25 C for typicals):
+#   VCC     = 4.75 / 5 / 5.25 V min/typ/max (Section 6.2)
+#   VIH     = 2 V min, VIL = 0.8 V max, on D, DE and RE (Section 6.2)
+#   RECEIVER output R (Section 6.6): VOH = 2.7 V MIN at VID = 200 mV,
+#           IOH = -400 uA; VOL = 0.45 V MAX at VID = 200 mV, IOL = 8 mA
+#   RECEIVER input thresholds: VIT+ = 0.2 V max, VIT- = -0.2 V min,
+#           Vhys = 50 mV typ, input resistance ri = 12 kOhm min
+#   DRIVER single-ended (Section 6.5): VOH = 3.7 V typ, VOL = 1.1 V typ, both at
+#           |IO| = 33 mA. These are the A/B BUS pins, NOT pin 1.
+#   DRIVER |VOD2| = 2 V min at RL = 100 Ohm, 1.5 V min at RL = 54 Ohm; VOC 3 V max
+#   ICC     = 35 mA typ / 50 mA max with the outputs enabled;
+#             26 mA typ / 40 mA max disabled (total package, no load)
+#   Abs max: VCC 7 V; any bus terminal -10 to +15 V; enable input 5.5 V
+#
+# THE OUTPUT LEVELS BELOW ARE THE RECEIVER'S, AND THE DATASHEET HAS TWO SETS.
+# Section 6.5 gives the DRIVER a single-ended VOH of 3.7 V typ and VOL of 1.1 V
+# typ, and those belong to pads 6 and 7, the differential bus pair. Section 6.6
+# gives the RECEIVER output, pad 1, VOH = 2.7 V min and VOL = 0.45 V max. Pad 1 is
+# the only pin this entry stamps a driver on, so its levels are the receiver's;
+# putting the driver's 3.7 V / 1.1 V here would describe two pins that carry no
+# driver and overstate the one that does by a volt.
+#
+# `vih`/`vil` are the TTL levels on D, DE and RE, and they are the datasheet's own
+# Recommended Operating Conditions rows, not a family convention.
+#
+# The bus side is a different world: A and B are a +/-200 mV differential pair
+# with a -7 to +12 V common-mode range, and this schema has no field for either a
+# differential threshold or a common-mode window. So the bus pins carry roles and
+# no electrical claim.
+#
+# DELIBERATELY NOT MODELLED, and the gap is large enough to state plainly: the
+# differential driver and receiver themselves. There is no `[models.logic]` block
+# because the function is not a Boolean one — D drives a differential pair when DE
+# is high and tri-states otherwise, and R reflects the sign of (A - B) when RE is
+# low. A logic spec over single-ended nets cannot express "the difference of two
+# nets", so a co-sim of an RS-485 link sees the bus as undriven in both directions.
+# What this entry buys is the pad map, the supply draw, and the abs-max ratings a
+# stress check needs. Also absent: the driver's short-circuit and thermal-shutdown
+# behaviour, and (from this revision of the datasheet specifically) any ESD rating,
+# which TI deleted between Rev B and Rev C.
+[[models]]
+id = "sn75176a"
+kind = "digital"
+description = "TI SN75176A RS-485 differential bus transceiver, SOIC-8 (pad map and levels; the differential pair is not modelled)"
+
+[models.match]
+# The A and B grades differ in signalling rate, not in pinout or DC levels, so one
+# entry covers both, as do the "N" (PDIP) and "D" (SOIC) package suffixes: the two
+# packages share this pin order.
+value_re = "(?i)^SN75176[AB]?[A-Z0-9-]*$"
+
+[models.params]
+voh   = 2.7      # RECEIVER output R, VOH min at VID = 200 mV, IOH = -400 uA
+vol   = 0.45     # RECEIVER output R, VOL max at VID = 200 mV, IOL = 8 mA
+vih   = 2.0      # D / DE / RE, high-level input, Section 6.2
+vil   = 0.8      # D / DE / RE, low-level input, Section 6.2
+supply_static_ua = 35000.0  # ICC typ, total package, outputs enabled, no load
+                            # (50 mA max); 26 mA typ / 40 mA max disabled. Tens of
+                            # milliamps: this is a line driver, not a logic gate,
+                            # and the rail should feel it.
+supply_pin = "8"
+gnd_pin    = "5"
+
+[models.pins]
+# SLLS100C pin configuration. Corroborated by the MWGEN-G1's own pin functions,
+# which name all eight pads exactly as below.
+#
+# NOTHING HERE IS `y`-PREFIXED, including the receiver output, which is the one
+# genuinely driven single-ended pin on the part. `digital::output_roles` stamps a
+# driver on every `y` role, and with no `[models.logic]` block nothing computes a
+# value for it: it would sit at 0 V and ENABLED, holding the receiver output at
+# ground. Since the differential receiver is not modelled (see above) there is
+# nothing to compute a value from, so `r` is a named pad and not a driver.
+#
+# A and B are not `y`-prefixed for a second, independent reason: they are a
+# differential pair, and stamping a single-ended driver on each would fabricate two
+# independent push-pull outputs where the silicon has one differential one.
+"1" = "r"        # R, receiver output
+"2" = "re_n"     # RE, receiver output enable, active low
+"3" = "de"       # DE, driver enable, active high
+"4" = "d"        # D, driver input
+"5" = "gnd"
+"6" = "bus_a"    # A, non-inverting bus terminal
+"7" = "bus_b"    # B, inverting bus terminal
+"8" = "vcc"
+
+[models.ratings]
+# Absolute Maximum Ratings. The -10 to +15 V bus-terminal window is WIDER than the
+# 7 V supply limit and there is no per-pin voltage field on this schema, so 7 V is
+# recorded: it is the tighter of the two and therefore the one a stress check must
+# not exceed.
+max_voltage_v = 7.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TCA9535: TI 16-bit I2C GPIO expander, WQFN-24 (RTW).
+#
+# Source: TI "TCA9535 Low-Voltage 16-Bit I2C and SMBus Low-Power I/O Expander With
+#   Interrupt Output and Configuration Registers", SCPS201E, August 2009 - revised
+#   May 2022: the RTW pin configuration, Electrical Characteristics and Absolute
+#   Maximum Ratings.
+#
+# Datasheet figures used:
+#   VCC    = 1.65 to 5.5 V
+#   VIH    = 0.7 x VCC to VCC on SCL/SDA; 0.7 x VCC to 5.5 V on the A and P pins
+#            (the P pins tolerate 5.5 V regardless of VCC, which is a real feature
+#            and not a typo)
+#   VIL    = -0.5 V to 0.3 x VCC on every input
+#   VOH    is tabulated at four discrete VCC points and two load currents, as a
+#            MIN column: at IOH = -8 mA it is 1.2 / 1.8 / 2.6 / 4.1 V for
+#            VCC = 1.65 / 2.3 / 3 / 4.75 V, and at IOH = -10 mA it is
+#            1.0 / 1.7 / 2.5 / 4.0 V
+#   VOL    is not tabulated at all. The sheet inverts the spec and gives IOL AT a
+#            stated VOL, over the whole 1.65 to 5.5 V range rather than per rail:
+#            the P port sinks 8 mA at VOL = 0.5 V and 10 mA at VOL = 0.7 V, and
+#            SDA and INT each sink 3 mA at VOL = 0.4 V
+#   ICC    = 22 uA typ / 40 uA max at VCC = 5.5 V, operating at 400 kHz with no
+#            load; 5 uA typ / 11 uA max at 1.95 V
+#   Address = 0100 A2 A1 A0, so 0x20 through 0x27
+#   Abs max: VCC / VI / VO -0.5 to 6 V; IOL 50 mA max, IOH -50 mA max
+#
+# THE LEVELS BELOW ARE EVALUATED AT VCC = 3.3 V, which is the rail the board that
+# motivated this entry uses, because the schema has one number per field and the
+# datasheet's are ratios and discrete points. On a 5 V board every threshold here
+# is low by a factor of 1.5.
+#
+# ON "RATIOMETRIC": the datasheet never uses the word. It gives VIH and VIL as
+# formulas in VCC and VOH/VOL as a table of VCC points, which is the same
+# behaviour; the terminology is this comment's, not TI's, and is flagged so nobody
+# goes looking for it in the sheet.
+#
+# DELIBERATELY NOT MODELLED: the register map, and therefore the whole part. There
+# is no input port register, no output port register, no polarity inversion and no
+# configuration register, so nothing here makes an I2C write move a pin. The 16 P
+# pins carry roles and no drivers, on purpose: `y`-prefixing them would stamp 16
+# push-pull outputs on nets whose direction is set by a configuration register this
+# entry does not have, and half of them would be inputs on any real board. The
+# pathway is a declarative sensor/peripheral spec, as for the BMA423 and BME280
+# above. Also absent: the open-drain INT output's behaviour, and the A0/A1/A2
+# address strapping (there is no address field here for it to set).
+[[models]]
+id = "tca9535"
+kind = "digital"
+description = "TI TCA9535 16-bit I2C I/O expander, WQFN-24 (pad map and levels; no register map)"
+
+[models.match]
+# The RTW (WQFN-24) and RGE (VQFN-24) codes ONLY, which share the map below.
+#
+# THE TSSOP AND SSOP PACKAGES ARE EXCLUDED, and this is the correction that matters
+# in this entry: TI's DB/PW 24-pin maps are NOT this one (they put INT on pin 1,
+# P00 on pin 4, GND on 12 and VCC on 24, against this map's P00 on 1, GND on 9 and
+# VCC on 21). A "TCA9535PWR" bound here would have its supply and ground on two
+# port pins. The TCA9535A shares the pinout and differs only in its fixed address
+# range, so it binds.
+value_re = "(?i)^TCA9535A?(RTW|RGE)R?$"
+
+[models.params]
+# Evaluated at VCC = 3.3 V. See the note above.
+voh   = 2.6      # VOH MIN at VCC = 3 V, IOH = -8 mA: the nearest tabulated rail
+                 # below 3.3 V. At -10 mA the same rail gives 2.5 V.
+vol   = 0.5      # the VOL at which the P port is specified to sink 8 mA. NOT a
+                 # VOL row: the sheet has none (see the note above), so this is
+                 # its IOL spec read backwards, and it is rail-independent.
+vih   = 2.31     # 0.7 x VCC min
+vil   = 0.99     # 0.3 x VCC max
+supply_static_ua = 22.0    # ICC typ at VCC = 5.5 V, 400 kHz, no load (40 uA max);
+                           # 5 uA typ at 1.95 V. The high-rail figure is carried
+                           # because it is the worst of the tabulated ones.
+supply_pin = "21"
+gnd_pin    = "9"
+
+[models.pins]
+# SCPS201E pin configuration, RTW (WQFN-24). Corroborated pad for pad by the
+# MWGEN-G1's own pin functions, including the exposed pad as pad 25.
+"1"  = "p00"
+"2"  = "p01"
+"3"  = "p02"
+"4"  = "p03"
+"5"  = "p04"
+"6"  = "p05"
+"7"  = "p06"
+"8"  = "p07"
+"9"  = "gnd"
+"10" = "p10"
+"11" = "p11"
+"12" = "p12"
+"13" = "p13"
+"14" = "p14"
+"15" = "p15"
+"16" = "p16"
+"17" = "p17"
+"18" = "a0"      # address bit 0; strapped on the board, not modelled here
+"19" = "scl"
+"20" = "sda"
+"21" = "vcc"
+"22" = "int_n"   # open-drain active-low interrupt. NOT `y`-prefixed: an open-drain
+                 # pin has no high-side drive, and the board's pull-up decides its
+                 # high level. Same reasoning as the SR2 entry in db/power_ics.toml.
+"23" = "a1"
+"24" = "a2"
+# The exposed pad. The datasheet's instruction is "connect to a secondary ground
+# or leave open", so a board that grounds it (the MWGEN-G1 does) is following the
+# sheet; naming it `gnd2` means the binder counts that connection rather than
+# reporting the pad as unmodelled.
+"25" = "gnd2"
+
+[models.ratings]
+# Absolute Maximum Ratings.
+max_voltage_v = 6.0         # VCC, VI, VO: -0.5 to 6 V
+max_pin_current_a = 0.05    # IOL 50 mA max / IOH -50 mA max

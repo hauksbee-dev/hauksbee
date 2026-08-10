@@ -34,28 +34,112 @@ max_voltage_v = 6.5
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 74LVC1G66: single bilateral analog switch. ONE PINOUT, EVERY VENDOR.
+#
+# Sources, read side by side because this entry's whole point is that they agree:
+#   - TI "SN74LVC1G66 Single-Pole Single-Throw Analog Switch", SCES323R,
+#     June 2001 - revised September 2025: Figures 4-1/4-2/4-3 and the Pin
+#     Functions table.
+#   - Nexperia "74LVC1G66 Single bilateral switch", Rev. 14.1, 3 September 2024:
+#     Section 6.1 Pinning and Table 3 Pin description.
+# Both give the five-lead packages as 1 = A/Y, 2 = B/Z, 3 = GND, 4 = C/E,
+# 5 = VCC, and both give the six-lead ones as the same order with n.c. inserted
+# at 5 and VCC moved to 6. The two vendors' names for the pins differ and nothing
+# else does.
+#
+# THIS ENTRY'S PAD MAP WAS WRONG UNTIL NOW: it read pad 2 as GROUND and pad 3 as
+# the second switch terminal, which is the two of them transposed.
+#
+# WHAT THAT COSTS DEPENDS ON THE BOARD, and it is worth being exact rather than
+# dramatic about it. Where a board grounds BOTH pads, the two roles land on the same
+# node and the transposition is invisible; the only board in this tree that fits the
+# part (Tarski's input system, 19 instances of it as a membrane-reset switch) does
+# exactly that, so its behaviour is unchanged by this correction. Where a board uses
+# pad 2 as a signal, which is the ordinary use of a BILATERAL switch and the reason
+# the pin exists, the old map stamped a ~7 Ohm switch from pad 1 onto the GROUND
+# PLANE and read a live I/O as ground. Nothing warned in either case, because from
+# the binder's point of view every role it wanted was present.
+#
+# The match rule is correspondingly vendor-neutral: the bare JEDEC number binds,
+# because there is no ambiguity for it to resolve. An `mpn_re` is deliberately
+# ABSENT: it ANDs with `value_re`, and the engine falls `mpn` back to the value
+# field, so `mpn_re = "SN74LVC1G66"` made a board writing the bare "74LVC1G66"
+# match nothing at all.
+#
+# DELIBERATELY NOT MODELLED: RON's dependence on the switched voltage (the
+# datasheets tabulate a peak-of-curve and a near-rail value, and this is one
+# constant), the charge injection, and the crosstalk.
 [[models]]
-id = "sn74lvc1g66"
+id = "lvc1g66"
 kind = "analog_switch"
-description = "SN74LVC1G66 single bilateral analog switch, SC-70-5 / SOT-23-5"
+description = "74LVC1G66 single bilateral analog switch, 5-lead SC-70/SOT-23/SOT-353 (TI and Nexperia, one pinout)"
 
 [models.match]
-value_re = "(?i)^SN74LVC1G66"
-mpn_re   = "(?i)SN74LVC1G66"
+# The bare JEDEC number, any vendor prefix, and the FIVE-LEAD package codes:
+# TI's DBV (SOT-23-5), DCK (SC70-5) and DRL, Nexperia's GW (SOT-353) and
+# GV (SOT-753). The six-lead codes are excluded here and handled by the entry
+# below, because they insert n.c. at pad 5 and move VCC to 6.
+value_re = """(?ix) ^
+    (SN|NL|ST|MC|TC)?          # vendor prefix, optional
+    74LVC1G66
+    (DBV|DCK|DRL|GW|GV)?       # five-lead package codes only
+    R?                         # reel suffix
+    ([-.,][A-Z0-9.,]*)?        # packing code; the matcher rewrites ',' to '.'
+$"""
 
 [models.params]
-# Source: Texas Instruments SN74LVC1G66 datasheet (SCLS282E), Table 6.5
-# ron at 5V supply: typ 7 Ω
-ron  = 7.0
-roff = 1.0e9
-vth  = 1.5
+# TI SCES323R Section 5.8 Analog Switch Characteristics, and Nexperia Rev. 14.1
+# Table 8, which agree within their tolerances.
+ron  = 6.5       # RON typ at VCC = 3.0 to 3.6 V (Nexperia's near-rail figure;
+                 # TI quotes 7 Ohm at 5 V, which is the same switch)
+roff = 1.1e7     # from Nexperia IS(OFF) 0.5 uA max at VCC = 5.5 V. Derived from an
+                 # output-side leakage figure, so this one is genuinely a
+                 # resistance and not a floor picked for solver comfort.
+vth  = 2.0       # C/E-pin VIH min at VCC = 2.7 to 3.6 V (VIL max is 0.8 V)
+
+[models.pins]
+# The five-lead map both datasheets give. `in_out_a`/`in_out_b` and NOT `com`/`s0`:
+# see the control-polarity note further down this file. `s0` would make the switch
+# conduct when the enable is LOW, and this part's enable is active HIGH.
+"1" = "in_out_a"   # A (TI) / Y (Nexperia)
+"2" = "in_out_b"   # B (TI) / Z (Nexperia)
+"3" = "vss"        # GND. This is the pad that used to be read as a signal.
+"4" = "ctrl"       # C (TI) / E (Nexperia), active high
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # ISW / IIK / IOK, +/-50 mA
+max_voltage_v = 6.5        # VCC abs max
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The SIX-LEAD packages of the same die. Identical in every respect except that
+# n.c. sits at pad 5 and VCC moves to pad 6, so the five-lead map above would put
+# the supply on a no-connect and leave the real supply pad unmodelled.
+[[models]]
+id = "lvc1g66_6pin"
+kind = "analog_switch"
+description = "74LVC1G66 single bilateral analog switch, 6-lead USON/X2SON/XSON6 (TI DRY/DSF, Nexperia GS/GX)"
+
+[models.match]
+# The six-lead package code is REQUIRED: a value string with no code at all is
+# assumed five-lead by the entry above, which is the commoner part by a wide
+# margin. A board fitting a six-lead part and writing only the bare number gets
+# the five-lead map, and the symptom is a `vcc` role on a no-connect pad.
+value_re = "(?i)^(SN|NL|ST|MC|TC)?74LVC1G66(DRY|DSF|GS|GX)R?([-.,][A-Z0-9.,]*)?$"
+
+[models.params]
+ron  = 6.5
+roff = 1.1e7
+vth  = 2.0
 
 [models.pins]
 "1" = "in_out_a"
-"2" = "vss"
-"3" = "in_out_b"
+"2" = "in_out_b"
+"3" = "vss"
 "4" = "ctrl"
-"5" = "vcc"
+"5" = "nc"
+"6" = "vcc"
 
 [models.ratings]
 max_pin_current_a = 0.05
@@ -426,3 +510,263 @@ theta_ja_c_per_w = 88.9    # PW / TSSOP-20
 #   pin map, GU12 (XQFN-12): 1=VCC(A) 2=A1 3=A2 4=A3 5=A4 6=GND 7=B4 8=B3 9=B2
 #     10=B1 11=VCC(B) 12=OE
 #   no TJ max and no theta_JA published in this revision
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE `s0` ROLE CARRIES A CONTROL-LOW CONTRACT, AND AN ACTIVE-HIGH LOAD SWITCH
+# MUST NOT USE IT. Read this before adding another switch to this file.
+#
+# `bind_analog_switch`'s single-throw path decides its polarity from the ROLE
+# NAMES: if the second terminal it picks is the one named `s0`, it senses the
+# INVERTED control (`b_is_control_low`) and closes the switch when the control is
+# LOW. That is correct and deliberate for an SPDT part, where `s0` is the
+# normally-closed throw (`role_from_pinfunction` maps a pin named NC onto it for
+# the same reason). It is exactly wrong for a single active-high load switch: the
+# modelled rail is then off when the silicon is on and on when it is off, which is
+# worse than the unresolved-open it replaced, because it is not disclosed.
+#
+# So the three load switches below name their two terminals `in_out_a` (the
+# switched output) and `in_out_b` (the input), the bilateral-switch vocabulary,
+# which leaves the default control-HIGH polarity in place. `com`/`s0` would read
+# more naturally for a load switch and would be silently inverted.
+#
+# (The AP22815 and AP22615A entries above predate this note and do use `com`/`s0`
+# while documenting an active-high enable, so they carry the inversion this note
+# describes. Correcting them changes the behaviour of boards already in the
+# corpus, so it is left to a commit that can measure that; it is recorded here so
+# the next reader does not copy them.)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TPS22916: TI 2 A ultra-low-leakage load switch, DSBGA-4 (YFP).
+#
+# Source: TI "TPS22916 5.5-V, 2-A, 70-mOhm On-Resistance Load Switch With
+#   Ultra-Low Leakage Current", SLVSDO5F, July 2017 - revised December 2021,
+#   Section 5 Pin Configuration and Functions, Section 6.3 Recommended Operating
+#   Conditions, Section 6.5 Electrical Characteristics and Section 6.1 Absolute
+#   Maximum Ratings.
+#
+# `ron` IS THE 3.6 V ROW, NOT A 3.3 V ONE, because the datasheet has no 3.3 V row:
+# it tabulates VIN = 5, 3.6, 1.8, 1.2 and 1 V at IOUT = 200 mA, and the two rows
+# either side of a 3.3 V board are 70 mOhm (at 3.6 V) and 100 mOhm (at 1.8 V).
+# Interpolating between them would be invention, so the nearer row is used verbatim
+# and the reader is told which. A board running this part at 1.8 V is modelled
+# ~30 mOhm optimistically.
+#
+# `roff` IS NOT A DATASHEET FIGURE. The sheet gives no output-side leakage at all,
+# only ISD,VIN (the current the disabled part draws on VIN with VOUT at ground):
+# 10 nA typ, 100 nA max on the C ordering option. Treating that as leakage THROUGH
+# the switch is the conservative reading and gives 5.5 V / 100 nA = 55 MOhm, so
+# 5.0e7 is used, the same floor and the same reasoning as the AP22815 entry above.
+#
+# DELIBERATELY NOT MODELLED: the soft-start ramp (the whole reason to fit this
+# part rather than a bare PMOS), the quick-output-discharge option, and the
+# reverse-current blocking. The ideal-switch path has no current limit either, so
+# the 2 A rating is a stress-check number and not a behaviour.
+[[models]]
+id = "tps22916"
+kind = "analog_switch"
+description = "TPS22916 load switch, 70 mOhm, DSBGA-4 (TI)"
+
+[models.match]
+# The three ACTIVE-HIGH ordering options, which differ only in soft-start slew and
+# quick-output-discharge and share this pinout and on-resistance: TPS22916B (fast,
+# with discharge), TPS22916C (slow, with discharge) and TPS22916CN (slow, no
+# discharge), each optionally carrying the YFP package code and an R reel suffix.
+#
+# THE `L` OPTIONS ARE EXCLUDED BY NAME. TPS22916BL, CL and CNL are the ACTIVE-LOW
+# enable variants (the datasheet's orderable table gives their sense in a column of
+# its own), and no single `vth` can serve both senses: an active-low part bound
+# here would conduct on exactly the half of the control range where it is off.
+#
+# The bare "TPS22916YFP" the board carries names no polarity letter at all, so
+# binding it is an assumption that it is one of the active-high options. That
+# assumption is stated rather than hidden, and it follows the AP22815 entry's
+# precedent above: if the board fits an L part, the disagreement shows up as the
+# switch being off when the board intends it on, which is diagnosable. What this
+# regex will not do is accept a code that says active-low out loud.
+value_re = "(?i)^TPS22916(B|C|CN)?(YFP)?R?$"
+
+[models.params]
+ron  = 0.07      # RON typ at VIN = 3.6 V, IOUT = 200 mA, 25 C (90 mOhm max at
+                 # 25 C, 120 mOhm over -40 to +85 C); see the note above
+roff = 5.0e7     # NOT A DATASHEET FIGURE. Conservative floor from ISD,VIN
+                 # 100 nA max at 5.5 V. See the note above.
+vth  = 1.0       # ON pin VIH min, 1 V over the whole 1 to 5.5 V VIN range
+                 # (VIL max is 0.35 V)
+
+[models.pins]
+# Section 5, YFP (DSBGA-4). Bump names, not numbers: the Eagle package on the
+# margay datalogger spells them A1/B1/B2/A2 and this map matches. Cross-checked
+# against that board: A2 on the battery rail, A1 on the switched rail, B2 on an
+# MCU control net, B1 on ground.
+"A1" = "in_out_a"   # VOUT. NOT `com`: see the control-polarity note above.
+"A2" = "in_out_b"   # VIN. NOT `s0`, for the same reason.
+"B1" = "vss"        # GND
+"B2" = "ctrl"       # ON, active high on every option this entry matches
+
+[models.ratings]
+# Section 6.1 Absolute Maximum Ratings.
+max_current_a       = 2.0    # IMAX continuous switch current
+max_surge_current_a = 2.5    # IPLS, pulse < 300 us at 2% duty
+max_voltage_v       = 6.0    # VIN / VOUT / VON, -0.3 to 6 V
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MIC94090: Microchip (ex-Micrel) 1.2 A high-side load switch, SC-70-6.
+#
+# Source: Microchip "MIC94090/1/2/3/4/5 High-Side Load Switches for Consumer
+#   Applications", DS20006706B, Section "Pin Description", Electrical
+#   Characteristics and Absolute Maximum Ratings.
+#
+# `ron` IS THE 3.6 V ROW for the same reason as the TPS22916 above: the tabulated
+# points are VIN = 3.6 V (140 mOhm typ, 255 max) and VIN = 2.5 V (170 typ,
+# 315 max), both at ID = -100 mA and VEN = 1.5 V, and there is no 3.3 V row.
+#
+# `vth` IS THE GUARANTEED-ON END OF A BAND, NOT A THRESHOLD. This part does not
+# publish a VIH/VIL pair; it publishes VEN_TH as a range, 0.4 V min to 1.25 V max,
+# meaning the switch is guaranteed OFF below 0.4 V and guaranteed ON above 1.25 V
+# and the sheet declines to say where in between it turns. 1.25 V is used, so the
+# model turns on only where the real part certainly does; a board driving EN to
+# 1 V would show as off here and might be on in silicon.
+#
+# `roff` from ISHUT-SWITCH, the off-state leakage measured on VOUT: 1 uA max at
+# VIN = 5.5 V, so 5.5 MOhm. That IS an output-side leakage figure, unlike the
+# TPS22916's, so this one is derived from the right quantity.
+#
+# WHAT THE SUFFIX DIGIT ACTUALLY SELECTS, since it is easy to assume it is the
+# enable polarity and it is not. Across the MIC9409x family the odd parts
+# (MIC94091/3/5) add a 250 Ohm auto-discharge load on VOUT when the switch is
+# disabled, and the digit also selects the soft-start speed (-0/-1 ultra-fast,
+# -2/-3 a 790 us ramp, -4/-5 a 120 us one). THE ENABLE IS ACTIVE HIGH ON THE WHOLE
+# FAMILY: the datasheet says an active pull-down holds the part off "until the
+# enable pin is pulled above 1.25V". So the regex demands the trailing 0 not
+# because a sibling would invert the enable but because the discharge resistor and
+# the ramp are real differences this entry does not carry.
+#
+# DELIBERATELY NOT MODELLED: the output discharge resistor on the -1/-3/-5 parts
+# (absent on this one), the soft-start ramp, the reverse-leakage blocking, and the
+# body-diode path.
+[[models]]
+id = "mic94090"
+kind = "analog_switch"
+description = "MIC94090 high-side load switch, 140 mOhm, active-high enable, SC-70-6 (Microchip)"
+
+[models.match]
+# "MIC94090C6" is the SC-70-6 ordering code the margay writes ("C6" is the
+# package); "MIC94090YC6" is the vendor's own spelling of it. The regex pins the
+# trailing 0 so no sibling with a discharge FET or a different soft-start ramp can
+# borrow this entry, and it pins the C6 package code so the 4-lead UDFN (the "MT"
+# code), which has a different pad count and pinout, cannot.
+value_re = "(?i)^MIC94090Y?C6(TR)?$"
+
+[models.params]
+ron  = 0.14      # RON typ at VIN = 3.6 V, ID = -100 mA, VEN = 1.5 V (255 mOhm max)
+roff = 5.5e6     # from ISHUT-SWITCH 1 uA max at VIN = 5.5 V: an output-side
+                 # leakage figure, so this one is genuinely derived
+vth  = 1.25      # VEN_TH max: the guaranteed-ON end of the band. See the note.
+
+[models.pins]
+# The "Package Types" SC-70-6 top view. That figure is a DRAWING, not a table, so
+# unlike most maps in this file it cannot be quoted as text, and the corroboration
+# does the work: on the margay datalogger both pads 2 and 5 are on GND, pad 4 is
+# the unswitched input, pad 1 the switched output, pad 6 an MCU control net and
+# pad 3 unconnected. Six pads, six agreements.
+#
+# Pads 2 and 5 are BOTH ground; they carry different role names because the binder
+# keys roles by string and a duplicate would drop one of the two connections.
+"1" = "in_out_a"  # VOUT, drain of the internal P-channel FET. NOT `com`: see the
+                  # control-polarity note at the head of this block.
+"2" = "vss"       # GND
+"3" = "nc"        # no connection
+"4" = "in_out_b"  # VIN, source of the internal P-channel FET. NOT `s0`.
+"5" = "gnd"       # GND (second pad)
+"6" = "ctrl"      # EN, active high across the whole family
+
+[models.ratings]
+# Absolute Maximum Ratings.
+max_current_a       = 1.2    # ID continuous, SC-70-6, TA = 25 C
+max_surge_current_a = 6.0    # IDP pulsed, < 300 us at < 2% duty
+max_voltage_v       = 6.0    # VIN and VEN
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TPS2104: TI dual-input single-output power multiplexer, SOT-23-5.
+#
+# Source: TI "TPS2104/TPS2105 Single Output, Dual Input Power Multiplexers",
+#   SLVS235A, September 1999 - revised April 2000, Pin Assignment, Electrical
+#   Characteristics and Absolute Maximum Ratings.
+#
+# ONLY HALF OF THIS PART IS MODELLED, AND THE HALF IS NAMED. It is a two-throw
+# mux: EN low selects IN1 through a 250 mOhm NMOS, EN high selects IN2 through a
+# 1.3 Ohm PMOS. `bind_analog_switch`'s two-throw path needs a VCC pin to
+# reference its complementary thresholds against, and this part HAS no VCC pin
+# (it powers itself from whichever input is live), so it binds through the
+# single-throw path instead: ONE VSwitch, closed when the control pin is high.
+#
+# That decides which throw the pin map may name `s0`. It must be IN2, the throw
+# the real part selects when EN is HIGH, because the single-throw path closes on a
+# high control and nothing here can invert it. Naming IN1 as `s0` would have given
+# a switch that conducts from the battery exactly when the board has switched to
+# USB: a fabricated current path, and the wrong one. So:
+#   MODELLED:     IN2 -> OUT, 1.3 Ohm, closed when EN is above 2 V.
+#   NOT MODELLED: IN1 -> OUT, 250 mOhm. Pad 5 carries the role `in1` and no
+#                 device. A board running from IN1 sees its OUT net unfed.
+# On the margay datalogger IN2 is the USB rail and IN1 the switched battery, so
+# the USB-powered case simulates and the battery-powered case does not. That is a
+# real, named gap; the fix is an inverting/complementary option on the analog
+# switch binder, not a different pin map here.
+#
+# `ron` is therefore the IN2 (PMOS) path's 1.3 Ohm typ, NOT the headline
+# 250 mOhm, which belongs to the throw this entry does not stamp.
+#
+# `roff` HAS NO DATASHEET BASIS AT ALL. The sheet gives an enable-pin input
+# current (+/-0.5 uA max) and quiescent supply currents and no output leakage, so
+# unlike the two entries above there is no quantity to derive an off-resistance
+# from. 1e9 is the engine's own ideal-open value, recorded explicitly so it is not
+# read as a measurement.
+#
+# DELIBERATELY NOT MODELLED beyond the missing throw: the break-before-make
+# sequencing, the body-diode blocking, and the thermal shutdown.
+[[models]]
+id = "tps2104"
+kind = "analog_switch"
+description = "TPS2104 dual-input power mux, SOT-23-5 (only the IN2/PMOS throw is stamped)"
+
+[models.match]
+# The TPS2105 is the same silicon with the OPPOSITE enable polarity, so it must
+# NOT bind here: with the single-throw model above it would conduct on exactly the
+# wrong half of the control range. The regex pins the trailing 4.
+value_re = "(?i)^TPS2104[A-Z0-9-]*$"
+
+[models.params]
+ron  = 1.3       # IN2-OUT (PMOS) typ at TJ = 25 C, VI = 5 V (2.4 Ohm at 125 C).
+                 # The IN1-OUT NMOS path is 250 mOhm and is not stamped.
+roff = 1.0e9     # NO DATASHEET BASIS: the sheet publishes no output leakage. This
+                 # is the engine's ideal-open value. See the note above.
+vth  = 2.0       # EN VIH min, 2.7 V <= VI <= 5.5 V (VIL max 0.8 V)
+
+[models.pins]
+# Pin Assignment, DBV (SOT-23-5). Cross-checked against the margay datalogger:
+# pad 1 driven by the board's USB-present comparator, pad 3 on the USB rail, pad 4
+# on the main rail, pad 5 on the switched battery rail.
+"1" = "ctrl"      # EN. Active LOW for IN1 / active HIGH for IN2 on this part.
+"2" = "vss"       # GND
+"3" = "in_out_b"  # IN2, the auxiliary input: the throw selected on a HIGH control.
+                  # `s0` would have inverted it; see the note at the head of this
+                  # block.
+"4" = "in_out_a"  # OUT
+"5" = "in1"       # IN1, the main input. Deliberately NOT a switch-terminal role:
+                  # the two-throw path cannot fire without a VCC pin, and a name
+                  # the binder recognises as a throw would be a claim this entry
+                  # does not make.
+
+[models.ratings]
+# `max_current_a` is the IN2 path's rating, because IN2 is the path this entry
+# stamps. The datasheet gives two figures per path and they are different
+# questions: the absolute-maximum continuous output current (the destruction
+# threshold, 700 mA on IN1 and 140 mA on IN2) and the recommended continuous
+# operating current (500 mA and 100 mA). A stress check asks the first, so 140 mA
+# is what is carried, and the datasheet's own footnote adds that IN2 will deliver
+# 220 mA at the cost of a larger drop.
+max_current_a = 0.14   # IO(IN2) absolute-maximum continuous; recommended is 100 mA
+max_voltage_v = 6.0    # IN1 / IN2 / EN / OUT, -0.3 to 6 V
+max_power_w = 0.309    # DBV dissipation rating at TA < 25 C, derating
+                       # 3.1 mW/C above 25 C (170 mW at 70 C, 123 mW at 85 C)
+max_junction_temp_c = 125.0

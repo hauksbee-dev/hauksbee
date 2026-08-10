@@ -950,3 +950,99 @@ max_voltage_v = 7.0
 #     IIN 0.4 mA typ (0.8 max) at VIN=3.6 V with ILED=0, UVLO 2.70 V rising /
 #     2.30 falling, TSD 150 C typ with 20 C hysteresis, theta_JA 235 C/W.
 #     Source: Fairchild/onsemi FAN5622/24/26 Rev. 1.0.3, cover dated July 2013.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAX6070AAUT18: Maxim/ADI low-noise precision SERIES voltage reference, 1.8 V,
+# SOT-23-6.
+#
+# Source: Maxim Integrated "MAX6070/MAX6071 Low-Noise, High-Precision Series
+#   Voltage References", 19-6355 Rev 18, 12/20: the Pin Description table, the
+#   "Electrical Characteristics - MAX607__AUT18 (VOUT = 1.800V)" table, the
+#   Absolute Maximum Ratings and the SOT23 Package Information.
+#
+# A SERIES REFERENCE IS A REGULATOR, WHICH IS WHY IT IS `kind = "vreg"`. It takes
+# an input rail, sinks a quiescent current, and holds an output pin at a fixed
+# voltage against +/-10 mA of load, which is exactly what `bind_vreg`'s ideal
+# source models. What separates it from the LDOs in db/vreg.toml is accuracy
+# rather than mechanism: +/-0.04% initial on the A grade, 1.5 ppm/C typical drift.
+# Neither of those has a field on this schema, so what the simulation gets is a
+# perfect 1.800 V, which is the reference's job done better than the real part
+# does it. That is the right direction for a reference and the wrong one for a
+# tolerance study.
+#
+# Datasheet figures used (VIN = +5.0 V, IOUT = 0 mA, TA = -40 to +125 C; typicals
+# at +25 C):
+#   VOUT   = 1.800 V, accuracy +/-0.04% at 25 C on the A grade (B is +/-0.08%)
+#   VIN    = 2.7 to 5.5 V (guaranteed by line regulation, 1.8 V option)
+#   IIN    = 130 uA typ, 200 uA max at 25 C (260 uA max over temperature)
+#   ISD    = 6 uA max, disabled
+#   IOUT   = -10 to +10 mA (sink and source)
+#   ISC    = 25 mA typ either direction
+#   VIH    = 0.7 x VIN, VIL = 0.3 x VIN on EN
+#   TCVOUT = 1.5 ppm/C typ, 6 ppm/C max (A grade)
+#
+# `dropout_v` IS A FAMILY FIGURE, NOT THIS OPTION'S ROW, and that has to be said
+# because every other vreg entry's dropout is its own part's. The 1.8 V table omits
+# the dropout row, as does the 1.25 V one; the options that carry it give, at
+# IOUT = 10 mA over temperature, 110 mV typ at 2.048 V and at 2.5 V, 80 mV at
+# 3.0 V, 65 mV at 3.3 V, 75 mV at 4.096 V and 60 mV at 5.0 V. 0.11 V is the
+# LARGEST of those, so it is the conservative pick from the same die and the same
+# test condition rather than an interpolation into a gap. The datasheet's own
+# headline claim is "low 200 mV dropout" and the worst tabulated maximum is
+# 230 mV.
+#
+# DELIBERATELY NOT MODELLED: the force/sense pair. OUTF and OUTS are separate
+# pads meant to be shorted at the load so the reference regulates out the trace
+# drop; `bind_vreg` stamps ONE ideal source, on `out`, and OUTS carries a role and
+# no device. On a board that ties them together (the margay datalogger does, at
+# the pad) the two are one node and nothing is lost; on a board that runs a real
+# Kelvin connection, the sense leg is not part of the loop here. Also absent: the
+# EN pin (bind_vreg has no enable, so the reference is always on), the FILTER pin's
+# noise-bandwidth network, and every accuracy and drift figure above.
+[[models]]
+id = "max6070_1v8"
+kind = "vreg"
+description = "MAX6070AAUT18 1.8V precision series voltage reference, +/-0.04%, SOT-23-6"
+
+[models.match]
+# The last two digits of the ordering code ARE the output voltage: AUT12 = 1.25 V,
+# AUT18 = 1.8 V, AUT25 = 2.5 V, AUT30 = 3.0 V, AUT33 = 3.3 V, AUT41 = 4.096 V,
+# AUT50 = 5.0 V. Only the 18 binds here, for the reason stated at the head of the
+# voltage-option entries in db/vreg.toml: an entry that matched the family would
+# hold a 5 V reference net at 1.8 V.
+#
+# The grade letter before "AUT" is accuracy (A = +/-0.04%, B = +/-0.08%,
+# D = +/-0.2%) and is accepted freely, because this entry carries no accuracy
+# field for it to contradict. The MAX6071 is deliberately EXCLUDED: it is the same
+# reference with a Kelvin GROUND pair (GNDF/GNDS) instead of the MAX6070's single
+# GND and FILTER pins, so pads 1 and 2 mean different things on it.
+value_re = "(?i)^MAX6070[ABD]AUT18([/A-Z0-9+-]*)?$"
+
+[models.params]
+vout      = 1.8       # VOUT, 1.800 V; +/-0.04% initial on the A grade at 25 C
+dropout_v = 0.11      # FAMILY figure at IOUT = 10 mA, not the 1.8 V row (which
+                      # the datasheet omits). See the note above.
+iq_a      = 1.3e-4    # IIN typ 130 uA at 25 C (200 uA max at 25 C, 260 uA max
+                      # over temperature)
+
+[models.pins]
+# Pin Description, MAX6070 column, 6-pin SOT23. Cross-checked against the margay
+# datalogger, where pad 1 carries the 0.1 uF filter capacitor, pads 3 and 4 are
+# both tied to the auxiliary rail (enabled, and supplied from it), and pads 5 and 6
+# are shorted together on the VREF net exactly as the datasheet instructs.
+"1" = "filter"   # 0.1 uF to ground for high-frequency bypass; leave open if unused
+"2" = "gnd"
+"3" = "en"       # drive high to enable; NOT gated by bind_vreg, see above
+"4" = "in"
+"5" = "outs"     # reference sense output; carries a role and no device
+"6" = "out"      # OUTF, the force output: the pin the ideal source is stamped on
+
+[models.ratings]
+# Absolute Maximum Ratings and the SOT23 Package Information table.
+max_current_a = 0.01         # IOUT, +/-10 mA (ISC is 25 mA, a limit not a rating)
+max_voltage_v = 6.0          # IN / OUTS / EN to ground, -0.3 to +6 V
+max_power_w = 0.3478         # continuous dissipation at TA = +70 C, SOT23,
+                             # derate 4.3 mW/C above +70 C
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 230.0     # multi-layer board
+theta_jc_c_per_w = 76.0

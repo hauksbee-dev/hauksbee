@@ -958,3 +958,351 @@ theta_jc_c_per_w = 118.4     # RthJC(top), DBV
 #              theta_JA 102 C/W. The Y is the 2.1 MHz frequency grade and the Q
 #              suffix is AEC-Q100 qualification, NOT an output-voltage code.
 #              TI SNVSA24.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE PART NUMBER IS THE OUTPUT VOLTAGE. Every entry below binds ONE voltage
+# option of a family that ships dozens, and the match rule is what keeps them
+# apart. That is not fussiness: `bind_vreg` stamps an ideal source at `vout`, so
+# an entry that matched a whole family would regulate a 1.8 V rail to 3.3 V and
+# then report every downstream part as over-volted. Where a family's own order
+# code encodes the voltage (TI's "33", Torex's "332"), the regex demands those
+# digits and nothing else, so an unlisted option resolves to NOTHING and is
+# reported as an honest gap rather than bound at the wrong rail.
+
+# TPS79733: TI ultra-low-IQ 50 mA LDO with power-good, 3.3 V fixed, SC70-5.
+#
+# Source: TI "TPS797xx Ultra-Low IQ, 50-mA Low-Dropout Linear Regulators",
+#   SLVS332J, March 2001 - revised December 2016, Section 6.5 Electrical
+#   Characteristics and Section 6.1 Absolute Maximum Ratings.
+#
+# Datasheet figures used (TJ = -40 to 85 C, typicals at TA = 25 C):
+#   VI    = 1.8 to 5.5 V   (2.0 V min at IO = 10 mA)
+#   IO    = 0 to 50 mA continuous
+#   VO    accuracy +/-4%, 1 mA < IO < 10 mA
+#   V(DO) = 105 mV typ, 200 mV max, IO = 10 mA (TPS79733 row specifically; the
+#           TPS79730 row beside it is 110 mV, so the row matters)
+#   I(GND)= 1.2 uA typ, 2 uA max, IO = 10 mA
+#   ISC   = 190 mA typ, 300 mA max
+# The dropout figure is the 10 mA one because it is the ONLY one the datasheet
+# gives; there is no 50 mA dropout row, so nothing here extrapolates to one.
+#
+# THE PG PIN IS NAMED AND NOT MODELLED. It is an open-drain active-high flag
+# that releases above 90% of VO and pulls low below it. `bind_vreg` stamps an
+# unconditional ideal source and has no notion of a flag output, so pad 1
+# carries the role `pg` for the bind report and drives nothing. On the margay
+# datalogger it is pulled up and read by the MCU as the "main supply good"
+# signal, so firmware waiting on it would wait forever in co-sim; that is a real
+# limitation of the vreg kind, not of this entry's numbers.
+[[models]]
+id = "tps79733"
+kind = "vreg"
+description = "TPS79733 TI 50mA LDO, 3.3V fixed, 1.2uA IQ, power-good, SC70-5"
+
+[models.match]
+# The family's ordering codes put the voltage in the last digits: TPS79718 =
+# 1.8 V, TPS797285 = 2.85 V, TPS79730 = 3.0 V, TPS79733 = 3.3 V. Only the 733 binds
+# here. "DCKR" is the package-and-reel suffix, and it is the only package SLVS332J
+# offers, so unlike the other new entries in this batch there is no second pin order
+# for a wider rule to reach.
+value_re = "(?i)^TPS79733(DCK)?R?$"
+
+[models.params]
+vout      = 3.3       # 3.3 V option, accuracy +/-4%
+dropout_v = 0.105     # V(DO) typ at IO = 10 mA (200 mV max); no 50 mA row exists
+iq_a      = 1.2e-6    # I(GND) typ at IO = 10 mA (2 uA max)
+
+[models.pins]
+# Section 5 Pin Configuration and Functions, DCK (SC70-5). Verified against the
+# margay datalogger's own nets: pad 1 on a net named PG, pad 4 on the battery
+# rail, pad 5 on the regulated 3V3, pad 3 unconnected.
+"1" = "pg"    # open-drain active-high power good; NOT modelled, see above
+"2" = "gnd"
+"3" = "nc"    # no internal connection
+"4" = "in"
+"5" = "out"
+
+[models.ratings]
+# Section 6.1 Absolute Maximum Ratings and Section 6.3 Recommended Operating.
+max_current_a = 0.05  # IO continuous, Section 6.3 (ISC is a limit, not a rating)
+max_voltage_v = 6.0   # input voltage abs max (max DC output voltage is 4.9 V)
+max_junction_temp_c = 85.0  # TJ operating max; the sheet gives no higher TJ abs
+                            # max, so this IS the ceiling a stress check has
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TPS7A0533DBV: TI 1-uA-IQ 200 mA LDO, 3.3 V fixed, SOT-23-5.
+#
+# Source: TI "TPS7A05 1-uA Ultralow IQ, 200-mA, Low-Dropout Regulator",
+#   SBVS254D, February 2018 - revised August 2019, Section 6.5 Electrical
+#   Characteristics and Section 6.1 Absolute Maximum Ratings.
+#
+# Datasheet figures used:
+#   VIN   = 1.4 to 5.5 V     (the 1.4 V floor applies for VOUT <= 0.9 V)
+#   IOUT  = 0 to 200 mA
+#   VOUT  accuracy +/-1% at TJ = 25 C, +/-2% over -40 to 85 C
+#   VDO   = 235 mV MAX at IOUT = 200 mA, VOUT = 3.3 V row
+#   IGND  = 1 uA typ (0.6 min, 1.3 max) at IOUT = 1 uA, TJ = 25 C
+#   ISHDN = 100 nA typ, 300 nA max, VEN = 0.4 V
+#   ICL   = 210 mA min / 450 typ / 700 max
+#
+# `dropout_v` IS A MAXIMUM, NOT A TYPICAL, and that is the datasheet's fault
+# rather than a choice: the VDO table gives only max columns, per output-voltage
+# band and per package. 0.235 V is the VOUT = 3.3 V row for the DBV package this
+# board fits (the DBZ package's rows are 222 and 245 mV and are NOT used here).
+# Every other vreg entry in this file carries a typical, so the difference is
+# called out to stop it being read as one.
+#
+# DELIBERATELY NOT MODELLED: the EN pin gates nothing (`bind_vreg` has no
+# enable), the current limit has no CC mode to live in, and the pin-4 NC is
+# named `nc` so no binder mistakes it for a feedback or ground pad. On the
+# margay datalogger EN is driven by the MCU to switch the auxiliary rail, so a
+# simulation of that board sees the auxiliary 3.3 V rail as always present. That
+# is the single biggest gap in this entry and it is the vreg kind's, not the
+# datasheet's.
+[[models]]
+id = "tps7a0533"
+kind = "vreg"
+description = "TPS7A05 TI 200mA LDO, 3.3V fixed, 1uA IQ, SOT-23-5"
+
+[models.match]
+# TPS7A05xx: the two digits after "TPS7A05" are the output voltage code (18 =
+# 1.8 V, 25 = 2.5 V, 33 = 3.3 V, 50 = 5.0 V), then the package and the reel suffix.
+# Only the 3.3 V code binds here.
+#
+# THE DBV PACKAGE CODE IS REQUIRED, because this entry's pin map is the DBV one and
+# the four packages have four different pin orders: DQN puts OUT on 1 and IN on 4,
+# and DBZ has no EN pin at all. An earlier draft of this rule accepted every
+# package while its own pin-map comment admitted the map was DBV-only, which is the
+# self-contradiction this spelling removes. A DQN or YKA board resolves to nothing
+# until it gets its own entry.
+value_re = "(?i)^TPS7A0533DBV(R)?$"
+
+[models.params]
+vout      = 3.3       # 3.3 V option, +/-1% at 25 C
+dropout_v = 0.235     # VDO MAX at IOUT = 200 mA, VOUT = 3.3 V, DBV package
+iq_a      = 1.0e-6    # IGND typ at IOUT = 1 uA, TJ = 25 C (1.3 uA max)
+
+[models.pins]
+# Section 5 Pin Configuration and Functions, DBV column of the Pin Functions
+# table. The four packages have FOUR DIFFERENT pin orders (DQN puts OUT on 1 and
+# IN on 4; DBZ has no EN at all), so this map is only right for the DBV. Verified
+# against the margay datalogger: pad 1 on the main rail, pad 3 on an MCU control
+# net, pad 5 on the regulated auxiliary rail, pad 4 unconnected.
+"1" = "in"
+"2" = "gnd"
+"3" = "en"    # named for the report; NOT gated, see above
+"4" = "nc"    # not internally connected
+"5" = "out"
+
+[models.ratings]
+# Section 6.1 Absolute Maximum Ratings.
+max_current_a = 0.2   # IOUT rating (the 210 mA ICL min is a limit, not a rating)
+max_voltage_v = 6.0   # IN pin abs max
+max_junction_temp_c = 125.0  # OPERATING TJ, from the same abs-max table. The 150 C
+                             # on the line beside it is the STORAGE limit and is not
+                             # what a thermal check may spend.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# XC6204B33: Torex 150 mA high-speed LDO, 3.3 V, SOT-89-5.
+#
+# Source: Torex "XC6204/XC6205 Series High Speed LDO Regulators Output ON-OFF
+#   Control", ETR03004-010: Ordering Information, PIN ASSIGNMENT, the XC6204A/B
+#   Type electrical table, the per-voltage VOUT/dropout table (VOUT(T) = 3.30
+#   row) and ABSOLUTE MAXIMUM RATINGS.
+#
+# THE PART NUMBER IS THE SPEC, AND THE BOARD'S SPELLING IS SHORT ONE CHARACTER.
+# Torex orders as XC6204(1)(2)(3)(4)(5)(6)-(7):
+#   (1)      regulator type = current + CE polarity + internal CE resistor.
+#            A/B = 150 mA active-high, C/D = 150 mA active-low,
+#            E/F = 300 mA active-high, G/H = 300 mA active-low; the first of each
+#            pair has an internal pull resistor on CE and the second does not.
+#            B is therefore 150 mA, active-high CE, no pull-down: the standard part.
+#   (2)(3)   output voltage in 0.1 V steps, as the voltage x 10: "33" = 3.3 V.
+#            The range is 18..60 for the XC6204 (1.8 to 6.0 V) and 09..17 for the
+#            XC6205.
+#   (4)      voltage step and accuracy: 2 = 0.1 V step +/-2%, 1 = 0.1 V step
+#            +/-1%, A = 0.05 V step +/-2%, B = 0.05 V step +/-1%.
+#   (5)(6)-(7) package and reel: MR / MR-G = SOT-25, DR / DR-G = USP-6B,
+#            PR / PR-G = SOT-89-5.
+# So a full orderable part is XC6204B332PR-G, and the MWGEN-G1's value string
+# "XC6204B33" stops after (3): it names the type and the voltage and omits the
+# accuracy grade and the package. That is enough to model, because the accuracy
+# grade only narrows the +/-2% window this entry does not carry anyway, and the
+# regex accepts both the short form and the full one.
+#
+# THE PACKAGE IS THE HAZARD, NOT THE VOLTAGE. Torex's own PIN ASSIGNMENT table
+# gives three DIFFERENT pin orders for the same die:
+#   SOT-25   : 1 = VIN,  2 = VSS, 3 = CE, 4 = NC,   5 = VOUT
+#   SOT-89-5 : 4 = VIN,  2 = VSS, 3 = CE, 1 = NC,   5 = VOUT
+#   USP-6B   : 1 = VIN,  5 = VSS, 6 = CE, 2/4 = NC, 3 = VOUT
+# Pads 1 and 4 TRADE PLACES between the two five-lead packages. The map below is
+# the SOT-89-5 one because that is the package the board that motivated this entry
+# fits, and because the value string carries no package code to discriminate on
+# (the sibling XC6206 entry above can demand one; this family's short-form value
+# cannot). A board fitting the SOT-25 with the short value string therefore gets
+# its VIN pad read as `nc` and vice versa.
+#
+# That mis-read matters less than it looks, and it is worth saying why rather than
+# leaving it to be discovered: `bind_vreg`'s ideal-source path reads only `out`,
+# which is pad 5 in BOTH packages, so the regulated rail is right either way. And
+# a board that carries pin FUNCTIONS (as the MWGEN-G1's does, naming its pads VIN,
+# GND, CE, NC, VOUT) overrides this map entirely, because the binder now has a
+# vreg pinfunction vocabulary. The pad map is the fallback for a board that gives
+# nothing but numbers.
+#
+# Datasheet figures used (Ta = 25 C, A/B type, VOUT(T) = 3.30 row):
+#   VOUT(E)   = 3.234 to 3.366 V   (the +/-2% grade; +/-1% is 3.267 to 3.333)
+#   IOUTMAX   = 150 mA min
+#   Vdif1     = 60 mV typ, 90 max  @ IOUT = 30 mA
+#   Vdif2     = 200 mV typ, 250 max @ IOUT = 100 mA
+#   IDD       = 70 uA typ, 100 max (B type; the A type is 80 typ / 120 max)
+#   ISTBY     = 0.01 uA typ, CE at VSS
+#   Ilim      = 300 mA typ, Ishort = 50 mA typ
+#   VIN       = 2 to 10 V operating, 12 V absolute maximum
+#   Pd        = 500 mW (SOT-89-5 bare), 1300 mW PCB-mounted
+#
+# DELIBERATELY NOT MODELLED: the CE pin gates nothing (bind_vreg has no enable),
+# so all three of the MWGEN-G1's rails are unconditionally present in simulation
+# even though the board sequences them; the +/-2% window, load regulation and the
+# 100 dB ripple rejection are absent because the output is an ideal source; and
+# the foldback current limiter has no CC mode to live in. `max_current_a` carries
+# the 150 mA output rating rather than the 300 mA limiter, which is the figure a
+# stress check should judge against.
+[[models]]
+id = "xc6204b33"
+kind = "vreg"
+description = "XC6204B33 Torex 150mA LDO, 3.3V fixed, 70uA IQ, active-high CE, SOT-89-5"
+
+[models.match]
+# Accepts the short "XC6204B33" the board writes and the full orderable forms
+# XC6204B332PR-G and XC6204B331MR. Only the B type binds: A adds an
+# internal CE pull-down (a real difference in what an undriven CE does) and C/D/
+# G/H invert the CE sense outright, which would make this model's rail present
+# exactly when the board switches it off. Only "33" binds, for the reason at the
+# head of this section.
+# THE USP-6B PACKAGE CODE (DR) IS EXCLUDED, and it is the one exclusion that is
+# electrically load-bearing. Of the three packages, only USP-6B moves VOUT: it is
+# pad 3 there and pad 5 on both five-lead packages. Since `bind_vreg` stamps its
+# ideal source on `out`, a DR part bound to this map would have the regulated rail
+# stamped on its VSS pad, which the binder reports as "vreg output tied to ground"
+# rather than modelling. Excluding DR turns that into an honest unresolved instead.
+#
+# The five-lead codes MR (SOT-25) and PR (SOT-89-5) both bind, and so does the
+# package-less short form the board writes. Between those two the ONLY disagreement
+# is which of pads 1 and 4 is VIN, and `bind_vreg`'s ideal-source path never reads
+# `in`, so the rail is right either way; a board that carries pin functions
+# overrides the map for that pad regardless.
+# THE ACCURACY DIGIT IS ALSO A VOLTAGE DIGIT, which is the trap in this ordering
+# scheme and the reason `A` and `B` are excluded. Designator (4) is 1 or 2 for a
+# 0.1 V step and A or B for a 0.05 V STEP, so "33" plus "A" is not 3.3 V at a
+# different tolerance: the datasheet's own worked example is
+# "VOUT = 2.85 V, +/-2% -> (2)=2, (3)=8, (4)=A", making XC6204B33A a 3.35 V part.
+# Only (4) = 1 or 2, and the package-less short form the board writes, bind here.
+value_re = "(?i)^XC6204B33([12]([MP]R(-G)?)?)?$"
+
+[models.params]
+vout      = 3.3      # VOUT(T) = 3.30; the +/-2% grade's window is 3.234 to 3.366
+dropout_v = 0.2      # Vdif2 typ @ IOUT = 100 mA (250 mV max). Vdif1 is 60 mV typ
+                     # at 30 mA; the 100 mA figure is the useful one for a 150 mA
+                     # part, and the datasheet tabulates none at 150 mA.
+iq_a      = 7.0e-5   # IDD typ, B type (100 uA max); standby is 0.01 uA typ
+
+[models.pins]
+# PIN ASSIGNMENT, SOT-89-5 column. READ THE PACKAGE HAZARD NOTE ABOVE before
+# reusing this map: the SOT-25 form of the same part swaps pads 1 and 4.
+"1" = "nc"
+"2" = "gnd"    # VSS, the wide centre tab on this package
+"3" = "en"     # CE, active high on the B type; named for the report, NOT gated
+"4" = "in"     # VIN
+"5" = "out"    # VOUT
+
+[models.ratings]
+# ABSOLUTE MAXIMUM RATINGS, SOT-89-5 row of the Pd table.
+max_current_a = 0.15   # IOUTMAX min (Ilim is 300 mA typ, a limiter not a rating)
+max_voltage_v = 12.0   # VIN abs max (2 to 10 V operating)
+max_power_w = 0.5      # Pd, SOT-89-5 as a bare package (1.3 W PCB-mounted)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LT1461A-3.3: Analog Devices (ex-Linear) micropower precision SERIES voltage
+# reference, 3.3 V, SO-8.
+#
+# Source: Linear Technology "LT1461 Micropower Precision Low Dropout Series
+#   Voltage Reference", document 1461f (copyright 1999, print code 08/00): the
+#   PACKAGE/ORDER INFORMATION pinout, ELECTRICAL CHARACTERISTICS and ABSOLUTE
+#   MAXIMUM RATINGS.
+#
+# CAVEAT ON THE SOURCE, recorded because it is the weakest link in this entry:
+# 1461f is the original Linear document, read from a distributor mirror because
+# analog.com refused the fetch. ADI has since reissued the sheet under its own
+# numbering and this entry has NOT been diffed against that reissue. The pin map
+# below is independently corroborated (see the pin note), but the numbers are
+# only as current as a 2000-vintage document.
+#
+# `kind = "vreg"` for the reason the MAX6070 entry in db/power_ics.toml sets out:
+# a series reference is a regulator whose distinguishing feature is accuracy, and
+# accuracy is the thing this schema has no field for. The simulation gets a
+# perfect 3.300 V where the real A-grade part gives +/-0.04%.
+#
+# Datasheet figures used:
+#   VOUT      = 3.300 V; initial accuracy +/-0.04% max on the A grade
+#               (the I/C suffix selects temperature range, not accuracy)
+#   VIN       = VOUT + 0.3 V minimum to 20 V maximum
+#   IQ        = 35 uA typ, 50 uA max at 25 C (70 uA max over the full range)
+#   Dropout   = 0.06 V typ at IOUT = 0 mA; 0.13 typ / 0.3 max at 1 mA;
+#               0.20 typ / 0.4 max at 10 mA; 1.5 typ / 2.0 max at 50 mA
+#   IOUT      = 50 mA guaranteed minimum
+#   ISC       = 100 mA minimum
+#
+# `dropout_v` = 0.20 V, the 10 mA row. The part is rated to 50 mA and the sheet's
+# 50 mA row is 1.5 V, which is a different regime (the pass device is out of
+# saturation); a reference feeding a TCXO, which is what the MWGEN-G1 uses this
+# one for, sits in the milliamp decade, so the 10 mA row is the representative
+# one. The 0 mA figure of 60 mV would flatter it.
+#
+# DELIBERATELY NOT MODELLED: the SHDN pin (bind_vreg has no enable, and this pin
+# is active LOW, so it is named `shdn` and NOT `en` — mapping it to an enable role
+# would invert its sense the moment anything gates on it), the initial accuracy
+# and drift, and the four DNC pads (which the datasheet says must be left
+# unconnected, not grounded).
+[[models]]
+id = "lt1461a_3v3"
+kind = "vreg"
+description = "LT1461A-3.3 precision 3.3V series voltage reference, +/-0.04%, SO-8"
+
+[models.match]
+# Ordering codes are LT1461AIS8-3.3 / LT1461ACS8-3.3 (A grade, industrial and
+# commercial temperature). The grade letter selects initial accuracy (A 0.04%,
+# B 0.06%, C 0.08%, D 0.15%) and this entry carries no accuracy field, so the
+# letter class below is wider than it needs to be rather than load-bearing. The MWGEN-G1
+# writes "LT1461AxS8-3.3" with a LITERAL lowercase x standing in for the
+# temperature-range letter, which is a convention a schematic author uses and no
+# distributor does, so the regex accepts it alongside the real letters. The
+# trailing voltage code is required: LT1461 also ships 2.5 V, 3.0 V, 4.096 V and
+# 5 V options, and an entry that matched them all would hold a 5 V reference net
+# at 3.3 V.
+value_re = "(?i)^LT1461[ABD][ICX]?S8[-_ ]?3[._]3$"
+
+[models.params]
+vout      = 3.3       # 3.300 V; +/-0.04% max initial on the A grade
+dropout_v = 0.2       # typ at IOUT = 10 mA (0.4 V max). See the note above.
+iq_a      = 3.5e-5    # IQ typ 35 uA at 25 C (50 uA max at 25 C, 70 uA over temp)
+
+[models.pins]
+# PACKAGE/ORDER INFORMATION, S8. Corroborated by the MWGEN-G1's own pin functions,
+# which name pad 2 VIN, pad 3 ~{SHDN}, pad 4 GND, pad 6 VOUT and pads 1/5/7/8 DNC:
+# pad for pad what the datasheet says, from an independent source.
+"1" = "nc"     # DNC. The datasheet says only "DO NOT CONNECT"; it does not say
+               # what happens if the pad is grounded, so neither does this.
+"2" = "in"     # VIN
+"3" = "shdn"   # active-LOW shutdown. Named `shdn`, not `en`; see the note above.
+"4" = "gnd"
+"5" = "nc2"    # DNC
+"6" = "out"    # VOUT
+"7" = "nc3"    # DNC
+"8" = "nc4"    # DNC
+
+[models.ratings]
+# ABSOLUTE MAXIMUM RATINGS.
+max_current_a = 0.05   # IOUT guaranteed minimum. The 100 mA short-circuit figure
+                       # is a TYPICAL with no min or max, and is a limit rather
+                       # than a rating either way.
+max_voltage_v = 20.0   # VIN abs max

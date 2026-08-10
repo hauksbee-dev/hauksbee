@@ -137,3 +137,92 @@ bits = 10
 # output pin (the same per-pin figure the MCP4728 entry above carries).
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP3421: Microchip 18-bit delta-sigma I2C ADC with on-chip reference, SOT-23-6.
+#
+# Source: Microchip "MCP3421 18-Bit Analog-to-Digital Converter with I2C
+#   Interface and On-Board Reference", DS22003E (2009), Table 3-1 Pin Function
+#   Table, Section 1.0 Electrical Characteristics and the Absolute Maximum
+#   Ratings table.
+#
+# Datasheet figures used:
+#   VDD    = 2.7 to 5.5 V
+#   VREF   = 2.048 V internal, giving a +/-2.048 V differential input range
+#          (carried as `vref_int`, which is this schema's name for it; a bare
+#           `vref` is not in the vocabulary and would be dropped)
+#   bits   = 18 max (12/14/16/18 selectable, tied to 240/60/15/3.75 SPS)
+#   VIH    = 0.7 x VDD min, VIL = 0.3 x VDD max, VHYST = 0.05 x VDD min
+#   VOL    = 0.4 V max at IOL = 3 mA, VDD = 5.0 V
+#   IDDA   = 145 uA typ at VDD = 3.0 V; 155 typ / 190 max at 5.0 V, converting
+#   Abs max: VDD 7.0 V; any I/O -0.3 V to VDD + 0.3 V
+#
+# NO `voh`, and that is deliberate rather than an omission. SDA is I2C
+# open-drain: the datasheet publishes no VOH for it because the part has no
+# high-side driver on that pin, and the board's pull-up decides its high level.
+# The SR2 entry in db/power_ics.toml records the same reasoning.
+#
+# THE ADDRESS IS FIXED IN SILICON, WHICH IS WHAT THE "A1" IN THE BOARD'S VALUE
+# MEANS. Unlike its MCP3422/3/4 siblings the MCP3421 has no address pins; the
+# three address bits are factory-set and appear in the ordering code as A0..A7.
+# The margay datalogger's U14 is an MCP3421A1, whose 7-bit address is therefore
+# 1101001b = 0x69. The regex accepts any of the eight options because they differ
+# ONLY in that address, which this entry does not carry: there is no field for it
+# and the register map is not modelled, so there is nothing for the address to be
+# wrong about. A declarative sensor spec is where the address would live.
+#
+# DELIBERATELY NOT MODELLED: the conversion. There is no delta-sigma modulator,
+# no PGA (x1/x2/x4/x8), no one-shot/continuous mode bit and no output register, so
+# an I2C read returns nothing. Also absent: the internal 2.048 V reference as a
+# node (it is a param, not a stamped source), and the SOT-23-6 exposed nothing
+# (this package has no thermal pad).
+[[models]]
+id = "mcp3421"
+kind = "adc"
+description = "Microchip MCP3421 18-bit delta-sigma I2C ADC, SOT-23-6 (pad map, levels and reference; no register map)"
+
+[models.match]
+# The trailing digit is the factory address option (A0..A7); all eight share this
+# pinout and these electricals. The MCP3422/3/4 are 2- and 4-channel parts in
+# larger packages with address pins, and are correctly excluded.
+value_re = "(?i)^MCP3421A[0-7]([A-Z0-9-]*)?$"
+
+# THE BUS LEVELS BELONG HERE, and an earlier draft of this entry left them out on
+# the strength of a lint warning that was wrong. `bind_component` routes an `adc`
+# through `bind_digital`, which reads voh/vol/vih/vil and `supply_static_ua` just as
+# it does for a `digital` entry; the lint's `adc` vocabulary simply did not list
+# them, so it reported them as silently ignored when the engine in fact consumes
+# them. The vocabulary is fixed in the same commit as this entry.
+#
+# The levels are evaluated at the 5.0 V the datasheet's table is specified at, NOT
+# at the 3.3 V the margay feeds this part, because VIH/VIL are given as fractions
+# of VDD and the VOL row is given only at VDD = 5.0 V; mixing a 3.3 V threshold
+# with a 5 V output level would be two operating points in one entry. On a 3.3 V
+# board the thresholds here are high by the ratio, which is the conservative
+# direction for an input threshold.
+[models.params]
+bits     = 18       # maximum resolution; 12/14/16 are the faster sample-rate modes
+vref_int = 2.048    # internal reference (V); the differential input range is +/-VREF
+vih      = 3.5      # 0.7 x VDD min, at the table's VDD = 5.0 V
+vil      = 1.5      # 0.3 x VDD max, same condition
+vol      = 0.4      # max at IOL = 3 mA, VDD = 5.0 V
+supply_static_ua = 155.0   # IDDA typ at VDD = 5.0 V while converting (190 max);
+                           # 145 uA typ at 3.0 V
+supply_pin = "5"
+gnd_pin    = "2"
+
+[models.pins]
+# Table 3-1 Pin Function Table, SOT-23-6. Cross-checked against the margay
+# datalogger: pad 5 on the auxiliary 3.3 V rail, pads 3/4 on the board's I2C pair,
+# pad 6 tied to ground as the negative input of a single-ended measurement, and
+# pad 1 on the sensed net.
+"1" = "vin_plus"
+"2" = "vss"
+"3" = "scl"
+"4" = "sda"
+"5" = "vdd"
+"6" = "vin_minus"
+
+[models.ratings]
+# Absolute Maximum Ratings.
+max_voltage_v = 7.0    # VDD
