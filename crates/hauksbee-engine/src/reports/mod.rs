@@ -87,18 +87,24 @@ pub fn kicad_pro_clearance_rules(
 
 /// Strict-mode predicate for the connectivity/resource lint: any high/medium
 /// finding fails the gate.
+///
+/// Asked of the machine findings, not of the severity words: the CI artifacts
+/// mark a testcase failed from [`crate::result::JsonFinding::gating`], and a
+/// gate that re-derived the rule here could grade the same run differently
+/// from the file the pipeline archives.
 pub fn lint_fails(report: &hauksbee_extract::NetLintReport) -> bool {
-    use hauksbee_extract::Severity;
-    report
-        .findings
+    crate::result::lint_findings_json(report)
         .iter()
-        .any(|f| matches!(f.severity, Severity::High | Severity::Medium))
+        .any(|f| f.gating)
 }
 
 /// Strict-mode predicate for the SI report: any real finding (high/medium/low,
-/// but not the informational computed-value notes) fails the gate.
+/// but not the informational computed-value notes) fails the gate. Asked of the
+/// machine findings for the same reason as [`lint_fails`].
 pub fn si_fails(report: &hauksbee_extract::SiReport) -> bool {
-    report.finding_count() > 0
+    crate::result::si_findings_json(report)
+        .iter()
+        .any(|f| f.gating)
 }
 
 /// How many gate-grade subjects the `--strict` failure line names before it
@@ -109,22 +115,22 @@ const STRICT_LINE_SUBJECTS: usize = 8;
 /// One `<check> <net/ref>` label per gating lint finding (high/medium, the
 /// same predicate as [`lint_fails`]), for the `--strict` failure line.
 pub fn lint_gate_items(report: &hauksbee_extract::NetLintReport) -> Vec<String> {
-    use hauksbee_extract::Severity;
-    report
-        .findings
+    crate::result::lint_findings_json(report)
         .iter()
-        .filter(|f| matches!(f.severity, Severity::High | Severity::Medium))
-        .map(|f| gate_item(f.check.as_str(), &f.nets, &f.refs))
+        .filter(|f| f.gating)
+        .map(|f| gate_item(&f.kind, &f.nets, &f.refs))
         .collect()
 }
 
 /// One label per gating SI finding (every real finding gates, matching
-/// [`si_fails`]).
+/// [`si_fails`]). The informational computed-value notes are filtered out: they
+/// never gate, and naming one on the failure line, or spending a GitHub
+/// annotation on it, says a note is why the run failed.
 pub fn si_gate_items(report: &hauksbee_extract::SiReport) -> Vec<String> {
-    report
-        .findings
+    crate::result::si_findings_json(report)
         .iter()
-        .map(|f| gate_item(f.check.as_str(), &f.nets, &f.refs))
+        .filter(|f| f.gating)
+        .map(|f| gate_item(&f.kind, &f.nets, &f.refs))
         .collect()
 }
 
@@ -260,5 +266,89 @@ pub fn note_ungated_findings(strict: bool, would_gate: bool) {
              error such as a missing or unreadable file, 2 = findings under --strict, 3 = invalid \
              for analysis), or gate CI with hauksbee-ci."
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hauksbee_extract::{
+        LintCheck, LintFinding, NetLintReport, Severity, SiCheck, SiFinding, SiReport, SiSeverity,
+    };
+
+    /// The gate predicates and the CI artifacts read one rule. These pin the two
+    /// families whose gate is wider than the `serious` severity, from both
+    /// sides: the gate's answer, the subjects it names, and the `gating` flags
+    /// the artifacts grade on, on the same report.
+    #[test]
+    fn the_lint_gate_is_exactly_the_gating_findings_it_names() {
+        let mut report = NetLintReport {
+            findings: vec![
+                LintFinding {
+                    check: LintCheck::PlaceholderValue,
+                    severity: Severity::Low,
+                    message: "a low one".into(),
+                    refs: vec!["R9".into()],
+                    nets: Vec::new(),
+                },
+                LintFinding {
+                    check: LintCheck::PlaceholderValue,
+                    severity: Severity::Medium,
+                    message: "a medium one".into(),
+                    refs: vec!["R1".into()],
+                    nets: Vec::new(),
+                },
+            ],
+        };
+        // Medium gates and low does not, so the gate fires and names one item.
+        assert!(super::lint_fails(&report));
+        assert_eq!(super::lint_gate_items(&report), ["placeholder_value R1"]);
+        // The findings the artifacts grade carry the same split.
+        let findings = crate::result::lint_findings_json(&report);
+        assert_eq!(
+            findings.iter().map(|f| f.gating).collect::<Vec<_>>(),
+            [false, true]
+        );
+        // Low only: nothing gates and nothing is named.
+        report.findings.pop();
+        assert!(!super::lint_fails(&report));
+        assert!(super::lint_gate_items(&report).is_empty());
+    }
+
+    #[test]
+    fn an_si_info_note_is_never_named_as_the_reason_a_run_failed() {
+        let mut report = SiReport {
+            findings: vec![
+                SiFinding {
+                    check: SiCheck::ControlledImpedance,
+                    severity: SiSeverity::Info,
+                    message: "a computed value".into(),
+                    refs: Vec::new(),
+                    nets: vec!["USB_DP".into()],
+                },
+                SiFinding {
+                    check: SiCheck::CrystalLoadCap,
+                    severity: SiSeverity::Medium,
+                    message: "load caps look wrong".into(),
+                    refs: Vec::new(),
+                    nets: vec!["XTAL1".into()],
+                },
+            ],
+        };
+        // The info note is on the report and in the JSON, but it is not why the
+        // run failed, so it is neither gating nor named on the failure line (the
+        // same list the GitHub annotations are printed from).
+        assert!(super::si_fails(&report));
+        assert_eq!(super::si_gate_items(&report), ["crystal_load_cap XTAL1"]);
+        let findings = crate::result::si_findings_json(&report);
+        assert_eq!(findings.len(), 2);
+        assert_eq!(
+            findings.iter().map(|f| f.gating).collect::<Vec<_>>(),
+            [false, true]
+        );
+        // Info only: no gate, no items, and the note is still reported.
+        report.findings.remove(1);
+        assert!(!super::si_fails(&report));
+        assert!(super::si_gate_items(&report).is_empty());
+        assert_eq!(crate::result::si_findings_json(&report).len(), 1);
     }
 }

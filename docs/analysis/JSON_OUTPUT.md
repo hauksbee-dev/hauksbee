@@ -45,9 +45,18 @@ escaped spellings should match on the real names.
 
 `run --junit <file>` and `run --sarif <file>` write the full static suite
 (the `--check` findings, waivers already applied) as JUnit XML and SARIF
-2.1.0 respectively, alongside whatever report was requested. Serious
-findings map to JUnit failures / SARIF `error` results. Under GitHub Actions
-a failing `--strict` gate also prints `::error` workflow annotations for each
+2.1.0 respectively, alongside whatever report was requested. A finding maps
+to a JUnit `<failure>` / SARIF `error` result when its `gating` flag is set.
+That flag is set on more than the `serious` findings (see the `Finding` shape
+below), so a run that gates on a finding does not archive `failures="0"` beside
+its red verdict. The artifact always covers the whole static suite, so it grades the
+`--check` gate whichever selector asked for it: on a narrower selector it can be
+redder than that selector's own exit code (`--drc --strict` exits 0 and still
+archives a gating lint finding as a failure). A whole-run refusal is a JUnit
+`<error>` and a SARIF `hauksbee/invalid-for-analysis` result instead of a
+failure; the bind-blocker `invalid` route is a failure carrying `INVALID
+evidence:` text under the `evidence/undermined` rule. Under GitHub Actions a
+failing `--strict` gate also prints `::error` workflow annotations for each
 gate-grade finding.
 
 ## Top-level verdict
@@ -140,6 +149,7 @@ Each `findings[]` entry carries:
 | `check` | string | which analysis produced it (`drc`, `si`, `lint`, `cosim`, …) |
 | `kind` | string | finding subtype |
 | `severity` | string | `"serious"` \| `"warning"` \| `"note"` \| `"info"` |
+| `gating` | bool | whether THIS finding is a reason the run fails its gate. Not a restatement of `severity`: every `serious` finding gates, and so do a medium (`warning`) lint finding, every real SI finding, and every co-sim fault. It runs the other way too, so a `warning` is not a gate grade on its own: a copper short on an unvalidated board format may be phantom and does not gate, and neither does a `note`-grade lint finding or a qualified/demoted evidence badge. Read this, not the severity word, to know which of these findings the exit code is about; the CI artifacts do. Copper shorts are the exception: they never appear in `findings[]` (they are rendered as `drc.shorts`, which carries no `gating`) and only the JUnit/SARIF artifacts show them with a gate grade |
 | `nets` / `refs` | string[] | involved nets / component references |
 | `location_mm` / `layer` | optional | board location and copper layer |
 | `actionable` | bool | whether a user can act on it |

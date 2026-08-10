@@ -1084,14 +1084,34 @@ the file lands even on a `--drc`-only run. Waivers are applied before the file i
 written, so a waived finding is absent rather than present-and-ignored.
 
 - **JUnit** gives one `<testsuite>` per check and one `<testcase>` per finding,
-  with serious findings as `<failure>` elements. A check that found nothing
-  carries a single passing `no findings` testcase, so a green suite is visible in
-  the report rather than missing from it.
+  with the findings that fail the gate as `<failure>` elements. A check that
+  found nothing carries a single passing `no findings` testcase, so a green suite
+  is visible in the report rather than missing from it.
 - **SARIF** is 2.1.0, so GitHub code scanning and anything else that speaks SARIF
-  will annotate the pull request. Serious findings come through as `error` and
-  everything else as `warning`, each rule id being `check/kind` (`drc/short`,
+  will annotate the pull request. Gating findings come through as `error` and
+  non-gating ones as `warning`, each rule id being `check/kind` (`drc/short`,
   `si/crystal_load_cap`). The location is the board file; SARIF has no notion of
   a millimetre, so the coordinates stay in the message text.
+
+Both grade on the finding's own `gating` flag, which the `--json` findings carry
+too, and NOT on the severity word. The gates are wider than the `serious`
+severity (below), so a run that gates on a medium lint finding or on a co-sim
+fault used to archive `failures="0"` beside its red verdict and exit 2, and a
+dashboard reading the artifact instead of the exit code was told the build was
+fine. The `invalid` route keeps its own shapes: a whole-run refusal is a JUnit
+`<error>` and a SARIF `hauksbee/invalid-for-analysis` result, never a
+`<failure>`. The routes that go through an evidence finding instead (unbound
+verdict-critical parts, undermined run-level coverage) are a `<failure>` like
+any other gate-grade finding, so what tells those apart is the text
+(`INVALID evidence: …`) and the `evidence/undermined` rule id, not the element.
+
+The artifact's subject is the whole static suite, so it grades the `--check`
+gate whichever selector asked for it. On a narrow selector that is deliberately
+wider than the exit code: `--drc --strict` on a board whose only gate-grade
+finding is a lint one exits 0 and still archives that finding as a failure,
+because the file reports the suite it ran, not the one report you printed. Pair
+the artifact flags with `--check --strict` when you want the exit code and the
+file to be answering the same question.
 
 Each file is written before the chosen report renders, and the run says so on
 stderr (`wrote JUnit report to hauksbee.xml`). That ordering means the artifact
@@ -1196,7 +1216,22 @@ own machine verdict on the same board: `fail` exits 2, `invalid` exits 3, `pass`
 exits 0. Those gates are deliberately wider than the `serious` severity
 (`--lint` gates on medium findings, `--si` on any real finding), so a run gating
 on a `warning`-severity finding reads `verdict: "fail"` in the very document its
-exit code was printed beside.
+exit code was printed beside, and the `--junit`/`--sarif` files it archives mark
+that finding failed.
+
+The `gating` flag makes the artifact agree with the exit code about FINDINGS. It
+does not make the file cover a non-zero exit whose reason never became a finding,
+because there is then nothing in the file to mark; read the document for those.
+Known cases: the boot advisory `--strict-boot` exits 2 on is not a finding
+anywhere in the artifact; a refusal for a board with no component placement
+exits 3 before the artifact is written at all, so a pipeline archiving a fixed
+path keeps the previous run's file; `--firmware` on a board that bound no
+processor exits 3 leaving whatever the static suite already wrote, which says
+nothing about the missing processor; and the timing-evidence refusal, the
+`--ac`/`--thermal` validity refusals, and an `invalid` verdict from an analysis
+section's own `valid:false` all exit 3 without adding anything to the file (the
+zero-activity and analog-abort co-sim refusals DO rewrite it with the refusal).
+The exit-1 usage errors raised after the write are the same class.
 
 Do not use a non-strict run to predict a strict one. On the static surfaces the
 document does not change with the flag (a refusing verdict prints beside exit 0

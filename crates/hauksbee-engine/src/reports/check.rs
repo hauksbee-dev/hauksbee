@@ -63,49 +63,8 @@ pub fn emit(
     // come out of the gate and go into their own section, never out of sight.
     let mut waivers = load_waivers(board_path);
     let mut lint = lint;
-    let (kept_lint, waived_lint) =
-        waivers.partition("lint", std::mem::take(&mut lint.findings), |f| {
-            (
-                f.check.as_str().to_string(),
-                f.nets.clone(),
-                f.refs.clone(),
-                f.message.clone(),
-            )
-        });
-    lint.findings = kept_lint;
-    let (kept_si, waived_si) = waivers.partition("si", std::mem::take(&mut si.findings), |f| {
-        (
-            f.check.as_str().to_string(),
-            f.nets.clone(),
-            f.refs.clone(),
-            f.message.clone(),
-        )
-    });
-    si.findings = kept_si;
-    // DrcReport keeps shorts and clearance violations in one list, so partition
-    // the whole list and let the key function leave the non-shorts unwaivable.
-    // A clearance violation does not gate on its own, so it has nothing to be
-    // excused from.
-    let (kept_drc, waived_shorts) =
-        waivers.partition("drc", std::mem::take(&mut drc.findings), |f| {
-            let kind = match f.kind {
-                hauksbee_extract::ViolationKind::Short => "short",
-                _ => "clearance-not-waivable",
-            };
-            (
-                kind.to_string(),
-                vec![f.net_a_name.clone(), f.net_b_name.clone()],
-                Vec::new(),
-                format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
-            )
-        });
-    drc.findings = kept_drc;
+    let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
     let drc_structured = DrcStructured::from_report(&drc);
-    let waived: Vec<_> = waived_lint
-        .into_iter()
-        .chain(waived_si)
-        .chain(waived_shorts)
-        .collect();
     let mut actual_findings = lint_findings_json(&lint);
     actual_findings.extend(si_findings_json(&si));
     actual_findings.extend(usbc.as_ref().and_then(usbc_finding_json));
@@ -142,7 +101,7 @@ pub fn emit(
     // unvalidated board format (KiCad 10+) yields possibly-phantom shorts and
     // does not gate; the caveat is printed instead.
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-    let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
+    let drc_gates = drc_gate_fails(&drc);
     let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     match mode {
         OutputMode::Json => {
@@ -404,17 +363,50 @@ pub fn gather_findings(
     let mut si = crate::checks::engine_si(board, lib, geo_text);
     let usbc = crate::usb_c_report(board);
 
+    // The same waivers, applied the same way, as every surface that gates: the
+    // artifact must not carry a finding the exit code excused, or the other way
+    // round.
     let mut waivers = load_waivers(board_path);
-    let (kept_lint, _) = waivers.partition("lint", std::mem::take(&mut lint.findings), |f| {
-        (
-            f.check.as_str().to_string(),
-            f.nets.clone(),
-            f.refs.clone(),
-            f.message.clone(),
-        )
-    });
+    let _ = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
+
+    let mut findings: Vec<crate::result::JsonFinding> = drc_short_findings(&drc);
+    findings.extend(lint_findings_json(&lint));
+    findings.extend(si_findings_json(&si));
+    findings.extend(usbc.as_ref().and_then(usbc_finding_json));
+    Ok(findings)
+}
+
+/// Apply this board's waivers to the whole static suite, in one place, and
+/// return the findings they overruled.
+///
+/// Every static surface has to do this identically: a waiver that excuses a
+/// finding on `--check` but not on the bare `--json` would make the two
+/// disagree about the same board, and the artifact writer (which applies
+/// waivers) would then disagree with a gate that did not. The bare `--json`
+/// gate skipped this entirely: it exited 2 on an excused finding while the
+/// `--junit`/`--sarif` file beside it, written from the waived-down suite, said
+/// `failures="0"`.
+///
+/// A clearance violation does not gate on its own, so the DRC key function
+/// leaves the non-shorts unwaivable rather than letting a `drc` waiver excuse
+/// something that was never gate-grade.
+pub(crate) fn apply_static_waivers(
+    waivers: &mut crate::waiver::WaiverSet,
+    lint: &mut hauksbee_extract::NetLintReport,
+    si: &mut hauksbee_extract::SiReport,
+    drc: &mut hauksbee_extract::DrcReport,
+) -> Vec<crate::waiver::WaivedFinding> {
+    let (kept_lint, waived_lint) =
+        waivers.partition("lint", std::mem::take(&mut lint.findings), |f| {
+            (
+                f.check.as_str().to_string(),
+                f.nets.clone(),
+                f.refs.clone(),
+                f.message.clone(),
+            )
+        });
     lint.findings = kept_lint;
-    let (kept_si, _) = waivers.partition("si", std::mem::take(&mut si.findings), |f| {
+    let (kept_si, waived_si) = waivers.partition("si", std::mem::take(&mut si.findings), |f| {
         (
             f.check.as_str().to_string(),
             f.nets.clone(),
@@ -423,32 +415,54 @@ pub fn gather_findings(
         )
     });
     si.findings = kept_si;
-    let (kept_drc, _) = waivers.partition("drc", std::mem::take(&mut drc.findings), |f| {
-        let kind = match f.kind {
-            hauksbee_extract::ViolationKind::Short => "short",
-            _ => "clearance-not-waivable",
-        };
-        (
-            kind.to_string(),
-            vec![f.net_a_name.clone(), f.net_b_name.clone()],
-            Vec::new(),
-            format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
-        )
-    });
+    let (kept_drc, waived_shorts) =
+        waivers.partition("drc", std::mem::take(&mut drc.findings), |f| {
+            let kind = match f.kind {
+                hauksbee_extract::ViolationKind::Short => "short",
+                _ => "clearance-not-waivable",
+            };
+            (
+                kind.to_string(),
+                vec![f.net_a_name.clone(), f.net_b_name.clone()],
+                Vec::new(),
+                format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
+            )
+        });
     drc.findings = kept_drc;
+    waived_lint
+        .into_iter()
+        .chain(waived_si)
+        .chain(waived_shorts)
+        .collect()
+}
 
-    let mut findings: Vec<crate::result::JsonFinding> = Vec::new();
-    // DRC shorts as findings (serious; an unvalidated board format's shorts
-    // may be phantom, mirroring the gate they demote to warnings).
+/// The copper shorts as machine findings.
+///
+/// An unvalidated board format's shorts may be phantom, so they are graded
+/// `warning` and marked non-gating: the copper gate excuses them and the CI
+/// artifacts have to agree. The exit-code side asks this function rather than
+/// re-reading the version warning, on both surfaces that gate on copper:
+/// [`drc_gate_fails`] is the copper half of the `--check` gate and the whole of
+/// `--drc`'s.
+///
+/// One copper route does NOT come through here: a short never enters a
+/// `--json` document's `findings` array (it is rendered as `drc.shorts`), and
+/// [`crate::result::JsonReport::verdict_with_waivers`] counts those shorts into
+/// `serious_count` behind its own copy of the same `version_warning` check. That
+/// shape carries no gating flag, and its severity vocabulary differs too (the
+/// phantom grade there is `note`, not `warning`). The two copies read one field
+/// and are pinned from both sides, but a change to the phantom rule has to be
+/// made in both places.
+pub(crate) fn drc_short_findings(
+    drc: &hauksbee_extract::DrcReport,
+) -> Vec<crate::result::JsonFinding> {
     let phantom = drc.version_warning.is_some();
-    for f in &drc.findings {
-        if !matches!(f.kind, hauksbee_extract::ViolationKind::Short) {
-            continue;
-        }
-        findings.push(crate::result::JsonFinding {
+    drc.shorts()
+        .map(|f| crate::result::JsonFinding {
             check: "drc".to_string(),
             kind: "short".to_string(),
             severity: if phantom { "warning" } else { "serious" }.to_string(),
+            gating: !phantom,
             nets: vec![f.net_a_name.clone(), f.net_b_name.clone()],
             location_mm: None,
             layer: Some(f.layer.clone()),
@@ -463,12 +477,15 @@ pub fn gather_findings(
                 f.net_a_name, f.net_b_name, f.layer
             ),
             fix: None,
-        });
-    }
-    findings.extend(lint_findings_json(&lint));
-    findings.extend(si_findings_json(&si));
-    findings.extend(usbc.as_ref().and_then(usbc_finding_json));
-    Ok(findings)
+        })
+        .collect()
+}
+
+/// The copper gate: a real (non-phantom) short fails it. Derived from
+/// [`drc_short_findings`], so the exit code and the CI artifact count the same
+/// shorts. Shared with `--drc`, which gates on copper alone.
+pub(crate) fn drc_gate_fails(drc: &hauksbee_extract::DrcReport) -> bool {
+    drc_short_findings(drc).iter().any(|f| f.gating)
 }
 
 /// What a static pass cannot see, said at the end of one.
@@ -656,7 +673,7 @@ pub fn emit_combined_json(
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
     .with_input_artifact(board_path, raw, input_kind)?;
-    let drc = if altium_present {
+    let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
         ExtractedBoard::drc_with_clearance_rules(
@@ -664,13 +681,19 @@ pub fn emit_combined_json(
             kicad_pro_clearance_rules(board_path, board),
         )?
     };
-    let drc_structured = DrcStructured::from_report(&drc);
-    let lint = crate::checks::engine_lint(board, lib);
+    let mut lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };
     // Same SI chokepoint as the text path: the combined `run --json` must carry
     // the ampacity/ripple findings too, or a machine consumer of the JSON reads
     // a false-clean SI section.
-    let si = crate::checks::engine_si(board, lib, geo_text);
+    let mut si = crate::checks::engine_si(board, lib, geo_text);
+    // Same waivers as `--check` and as the artifact writer. This surface used to
+    // skip them, so an excused finding stayed live in `findings`, gated the run
+    // to exit 2 with `verdict: "fail"`, and left the `--junit`/`--sarif` file
+    // written from the waived-down suite reading `failures="0"` beside it.
+    let mut waivers = load_waivers(board_path);
+    let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
+    let drc_structured = DrcStructured::from_report(&drc);
     let usbc = crate::usb_c_report(board);
     let mut findings = lint_findings_json(&lint);
     findings.extend(si_findings_json(&si));
@@ -696,7 +719,7 @@ pub fn emit_combined_json(
     // critical parts must carry the same qualification.
     let blockers = crate::result::unmodelled_critical_refs(&combined_summary);
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-    let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
+    let drc_gates = drc_gate_fails(&drc);
     let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     let mut jr = JsonReport::new(&bound.name, combined_summary)
         .with_bind_verdict_gate()
@@ -713,6 +736,9 @@ pub fn emit_combined_json(
             message: crate::result::inconclusive_verdict(&blockers),
         });
     }
+    // A green verdict that quietly dropped findings would be worse than no
+    // waivers at all, so this surface carries them like `--check --json` does.
+    jr.waived = waived.iter().cloned().map(Into::into).collect();
     println!("{}", jr.to_json());
     // Honour `--strict` on the default machine command: a bare
     // `run <board> --json --strict` must gate a shorted/failing board like the

@@ -1435,6 +1435,10 @@
             "null"
           ]
         },
+        "gating": {
+          "description": "Whether THIS finding is a reason the run fails its gate.\n\nNot a restatement of `severity`. Every `serious` finding gates, and so do\nfindings the severity word grades lower: a medium (`warning`) lint\nfinding, every real SI finding, every co-sim fault. It runs the other way\ntoo, so a `warning` is not a gate grade on its own: a copper short on a\nboard format the copper extraction was never validated against may be\nphantom and does not gate, a `note`-grade lint finding does not gate, and\nneither does a qualified or demoted evidence badge.\n\nA consumer asking \"which findings is the exit code about\" reads this, not\nthe severity word. The CI artifacts do exactly that, so a `--junit`\n`<failure>`, a SARIF `error` level and a GitHub `::error` mark the\nfindings the run failed on.\n\nSet where the finding is built, from the predicate that surface's gate\nasks. The gates in reports::mod (lint_fails, si_fails) and\nreports::check (drc_gate_fails) are DEFINED as \"any finding here is\ngating\", so the archived file and the exit code cannot disagree about a\nfinding in this array. A copper short is the one gate-grade item that is\nNOT in this array on any surface: it is rendered as `drc.shorts`, which\nhas no gating flag, and `serious_count` counts it separately.",
+          "type": "boolean"
+        },
         "kind": {
           "description": "The specific rule (e.g. \"controlled_impedance\", \"strap_pin\").",
           "type": "string"
@@ -1486,6 +1490,7 @@
         "check",
         "kind",
         "severity",
+        "gating",
         "nets",
         "refs",
         "actionable",
@@ -1541,7 +1546,7 @@
       "type": "object"
     },
     "JsonNote": {
-      "description": "An info-level, never-`--strict`, always-emitted note. Distinct from\n[`JsonFinding`]: a note never gates a CI pipeline and never changes an exit\ncode; it is the structured home for honesty annotations that must never be\nsilently absent (bind roles, co-sim substitution, coverage caveats, SI info).",
+      "description": "An always-emitted, info-level note: the structured home for honesty\nannotations that must never be silently absent (bind roles, co-sim\nsubstitution, coverage caveats, SI info, boot hazards).\n\nDistinct from [`JsonFinding`]: a note carries no severity and no gating flag,\nnothing counts it into `serious_count`, and no gate reads this array. But\n\"informational\" is about the note, NOT about what it reports: 3 of the 5\n[`JsonNoteKind`] variants describe a condition a gate reads from its own\nsource, so seeing one of those does not mean the run exited 0.\n\n- `Coverage` carries the INCONCLUSIVE sentence for unbound verdict-critical\n  parts (verdict `invalid`, exit 3 under `--strict`) and the `--thermal`\n  PARTIAL-coverage caveat (exit 3 BY DEFAULT, unless `--no-strict-thermal`).\n- `CosimSubstitution` reports a substitute MCU core, which is an\n  `Undermined`-class assumption: on a run-level evidence map it makes the\n  verdict `invalid`, and `--strict` exits 3.\n- `BootControlNet` reports the boot hazard `--strict-boot` escalates to a\n  failing gate (verdict `fail`, exit 2).\n\nThe other 2, `BindRole` and `SiInfo`, report conditions no gate reads: an\ninferred pin role is a `Qualified`-class assumption, which never invalidates\na run, and the SI gate counts real findings only, never its info notes.",
       "properties": {
         "kind": {
           "$ref": "#/definitions/JsonNoteKind"
