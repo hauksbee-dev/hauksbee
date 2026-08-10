@@ -1519,10 +1519,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 }
                 // `fail` outranks `invalid`, the same precedence the verdict
                 // field applies: a run that raised real electrical faults CAN
-                // be judged, so the fault gate below owns the exit (2) and this
-                // refusal stays on stderr and in the artifacts. Exiting 3 here
-                // put "invalid for analysis" beside a document reading
-                // `"verdict":"fail"`.
+                // be judged, so the fault gate below takes the exit (2) and
+                // this refusal stays on stderr and in the artifacts. Exiting 3
+                // here put "invalid for analysis" beside a document reading
+                // `"verdict":"fail"`. A timing refusal, if this run also had
+                // one, still exits 3 from between here and that gate: that
+                // exception is documented in docs/ci/CI.md.
                 if faults.is_empty() {
                     std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
                 }

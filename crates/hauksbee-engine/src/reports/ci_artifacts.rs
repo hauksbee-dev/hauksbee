@@ -97,6 +97,7 @@ pub fn github_refusal_annotation(refusal: &Refusal) {
         refusal
             .render_text()
             .replace('%', "%25")
+            .replace('\r', "%0D")
             .replace('\n', "%0A")
     );
 }
