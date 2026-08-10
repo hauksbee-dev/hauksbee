@@ -149,6 +149,21 @@ pub enum EvidenceError {
 /// The subject keeps its own case (a reference designator is `R7`, not `r7`)
 /// and reserved bytes are percent-encoded, so distinct subjects never collapse
 /// while the kind slug remains everything before the first `:`.
+///
+/// A subject the board fails to name uniquely still needs a unique id, because
+/// two different gaps sharing one is a duplicate the registry rejects rather than
+/// a cosmetic problem. Two shapes cover that: `open-part:unnamed~<hex>` when there
+/// is no designator at all, hashing the claim that distinguishes it, and
+/// `open-part:R7#2` for the second distinct claim on a designator the board
+/// reuses. Both are pure functions of the input, so a re-run of the same input
+/// mints the same bytes.
+///
+/// The ordinal form is the one exception to tracking a subject across BOARD
+/// REVISIONS, and it is a limit of the input rather than of the scheme: a
+/// designator carrying two claims does not identify either of them, so there is
+/// nothing stable to key on. Adding or removing a claim on that designator
+/// renumbers the rest. A designator the board uses once is unaffected and keeps
+/// its bare `open-part:R7`.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -164,36 +179,68 @@ impl AssumptionId {
     pub const UNNAMED_SUBJECT: &'static str = "unnamed";
 
     /// Compose an id from a kind and a subject. Reserved bytes are encoded
-    /// injectively; an empty subject becomes [`Self::UNNAMED_SUBJECT`].
+    /// injectively; an empty subject becomes [`Self::UNNAMED_SUBJECT`] followed by
+    /// the claim disambiguator, since the sentinel alone would collide with the next
+    /// unnameable subject.
     pub fn new(kind: AssumptionKind, subject: &str) -> Self {
         Self::disambiguated(kind, subject, "")
     }
 
     /// An id for a subject the producer could not name, disambiguated by the
-    /// assumption's own composed statement.
+    /// assumption's own composed claim.
     ///
     /// Two footprints with blank designators are two gaps, and giving them one id
     /// would be worse than giving them an ugly one: the evidence map dedupes by
     /// id, so the second gap would vanish from the report rather than appear
-    /// twice. The statement is the only thing that distinguishes them, so its
+    /// twice. The claim is the only thing that distinguishes them, so its
     /// complete bytes become the disambiguator. It stays deterministic across
     /// runs and avoids a truncated-hash collision.
-    fn disambiguated(kind: AssumptionKind, subject: &str, statement: &str) -> Self {
-        let subject = if subject.trim().is_empty() {
-            format!(
-                "{}-{}",
-                Self::UNNAMED_SUBJECT,
-                hex_bytes(statement.as_bytes())
-            )
+    ///
+    /// The disambiguator covers the WHOLE claim, not the statement alone. Two
+    /// unnameable subjects can carry the same statement and differ only in why
+    /// the run had to assume it, and hashing the statement by itself collapsed
+    /// those onto one id: a real second gap then hit
+    /// [`EvidenceError::DuplicateAssumption`] instead of being reported. The
+    /// bytes hashed here are exactly the bytes that make two claims different,
+    /// so equal ids now mean equal claims.
+    ///
+    /// The synthesized form is composed AFTER escaping rather than being escaped
+    /// with the rest, which is what keeps its namespace reserved. `~` is outside
+    /// the escaped alphabet (alphanumerics, `-_./`, and `%XX`), so a real
+    /// designator that happens to begin `unnamed~` escapes to `unnamed%7E...` and
+    /// cannot land on a synthesized id. Escaping the synthesized string alongside a
+    /// real one instead would put both in the same space, and a designator spelling
+    /// out another claim's disambiguator would collide with it.
+    fn disambiguated(kind: AssumptionKind, subject: &str, claim: &str) -> Self {
+        let subject = subject.trim();
+        let subject = if subject.is_empty() {
+            format!("{}~{}", Self::UNNAMED_SUBJECT, hex_bytes(claim.as_bytes()))
         } else {
-            subject.trim().to_string()
+            escape_id_component(subject)
         };
-        Self(format!("{}:{}", kind.slug(), escape_id_component(&subject)))
+        Self(format!("{}:{}", kind.slug(), subject))
     }
 
     /// The id as a string.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Separate this id from another claim on the same designator, by the claim's
+    /// 1-based position among the claims that designator carries.
+    ///
+    /// Appended AFTER escaping, and that ordering is the whole correctness
+    /// argument. `escape_id_component` percent-encodes `#`, so an escaped subject
+    /// can never contain a raw one, which makes a raw `#` an unambiguous
+    /// separator. Building `"{subject}#{n}"` first and escaping afterwards looks
+    /// equivalent and is not: a board that names a part `TP#1` would escape to
+    /// `TP%231`, which is exactly what `TP` plus ordinal 1 escapes to, so a
+    /// designator containing `#` collided with an ordinal-qualified one and the
+    /// duplicate reached the registry. KiCad emits `#`-prefixed references
+    /// routinely, and a designator read verbatim out of a fabrication report can
+    /// hold anything, so this is board data rather than a crafted string.
+    fn with_ordinal(&self, n: usize) -> Self {
+        Self(format!("{}#{n}", self.0))
     }
 }
 
@@ -713,15 +760,27 @@ impl Assumption {
         // sites, even where a composed sentence opens with a caller-supplied
         // fragment.
         let statement = sentence(&statement);
+        let because = sentence(&because);
         let built = Self {
-            // The statement is composed FIRST because it is what disambiguates
-            // an id whose subject the producer could not name.
-            id: AssumptionId::disambiguated(kind, subject, &statement),
+            // The sentences are composed FIRST because together they are what
+            // disambiguates an id whose subject the producer could not name.
+            // The two sentences are LENGTH-PREFIXED, not delimited, before they are
+            // hashed. Hashing "{statement} {because}" over any separator is
+            // ambiguous, because the caller's own value and reason sit inside those
+            // sentences and can contain the separator: a value carrying the rest of
+            // one sentence and a reason carrying the start of another produced the
+            // same bytes as a different pair, so two distinct gaps landed on one id.
+            // A leading byte count cannot be forged from inside either half.
+            id: AssumptionId::disambiguated(
+                kind,
+                subject,
+                &format!("{}:{statement}{because}", statement.len()),
+            ),
             kind,
             source,
             scope,
             statement,
-            because: sentence(&because),
+            because,
             consequence: sentence(&consequence),
             replacement: sentence(&replacement),
             expires,
@@ -839,6 +898,42 @@ impl Assumption {
     /// assert!(a.replacement().contains("U2"));
     /// ```
     pub fn open_part(reference: &str, value: &str, reason: &str) -> Self {
+        Self::open_part_group(reference, value, reason, 1, None)
+    }
+
+    /// The same claim, made once for `count` parts that the run cannot tell
+    /// apart, and optionally separated from another claim on the same designator
+    /// by `ordinal`.
+    ///
+    /// Two situations need this, and both were crashes before it existed.
+    ///
+    /// A board can place several parts the run cannot distinguish at all: four
+    /// footprints with a blank designator, a blank value and one shared reason,
+    /// or a gerber job whose reconstructed placements all carry one name. Every
+    /// field an assumption holds is then identical, so per-part rows are the same
+    /// sentence repeated, and the ids collide. One claim that STATES THE COUNT is
+    /// both unique and more honest: it discloses every part rather than dropping
+    /// the duplicates, and it says how many there are, which repeated identical
+    /// rows never did. `count` must therefore reach the reader, not just the id.
+    ///
+    /// `ordinal` is the other half. Two parts can share a designator and still
+    /// make DIFFERENT claims (one value unresolved, another blocked for another
+    /// reason), and those are two gaps that must stay two. A named subject's id
+    /// is a contract (`open-part:R7`), so it cannot absorb a hash; the 1-based
+    /// position of the claim among the claims on that designator, in board order,
+    /// separates them deterministically and stays readable. `None` when the
+    /// designator carries a single claim, which is every ordinary board.
+    ///
+    /// Ordinals are numbered in board order, so they are stable for a given input
+    /// and renumber when the board's own set of claims on that designator changes.
+    /// That is inherent: a designator used twice identifies neither part.
+    pub fn open_part_group(
+        reference: &str,
+        value: &str,
+        reason: &str,
+        count: usize,
+        ordinal: Option<usize>,
+    ) -> Self {
         // A NAMED ABSTENTION arrives as one string carrying both halves, joined by
         // [`UNLOCKED_BY_MARKER`]: the binder has one `reason` channel to the report
         // and the two halves belong in two different fields here, so the split
@@ -874,31 +969,84 @@ impl Assumption {
         } else {
             sentence(reason)
         };
-        Self::build(
+        // One claim for several indistinguishable parts must say how many, or the
+        // aggregation would be hiding parts rather than summarising them. Every
+        // sentence below therefore switches to the plural with the count in it.
+        // A count of zero would assert an open part that does not exist, which is
+        // the opposite of the disclosure this constructor is for. Corrected rather
+        // than only debug-asserted, because a release build would otherwise emit the
+        // singular sentence about nothing.
+        debug_assert!(count > 0, "an open-part claim covers at least one part");
+        let count = count.max(1);
+        let plural = count > 1;
+        let mut built = Self::build(
             AssumptionKind::OpenPart,
             AssumptionSource::Binder,
             &subject,
             part_scope(&subject),
-            format!("{named} is treated as an open circuit."),
+            match (plural, subject.is_empty()) {
+                // An unnamed group has no designator to share, so it is counted
+                // rather than named, and the value still goes in when there is one.
+                (true, true) if value.is_empty() => {
+                    format!("{count} unnamed parts are treated as open circuits.")
+                }
+                (true, true) => {
+                    format!("{count} unnamed parts ({value}) are treated as open circuits.")
+                }
+                (true, false) => format!(
+                    "{count} parts share the designator {named}, and every one of them is \
+                     treated as an open circuit."
+                ),
+                (false, _) => format!("{named} is treated as an open circuit."),
+            },
             because,
-            format!(
-                "Nets through {reference} are isolated in simulation, so any current path \
-                 across it is missing from every result that depends on it."
-            ),
+            if plural {
+                format!(
+                    "Nets through those {count} parts are isolated in simulation, so any current \
+                     path across them is missing from every result that depends on them."
+                )
+            } else {
+                format!(
+                    "Nets through {reference} are isolated in simulation, so any current path \
+                     across it is missing from every result that depends on it."
+                )
+            },
             // The "what to do" is the generic route ONLY when nobody has looked at
             // this part. When the library has looked and named the blocker, that
             // named input IS the next step, and printing "add a model to your models
             // directory" beside it would be telling the reader to do the thing the
             // sentence above just explained is not yet possible.
-            match unlocked_by {
-                Some(unlock) => unlock.to_string(),
-                None => format!(
+            match (unlocked_by, plural) {
+                (Some(unlock), _) => unlock.to_string(),
+                (None, true) => format!(
+                    "Add models for those {count} parts to your models directory, or mark them \
+                     DNP if the board does not fit them."
+                ),
+                (None, false) => format!(
                     "Add a model for {reference} to your models directory, or mark it DNP if \
                      the board does not fit it."
                 ),
             },
             None,
-        )
+        );
+        // The ordinal lands on the FINISHED id, so it is appended to an already
+        // escaped subject: see [`AssumptionId::with_ordinal`] for why that ordering
+        // is what makes it collision-free. It is a disambiguator, not a fact about
+        // the part, so it touches no sentence: "Via#2 is treated as an open
+        // circuit" would be naming a designator the board does not have. A blank
+        // subject is excluded because it has no designator to qualify; its claim
+        // hash already separates it.
+        if let Some(n) = ordinal {
+            if !subject.is_empty() {
+                built.id = built.id.with_ordinal(n);
+            }
+        }
+        debug_assert!(
+            built.validate().is_ok(),
+            "{}",
+            built.validate().unwrap_err()
+        );
+        built
     }
 
     /// A model stood in for the real part: an engine fallback entry

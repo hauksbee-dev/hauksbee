@@ -417,7 +417,7 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
     let a = Assumption::open_part("", "10k", "no model matched");
     let b = Assumption::open_part("", "47k", "no model matched");
     assert_ne!(a.id(), b.id(), "{} == {}", a.id(), b.id());
-    assert!(a.id().as_str().starts_with("open-part:unnamed-"));
+    assert!(a.id().as_str().starts_with("open-part:unnamed~"));
     // Deterministic: the same board yields the same id next run, which is
     // what makes an id citeable at all.
     assert_eq!(
@@ -426,6 +426,84 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
     );
     let map = EvidenceMap::new("A", &[a, b], today());
     assert_eq!(map.assumptions().len(), 2, "a real gap went missing");
+    // Two unnameable subjects can also share a statement and differ only in WHY
+    // the run had to assume it. Hashing the statement alone collapsed those onto
+    // one id, so the second gap hit the registry's duplicate check instead of
+    // being reported. The disambiguator covers the whole claim for that reason.
+    let same_statement_a = Assumption::open_part("", "", "no model matched");
+    let same_statement_b = Assumption::open_part("", "", "the footprint carries no value");
+    assert_eq!(
+        same_statement_a.statement(),
+        same_statement_b.statement(),
+        "the fixture only bites while the statements are identical"
+    );
+    assert_ne!(
+        same_statement_a.id(),
+        same_statement_b.id(),
+        "two reasons are two gaps: {}",
+        same_statement_a.id()
+    );
+    // The two sentences are LENGTH-PREFIXED before being hashed, because any
+    // separator can be forged from inside them: the caller's own value and reason
+    // sit in those sentences, so a value carrying the tail of one and a reason
+    // carrying the head of another produce identical bytes under a delimiter. Both
+    // pairs below are two genuinely different claims that collided that way.
+    let spliced_a = Assumption::open_part("", "10k) is treated as an open circuit. Foo", "Bar");
+    let spliced_b = Assumption::open_part("", "10k", "Foo) is treated as an open circuit. Bar");
+    assert_ne!(
+        spliced_a.statement(),
+        spliced_b.statement(),
+        "the fixture only bites while these are two different claims"
+    );
+    assert_ne!(
+        spliced_a.id(),
+        spliced_b.id(),
+        "a value and a reason spliced across the separator collided: {}",
+        spliced_a.id()
+    );
+    // And with the separator byte itself embedded in the caller's data, which is
+    // what makes a length prefix necessary rather than a rarer delimiter.
+    let nul_a = Assumption::open_part("", "x) is treated as an open circuit.\u{0}T'", "Bar");
+    let nul_b = Assumption::open_part("", "x", "T') is treated as an open circuit.\u{0}Bar");
+    assert_ne!(
+        nul_a.id(),
+        nul_b.id(),
+        "an embedded separator forged the join: {}",
+        nul_a.id()
+    );
+    // A designator that itself contains the ordinal separator must not collide
+    // with an ordinal-qualified id. `escape_id_component` encodes `#` as `%23`, so
+    // building "TP#1" and escaping afterwards made a part genuinely named `TP#1`
+    // indistinguishable from the first of two claims on `TP`, and the duplicate
+    // reached the registry. KiCad emits `#`-prefixed references routinely and a
+    // designator lifted from a fabrication report can hold anything, so the
+    // separator is appended AFTER escaping instead.
+    let literal_hash = Assumption::open_part_group("TP#1", "10k", "no model matched", 1, None);
+    let ordinal_one = Assumption::open_part_group("TP", "10k", "no model matched", 1, Some(1));
+    assert_ne!(
+        literal_hash.id(),
+        ordinal_one.id(),
+        "a part named TP#1 collided with TP's first claim: {}",
+        literal_hash.id()
+    );
+    // The synthesized subject's namespace is reserved the same way. A designator
+    // that spells out another claim's disambiguator must not land on that claim's
+    // id, so the synthesized form is composed after escaping and joined by a byte
+    // escaping always encodes.
+    let synthesized = Assumption::open_part("", "10k", "no model matched");
+    let forged_subject = synthesized
+        .id()
+        .as_str()
+        .split_once(':')
+        .expect("an id carries a kind slug")
+        .1;
+    let forged = Assumption::open_part(forged_subject, "47k", "a different reason");
+    assert_ne!(
+        synthesized.id(),
+        forged.id(),
+        "a designator spelling out the disambiguator collided with it: {}",
+        forged.id()
+    );
     // And a NAMED subject never carries prose: an id is a contract, and
     // "open-part:an_unnamed_part" would be neither citeable nor unique.
     assert_eq!(
@@ -536,7 +614,7 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
     for (first, second) in nameless {
         let subject = first.id().as_str().split_once(':').unwrap().1;
         assert!(
-            subject.starts_with("unnamed-"),
+            subject.starts_with("unnamed~"),
             "{} does not go through the disambiguator",
             first.id()
         );
