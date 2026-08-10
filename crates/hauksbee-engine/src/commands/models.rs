@@ -415,7 +415,8 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
             // the timer groups) rather than of this file, so the descriptor has
             // no field to read back. Quote the backend's own constant rather
             // than restating it: this is the sentence a run reports verbatim on
-            // every surface, and a second copy would be a second wording.
+            // its four batch surfaces, and a second copy would be a second
+            // wording.
             out.push(format!(
                 "watchdog: {} (stated per-backend rather than per-descriptor for this family)",
                 hauksbee_mcu::qemu::WATCHDOG_LIMITATION
@@ -480,7 +481,8 @@ fn soc_advisories(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
             if c.adc_channels.is_empty() {
                 out.push(
                     "no [[soc.adc]]: analog injections into this MCU are DROPPED and \
-                     reported as a coverage hole on every surface, never silently"
+                     reported as a coverage hole by `hauksbee run` (text, --plain, \
+                     --json) and hauksbee-ci, never silently"
                         .to_string(),
                 );
             }

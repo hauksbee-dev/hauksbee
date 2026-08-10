@@ -115,12 +115,13 @@ have their own shape (`arch`, `icount_shift`, mailbox-style `banks`), see
   checks firmware ELFs against this field, so an ESP32 binary refuses loudly on
   an ARM part. `mcu_label` is the report string.
 - `watchdog_limitation` (optional): one sentence saying how this part's watchdog
-  fidelity falls short, rendered verbatim on every report surface. Leaving it out
+  fidelity falls short, rendered verbatim on the four batch report surfaces and in
+  `hauksbee models lint`, though not in the TUI. Leaving it out
   claims that a starved watchdog reboots the core the way silicon does, which on
   the shipped parts is true of exactly one of them, so leave it out only if you
   measured it.
 - `timing_limitation` (optional): the timing twin of the field above, one
-  sentence rendered verbatim on every report surface. Leaving it out claims a
+  sentence rendered verbatim on the same surfaces. Leaving it out claims a
   firmware delay costs the virtual time it costs on silicon; the shipped parts
   earn that silence through the clock-truth gate, so a variant that diverges (a
   timer block deliberately clocked off its reset default, say) must say so here.

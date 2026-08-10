@@ -287,8 +287,9 @@ What remains open:
   platform descriptions model no ADC peripheral, and Renode's
   `Analog.STM32_ADC` speaks the F0/L0 register layout, so pretending it is an
   F1 ADC would be fake fidelity. Unmapped channels drop loudly (once-per-channel
-  stderr warning, plus every report surface). A board that knows where its
-  counts land adds `[[soc.adc]]` to its own descriptor, no recompile.
+  stderr warning, plus all four batch report surfaces, though not the TUI). A
+  board that knows where its counts land adds `[[soc.adc]]` to its own
+  descriptor, no recompile.
 - **QEMU ESP32 SAR ADC** is not modeled by the Espressif QEMU fork, a
   silicon-model gap, so `set_analog_in` writes the count into a RAM-mailbox
   slot instead, a firmware contract like the GPIO mailbox below. Only

@@ -218,7 +218,9 @@ pub fn build_cosim_json(
 
 /// One canonical warning per HEURISTIC-framed SPI bus (05 §2 / U3 finding 3),
 /// shared by the default-text summary, the `--plain` heads-ups, and the
-/// `--json` coverage notes so every surface names the same failure modes.
+/// `--json` coverage notes so those three name the same failure mode in the same
+/// words. The TUI, the web front door and hauksbee-ci each report the framing
+/// tier from `Scheduler::spi_framing_modes` directly instead of through here.
 /// Exact/backend-framed buses produce nothing, their boundaries are real.
 pub fn heuristic_framing_warnings(
     framing: &[(String, crate::peripherals::SpiFramingMode)],

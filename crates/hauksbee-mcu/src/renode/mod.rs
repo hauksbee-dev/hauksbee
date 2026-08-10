@@ -1006,6 +1006,15 @@ impl RenodeBackend {
     /// the Monitor and (optional) UART socket.
     pub fn new(config: RenodeConfig) -> Result<Self> {
         let (process, mut monitor, uart_port) = spawn_and_connect()?;
+        // Fixed wall-clock budget, not a per-load one, and that is the cause of
+        // the Renode co-sim test flake we measured: on a build host under heavy CPU
+        // contention (measured at load average 248) machine bring-up misses this
+        // budget and the run dies as "Renode monitor command timed out after 30s
+        // with no prompt". Measured there both in parallel and with
+        // `--test-threads=1`, with a DIFFERENT test failing each run, so
+        // serialising the suite does not fix it and a temp-file race is not the
+        // explanation. A red here is evidence about the host's load before it is
+        // evidence about the backend.
         monitor.set_timeout(Duration::from_secs(30));
 
         // Bring up the machine.
