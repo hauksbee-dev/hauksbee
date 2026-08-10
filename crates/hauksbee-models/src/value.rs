@@ -33,7 +33,11 @@ impl fmt::Display for ParsedValue {
 /// Parse a component value string into a [`ParsedValue`].
 ///
 /// Returns `None` when the string cannot be interpreted as a numeric value
-/// (e.g. `"NC"`, `"DNP"`, part-number strings, or empty strings).
+/// (e.g. `"NC"`, `"DNP"`, part-number strings, or empty strings), and also for
+/// a value whose unit is a RATING or a FREQUENCY rather than an R/C/L
+/// magnitude: volts, amperes, and hertz. Callers key off `None` to mean "not a
+/// two-terminal passive", so `"16MHz"` must not come back as a number here; use
+/// [`parse_frequency_hz`] when a frequency is what you want.
 ///
 /// # Examples
 ///
@@ -84,7 +88,65 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     // classification (binder.rs excludes BOTH V and A). It also lets a leading
     // current token be mis-picked as the magnitude ("2A_22u" → 2 F instead of 22 uF).
     // Filter both so V and A are treated identically everywhere.
-    parse_inner(v).filter(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A")))
+    parse_inner(v).filter(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A") | Some("Hz")))
+}
+
+/// Parse a value string that is WHOLLY a frequency and return it in hertz.
+///
+/// This is the crystal/resonator/oscillator reading of a value field, and it is
+/// deliberately a separate entry point from [`parse_value`]. A frequency is not
+/// an R/C/L magnitude, so [`parse_value`] refuses it for the same reason it
+/// refuses a volt or an ampere rating: every caller that keys off
+/// `parse_value() == None` to mean "not a two-terminal passive" would otherwise
+/// stamp a 16 MHz crystal as a 16 MΩ resistor (or, on a `C`-prefixed reference,
+/// a 16 megafarad capacitor, which collapses the whole nodal solve).
+///
+/// Accepted: an optional sign, a magnitude, an optional space, an optional
+/// k/M/G multiplier in EITHER case, and a `Hz` in ANY case. Everything the
+/// underlying grammar already handles comes along, so a European decimal
+/// separator and a trailing tolerance annotation both work.
+///
+/// Refused: anything with a residue that is not a frequency. In particular a
+/// ferrite bead's impedance-at-frequency marking (`600@100MHz`) is NOT a
+/// frequency: the magnitude is the 600 Ω impedance and the bead sits in series
+/// in a real current path, so reading it as a crystal would open that path.
+///
+/// # The one place this departs from [`parse_value`]'s SI reading
+///
+/// A lowercase `m` is MILLI everywhere else in this module, deliberately, because
+/// a milliohm and a megohm are both ordinary resistor values and guessing between
+/// them from the case of one letter would be a 10⁹ error waiting to happen. Before
+/// `Hz`, that distinction does not exist: a millihertz component is not a thing
+/// anyone fits to a board, while `16mhz` is a spelling of 16 megahertz that
+/// appears in real value fields. So `m` before `Hz` reads as mega here, and this
+/// is the only place in the module where case is not load-bearing for `m`.
+///
+/// # Examples
+///
+/// ```
+/// use hauksbee_models::value::parse_frequency_hz;
+/// assert_eq!(parse_frequency_hz("16Mhz"), Some(16e6));
+/// assert_eq!(parse_frequency_hz("16MHz"), Some(16e6));
+/// assert_eq!(parse_frequency_hz("16 MHz"), Some(16e6));
+/// assert_eq!(parse_frequency_hz("16mhz"), Some(16e6));
+/// assert_eq!(parse_frequency_hz("32.768kHz"), Some(32_768.0));
+/// // A comma is a DECIMAL separator in a frequency, never a thousands grouping.
+/// assert_eq!(parse_frequency_hz("32,768kHz"), Some(32_768.0));
+/// assert_eq!(parse_frequency_hz("600@100MHz"), None);
+/// assert_eq!(parse_frequency_hz("10k"), None);
+/// ```
+pub fn parse_frequency_hz(s: &str) -> Option<f64> {
+    let cleaned = normalise_frequency_comma(&normalise_unicode(s.trim()));
+    let p = parse_inner(&cleaned)?;
+    if p.unit.as_deref() != Some("Hz") {
+        return None;
+    }
+    // Undo the milli reading of a lowercase 'm' and make it mega. See the note
+    // above: 1e9 is (1 / 1e-3) * 1e6.
+    if p.suffix.as_deref() == Some("m") {
+        return Some(p.si * 1e9);
+    }
+    Some(p.si)
 }
 
 /// A JEDEC semiconductor part number of the `<digit>N<serial>` family (1N4007,
@@ -195,6 +257,38 @@ fn normalise_comma_decimal(s: &str) -> String {
     s.to_string()
 }
 
+/// Normalise a comma in a FREQUENCY, where it is a decimal separator and never a
+/// thousands grouping.
+///
+/// [`normalise_comma_decimal`] reads a single comma followed by three digits as a
+/// thousands separator, which is right for a passive ("4,700uF" is 4700 uF) and a
+/// 1000x ERROR for a frequency: "32,768kHz" is the European spelling of the
+/// 32.768 kHz RTC crystal, and reading it as 32768 kHz puts a watch crystal at
+/// 32.768 MHz. The confusion cannot arise in the other direction either, because a
+/// frequency's magnitude is always below 1000 by construction: the SI prefix does
+/// the scaling, so nobody writes thirty-two thousand kilohertz when they mean
+/// 32.768 MHz.
+///
+/// MULTIPLE commas keep the thousands reading ("1,000,000Hz" is 1 MHz), because
+/// that spelling has no decimal-separator interpretation at all.
+fn normalise_frequency_comma(s: &str) -> String {
+    if s.bytes().filter(|&b| b == b',').count() == 1 {
+        let i = s.find(',').unwrap();
+        let before_digit = s[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_digit());
+        let after_digit = s[i + 1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit());
+        if before_digit && after_digit {
+            return s.replacen(',', ".", 1);
+        }
+    }
+    normalise_comma_decimal(s)
+}
+
 /// True when every comma in `s` is followed by exactly three digits; the
 /// signature of thousands grouping ("1,000,000").
 fn is_thousands_grouped(s: &str) -> bool {
@@ -246,7 +340,7 @@ fn normalise_unicode(s: &str) -> String {
 /// value  = digits [ '.' digits ] [ suffix ] [ unit ]
 ///        | digits suffix digits unit?   ("4k7" style)
 /// suffix = 'f' | 'p' | 'n' | 'u' | 'm' | 'k' | 'K' | 'meg' | 'M' | 'g' | 'R'
-/// unit   = 'F' | 'H' | 'R' | 'OHM' | 'V' | 'A'   (optional, informational)
+/// unit   = 'F' | 'H' | 'HZ' | 'R' | 'OHM' | 'V' | 'A'   (optional, informational)
 /// ```
 fn parse_inner(s: &str) -> Option<ParsedValue> {
     // RKM / IEC 60062 leading-letter form: when the magnitude is < 1 the
@@ -504,7 +598,13 @@ fn parse_tail(t: &str) -> Option<Option<String>> {
 /// Extract a leading unit token. Returns the unit and the remainder after it.
 fn unit_token(s: &str) -> Option<(String, &str)> {
     let upper = s.to_uppercase();
-    let (unit, len) = if upper.starts_with("OHMS") {
+    // "HZ" MUST be tested before the bare "H", or "16MHz" reads as 16 mega-
+    // HENRIES with a stray 'z' left over, which `parse_tail` then rejects as
+    // garbage. That rejection is why a crystal valued "16Mhz" used to reach the
+    // binder as "unparseable value" instead of as the frequency it plainly is.
+    let (unit, len) = if upper.starts_with("HZ") {
+        ("Hz", 2)
+    } else if upper.starts_with("OHMS") {
         ("Ω", 4)
     } else if upper.starts_with("OHM") || upper.starts_with("OH") {
         ("Ω", if upper.starts_with("OHM") { 3 } else { 2 })
@@ -999,5 +1099,131 @@ mod tests {
         // Genuine capacitances (sub-farad prefixes, or bare) stay Farads.
         assert_eq!(parse_value("4.7uF").unwrap().unit.as_deref(), Some("F"));
         assert_eq!(parse_value("1F").unwrap().unit.as_deref(), Some("F"));
+    }
+    /// A frequency is not an R/C/L magnitude, and `parse_value` must keep saying
+    /// so. Every caller that reads `None` as "not a two-terminal passive" depends
+    /// on it: the crystal on an emonTx is a `Q`-prefixed part valued "16Mhz", and
+    /// a number here would have made it a 16 MOhm resistor across the oscillator
+    /// (or, on a `C`-prefixed reference, a 16-megafarad capacitor, which collapses
+    /// the whole nodal solve).
+    ///
+    /// The refusal has to survive the `Hz` unit now being RECOGNISED rather than
+    /// merely unparseable, which is what changed: before, "16MHz" was rejected
+    /// because the stray 'z' after a mega-HENRY reading was garbage, and that is a
+    /// right answer reached by an accident that a new unit token could undo.
+    #[test]
+    fn a_frequency_is_refused_as_a_passive_magnitude() {
+        for v in [
+            "16Mhz",
+            "16MHz",
+            "16 MHz",
+            "16mhz",
+            "32.768kHz",
+            "32.768 KHZ",
+            "8MHz",
+            "40MHz",
+            "1Hz",
+            "12.288MHz",
+        ] {
+            assert!(
+                parse_value(v).is_none(),
+                "parse_value({v:?}) must be None: a frequency is not an ohm, farad or henry"
+            );
+        }
+    }
+
+    /// The other side of the same coin: `parse_frequency_hz` reads exactly those
+    /// strings, in any case and with or without the space, and refuses everything
+    /// that is not wholly a frequency.
+    #[test]
+    fn parse_frequency_hz_reads_every_case_and_spacing() {
+        for (v, hz) in [
+            ("16Mhz", 16e6),
+            ("16MHz", 16e6),
+            // Lowercase 'm' before Hz is mega, not milli: see the module note on
+            // parse_frequency_hz. This is the ONLY departure from the SI reading.
+            ("16mhz", 16e6),
+            ("8 mhz", 8e6),
+            ("16MHZ", 16e6),
+            ("16 MHz", 16e6),
+            ("  16MHz  ", 16e6),
+            ("32.768kHz", 32_768.0),
+            ("32.768 KHz", 32_768.0),
+            ("1Hz", 1.0),
+            ("8hz", 8.0),
+            ("2.4GHz", 2.4e9),
+            // A comma in a FREQUENCY is a decimal separator whatever the digit
+            // count, which is the one place this function overrides the module's
+            // thousands rule. "32,768kHz" is the European spelling of the RTC
+            // crystal, and the thousands reading would put it at 32.768 MHz: a
+            // 1000x error, in the value the whole crystal path exists to read.
+            ("12,5MHz", 12.5e6),
+            ("32,768kHz", 32_768.0),
+            ("32,768 KHZ", 32_768.0),
+            ("12,288MHz", 12.288e6),
+            // MULTIPLE commas keep the thousands reading; that spelling has no
+            // decimal interpretation.
+            ("1,000,000Hz", 1.0e6),
+        ] {
+            let got = parse_frequency_hz(v)
+                .unwrap_or_else(|| panic!("parse_frequency_hz({v:?}) returned None"));
+            let rel = (got - hz).abs() / hz;
+            assert!(
+                rel < 1e-9,
+                "parse_frequency_hz({v:?}) = {got}, expected {hz}"
+            );
+        }
+    }
+
+    /// The refusals matter more than the acceptances, because this predicate is
+    /// what decides whether a part is bound as a high-impedance crystal (i.e.
+    /// REMOVED from the solve) or left as the passive it is. A ferrite bead is the
+    /// dangerous case: it is conventionally valued as an impedance AT a frequency,
+    /// it sits in SERIES in a power or signal path, and opening it would cut that
+    /// path.
+    /// The other side of the comma rule: a PASSIVE keeps the thousands reading, so
+    /// the frequency override cannot leak into the value parser it sits beside.
+    #[test]
+    fn the_frequency_comma_rule_does_not_change_passive_values() {
+        // Thousands grouping, unchanged.
+        check("4,700uF", 4700e-6);
+        check("10,000", 10_000.0);
+        check("1,000,000", 1_000_000.0);
+        // European decimal on a passive, unchanged.
+        check("5,1K", 5_100.0);
+        check("2,2uF", 2.2e-6);
+        check("0,047uF", 0.047e-6);
+        // And a frequency is still refused as a passive magnitude whichever
+        // separator it uses.
+        assert!(parse_value("32,768kHz").is_none());
+        assert!(parse_value("32.768kHz").is_none());
+    }
+
+    #[test]
+    fn parse_frequency_hz_refuses_everything_that_is_not_a_frequency() {
+        for v in [
+            "600@100MHz", // ferrite bead: 600 Ohm at 100 MHz, NOT a 100 MHz part
+            "1k@100MHz",  // same shape with a multiplier
+            "10k",        // a resistance
+            "100nF",      // a capacitance
+            "22uH",       // an inductance
+            "16",         // a bare number: no unit, no claim
+            "MHz",        // a unit with no magnitude
+            "Hz",
+            "XTCLH40M000CHJA0P0", // a TCXO part number that happens to contain 40M
+            "Abracon_ABM11",      // a crystal named by its family, not its frequency
+            "DNP",
+            "TODO",
+            "",
+            "   ",
+            "16 5MHz", // two magnitudes is not one value
+            "3V3",     // a rating
+            "500mA",
+        ] {
+            assert!(
+                parse_frequency_hz(v).is_none(),
+                "parse_frequency_hz({v:?}) must be None"
+            );
+        }
     }
 }

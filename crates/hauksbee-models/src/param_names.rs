@@ -54,7 +54,11 @@
 use crate::schema::{ComponentKind, ModelEntry};
 
 /// Names any kind may carry: the resolve-report annotations and the free-text
-/// caveat the binder surfaces with an opamp.
+/// `warning` the binder surfaces for an entry that models only part of its part.
+/// `bind_opamp` and `bind_analog_switch` both read it, and a warning carrying
+/// [`hauksbee_ir::evidence::Assumption::PARTIAL_MODEL_MARKER`] also becomes an
+/// assumption on the evidence map, so it reaches `--plain` and `--json` and not
+/// only the bind report.
 const UNIVERSAL: &[&str] = &[
     "warning",
     "auto_bind",
@@ -140,6 +144,37 @@ const SHIFT_REGISTER: &[&str] = &[
 
 /// The converter vocabulary shared by the DAC and the ADC: resolution, the
 /// reference, the output impedance, and the bus wiring.
+/// An `adc` entry's vocabulary: the converter names PLUS the digital ones.
+///
+/// This is not a convenience union. `bind_component` routes `ComponentKind::Adc`
+/// through `bind_digital`, which reads `voh`/`vol`/`vih`/`vil` (via
+/// `LogicLevels::from_params`) and `supply_static_ua` exactly as it does for a
+/// `digital` entry. Listing only the converter names made the lint report those as
+/// "not read for this kind, so it is silently ignored", which is the opposite of
+/// true: the engine reads them and the LINT was the thing that did not know. An
+/// entry author who believed the warning would strip a bus level the solver wanted.
+const ADC_VOCAB: &[&str] = &[
+    "bits",
+    "gain",
+    "rout",
+    "vref_int",
+    "vref_ext",
+    "lsb_size_v",
+    "i2c_addr",
+    "scl_pin",
+    "sda_pin",
+    "supply_pin",
+    "gnd_pin",
+    // Read by bind_digital, which is what an adc binds through.
+    "vih",
+    "vil",
+    "voh",
+    "vol",
+    "ro",
+    "tpd_s",
+    "supply_static_ua",
+];
+
 const CONVERTER_COMMON: &[&str] = &[
     "bits",
     "gain",
@@ -178,7 +213,7 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
         ComponentKind::Digital => DIGITAL_COMMON,
         ComponentKind::ShiftRegister => SHIFT_REGISTER,
         ComponentKind::Dac => CONVERTER_COMMON,
-        ComponentKind::Adc => CONVERTER_COMMON,
+        ComponentKind::Adc => ADC_VOCAB,
         ComponentKind::Mcu => &["backend", "module"],
         ComponentKind::Connector | ComponentKind::Ignore => &[],
     }
