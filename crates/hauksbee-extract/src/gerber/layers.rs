@@ -632,10 +632,13 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
     // not applied to a butt-up digit, where the number always IS a stack position:
     // bounding it there discards the copper of a >32-layer stackup outright, which
     // is worse than handing `assign_inner_indices` a number to re-rank.
+    // `copper` does not contain the substring `cu`, so testing only for `cu` left
+    // `<board>_Copper_Layer_1.gbr` classifying Unknown and its copper discarded:
+    // the same silent loss this function was fixed for on `_Copper_Signal_1`, one
+    // marker over. The top and bottom rules already use both spellings.
+    let has_copper = n.has("cu") || n.has("copper");
     let accept = |marker: &str, k: usize, bounded: bool| -> Option<usize> {
-        (k >= 1
-            && (!bounded || k <= 32)
-            && (n.has("cu") || marker == "signal" || marker == "inner"))
+        (k >= 1 && (!bounded || k <= 32) && (has_copper || marker == "signal" || marker == "inner"))
             .then_some(k)
     };
     // Scan EVERY occurrence of a marker, not just the first: a project name that
@@ -829,6 +832,17 @@ mod tests {
         assert!(matches!(
             role("board-in40_cu.gbr"),
             LayerRole::Copper { index: 40, .. }
+        ));
+        // "copper" spelled out is the copper token too. `cu` is not a substring of
+        // it, so a name using the long spelling with the `layer` or `in` marker
+        // classified Unknown and its copper was discarded.
+        assert!(matches!(
+            role("ARDEP_Mainboard_Copper_Layer_1.gbr"),
+            LayerRole::Copper { index: 1, .. }
+        ));
+        assert!(matches!(
+            role("board_copper_layer_2.gbr"),
+            LayerRole::Copper { index: 2, .. }
         ));
         // And no name-based copper rule may claim a file that is plainly not a
         // film. Altium's per-side pick-and-place and its per-layer prints both

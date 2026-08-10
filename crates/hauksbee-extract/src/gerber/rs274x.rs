@@ -305,7 +305,16 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     // for pours no void ever touches: a film of 300 finely flattened 10000-gon
     // fill regions and ONE clear stroke paid 1.3 GB and 1.9 s for the 299 grids it
     // never queried.
+    // Laziness alone is not a bound: if a void does reach every detailed pour, all
+    // the grids are live at once and the 1.3 GB is back. They share a cell budget
+    // for the same reason `connect`'s do, and the grid is exact at any resolution,
+    // so this only ever moves work.
     const ENCLOSE_GRID_VERTS: usize = 2000;
+    const ENCLOSE_CELL_BUDGET: usize = 64 << 20;
+    let enclose_side_ceiling = {
+        let per_pour = ENCLOSE_CELL_BUDGET / regions.len().max(1);
+        ((per_pour as f64).sqrt() as usize).clamp(64, 2048)
+    };
     let mut enclose_grids: Vec<Option<Option<super::geo::PolyGrid>>> =
         (0..regions.len()).map(|_| None).collect();
     // The void contours already cut from each pour, bucketed spatially so the
@@ -388,7 +397,10 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             let grid = enclose_grids[slot].get_or_insert_with(|| {
                 let verts: usize = originals[slot].iter().map(Vec::len).sum();
                 (verts >= ENCLOSE_GRID_VERTS).then(|| {
-                    super::geo::PolyGrid::new(&originals[slot], (verts / 4).clamp(64, 2048))
+                    super::geo::PolyGrid::new(
+                        &originals[slot],
+                        (verts / 4).clamp(64, enclose_side_ceiling),
+                    )
                 })
             });
             let enclosed = group.iter().all(|c| match grid {
@@ -423,7 +435,8 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             let Shape::MultiPolygon { contours } = shape else {
                 continue;
             };
-            let mut units: Vec<(Vec<usize>, [f64; 4], usize)> = Vec::with_capacity(group.len());
+            let mut units: Vec<(Vec<usize>, [f64; 4], (usize, usize))> =
+                Vec::with_capacity(group.len());
             for clear in group {
                 let mut indices = Vec::with_capacity(clear.contours.len());
                 for c in &clear.contours {
@@ -433,11 +446,11 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
                 units.push((
                     indices,
                     contour_bounds(&clear.contours.concat()),
-                    clear.statement,
+                    (clear.statement, clear.piece),
                 ));
             }
-            for (indices, b, statement) in units {
-                applied[slot].insert(indices, b, statement);
+            for (indices, b, void_id) in units {
+                applied[slot].insert(indices, b, void_id);
             }
             cut.push(slot);
         }
@@ -456,7 +469,7 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     // island was compared against every island freed so far, and all the islands of
     // one aperture are the same 32-gon so the length check never short-circuited:
     // 62500 annular antipads spent 5.4 s in that scan alone.
-    let mut already_freed: std::collections::HashSet<(usize, usize)> =
+    let mut already_freed: std::collections::HashSet<(usize, usize, usize)> =
         std::collections::HashSet::new();
     for slot in cut {
         let i = regions[slot];
@@ -513,7 +526,7 @@ fn free_ringed_islands(
     shape: &mut Shape,
     applied: &VoidIndex,
     originals: &[Vec<(f64, f64)>],
-) -> Vec<((usize, usize), Shape)> {
+) -> Vec<((usize, usize, usize), Shape)> {
     let Shape::MultiPolygon { contours } = shape else {
         return Vec::new();
     };
@@ -534,7 +547,7 @@ fn free_ringed_islands(
         return Vec::new();
     }
     let mut promoted = vec![false; contours.len()];
-    let mut freed: Vec<((usize, usize), Shape)> = Vec::new();
+    let mut freed: Vec<((usize, usize, usize), Shape)> = Vec::new();
     for (uid, h, ordinal) in holes {
         let Some(contour) = contours.get(h) else {
             continue;
@@ -556,8 +569,9 @@ fn free_ringed_islands(
             continue;
         }
         promoted[h] = true;
+        let (statement, piece) = applied.unit_id[uid];
         freed.push((
-            (applied.unit_statement[uid], ordinal),
+            (statement, piece, ordinal),
             Shape::Polygon {
                 pts: contour.clone(),
                 r: 0.0,
@@ -620,10 +634,10 @@ struct VoidIndex {
     /// Per void id, the contour indices it occupies in the pour's contour list.
     /// The first is its outer boundary, the rest its holes.
     units: Vec<Vec<usize>>,
-    /// Per void id, the clear image it is a piece of. Two pours that both enclose
-    /// one void free the same island, and this is what says the two are the same
-    /// copper without comparing float coordinates.
-    unit_statement: Vec<usize>,
+    /// Per void id, which piece of which clear image it is. Two pours that both
+    /// enclose one void free the same island, and this is what says the two are the
+    /// same copper without comparing float coordinates.
+    unit_id: Vec<(usize, usize)>,
 }
 
 impl VoidIndex {
@@ -640,7 +654,7 @@ impl VoidIndex {
             all: Vec::new(),
             cells: Vec::new(),
             units: Vec::new(),
-            unit_statement: Vec::new(),
+            unit_id: Vec::new(),
         }
     }
 
@@ -658,10 +672,10 @@ impl VoidIndex {
 
     /// Register a void occupying `indices` in the pour's contour list, bounded
     /// by `b`.
-    fn insert(&mut self, indices: Vec<usize>, b: [f64; 4], statement: usize) {
+    fn insert(&mut self, indices: Vec<usize>, b: [f64; 4], void_id: (usize, usize)) {
         let id = self.units.len();
         self.units.push(indices);
-        self.unit_statement.push(statement);
+        self.unit_id.push(void_id);
         self.all.push((id, b));
         if self.cells.is_empty() {
             if self.all.len() < Self::GRID_AT {
@@ -1004,12 +1018,20 @@ struct Clear {
     /// piece that restores its island erases copper the film kept. See the
     /// sibling rule in [`apply_clears`].
     statement: usize,
+    /// Which connected piece of that image this is. One region statement can carry
+    /// several disjoint voids, so `statement` alone does not identify a void: two
+    /// pieces of one image that each have a hole would key their islands
+    /// identically, and the freed-island dedup would keep the first island and
+    /// silently drop the second while still cutting its contour out of the pour.
+    /// That is copper the film kept, erased.
+    piece: usize,
 }
 
 impl Clear {
     fn translated(&self, dx: f64, dy: f64, painted_before: usize) -> Clear {
         Clear {
             statement: self.statement,
+            piece: self.piece,
             contours: self
                 .contours
                 .iter()
@@ -1113,11 +1135,12 @@ impl<'a> Plotter<'a> {
         let painted_before = self.out.len();
         let statement = self.next_clear_statement;
         self.next_clear_statement += 1;
-        for piece in group_contours(contours) {
+        for (piece, contours) in group_contours(contours).into_iter().enumerate() {
             self.clears.push(Clear {
-                contours: piece,
+                contours,
                 painted_before,
                 statement,
+                piece,
             });
         }
     }
@@ -3072,6 +3095,53 @@ G37*
         ));
         assert_eq!(n, 1, "no void is banked on a negative image");
         assert!(is_copper(10.0, 10.0));
+    }
+
+    #[test]
+    fn two_annular_voids_in_one_statement_both_keep_their_islands() {
+        // One region statement carrying two disjoint ANNULAR voids: the two
+        // constructs each blessed by a test above, composed. The freed-island dedup
+        // keyed on the clear image plus the contour's ordinal within its void, and
+        // both pieces of one image have a hole at ordinal 1, so the two islands
+        // keyed identically. The second island's contour was still cut out of the
+        // pour and its shape was then dropped as a duplicate: 2x2 mm of copper the
+        // film kept, erased. On a real plane those islands are the annular pads of
+        // through-holes, so the second pin left the netlist.
+        let ring = |x0: i64, y0: i64, x1: i64, y1: i64| {
+            format!(
+                "X{}Y{}D02*\nX{}Y{}D01*\nX{}Y{}D01*\nX{}Y{}D01*\nX{}Y{}D01*\n",
+                x0 * 1000000,
+                y0 * 1000000,
+                x1 * 1000000,
+                y0 * 1000000,
+                x1 * 1000000,
+                y1 * 1000000,
+                x0 * 1000000,
+                y1 * 1000000,
+                x0 * 1000000,
+                y0 * 1000000
+            )
+        };
+        let body = format!(
+            "G36*\n{}{}{}{}G37*\n",
+            ring(6, 6, 10, 10),
+            ring(7, 7, 9, 9),
+            ring(12, 6, 16, 10),
+            ring(13, 7, 15, 9)
+        );
+        let pieces = pieces_of(&negative_pour("", &body));
+        let a = piece_at(&pieces, 8.0, 8.0).expect("the first island is copper");
+        let b = piece_at(&pieces, 14.0, 8.0).expect("the second island is copper too");
+        let pour = piece_at(&pieces, 2.0, 2.0).expect("the pour is copper");
+        assert_ne!(a, pour);
+        assert_ne!(b, pour);
+        assert_ne!(a, b, "and the two islands are two conductors");
+        assert_eq!(piece_at(&pieces, 6.5, 8.0), None, "the first ring is void");
+        assert_eq!(
+            piece_at(&pieces, 12.5, 8.0),
+            None,
+            "the second ring is void"
+        );
     }
 
     #[test]
