@@ -396,10 +396,10 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
 
     // KiCad's expected keys come from the recording. The footprint pair is
     // derived from its "<REF> pad <n>" strings; the location check below pins the
-    // pad number only where the footprint's violating pads are at least 4 mm
-    // apart: D503's are exactly 4.000 mm, so a point on the wrong one is 4 mm from
-    // the right anchor and fails, and D203's violating pair (pad 1 to pad 3) is
-    // 2.102 mm, which also fails the 2 mm check. R204's 1.825 mm does not.
+    // pad number wherever the footprint's two violating pads are further apart
+    // than the 2 mm tolerance: D503's are 4.000 mm and D203's violating pair
+    // (pad 1 to pad 3) is 2.102 mm, so a point on the wrong pad of either fails.
+    // R204's 1.825 mm is inside the tolerance and is not pinned.
     let want: std::collections::BTreeSet<Key> = recorded
         .iter()
         .map(|r| {
@@ -471,11 +471,11 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
         );
     }
 
-    // And each contact point must sit on the pads KiCad named, within 2 mm. On
-    // D503, whose two pads are 4 mm apart, that pins WHICH pad: a point on the
-    // wrong one is 4 mm from the right anchor. On the smaller footprints
-    // (R204 1.825 mm between pads, D203 1.9 mm) both pads are inside the
-    // tolerance, so there it only pins the footprint and the neighbourhood.
+    // And each contact point must sit on the pads KiCad named, within 2 mm. Where
+    // the two violating pads are further apart than that, this pins WHICH pad:
+    // D503's are 4.000 mm apart and D203's violating pair 2.102 mm, so a point on
+    // the wrong one of either fails. R204's pads are 1.825 mm apart, inside the
+    // tolerance, so there it pins the footprint and the neighbourhood only.
     for r in &recorded {
         let mut owners = [
             r.pads[0].split(" pad ").next().unwrap().to_string(),
