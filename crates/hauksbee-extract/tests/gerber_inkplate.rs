@@ -162,9 +162,53 @@ fn inkplate6_net_count_matches_the_board() {
         return;
     };
     let g = from_gerber_dir(&dir).expect("Inkplate gerbers must reverse-extract");
+    // Bounded on BOTH sides. A lower bound alone cannot see over-splitting, which is
+    // the forbidden direction: a reader that shattered the board into a net per pad
+    // would sail past `> 100`. The band is wide because the true count is unknown
+    // (the published set has no netlist to check against), but it is narrow enough
+    // that a systematic split or merge moves out of it. 181 is the measured value.
     assert!(
-        g.stats.n_nets > 100,
-        "nets reconstructed: {}",
+        (120..=260).contains(&g.stats.n_nets),
+        "nets reconstructed: {}, expected the measured 181 within a band that a \
+         systematic merge or split would leave",
+        g.stats.n_nets
+    );
+}
+
+/// The SparkFun RP2040 Thing Plus panel, an Eagle export whose films draw copper as
+/// filled regions and ring every off-net pad with clearance.
+///
+/// It is the second board the negative-pour cut moved, 2382 nets to 3438, and the
+/// only other one of 57 corpus gerber directories that changed at all. The direction
+/// is right (Eagle's clearance rings are exactly the voids that were being dropped),
+/// but the magnitude had nothing covering it, so it is pinned here: a band, because
+/// the true count is unknown, tight enough that a systematic change in either
+/// direction leaves it.
+///
+/// This board also ships `RP2040_Thing_Plus-Panel.brd` beside its gerbers, and this
+/// crate reads Eagle binaries, so a pin-to-net partition comparison against the
+/// native layout is the gate that would settle the count outright. It needs the
+/// per-net copper GEOMETRY to be reachable from `ReconStats` (the published set has
+/// no pick-and-place, so no pads bind and there is nothing to compare pad-wise), and
+/// that API does not exist yet. Left as the highest-value test to add in this area.
+#[test]
+fn sparkfun_rp2040_panel_reconstructs_to_a_stable_net_count() {
+    let Some(dir) = hauksbee_testkit::corpus_board(
+        env!("CARGO_MANIFEST_DIR"),
+        "sparkfun_thingplus_rp2040/Hardware/Production",
+    ) else {
+        return;
+    };
+    let g = from_gerber_dir(&dir).expect("SparkFun panel gerbers must reverse-extract");
+    assert_eq!(g.stats.n_layers, 2, "the published set is GTL plus GBL");
+    assert_eq!(
+        g.stats.n_holes, 0,
+        "no drill ships with it, so the two layers cannot stitch"
+    );
+    assert!(
+        (3100..=3800).contains(&g.stats.n_nets),
+        "nets reconstructed: {}, expected the measured 3438 within a band that a \
+         systematic merge or split would leave",
         g.stats.n_nets
     );
 }
