@@ -202,10 +202,11 @@ yielder either, but whichever pour gives way is carved back by its own `isolate`
 so an outline overlap on its own is not a short. What is reported is an overlap where the smaller `isolate` is below one
 micrometre, meaning nothing in the file asks for a gap at all. The pour settings
 ride along on the finding's `Item::owner` field, which `drc_probe` prints and the
-tests assert. No user surface shows it: `--drc`, `--drc --plain` and `--drc --json`
-all go through `plain_drc_structured`, whose per-short output is nets, layer, gap
-and location, so a reader of the report does not see the `isolate` that triggered
-the finding. That is a gap, and it bites hardest on the false positive below. This was narrowed against the emonTx
+tests assert. No user surface shows it. `--drc` renders through
+`DrcStructured::render` (nets, layer, gap, location), `--drc --plain` through
+`plain_drc_structured` (nets, layer, location), and `--drc --json` serialises
+`DrcShort`, which has no owner field; the `isolate` string appears in none of the
+three, so a reader of the report does not see what triggered the finding. That is a gap, and it bites hardest on the false positive below. This was narrowed against the emonTx
 V3.4.5's own fabrication output, which shows the same outline overlap
 resolving to separate copper on the layer where both pours hold `isolate="0.3048"`
 and to one body on the layer where one holds `0.00030625`
