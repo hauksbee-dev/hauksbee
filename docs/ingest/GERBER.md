@@ -553,6 +553,19 @@ carry discrete widths and the check runs on them.
 
 ## Negative-drawn pours (LPC)
 
+> **A split plane still reads as one net.** On a negatively-drawn film the two
+> most common constructs are the antipad and the *deliberately split plane*: one
+> region of copper divided into two rails by a clear gap. Antipads are cut
+> correctly and their pads separate. A split is **not** detected: a 20 x 20 mm
+> plane cut edge to edge by a 0.5 mm clear stroke reconstructs as **one** net,
+> not two, and so does a gap that stops inside the pour. If your board splits a
+> plane that way, expect the reader to report the rails as a single net, and
+> expect every downstream check to inherit that. It errs toward reporting things
+> as connected, so it will not hide a break that exists; it will hide a
+> separation that exists. The mechanism, and why the narrow decomposition that
+> does work cannot see this case, is in
+> `gerber::rs274x::apply_clears`.
+
 Altium plots a plane *negatively*: one `G36/G37` dark region covering the
 whole board, then `%LPC*%` and a few hundred clear regions, one per
 clearance, antipad and thermal gap, then `%LPD*%` for whatever islands are
@@ -647,9 +660,14 @@ The remaining limits all leave copper standing: the refusals above, a void
 straddling a pour's edge, a void laid over a track or a pad rather than over a
 pour, a void spanning a hole the pour was drawn with, the intersection of two
 voids that only partially overlap, an island ringed by several separate voids
-rather than by one void's own hole contour, and a concave pour severed by a
+rather than by one void's own hole contour, a concave pour severed by a
 void lying wholly inside it, which is what a plane deliberately split by a
-clear gap looks like.
+clear gap looks like, one clear statement spanning two pours (all-or-none is
+applied per pour and enclosure demands every piece sit inside that pour, so
+such a statement voids NEITHER and on a film that concatenates a plane's
+clearances across two pours the solid-slab reading returns whole), and an
+island a later dark REGION bridges, which stays a contour of the pour because
+connectivity never unions one region to another.
 
 Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
 pour with two ringed pads must reconstruct to three conductors, and its
