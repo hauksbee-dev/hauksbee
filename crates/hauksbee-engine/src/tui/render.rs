@@ -165,6 +165,9 @@ pub fn draw(f: &mut Frame, state: &AppState, cosim: Option<&CosimUpdate>, cosim_
     if state.left_detail_open {
         draw_left_detail_overlay(f, state);
     }
+    if state.coverage_open {
+        draw_coverage_overlay(f, state);
+    }
 }
 
 /// The persistent identity bar: which board this is, what it is bound to, and
@@ -539,6 +542,15 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                     Style::default().fg(Color::Gray),
                 )));
 
+                // ── Co-sim coverage caveats ───────────────────────────────────
+                // Placed HERE, directly under the status lines and above the
+                // GPIO table, because the panes below it (GPIO rows, then the
+                // UART tail) grow with the run: a caveat rendered after them
+                // would be pushed off a narrow pane, and a caveat the user has
+                // to scroll to find has not been surfaced. Only the count and
+                // the class names live in the pane; `c` opens the sentences.
+                lines.extend(coverage_banner(state));
+
                 // ── GPIO / control-net state (the "LED") ──────────────────────
                 // The width budget inside the pane (border already removed).
                 let w = inner.width as usize;
@@ -627,20 +639,6 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                     )));
                 }
 
-                // SPI framing honesty: a bus whose transaction boundaries are
-                // guessed at chunk edges (no CS pin resolved, backend does not
-                // frame) can merge or truncate transactions; say so instead of
-                // presenting its traffic as exactly framed.
-                if !u.heuristic_spi_buses.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            "SPI framing is heuristic on [{}]: transaction boundaries are guessed at chunk edges (declare cs_net, or point the peripheral at a board component whose model maps a cs pin, for exact framing)",
-                            u.heuristic_spi_buses.join(", ")
-                        ),
-                        Style::default().fg(Color::Yellow),
-                    )));
-                }
-
                 // ── Stall honesty ─────────────────────────────────────────────
                 // If the firmware never drove any GPIO and never printed
                 // anything, say so plainly rather than freezing silently. While
@@ -706,6 +704,127 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
         }
     }
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+/// The co-sim pane's coverage banner: how many caveats this run has disclosed,
+/// which kinds, and the key that shows the sentences.
+///
+/// Two lines at most, whatever the caveat count, because the pane is a quarter
+/// of the terminal wide and ten full sentences there would push the GPIO table
+/// and the UART tail out of the frame. The count is the thing that must be
+/// impossible to miss; the wording lives one keypress away in
+/// [`draw_coverage_overlay`]. Holes and resolution statements are counted apart
+/// so a clean run does not wear a red number for stating its own edge
+/// resolution.
+fn coverage_banner(state: &AppState) -> Vec<Line<'static>> {
+    let caveats = state.coverage();
+    if caveats.is_empty() {
+        return Vec::new();
+    }
+    let holes = state.coverage_hole_count();
+    let notes = state.coverage_note_count();
+    let mut head = match (holes, notes) {
+        (0, n) => format!("COVERAGE: {n} note(s)"),
+        (h, 0) => format!("COVERAGE: {h} hole(s)"),
+        (h, n) => format!("COVERAGE: {h} hole(s) + {n} note(s)"),
+    };
+    head.push_str("  press [c]");
+    let style = if holes > 0 {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    };
+    let kinds = crate::reports::coverage::classes_present(caveats)
+        .into_iter()
+        .map(|class| class.label())
+        .collect::<Vec<_>>()
+        .join(", ");
+    vec![
+        Line::from(Span::styled(head, style)),
+        Line::from(Span::styled(
+            format!("  {kinds}"),
+            Style::default().fg(Color::Yellow),
+        )),
+    ]
+}
+
+/// The coverage overlay (`c`): every co-sim coverage caveat this run disclosed,
+/// with the whole sentence the batch report surfaces print, scrolled with ↑/↓.
+///
+/// Why a modal rather than more pane lines: the caveats are the one part of the
+/// co-sim result whose text is a paragraph each, and the pane has to keep
+/// showing live GPIO and UART while they are on screen.
+fn draw_coverage_overlay(f: &mut Frame, state: &AppState) {
+    let caveats = state.coverage();
+    if caveats.is_empty() {
+        return;
+    }
+    let holes = state.coverage_hole_count();
+    let area = centered_rect(OVERLAY_PCT_X, OVERLAY_PCT_Y, f.area());
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .title(format!(
+            " co-sim coverage: {} caveat(s), from #{} (↑↓ scroll, Esc to close) ",
+            caveats.len(),
+            state.coverage_scroll + 1
+        ))
+        .borders(Borders::ALL)
+        .border_style(
+            if holes > 0 {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::Yellow)
+            }
+            .add_modifier(Modifier::BOLD),
+        );
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "What this run could not do. Counted at the latest chunk, so a caveat that \
+         becomes true later appears later; the finished run's report is the record.",
+        Style::default().fg(Color::Gray),
+    )));
+    lines.push(Line::from(""));
+    for c in caveats.iter().skip(state.coverage_scroll) {
+        let tag = if c.is_hole() { "HOLE" } else { "NOTE" };
+        let tag_style = if c.is_hole() {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("[{tag}] "), tag_style),
+            Span::styled(
+                c.class.label().to_string(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(Span::raw(c.message.clone())));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "unlocked by: ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(c.fix.clone()),
+        ]));
+        lines.push(Line::from(""));
+    }
+    lines.push(Line::from(Span::styled(
+        "`hauksbee run --json` carries these as structured fields, and hauksbee-ci \
+         fails a peripheral assertion against an unexercised bus.",
+        Style::default().fg(Color::DarkGray),
+    )));
+    f.render_widget(
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 /// The per-series trace colour, by probe order. Four distinguishable hues for
@@ -907,6 +1026,15 @@ fn draw_footer(f: &mut Frame, area: Rect, state: &AppState, running: bool) {
         "  r run".to_string()
     };
 
+    // Advertise `c` only once the run has something to disclose, so the hint is
+    // never a key that opens an empty modal. When it IS there, the count comes
+    // with it: the footer is the one line always on screen, so a user who has
+    // scrolled the co-sim pane still learns the run has holes.
+    let coverage_hint = match state.coverage().len() {
+        0 => String::new(),
+        _ => format!("  c coverage ({})", state.coverage_hole_count()),
+    };
+
     let line = Line::from(vec![
         Span::styled(
             format!("{} ", truncate(&state.board_name, 24)),
@@ -921,7 +1049,9 @@ fn draw_footer(f: &mut Frame, area: Rect, state: &AppState, running: bool) {
             Style::default().fg(Color::Green),
         ),
         Span::styled(
-            format!("│ Tab/←→ pane  ↑↓ nav  Enter detail  p probe{run_hint}  q quit"),
+            format!(
+                "│ Tab/←→ pane  ↑↓ nav  Enter detail  p probe{run_hint}{coverage_hint}  q quit"
+            ),
             Style::default().fg(Color::Gray),
         ),
     ]);
@@ -1204,6 +1334,7 @@ fn wrap_words(s: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::report::{BindOutcome, BindReport, BindRow};
+    use crate::reports::coverage::CoverageInputs;
     use crate::result::{BindSummary, DrcStructured};
     use hauksbee_models::Confidence;
     use ratatui::backend::TestBackend;
@@ -1261,8 +1392,20 @@ mod tests {
     /// Render one frame of the full TUI into a TestBackend and return the
     /// buffer's rows as strings (the poor man's snapshot).
     fn render_rows(state: &AppState, w: u16, h: u16) -> Vec<String> {
+        render_rows_with(state, None, w, h)
+    }
+
+    /// The same poor-man's snapshot with a co-sim snapshot attached, so the
+    /// live co-sim pane (and not only the idle one) can be asserted on.
+    fn render_rows_with(
+        state: &AppState,
+        cosim: Option<&CosimUpdate>,
+        w: u16,
+        h: u16,
+    ) -> Vec<String> {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-        term.draw(|f| draw(f, state, None, false)).unwrap();
+        term.draw(|f| draw(f, state, cosim, cosim.is_some_and(|u| !u.done)))
+            .unwrap();
         let buf = term.backend().buffer().clone();
         (0..buf.area.height)
             .map(|y| {
@@ -1271,6 +1414,271 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    // ── Co-sim coverage parity ───────────────────────────────────────────────
+    // `docs/cosim/MCU.md` measured this pane carrying 1 of the 10 co-sim
+    // coverage caveat classes while `hauksbee run` carried 9 of them, so a user
+    // watching a live co-sim saw a quiet pane over a run whose ADC channel was
+    // dropped or whose bus was never exercised. These tests drive the REAL
+    // `draw` through a TestBackend, class by class, from both sides: the caveat
+    // appears when its scheduler signal fired, and the pane is silent when it
+    // did not.
+
+    /// A co-sim snapshot in the running state, so `draw_cosim` takes its
+    /// `Some(update)` branch. The coverage list itself lives in `AppState`
+    /// (fed there from this same stream by the event loop).
+    fn live_update() -> CosimUpdate {
+        CosimUpdate {
+            sim_ms: 12.0,
+            wall_s: 0.4,
+            chunk_ms: 1.0,
+            analog_valid: true,
+            uart_seen: true,
+            gpio_driven: true,
+            ..Default::default()
+        }
+    }
+
+    /// The whole frame as one whitespace-collapsed string. Needed because the
+    /// panes wrap at word boundaries, so a sentence is split across rows; joining
+    /// and collapsing reconstructs the word sequence without asserting on where
+    /// the wrap happened to land.
+    fn flat(rows: &[String]) -> String {
+        rows.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// One scheduler signal per class, so each class can be driven alone and its
+    /// silence control is every other class staying empty.
+    fn inputs_for(class: crate::reports::coverage::CoverageClass) -> CoverageInputs {
+        use crate::reports::coverage::CoverageClass as C;
+        use crate::scheduler::{AdcDrop, DriverContention, ShortPulse, TimingCoverage, UnexercisedBus};
+        let mut i = CoverageInputs::default();
+        match class {
+            C::AdcDropped => {
+                i.adc_dropped = vec![AdcDrop {
+                    mcu_ref: "U1".into(),
+                    channel: 4,
+                    net: "/VSENSE".into(),
+                    parts: vec!["R7".into()],
+                }]
+            }
+            C::UnexercisedBus => {
+                i.unexercised_buses = vec![UnexercisedBus {
+                    id: "IMU1".into(),
+                    bus: "I2C",
+                    controller: None,
+                }]
+            }
+            C::WatchdogLimitation => {
+                i.watchdog_limitations =
+                    vec![("U1".into(), "this backend's watchdog never fires".into())]
+            }
+            C::WatchdogReboot => i.watchdog_resets = vec![("U1".into(), 12)],
+            C::TimingLimitation => {
+                i.timing_limitations = vec![("U1".into(), "virtual time runs slow here".into())]
+            }
+            C::TimingCoverage => {
+                i.timing_coverage = vec![TimingCoverage {
+                    mcu_ref: "U1".into(),
+                    backend: "renode:stm32f103".into(),
+                    cycle_exact: false,
+                    timestamp_precision_s: 1e-3,
+                    minimum_guaranteed_pulse_s: 2e-3,
+                    chunk_s: 1e-3,
+                }]
+            }
+            C::ShortPulse => {
+                i.short_pulses = vec![ShortPulse {
+                    net: "/STROBE".into(),
+                    mcu_ref: "U1".into(),
+                    port: 'B',
+                    bit: 5,
+                    pulse_s: 2e-6,
+                    chunk_s: 1e-4,
+                    parts: vec!["U7".into()],
+                }]
+            }
+            C::DriverContention => {
+                i.driver_contentions = vec![DriverContention {
+                    net: "/LED".into(),
+                    mcu_ref: "U1".into(),
+                    port: 'B',
+                    bit: 5,
+                    parts: vec!["U9.out".into()],
+                    t_s: 0.01,
+                }]
+            }
+            C::DriveConflict => {
+                i.drive_conflicts =
+                    vec!["net '/VBUS' is overridden to 20.000 V after each solve".into()]
+            }
+            C::HeuristicSpiFraming => i.heuristic_spi_buses = vec!["ADC1".into()],
+        }
+        i
+    }
+
+    /// A short fragment of each class's sentence that must reach the overlay.
+    /// Written out here rather than compared against the formatter's output, so a
+    /// silent re-wording fails this test instead of following it.
+    fn sentence_fragment(class: crate::reports::coverage::CoverageClass) -> &'static str {
+        use crate::reports::coverage::CoverageClass as C;
+        match class {
+            C::AdcDropped => "this platform has no ADC injection map",
+            C::UnexercisedBus => "it was NEVER exercised",
+            C::WatchdogLimitation => "this backend's watchdog never fires",
+            C::WatchdogReboot => "the watchdog rebooted the core 12 times",
+            C::TimingLimitation => "virtual time runs slow here",
+            C::TimingCoverage => "poll-boundary stamps",
+            C::ShortPulse => "is NEVER observed",
+            C::DriverContention => "driver contention on net '/LED'",
+            C::DriveConflict => "is overridden to 20.000 V after each solve",
+            C::HeuristicSpiFraming => "HEURISTIC transaction framing",
+        }
+    }
+
+    #[test]
+    fn a_run_with_nothing_to_disclose_shows_no_coverage_banner() {
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
+        assert!(st.coverage().is_empty());
+        let all = flat(&render_rows_with(&st, Some(&live_update()), 240, 40));
+        assert!(
+            !all.contains("COVERAGE"),
+            "a clean run must not wear a coverage banner:\n{all}"
+        );
+        assert!(
+            !all.contains("c coverage"),
+            "and must not advertise a key that opens an empty modal:\n{all}"
+        );
+    }
+
+    #[test]
+    fn every_coverage_class_reaches_the_cosim_pane_and_its_overlay() {
+        use crate::reports::coverage::CoverageClass;
+        for class in CoverageClass::ALL {
+            // The signal fired: the pane counts it, names its kind, and the
+            // footer advertises the key.
+            let mut st = scope_sample_state();
+            st.dismiss_banner();
+            st.set_coverage(inputs_for(class).caveats());
+            assert_eq!(
+                st.coverage().len(),
+                1,
+                "{class:?} must produce exactly one caveat from its own signal"
+            );
+            let all = flat(&render_rows_with(&st, Some(&live_update()), 240, 40));
+            assert!(
+                all.contains("COVERAGE:"),
+                "{class:?}: no coverage banner in the pane:\n{all}"
+            );
+            assert!(
+                all.contains(class.label()),
+                "{class:?}: the banner does not name the kind ('{}'):\n{all}",
+                class.label()
+            );
+            assert!(
+                all.contains("press [c]"),
+                "{class:?}: the banner does not say how to read it:\n{all}"
+            );
+            assert!(
+                all.contains("c coverage"),
+                "{class:?}: the footer does not advertise the key:\n{all}"
+            );
+
+            // And the overlay carries the whole sentence plus the input that
+            // would unlock the abstention.
+            st.toggle_coverage();
+            assert!(st.coverage_open, "{class:?}: `c` did not open the overlay");
+            let open = flat(&render_rows_with(&st, Some(&live_update()), 240, 40));
+            assert!(
+                open.contains(sentence_fragment(class)),
+                "{class:?}: the overlay does not carry the sentence \
+                 ('{}'):\n{open}",
+                sentence_fragment(class)
+            );
+            assert!(
+                open.contains("unlocked by:"),
+                "{class:?}: the overlay does not name the unlocking input:\n{open}"
+            );
+
+            // The silence control for this class: with its one signal removed and
+            // no other fired, the pane is quiet again. This is what makes the
+            // banner a measurement rather than decoration.
+            let mut clean = scope_sample_state();
+            clean.dismiss_banner();
+            clean.set_coverage(CoverageInputs::default().caveats());
+            let quiet = flat(&render_rows_with(&clean, Some(&live_update()), 240, 40));
+            assert!(
+                !quiet.contains(class.label()),
+                "{class:?}: the label appears with no signal behind it:\n{quiet}"
+            );
+        }
+    }
+
+    #[test]
+    fn holes_and_resolution_statements_are_counted_apart() {
+        use crate::reports::coverage::CoverageClass;
+        // Nine of the ten classes name something the run could not do; per-core
+        // timing coverage states the resolution the run delivered. A pane that
+        // counted the statement as a hole would put a permanent number on a
+        // healthy run.
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
+        st.set_coverage(inputs_for(CoverageClass::TimingCoverage).caveats());
+        assert_eq!(st.coverage_hole_count(), 0);
+        assert_eq!(st.coverage_note_count(), 1);
+        let notes_only = flat(&render_rows_with(&st, Some(&live_update()), 240, 40));
+        assert!(
+            notes_only.contains("COVERAGE: 1 note(s)"),
+            "a resolution statement is a note, not a hole:\n{notes_only}"
+        );
+
+        let mut both = scope_sample_state();
+        both.dismiss_banner();
+        let mut inputs = inputs_for(CoverageClass::TimingCoverage);
+        inputs.adc_dropped = inputs_for(CoverageClass::AdcDropped).adc_dropped;
+        both.set_coverage(inputs.caveats());
+        assert_eq!(both.coverage_hole_count(), 1);
+        let mixed = flat(&render_rows_with(&both, Some(&live_update()), 240, 40));
+        assert!(
+            mixed.contains("COVERAGE: 1 hole(s) + 1 note(s)"),
+            "the banner counts each kind:\n{mixed}"
+        );
+    }
+
+    #[test]
+    fn the_coverage_banner_sits_above_the_growing_panes() {
+        use crate::reports::coverage::CoverageClass;
+        // A caveat the user has to scroll to find has not been surfaced. The GPIO
+        // table and the UART tail both grow with the run, so the banner must
+        // render ABOVE them, not after.
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
+        st.set_coverage(inputs_for(CoverageClass::AdcDropped).caveats());
+        let mut u = live_update();
+        u.uart_lines = (0..80).map(|i| format!("boot line {i}")).collect();
+        u.gpio_nets = (0..12)
+            .map(|i| crate::tui::cosim::GpioNet {
+                name: format!("/LED{i}"),
+                volts: 3.3,
+                driven: true,
+            })
+            .collect();
+        let rows = render_rows_with(&st, Some(&u), 240, 40);
+        let banner_row = rows
+            .iter()
+            .position(|r| r.contains("COVERAGE:"))
+            .expect("the banner survives a full pane");
+        let gpio_row = rows
+            .iter()
+            .position(|r| r.contains("GPIO / control nets"))
+            .expect("the GPIO header is rendered");
+        assert!(
+            banner_row < gpio_row,
+            "the banner must lead the panes that grow (banner at {banner_row}, \
+             GPIO header at {gpio_row})"
+        );
     }
 
     #[test]

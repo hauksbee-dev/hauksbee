@@ -284,6 +284,21 @@ pub struct WebCosimSection {
     /// no SPI slaves, so the common JSON shape is unchanged for existing consumers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spi_framing: Vec<WebSpiFraming>,
+    /// Per-core timing coverage measured at the chunk actually run: the edge
+    /// timestamp uncertainty, the narrowest pulse guaranteed observable, and
+    /// whether the stamps are cycle-exact or poll-boundary. One row per live
+    /// MCU, straight from `Scheduler::timing_coverage`, the same source the CLI
+    /// `--json` `cosim.timing_coverage` field reads.
+    ///
+    /// A field rather than a finding, on purpose: it is a resolution STATEMENT
+    /// present on every run with a live core, not a hole, so a finding would
+    /// demote every healthy report's headline and stop being read. The web
+    /// surface used to read this accessor not at all, which is how a run whose
+    /// edge resolution is coarse read quiet here while `hauksbee run` printed
+    /// the resolution. Empty (and omitted) when no core was live, so the common
+    /// JSON shape is unchanged for existing consumers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timing_coverage: Vec<crate::scheduler::TimingCoverage>,
     /// Per-gate power-up state panel (what the firmware does to each
     /// transistor-gate control net at boot). Mirrors the CLI `--json`
     /// `boot_gates` / `--plain` gate panel so the web surface cannot give false
@@ -1165,6 +1180,9 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
         analog_valid: true,
         failed_windows: Vec::new(),
         spi_framing: Vec::new(),
+        // No co-sim ran, so no core was live and there is no measured timing
+        // resolution to report. An empty row set, never a fabricated one.
+        timing_coverage: Vec::new(),
         boot_gates: Vec::new(),
         // ran == false: the headline demotion is gated on `ran`, so these remain
         // neutral defaults inside the co-sim section. The containing WebReport's
@@ -1561,6 +1579,61 @@ fn run_web_cosim(
             },
         );
     }
+    // The co-sim coverage caveats this surface did not carry, on the same
+    // note-level `WebFinding` mechanism as the ones it already did (short
+    // pulses, driver contention, drive conflicts).
+    //
+    // Watchdog reboots were reachable here and silent: `simavr`'s watchdog does
+    // bite and `Mcu::watchdog_resets` counts the reboots, so a run whose
+    // firmware was rebooted mid-window read quiet on the web while `hauksbee
+    // run` warned about it. Behaviour after a reboot belongs to a rebooted core,
+    // so it demotes the headline like every other honesty caveat here.
+    //
+    // Dropped ADC injections, unexercised buses, watchdog limitations and timing
+    // limitations are structurally empty on this path, which co-sims AVR in
+    // process: `simavr` has an exact ADC injection map, decodes TWI and SPI
+    // natively, and reports neither limitation. They are wired anyway rather
+    // than skipped, so a backend added to this path later cannot make them
+    // silent again.
+    //
+    // Sourced from `reports::coverage`, the one enumeration the batch surfaces'
+    // wording comes from, so a sentence here is the sentence `--json` carries.
+    // Per-core timing coverage is deliberately NOT in this list: it is a
+    // resolution statement present on every run with a live core, so a finding
+    // would demote every healthy report's headline. It rides the structural
+    // `timing_coverage` field below instead, the tier `--json` gives it and the
+    // mechanism `spi_framing` already uses on this surface.
+    {
+        use crate::reports::coverage::{CoverageClass, CoverageInputs};
+        let caveats = CoverageInputs::from_scheduler(sched).caveats();
+        for c in caveats.iter().filter(|c| {
+            matches!(
+                c.class,
+                CoverageClass::AdcDropped
+                    | CoverageClass::UnexercisedBus
+                    | CoverageClass::WatchdogLimitation
+                    | CoverageClass::WatchdogReboot
+                    | CoverageClass::TimingLimitation
+            )
+        }) {
+            findings.insert(
+                0,
+                WebFinding {
+                    // Note-level for the same reason as the substitution and
+                    // short-pulse caveats: it is an honesty statement about what
+                    // the run means, not a board defect, so it demotes the
+                    // headline via `cosim_caveat_headline` without inventing a
+                    // serious fault.
+                    level: "note".to_string(),
+                    what: c.headline.clone(),
+                    why: c.message.clone(),
+                    fix: c.fix.clone(),
+                    x: None,
+                    y: None,
+                },
+            );
+        }
+    }
     // Zero-activity refusal: a run that drove nothing proves nothing.
     if total_toggles == 0 && uart_empty && !any_gpio_driven {
         findings.insert(
@@ -1684,6 +1757,11 @@ fn run_web_cosim(
         })
         .collect();
 
+    // Per-core timing coverage, read from the same accessor the CLI `--json`
+    // field reads (see the field's doc comment for why it is a field and not a
+    // finding).
+    let timing_coverage = sched.timing_coverage();
+
     let error_budget = match sched.error_budget() {
         Ok(budget) => Some(budget),
         Err(error) => {
@@ -1719,6 +1797,7 @@ fn run_web_cosim(
             analog_valid,
             failed_windows,
             spi_framing,
+            timing_coverage,
             boot_gates,
             firmware_exercised: firmware_ran,
             substituted,
@@ -2678,6 +2757,7 @@ fn main {
             analog_valid: true,
             failed_windows: Vec::new(),
             spi_framing: Vec::new(),
+            timing_coverage: Vec::new(),
             boot_gates: Vec::new(),
             firmware_exercised: true,
             substituted: false,
@@ -2893,6 +2973,7 @@ fn main {
                 reason: "DC Newton did not converge in 100 iters".to_string(),
             }],
             spi_framing: Vec::new(),
+            timing_coverage: Vec::new(),
             boot_gates: Vec::new(),
             firmware_exercised: true,
             substituted: false,
@@ -2937,6 +3018,7 @@ fn main {
             analog_valid: true,
             failed_windows: Vec::new(),
             spi_framing: Vec::new(),
+            timing_coverage: Vec::new(),
             boot_gates: vec![WebBootGate {
                 reference: "Q1".to_string(),
                 net: "GATE_CTRL".to_string(),
