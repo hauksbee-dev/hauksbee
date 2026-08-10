@@ -874,10 +874,15 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
 /// a way to silence a short.
 #[test]
 fn emontx_v340_schematic_declares_no_tie_so_its_shorts_stay_serious() {
-    let Some(brd) = board("emontx3/hardware/V3.4.0/emonTx V3.4.brd") else {
+    // V3.4.0 is its own corpus entry (`emontx3_v340`, `dest = "emontx3_v340"`),
+    // NOT a sibling directory of the V3.4.5 one, so it resolves under that id.
+    // Pointing this at `emontx3/hardware/V3.4.0/...` made the whole guard skip
+    // silently on a corpus laid out from the manifest, which is the one way a
+    // false-negative guard can fail without anyone noticing.
+    let Some(brd) = board("emontx3_v340/hardware/V3.4.0/emonTx V3.4.brd") else {
         return;
     };
-    let Some(sch) = board("emontx3/hardware/V3.4.0/emonTx V3.4.sch") else {
+    let Some(sch) = board("emontx3_v340/hardware/V3.4.0/emonTx V3.4.sch") else {
         return;
     };
     hauksbee_testkit::scanned("emonTx V3.4.0 undeclared-tie row", 1);
