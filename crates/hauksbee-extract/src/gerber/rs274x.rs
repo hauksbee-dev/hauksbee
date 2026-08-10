@@ -375,7 +375,7 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     cut.dedup();
     for slot in cut {
         let i = regions[slot];
-        for shape in free_ringed_islands(&mut out[i].shape, &applied[slot]) {
+        for shape in free_ringed_islands(&mut out[i].shape, &applied[slot], &originals[slot]) {
             // An island is still region copper, no longer the same conductor. It
             // does NOT inherit the pour's X2 identity: `%TO.N` on a pour names the
             // pour's net, and copper the film deliberately cut free of the pour is
@@ -420,7 +420,11 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
 /// promoted that way and the board-sized sheet came back. The bounding-box test
 /// is conservative in the safe direction: an island it declines to promote stays a
 /// contour of the pour, i.e. over-connected.
-fn free_ringed_islands(shape: &mut Shape, applied: &VoidIndex) -> Vec<Shape> {
+fn free_ringed_islands(
+    shape: &mut Shape,
+    applied: &VoidIndex,
+    originals: &[Vec<(f64, f64)>],
+) -> Vec<Shape> {
     let Shape::MultiPolygon { contours } = shape else {
         return Vec::new();
     };
@@ -440,7 +444,20 @@ fn free_ringed_islands(shape: &mut Shape, applied: &VoidIndex) -> Vec<Shape> {
         let Some(contour) = contours.get(h) else {
             continue;
         };
-        if applied.any_other_overlaps(contour_bounds(contour), uid) {
+        let hb = contour_bounds(contour);
+        if applied.any_other_overlaps(hb, uid) {
+            continue;
+        }
+        // The pour's OWN holes count too. Enclosure only requires a void's
+        // vertices to sit on even-odd copper, so a void's hole contour can span a
+        // hole the pour was drawn with while every rim vertex is on copper.
+        // Promoting that island would emit solid copper over ground the pour never
+        // had any on, which could bridge conductors routed through the pour's slot.
+        let over_a_drawn_hole = originals.iter().skip(1).any(|c| {
+            let ob = contour_bounds(c);
+            !(ob[2] < hb[0] || ob[0] > hb[2] || ob[3] < hb[1] || ob[1] > hb[3])
+        });
+        if over_a_drawn_hole {
             continue;
         }
         promoted[h] = true;
@@ -1926,8 +1943,31 @@ fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
         })
         .unwrap_or(0);
     let c = poly[m];
-    let p = poly[(m + n - 1) % n];
-    let q = poly[(m + 1) % n];
+    // Walk outward past any vertex coincident with `c` for the two edge
+    // directions. The immediate neighbours are not usable: a region contour is
+    // built from its start point plus every draw endpoint, so a properly closed
+    // loop repeats its start vertex at the end, and when that start point is also
+    // the lowest vertex the previous neighbour IS `c`. That made the whole
+    // construction fall back to the bare vertex for the commonest shape in the
+    // format, a rectangular void whose loop starts at its lower-left corner, which
+    // is exactly the ambiguity this function exists to remove. The polygonised
+    // aperture outlines have the same shape of problem: `stadium_outline`'s two
+    // cap loops repeat the segment-perpendicular vertices, and on a degenerate
+    // capsule (a clear circle flash) the repeated pair is the lowest vertex.
+    let away = |dir: usize| -> Option<(f64, f64)> {
+        (1..n)
+            .map(|k| {
+                if dir == 0 {
+                    poly[(m + n - k) % n]
+                } else {
+                    poly[(m + k) % n]
+                }
+            })
+            .find(|&z| z != c)
+    };
+    let (Some(p), Some(q)) = (away(0), away(1)) else {
+        return c;
+    };
     let unit = |a: (f64, f64)| -> Option<(f64, f64)> {
         let (dx, dy) = (a.0 - c.0, a.1 - c.1);
         let len = dx.hypot(dy);
@@ -2692,6 +2732,65 @@ G37*
             None,
             "and the rest of the region is still cut"
         );
+    }
+
+    #[test]
+    fn a_closed_contour_classifies_the_same_as_an_unclosed_one() {
+        // A region contour is its start point plus every draw endpoint, so a
+        // properly closed loop repeats its start vertex at the end. When that start
+        // point is also the lowest vertex, the interior-witness construction found
+        // its previous neighbour coincident with itself and fell back to the bare
+        // vertex, which is precisely the ambiguity it exists to remove, for the
+        // commonest shape in the format: a rectangular void whose loop starts at
+        // its lower-left corner.
+        //
+        // Two voids in one clear region statement, disjoint, touching at one point,
+        // the second's loop STARTING at that touch point. With a raw vertex as the
+        // witness it read as inside the first, was filed as its hole, and was then
+        // promoted: dropped from the pour AND re-emitted as phantom copper.
+        let body = "\
+G36*
+X6000000Y4000000D02*
+X16000000Y4000000D01*
+X16000000Y14000000D01*
+X6000000Y14000000D01*
+X6000000Y4000000D01*
+X6000000Y7000000D02*
+X3000000Y9000000D01*
+X3000000Y12000000D01*
+X6000000Y7000000D01*
+G37*
+";
+        let pieces = pieces_of(&negative_pour("", body));
+        assert_eq!(
+            piece_at(&pieces, 11.0, 9.0),
+            None,
+            "the box the film cleared is void"
+        );
+        assert_eq!(
+            piece_at(&pieces, 4.0, 10.0),
+            None,
+            "and so is the triangle touching it at one point"
+        );
+        // The same geometry with the triangle's vertex list rotated so its lowest
+        // vertex is not the loop's start. Identical film, identical answer.
+        let rotated = body.replace(
+            "\
+X6000000Y7000000D02*
+X3000000Y9000000D01*
+X3000000Y12000000D01*
+X6000000Y7000000D01*
+",
+            "\
+X3000000Y12000000D02*
+X6000000Y7000000D01*
+X3000000Y9000000D01*
+X3000000Y12000000D01*
+",
+        );
+        let pieces = pieces_of(&negative_pour("", &rotated));
+        assert_eq!(piece_at(&pieces, 11.0, 9.0), None);
+        assert_eq!(piece_at(&pieces, 4.0, 10.0), None);
     }
 
     #[test]

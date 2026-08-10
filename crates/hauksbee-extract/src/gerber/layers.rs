@@ -252,6 +252,26 @@ pub fn classify(path: &Path) -> LayerRole {
         };
     }
 
+    // ── Nothing below here can be copper unless the file is a plotted film ──
+    // Every rule from here on keys on WORDS in the name, and the words a fab job
+    // puts on its copper films appear just as readily on the documents beside
+    // them: Altium's per-side pick-and-place is `Pick Place for <board> - Top
+    // Layer.csv` and its per-layer prints are `<board>_Copper_Top.pdf`. The
+    // directory scan claims copper before it looks for placement data, so a
+    // matched CSV was swallowed as an empty copper film and the components never
+    // bound. Refusing here rather than inside one rule covers the top, bottom,
+    // inner, bare-role and `.art` rules alike.
+    //
+    // Stated as what a film is NOT, deliberately. An allowlist of film extensions
+    // would drop the copper of any exporter using a name outside it
+    // (`-Inner1.gbx`, `-signal_2.gb`), which is the same silent loss this
+    // function has been fixed for twice; the thing actually being excluded is a
+    // small, known set of non-films. Everything genuinely ambiguous (`.txt` for a
+    // drill, extensionless plots) is already resolved above or left to the rules.
+    if n.ext.as_deref().is_some_and(is_definitely_not_a_film) {
+        return LayerRole::Unknown;
+    }
+
     // ── Copper by KiCad/long name ───────────────────────────────────────────
     // `*-F_Cu.gbr`, `*-B_Cu.gbr`, `*-In1_Cu.gbr` (case-insensitive).
     let has_copper = |n: &Name| n.has("cu") || n.has("copper");
@@ -589,21 +609,6 @@ fn protel_inner_index(n: &Name) -> Option<usize> {
 /// KiCad inner-copper name: `*-In1_Cu.gbr`, `*-In2_Cu.gbr`, … or
 /// `inner1`, `signal2`, `Copper_Signal_1`, etc.
 fn kicad_inner_index(n: &Name) -> Option<usize> {
-    // Copper has to be a plotted film. The `signal`/`inner` markers below do not
-    // require a `cu` token (Altium and Protel-lineage exporters omit it), so
-    // without a gate here a `signal_1.csv` pick-and-place or an `inner_2.pdf`
-    // drawing classified as a copper layer, and the directory scan claims copper
-    // before it looks for placement data: the CSV was swallowed as an empty
-    // copper film and the components never bound.
-    //
-    // Stated as what a film is NOT, deliberately. An allowlist of film
-    // extensions drops the copper of any exporter using a name outside it
-    // (`-Inner1.gbx`, `-signal_2.gb`), which is the same silent loss this
-    // function was fixed for; the thing actually being excluded is a small,
-    // known set of non-films.
-    if n.ext.as_deref().is_some_and(is_definitely_not_a_film) {
-        return None;
-    }
     /// The layer index that butts straight up against a marker.
     fn index_at(tail: &str) -> Option<usize> {
         let d: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -622,11 +627,15 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
             _ => None,
         }
     }
-    // A copper layer, and a plausible stack position: `board-Inner 2024-05-01.gbr`
-    // must not report inner layer 2024. `bare_stack_index` bounds itself the same
-    // way and for the same reason.
-    let accept = |marker: &str, k: usize| -> Option<usize> {
-        ((1..=32).contains(&k) && (n.has("cu") || marker == "signal" || marker == "inner"))
+    // A copper layer, and for the SEPARATED form a plausible stack position:
+    // `board-Inner 2024-05-01.gbr` must not report inner layer 2024. The bound is
+    // not applied to a butt-up digit, where the number always IS a stack position:
+    // bounding it there discards the copper of a >32-layer stackup outright, which
+    // is worse than handing `assign_inner_indices` a number to re-rank.
+    let accept = |marker: &str, k: usize, bounded: bool| -> Option<usize> {
+        (k >= 1
+            && (!bounded || k <= 32)
+            && (n.has("cu") || marker == "signal" || marker == "inner"))
             .then_some(k)
     };
     // Scan EVERY occurrence of a marker, not just the first: a project name that
@@ -651,7 +660,7 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
                 } else {
                     None
                 };
-                if let Some(k) = k.and_then(|k| accept(marker, k)) {
+                if let Some(k) = k.and_then(|k| accept(marker, k, pass == 1)) {
                     return Some(k);
                 }
             }
@@ -814,6 +823,28 @@ mod tests {
             LayerRole::Copper { index: 2, .. }
         ));
         assert!(!role("board-Inner 2024-05-01.gbr").is_copper());
+        // The bound is on the SEPARATED form only. A butt-up digit always IS a
+        // stack position, and bounding it there discarded the copper of a
+        // >32-layer stackup outright.
+        assert!(matches!(
+            role("board-in40_cu.gbr"),
+            LayerRole::Copper { index: 40, .. }
+        ));
+        // And no name-based copper rule may claim a file that is plainly not a
+        // film. Altium's per-side pick-and-place and its per-layer prints both
+        // carry the words the top and bottom rules key on, and the directory scan
+        // claims copper before it looks for placement data, so a matched CSV was
+        // swallowed as an empty copper film and no component bound.
+        for name in [
+            "Pick Place for ARDEP - Top Layer.csv",
+            "ARDEP_Mainboard_Copper_Top.csv",
+            "ARDEP_Mainboard_Copper_Top.pdf",
+            "ARDEP_Mainboard-Top Layer.pdf",
+            "top layer bom.xlsx",
+            "ARDEP_Mainboard_Copper_Bottom.csv",
+        ] {
+            assert!(!role(name).is_copper(), "{name} is not a copper film");
+        }
     }
 
     #[test]
