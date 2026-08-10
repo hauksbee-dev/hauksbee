@@ -54,8 +54,19 @@ pub fn evidence_findings_with_gate(
 /// GitHub error annotation for unbound verdict-critical parts, so the
 /// annotation surface agrees with the gate-grade JUnit/SARIF entry the same
 /// blockers produce. No-op outside GitHub Actions.
+///
+/// At most once per process. Two call sites reach it for the same run: the
+/// artifact writer (which must annotate a NON-gating run, the only surface
+/// that would otherwise say nothing) and the invalid-for-analysis exit (which
+/// must annotate a gating run whether or not artifacts were asked for). It
+/// names the whole run's blockers either way, so a second identical `::error`
+/// would only spend one of GitHub's ten annotations-per-type-per-step.
 pub fn github_blocker_annotation(blockers: &[String]) {
+    static ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if blockers.is_empty() || std::env::var_os("GITHUB_ACTIONS").is_none() {
+        return;
+    }
+    if ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return;
     }
     eprintln!(
