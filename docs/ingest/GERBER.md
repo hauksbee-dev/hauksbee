@@ -677,16 +677,17 @@ negative-drawn plane makes load-bearing: cutting its voids turns it into ONE
 board-sized shape carrying a contour per antipad. The grid also answers "is
 there any pour boundary inside this pad's bounds", which keeps the exact
 poly-distance penetration test off a hot path that a board-sized pour would
-otherwise reach for every pad on the layer. Its scanline classifier buckets
-edges by the rows they span, so the build is linear in vertices rather than
-rows-times-vertices, and a layer's gridded pours share a cell budget rather
-than each taking the resolution ceiling.
+otherwise reach for every pad on the layer. Its scanline classifier sweeps an
+active-edge table, so it holds one copy of each edge rather than one per row
+the edge spans, and its time is linear in the rows those edges sweep (two or
+three per edge of an antipad's outline). A layer's gridded pours share a cell
+budget rather than each taking the resolution ceiling.
 
 Whole-extraction times for a synthetic 100 mm plane with 6084 rectangular
-antipads and a pad in each: 3.97 s before those changes, 60 ms after. With the
-antipads drawn as annular clear flashes, the shape a real negative plane
-carries, 92 ms; with 62500 non-overlapping annular ones, each leaving an
-island to free, 2.2 s.
+antipads and a pad in each: 3.97 s before those changes, 60-75 ms after. With
+the antipads drawn as annular clear flashes, the shape a real negative plane
+carries, 90-100 ms; with 62500 non-overlapping annular ones, each leaving an
+island to free, 1-2 s. Machine-dependent to within about a factor of two.
 
 Two-layer boards extract in tens to hundreds of milliseconds. The 6-layer
 reform motherboard (about 75k draws and four 35k-vertex plane pours)

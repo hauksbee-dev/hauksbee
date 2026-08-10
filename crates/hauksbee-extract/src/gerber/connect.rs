@@ -387,11 +387,11 @@ pub fn reconstruct(
                     //
                     // Whole-extraction times for a 100 mm plane with 6084
                     // rectangular antipads and a pad in each: 3.97 s with the
-                    // ceiling at 512, 60 ms at 2048. With the antipads drawn as
+                    // ceiling at 512, 60-75 ms at 2048. With the antipads drawn as
                     // ANNULAR clear flashes, the shape a real negative plane
                     // carries (a 64-gon plus a 32-gon rim each, some 600k contour
-                    // vertices), 92 ms; 62500 non-overlapping annular ones, each
-                    // leaving an island to free, 2.2 s. Those last two are only
+                    // vertices), 90-100 ms; 62500 non-overlapping annular ones,
+                    // each leaving an island to free, 1-2 s. Those last two are only
                     // affordable because the scanline buckets its edges by row (see
                     // `PolyGrid::new`); without that the build alone was 3.2 s.
                     let cells = (verts / 4).clamp(64, side_ceiling);

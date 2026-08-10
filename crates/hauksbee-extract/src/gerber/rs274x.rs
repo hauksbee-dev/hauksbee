@@ -261,12 +261,23 @@ fn contour_bounds(c: &[(f64, f64)]) -> [f64; 4] {
 ///
 /// Finally, a void that RINGS copper (an annular clear flash, or a clear region
 /// carrying an island contour) leaves that island electrically separate from the
-/// pour around it, so the cut pour is re-split into its connected pieces by
-/// [`group_contours_into_pieces`]. Without that the island stayed in the pour's
-/// own primitive and the union-find shorted it to the plane, which for a
-/// negative-drawn plane is the very merge this function exists to break. A ring
-/// formed by SEVERAL separate voids is not a nesting relationship and is not
-/// found this way; that island stays on the pour, over-connected.
+/// pour around it, so [`free_ringed_islands`] moves it out of the pour and into a
+/// primitive of its own. Without that the island stayed in the pour's and the
+/// union-find shorted it to the plane, which for a negative-drawn plane is the very
+/// merge this function exists to break.
+///
+/// That is the ONLY decomposition done to a cut pour, and it is deliberately
+/// narrow: a void's own hole contours, promoted only when no other void's bounds
+/// overlap them. It is emphatically NOT a general re-split by nesting depth. Depth
+/// is meaningless across the voids of a whole film, which cross one another, and
+/// applying it here promoted 11890 of 12000 voids on an overlapping-antipad plane
+/// and brought the board-sized sheet straight back (see `group_contours`, which is
+/// valid only inside one region statement). Narrow is also sufficient: a void whose
+/// vertices all lie inside a pour cannot sever it, and one reaching past the pour's
+/// edge is refused for that pour entirely, so a ring-shaped void is the only cut
+/// that can separate copper. A ring formed by SEVERAL separate voids is not one
+/// void's hole and is not found this way; that island stays a contour of the pour,
+/// over-connected.
 fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     if clears.is_empty() {
         return;
