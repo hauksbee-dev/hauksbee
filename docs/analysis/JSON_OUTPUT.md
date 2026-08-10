@@ -92,9 +92,15 @@ Read `verdict` together with `notes` and the `bind` fields, never on its own:
 `thermal.valid: true` under `--thermal --no-strict-thermal` means the table is
 usable, not that the coverage is complete, and the top-level `verdict` can
 still be `invalid` for the undermined evidence behind it while the opt-out
-returns exit 0. That opt-out is the one place the exit code and the verdict
-deliberately part company (it exists to stop thermal coverage failing a build),
-the same way omitting `--strict` leaves a `fail` verdict at exit 0.
+returns exit 0. That opt-out is one of three places the exit code and the verdict
+deliberately part company, the same way omitting `--strict` leaves a `fail`
+verdict at exit 0. The other two are on the co-sim path: an aborted analog
+solve exits 3 (invalid for analysis) even where the document grades the faults
+it observed as `fail`, because those faults may come from the stale-voltage
+windows the solve failed on; and a runtime timing refusal exits 3 beside
+whatever verdict the document already printed. In all three the document is the
+record of what was observed and the exit code is the policy; where the gate is
+armed and the run is analysable they agree.
 
 ## Sections
 
