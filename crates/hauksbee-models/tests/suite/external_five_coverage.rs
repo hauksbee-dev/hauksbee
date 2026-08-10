@@ -1126,3 +1126,79 @@ fn no_entry_names_a_driven_output_it_has_no_logic_to_drive() {
          swept; the database has more than that"
     );
 }
+
+/// The three parts this batch could NOT model each name their own unlocking input,
+/// and the table that carries those sentences cannot make any of them bind.
+///
+/// The project's rule is that an abstention must name what would unlock it. Before
+/// `db/unmodelled.toml` the report had one sentence for every gap ("No model in the
+/// library matched this part") and one next step ("add a model to your models
+/// directory"), which are also exactly what a part nobody has ever examined prints.
+/// A reader could not tell "unexamined" from "examined, and here is the blocker".
+///
+/// Two things are asserted, and the second matters more than the first. The
+/// sentences exist and are specific; AND every part named in that table still
+/// resolves to NO MODEL, because a table that could quietly promote a part to
+/// "covered" would be the exact dishonesty the abstention text is there to avoid.
+#[test]
+fn each_abstention_names_its_unlocking_input_and_binds_nothing() {
+    let lib = ModelLibrary::builtin();
+    let table = lib.unmodelled();
+    assert!(
+        !table.is_empty(),
+        "the built-in unmodelled.toml must load; an empty table means the include \
+         or the loader broke and every gap silently went back to the generic text"
+    );
+
+    for (value, must_mention) in [
+        // The strap that decides the output format is the input; naming LVDS alone
+        // would not be enough, so the sentence has to reach the strap pins.
+        ("Si53301", &["SFOUT", "strap"][..]),
+        // A device kind, not a document: the datasheet is complete and the schema
+        // is what cannot express a differential output.
+        ("LMX2572", &["differential"][..]),
+        // The package contradiction is the finding here, so the disclosure has to
+        // carry it rather than only asking for a SPICE card.
+        ("BFP181", &["SOT143", "SPICE"][..]),
+    ] {
+        let note = table
+            .note_for(value, "")
+            .unwrap_or_else(|| panic!("{value} must have a named abstention"));
+
+        assert!(
+            note.because.len() > 80,
+            "{value}: `because` is {} chars, which is too short to have said \
+             anything specific",
+            note.because.len()
+        );
+        assert!(
+            note.unlocked_by.len() > 60,
+            "{value}: `unlocked_by` is {} chars; an unlocking input has to be \
+             specific enough to act on",
+            note.unlocked_by.len()
+        );
+        for token in must_mention {
+            let both = format!("{} {}", note.because, note.unlocked_by);
+            assert!(
+                both.contains(token),
+                "{value}: the disclosure never mentions {token:?}, so it does not \
+                 name the actual blocker"
+            );
+        }
+        // "More work" is not an unlocking input.
+        for vague in ["TODO", "not supported", "unsupported", "someday"] {
+            assert!(
+                !note.unlocked_by.to_lowercase().contains(vague),
+                "{value}: `unlocked_by` contains the non-answer {vague:?}"
+            );
+        }
+
+        // THE CONTAINMENT. An abstention must never resolve a part.
+        assert!(
+            resolve(value).is_none(),
+            "{value} has a named abstention AND a model, which means the abstention \
+             text is unreachable dead weight or, worse, the part is being counted as \
+             covered while the report explains why it cannot be"
+        );
+    }
+}

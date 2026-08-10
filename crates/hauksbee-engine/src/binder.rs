@@ -428,7 +428,7 @@ pub fn bind_board_with(
 
         let (kind_str, outcome, warning, guesses) = match &model {
             None => {
-                let (kind_str, outcome, warning) = unresolved_outcome(comp, &node_of);
+                let (kind_str, outcome, warning) = unresolved_outcome(comp, &node_of, lib);
                 (kind_str, outcome, warning, Vec::new())
             }
             Some(m) => {
@@ -1777,11 +1777,19 @@ fn non_empty(s: &str) -> Option<String> {
     }
 }
 
+/// Collapse a multi-line TOML string into one report sentence: the abstention
+/// table's `because`/`unlocked_by` are written as wrapped block strings so they are
+/// readable in the file, and a report line wants them unwrapped.
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Build the outcome for a PRESENT component with no resolved model. The two
 /// absent assembly states never reach here: pass 2 rows them before resolving.
 fn unresolved_outcome(
     comp: &Component,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+    lib: &ModelLibrary,
 ) -> (Option<String>, BindOutcome, Option<String>) {
     if let Some(McuFamilyRoute::NoPlatform { family }) = route_mcu_family(comp) {
         let msg = format!(
@@ -1815,10 +1823,35 @@ fn unresolved_outcome(
         .iter()
         .find(|(k, _)| k == hauksbee_extract::altium::VALUE_UNRESOLVED_KEY)
         .map(|(_, v)| v.clone());
-    let reason = match value_unresolved {
-        Some(why) => why,
-        None if two_terminal => "no model; left open".to_string(),
-        None => "no model".to_string(),
+    // A NAMED ABSTENTION beats the generic sentence. `db/unmodelled.toml` carries
+    // the parts this library has looked at and cannot model honestly, each with the
+    // input that would unlock it, and the report prints the binder's `reason` as the
+    // disclosure's "because". So a part on that list says WHY it is open and what
+    // would close it, where an unexamined part says "no model" and means it.
+    //
+    // The table is consulted only HERE, after resolution has already failed, and it
+    // contributes only this string: it cannot bind anything, and a stale entry for a
+    // part that has since gained a real model is unreachable rather than wrong.
+    let mpn = comp
+        .properties
+        .iter()
+        .find(|(k, _)| k.to_ascii_lowercase().contains("mpn"))
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    let abstention = lib.unmodelled().note_for(&comp.value, mpn);
+    let reason = match (value_unresolved, abstention) {
+        // The extractor's own explanation for a valueless part wins: it says the
+        // value is missing, which is a different and more immediate fact than any
+        // statement about a named part.
+        (Some(why), _) => why,
+        (None, Some(note)) => format!(
+            "{}{}{}",
+            one_line(&note.because),
+            hauksbee_ir::evidence::Assumption::UNLOCKED_BY_MARKER,
+            one_line(&note.unlocked_by)
+        ),
+        (None, None) if two_terminal => "no model; left open".to_string(),
+        (None, None) => "no model".to_string(),
     };
     (None, BindOutcome::Unresolved { reason }, warning)
 }
