@@ -386,7 +386,9 @@ pub struct Scheduler {
     /// MCU backends model NO matching bus controller; the firmware's bus
     /// traffic can never reach them, so they sit at their power-on defaults for
     /// the whole run. Recorded at attach time (mirroring `substitutions`) and
-    /// surfaced as a co-sim coverage warning on every report surface; a CI
+    /// surfaced as a co-sim coverage warning on the four batch report surfaces
+    /// (default text, `--plain`, `--json`, hauksbee-ci) and on neither the TUI
+    /// nor the web front door; a CI
     /// `peripheral` assertion against one of these FAILS rather than passing on
     /// the slave's untouched default state (U3 finding 2).
     unexercised_buses: Vec<UnexercisedBus>,
@@ -645,8 +647,9 @@ pub struct AdcDrop {
 }
 
 impl AdcDrop {
-    /// The one-line warning every surface emits for this channel; same
-    /// shared-wording discipline as [`UnexercisedBus::message`].
+    /// The one-line warning the four batch surfaces emit for this channel (the
+    /// TUI and the web front door render no ADC drop); same shared-wording
+    /// discipline as [`UnexercisedBus::message`].
     pub fn message(&self) -> String {
         let parts = if self.parts.is_empty() {
             String::new()
@@ -813,8 +816,10 @@ pub struct DriverContention {
 }
 
 impl DriverContention {
-    /// The one-line finding every surface emits for this net; same
-    /// shared-wording discipline as [`UnexercisedBus::message`].
+    /// The one-line finding the default text summary, `--plain`, `--json` and
+    /// the web front door emit for this net (hauksbee-ci and the TUI render no
+    /// driver contention); same shared-wording discipline as
+    /// [`UnexercisedBus::message`].
     pub fn message(&self) -> String {
         format!(
             "co-sim: driver contention on net '{}' from t={:.6}s: firmware configured \
@@ -1774,7 +1779,8 @@ impl Scheduler {
     /// divergence), so a green time-based assertion means less than it looks.
     ///
     /// The value is the backend's whole sentence, rendered verbatim through
-    /// [`timing_limitation_message`] on every surface. Clock-truth-gated
+    /// [`timing_limitation_message`] on the four batch surfaces that read it,
+    /// and in `hauksbee models lint` before a run happens. Clock-truth-gated
     /// backends report nothing and are absent: the silence is the claim the
     /// gate measures. Ordered by MCU reference.
     pub fn timing_limitations(&self) -> Vec<(String, String)> {

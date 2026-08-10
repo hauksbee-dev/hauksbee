@@ -63,7 +63,8 @@ pub fn emit(
     });
     report.findings = kept;
     // Zero routed copper (D2): a pads-only board passes the spacing check
-    // vacuously; say so prominently on every surface.
+    // vacuously, so `UNROUTED_COPPER_NOTE` is printed by the two surfaces that
+    // read this flag, `--drc` and `--check`.
     let unrouted = !altium_present && super::unrouted_kicad_layout(text);
     let bound = bind_board(board, lib);
     let evidence = crate::evidence::BoardEvidence::from_bound(

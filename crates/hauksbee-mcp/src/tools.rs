@@ -46,7 +46,7 @@ pub fn definitions() -> Value {
     json!([
         {
             "name": "analyze_board",
-            "description": "Full physics-grounded analysis of a PCB design file (KiCad .kicad_pcb/.kicad_sch, Eagle .brd, Altium .PcbDoc, IPC-D-356 .d356, gerber zip, or Board-as-Code .board). Returns the front-door report JSON: overall headline, serious/total finding counts, per-section findings (DRC, connectivity, signal integrity), bind coverage (which components resolved to models), nets, detected supplies, and honesty notes. With firmware_path (.elf/.hex, a PlatformIO project, or a zip of either) it also runs a short firmware co-sim and attaches a `cosim` section. HONESTY CONTRACT: if the firmware question cannot be answered (no MCU on the board, external-only backend, firmware failed to load, or the analog solve aborted) the result is {\"status\":\"invalid_for_analysis\",\"reason\":...,\"report\":...} with the static report riding along. Never treat a refusal as pass or fail; it means the run declined to vouch for itself. Coverage degradations (substituted MCU core, dropped ADC channels, unexercised buses) are data fields inside the report, not prose; surface them.",
+            "description": "Full physics-grounded analysis of a PCB design file (KiCad .kicad_pcb/.kicad_sch, Eagle .brd, Altium .PcbDoc, IPC-D-356 .d356, gerber zip, or Board-as-Code .board). Returns the front-door report JSON: overall headline, serious/total finding counts, per-section findings (DRC, connectivity, signal integrity), bind coverage (which components resolved to models), nets, detected supplies, and honesty notes. With firmware_path (.elf/.hex, a PlatformIO project, or a zip of either) it also runs a short firmware co-sim and attaches a `cosim` section. HONESTY CONTRACT: if the firmware question cannot be answered (no MCU on the board, external-only backend, firmware failed to load, or the analog solve aborted) the result is {\"status\":\"invalid_for_analysis\",\"reason\":...,\"report\":...} with the static report riding along. Never treat a refusal as pass or fail; it means the run declined to vouch for itself. Coverage degradations arrive as data fields, not prose; surface them. The front-door report carries the substituted-MCU-core caveat, driver contentions and short pulses. It does NOT carry dropped ADC channels or unexercised buses: those two reach `hauksbee run --json` and the `run_checks` tool's `coverage_warnings`, so use `run_checks` when the board has an unmapped ADC channel or a bus slave on a controller-less platform.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -230,7 +230,10 @@ fn analyze_board(args: &Value) -> ToolResult {
 /// shapes, both the CLI's exit-3 territory: the co-sim never ran (no bound MCU,
 /// external-only backend, firmware failed to load), or it ran and the analog
 /// solve aborted. Returns the structured refusal carrying the report, so the
-/// static findings and every coverage hole still reach the caller as data.
+/// static findings, and the coverage holes the front door carries (substituted
+/// core, driver contentions, short pulses), still reach the caller as data.
+/// Dropped ADC channels and unexercised buses do not: see `analyze_board`'s
+/// description.
 fn firmware_refusal(report: &Value) -> Option<Value> {
     // The engine owns the typed contract. MCP is a transport: passing the same
     // object through prevents a second renderer from drifting on claim scope,
