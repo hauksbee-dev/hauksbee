@@ -1902,18 +1902,41 @@ fn bind_component(
     // and a curated entry was strictly worse than no entry at all. Same
     // treatment here: high-impedance, clock supplied by the MCU model. The two
     // load caps beside it are genuine passives and are unaffected.
-    // WHAT THIS SWEEPS IN BESIDES CRYSTALS. `crystal_footprint` in db/passives.toml
-    // matches `^Oscillator...:` as well, so a packaged TCXO lands here too, and a
-    // TCXO is not a two-terminal quartz blank: it has a supply pin and it DRIVES a
-    // clock output. Skipping it is still the right electrical answer, because this
-    // library models neither a motional arm nor an oscillator core, and both
-    // therefore end up high-impedance either way. What changes is the DISCLOSURE:
-    // the part used to be reported as "unresolved, left open" and is now reported as
-    // deliberately skipped, so the reason string has to say that an oscillator is
-    // included and that its supply draw and its driven output are the things going
-    // unmodelled. A board whose only clock source is a TCXO should not read as
-    // fully handled.
+    // WHAT `Skipped` ACTUALLY COSTS, because it is not free and an earlier version
+    // of this comment claimed the opposite. `BindOutcome::Skipped` is
+    // `is_ignored()`, so the row leaves `non_ignored()`: it drops out of the
+    // resolved/total denominator, and `BoardEvidence::from_bound` builds an
+    // `open_part` assumption only for `Unresolved`, so it produces no assumption on
+    // any evidence surface either. Skipping a part therefore makes the board read as
+    // MORE fully handled, not less.
+    //
+    // For a bare two-terminal quartz that is right, and is what the engine's own
+    // `crystal_fallback` has always done: there is no motional arm to model, so
+    // there is nothing a reader could act on.
+    //
+    // For a PACKAGED OSCILLATOR it is not right on its own. `crystal_footprint` in
+    // db/passives.toml matches `^Oscillator...:` too, so a TCXO lands here, and a
+    // TCXO is not a quartz blank: it has a supply pin and it DRIVES a clock. Its
+    // supply draw and its driven output both go unmodelled, and a board whose only
+    // clock source is a TCXO should not read as fully handled. So that case carries
+    // a WARNING, which `BindReport::warnings` collects over every row including the
+    // ignored ones and the bind report prints; the reason string alone would reach
+    // only the bind table's own line.
     if model.passive_class == Some(hauksbee_models::schema::PassiveClass::Crystal) {
+        // The footprint is the discriminator because it is the same evidence that
+        // admitted the class: a bare crystal's footprint says Crystal, a packaged
+        // oscillator's says Oscillator. Pad count would not do it, since a 4-pad
+        // crystal is just a 2-pad crystal with two grounded shield pads.
+        let is_powered_oscillator = comp.footprint.to_ascii_lowercase().contains("oscillator");
+        let warning = is_powered_oscillator.then(|| {
+            format!(
+                "{} ({}): packaged oscillator skipped as high impedance; it has a \
+                 supply pin and drives a clock, and neither its supply draw nor its \
+                 output is modelled, so any result that depends on this clock \
+                 existing is not evidence",
+                comp.reference, comp.value
+            )
+        });
         return (
             BindOutcome::Skipped {
                 reason: "crystal, resonator or packaged oscillator: modelled as \
@@ -1922,7 +1945,7 @@ fn bind_component(
                          driven clock output are absent too"
                     .to_string(),
             },
-            None,
+            warning,
             guesses,
         );
     }
@@ -3315,11 +3338,21 @@ fn bind_analog_switch(
         ron,
         roff,
     });
+    // AN ENTRY'S OWN `warning` REACHES THE REPORT FROM HERE, the way `bind_opamp`
+    // already does it. This path stamps ONE switch, so a multi-channel part
+    // (TXS0108E: eight channels, PCA9306: two) and a two-throw mux whose second
+    // throw cannot be modelled (TPS2104) are all bound with a real gap in them.
+    // Those gaps were stated only in TOML comments, which no report surface reads,
+    // while the board saw `Behavioral vswitch` with no warning and counted the part
+    // as resolved. A comment is not a disclosure.
     (
         BindOutcome::Behavioral {
             device: "vswitch".to_string(),
         },
-        None,
+        model
+            .params
+            .get_str("warning")
+            .map(|w| format!("{} ({}): {w}", comp.reference, comp.value)),
     )
 }
 
@@ -6337,10 +6370,34 @@ mod crystal_fallback_tests {
                 }
                 other => panic!("{reference} ({value}) must be Skipped, got {other:?}"),
             }
-            assert!(
-                warning.is_none(),
-                "{reference} ({value}) is a recognised part, not a problem to warn about"
-            );
+            // THE DISCLOSURE, BOTH WAYS. `Skipped` is `is_ignored()`, so the row
+            // leaves the resolve denominator AND produces no `open_part`
+            // assumption: skipping is what makes a board read as fully handled.
+            // For a bare quartz blank that is the honest answer, so it must stay
+            // silent. For a PACKAGED OSCILLATOR it is not: the part has a supply
+            // pin and drives a clock, and neither is modelled, so it must carry a
+            // warning onto the report. Delete the warning arm in the crystal branch
+            // and the oscillator half of this fails.
+            let is_oscillator = footprint.to_ascii_lowercase().contains("oscillator");
+            if is_oscillator {
+                let w = warning.unwrap_or_else(|| {
+                    panic!(
+                        "{reference} ({value}) is a packaged oscillator excluded from \
+                         the resolve denominator with nothing said about it"
+                    )
+                });
+                assert!(
+                    w.contains(reference) && w.contains("supply") && w.contains("clock"),
+                    "the oscillator warning must name the part and say what is \
+                     missing: {w}"
+                );
+            } else {
+                assert!(
+                    warning.is_none(),
+                    "{reference} ({value}) is a bare crystal, not a problem to warn \
+                     about: {warning:?}"
+                );
+            }
             assert_eq!(
                 circuit.devices.len(),
                 devices_before,
@@ -6517,6 +6574,119 @@ mod crystal_fallback_tests {
     /// switch closes above the threshold and opens below it. The spelling itself is
     /// pinned in the models suite; what is checked here is that the spelling buys
     /// the polarity.
+    /// A switch entry that models only part of the part must say so on a surface a
+    /// reader sees, not in a TOML comment.
+    ///
+    /// `bind_analog_switch`'s single-throw path stamps exactly ONE switch. Three
+    /// entries are bound through it with a real gap left inside: the TXS0108E has
+    /// eight channels and one is modelled, the PCA9306 has two and one is modelled,
+    /// and the TPS2104 is a two-input mux whose IN1 path is not stamped. Each
+    /// returns `BindOutcome::Behavioral`, which counts as RESOLVED, so if the gap
+    /// travels only as a comment the board reads as fully handled and the report
+    /// says nothing at all. `BindReport::warnings` walks every row and the report
+    /// prints it, so the entry's `warning` param is the channel; this asserts it is
+    /// wired up and that the entries carry it.
+    ///
+    /// The negative half matters as much: a part the entry models COMPLETELY must
+    /// stay silent, or the warning list becomes noise a reader learns to skip.
+    #[test]
+    fn a_partly_modelled_switch_discloses_the_part_it_leaves_out() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+
+        // (value, a phrase the disclosure must contain) and then the silent ones.
+        let partial = [
+            ("TXS0108E", "eight"),
+            ("PCA9306", "SDA"),
+            ("TPS2104", "IN1"),
+        ];
+        let complete = ["TPS22916YFP", "MIC94090C6"];
+
+        for (value, phrase) in partial
+            .iter()
+            .map(|(v, p)| (*v, Some(*p)))
+            .chain(complete.iter().map(|v| (*v, None)))
+        {
+            let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+            q.mpn = Some(value.to_string());
+            let model = lib
+                .resolve(&q)
+                .model
+                .unwrap_or_else(|| panic!("{value} must resolve"));
+
+            // Wire the pads BY ROLE out of the entry's own map, so this test does
+            // not restate a pin map that another test already owns.
+            let pad_for = |role: &str| -> String {
+                model
+                    .pins
+                    .iter()
+                    .find(|(_, r)| r.as_str() == role)
+                    .map(|(pad, _)| pad.clone())
+                    .unwrap_or_else(|| panic!("{value} names no `{role}` pad"))
+            };
+            let mut c = comp("U1", value);
+            c.pins = vec![
+                pin(&pad_for("in_out_a"), 1),
+                pin(&pad_for("in_out_b"), 2),
+                pin(&pad_for("ctrl"), 3),
+                pin(&pad_for("vss"), 0),
+            ];
+
+            let mut circuit = Circuit::new();
+            let (a, b, ctrl) = (
+                circuit.node("SWITCHED"),
+                circuit.node("RAIL"),
+                circuit.node("ENABLE"),
+            );
+            let node_of = move |net: Option<i64>| match net {
+                Some(1) => Some(a),
+                Some(2) => Some(b),
+                Some(3) => Some(ctrl),
+                Some(0) => Some(NodeId::GROUND),
+                _ => None,
+            };
+
+            let (outcome, warning, _) = bind_component(
+                &c,
+                &model,
+                Confidence::Exact,
+                &mut circuit,
+                &node_of,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                false,
+                &HashMap::new(),
+                pin_rules,
+            );
+            assert!(
+                !matches!(outcome, BindOutcome::Unresolved { .. }),
+                "{value} did not bind: {outcome:?}"
+            );
+
+            match phrase {
+                Some(phrase) => {
+                    let w = warning.unwrap_or_else(|| {
+                        panic!(
+                            "{value} binds as resolved with only part of it modelled \
+                             and says nothing; add a `warning` param to the entry"
+                        )
+                    });
+                    assert!(
+                        w.contains("U1") && w.contains(phrase),
+                        "{value}'s disclosure must name the reference and the gap \
+                         ({phrase:?}): {w}"
+                    );
+                }
+                None => assert!(
+                    warning.is_none(),
+                    "{value} is modelled completely; a warning here trains readers to \
+                     ignore the list: {warning:?}"
+                ),
+            }
+        }
+    }
+
     #[test]
     fn an_active_high_load_switch_conducts_on_a_high_control() {
         let lib = ModelLibrary::builtin();
