@@ -344,7 +344,11 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         if cfg.json {
             println!(
                 "{}",
-                serde_json::json!({ "ok": true, "verdict": "invalid", "refusal": refusal })
+                // `ok` is true iff the verdict is `pass` (docs/analysis/JSON_OUTPUT.md
+                // states the invariant, and every other rollup honours it). This
+                // envelope read `ok:true` beside `verdict:"invalid"` and exit 3,
+                // so a consumer gating on `ok` treated a refusal as a clean run.
+                serde_json::json!({ "ok": false, "verdict": "invalid", "refusal": refusal })
             );
         } else {
             eprintln!("error: {msg}");

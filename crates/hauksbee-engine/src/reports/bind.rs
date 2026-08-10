@@ -34,7 +34,7 @@ pub fn emit(
             // code will always be 0. The binding facts stay in the evidence
             // array and the bind summary, both rendered in full.
             let report = JsonReport::new(&bound.name, summary)
-                .describing_only()
+                .with_descriptive_only()
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             println!("{}", report.to_json());
