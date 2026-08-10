@@ -242,7 +242,10 @@ footprint name by itself never waives copper:
   `SparkFun-Jumpers` closed-trace packages. A generic package/value named
   `JUMPER` is checked even when both fields match. New vendor conventions require
   a real-board fixture. The two-field dedicated-0R rule is the only zero-ohm
-  exception.
+  exception. A tie drawn as a **supply symbol** rather than a footprint is not
+  expressible in the `.brd` at all, and is read from the companion `.sch`
+  instead: see [Declared ties read from the schematic](#declared-ties-read-from-the-schematic)
+  below, which reclassifies rather than exempts.
 - **Altium binary `.PcbDoc`:** only the native Components record
   `COMPONENTTYPE=Net Tie` or `Net Tie (In BOM)` is accepted. `PATTERN`, library,
   reference, and inferred 0R names are not substitutes. Component ownership
@@ -254,6 +257,83 @@ footprint name by itself never waives copper:
 Every accepted group is still owner-, layer-, net-group-, and contact-local.
 The reported contact point must land on that group's own copper. A legal A/B
 contact at one tie can never suppress another A/B collision elsewhere.
+
+### Declared ties read from the schematic
+
+The exemptions above are all **footprint** properties, and they all **waive** the
+finding: the copper never appears in the report. Eagle has a second way to declare
+a deliberate join that no footprint carries, and it needs the opposite treatment.
+
+A star ground in Eagle is drawn by placing one net's **supply symbol** on another
+net. `emonTx V3.4.5.sch` puts an `AGND` supply symbol (`AGND7`) on a segment of
+net `GND` alongside a `GND` one (`SUPPLY6`); the board then routes the two
+together on both layers. An Eagle `.brd` records no net ties of any kind, so the
+DRC, handed only the `.brd`, sees copper between two differently named nets and
+cannot tell this from a solder bridge.
+
+**The companion input.** Supply the schematic with `--schematic <FILE>`, or leave
+it beside the board under the board's own name (`<project>.brd` / `<project>.sch`)
+and it is found automatically, the same sibling convention the `.kicad_pro`
+clearance lookup uses. The parser (`hauksbee-extract/src/eagle_sch.rs`) reads one
+thing and nothing else: which named nets the schematic declares deliberately tied.
+It is not a schematic extractor, because the `.brd` already carries the netlist.
+A supply symbol is recognised by Eagle's own marker, a library symbol whose pin
+has `direction="sup"`, with the **pin's name** being the net it imposes; a tie is
+claimed only when such a symbol sits on a net whose name differs from its own.
+An ordinary component bridging two nets declares nothing.
+
+**Reclassified, not deleted.** A covered finding keeps its net pair, layer,
+location and measured gap, and gains the declaration. Its severity drops from
+`serious` to `note`, it stops failing `--strict`
+(`DrcReport::undeclared_shorts` is the gating set, `shorts` stays the full one),
+and every surface states both halves: that the nets are joined in copper, and
+that the schematic declares the tie, naming the symbols and the net. Deleting the
+finding would hide that GND and AGND share copper, which is a fact about the board
+the user is entitled to whether or not it was intended.
+
+**No schematic, no silence.** With none supplied, the finding stays `serious` and
+names the schematic as the unlocking upload, on the finding's own `fix` text and
+as a report-level note. And a schematic that declares nothing qualifies nothing:
+matching is by net-name pair against an actual declaration, so supplying a
+schematic can never be a route to silence a short. emonTx V3.4.0, the revision
+before the tie was drawn, declares none and its contacts stay serious even with
+its own schematic supplied. That is the guard the reverted `isolate` narrowing
+failed, and it is a test, not an intention.
+
+**Eagle only, and enforced.** A `.kicad_pcb` declares its ties in the layout the
+DRC already has and a `.kicad_sch` has no construct for a deliberate two-net join
+to read (`docs/ingest/SCHEMATICS.md`); Altium carries the native
+`COMPONENTTYPE=Net Tie` field. A KiCad or Altium board is therefore never asked
+for a schematic and carries no hint, and no companion is looked for beside it. An
+explicit `--schematic` on a non-Eagle board is REFUSED rather than ignored:
+accepting it would let a schematic describing a different design reclassify that
+board's shorts on a net-name coincidence, and ignoring it would leave the user
+reading an unqualified serious short believing their schematic had been read.
+Likewise a path that is not an Eagle `.sch` (a `.brd`, a KiCad legacy `.sch`, a
+pre-Eagle-6 binary drawing) is refused with the reason.
+
+The schematic enters the run's input inventory as
+`ArtifactRole::Schematic` / `ArtifactKind::EagleSchematic` with its SHA-256 and
+what it contributed, so a reclassified finding traces to the file that
+reclassified it; its connectivity is recorded as deliberately ignored. The DRC
+evidence map for a reclassified short cites both artifacts, because its assertion
+text quotes the declaration.
+
+The `sch_ties` example is the diagnostic behind these tests, and reproduces the
+revision boundary the evidence file records:
+
+```
+cargo run -p hauksbee-extract --example sch_ties -- "<board>.brd" "<board>.sch"
+# declared ties: 1
+#   GND <-> AGND: AGND7 wired to SUPPLY6 in net GND
+# shorts: 2
+# qualified: 2
+# still gating: 0
+```
+
+Run against emonTx V3.4.0 it prints `declared ties: 0` and `still gating: 2`,
+which is the same board family three revisions earlier and the reason the
+false-negative guard is a test rather than an intention.
 
 ## Simulation (`hauksbee-engine/src/shorts.rs`)
 

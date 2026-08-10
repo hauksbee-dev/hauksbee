@@ -130,6 +130,7 @@ fn drc_short_evidence_is_geometry_causal_and_cites_the_layout_artifact() {
             loc_mm: [1.0, 2.0],
             gap_mm: 0.0,
             severity: "serious".into(),
+            declared_tie: None,
             plain: "3V3 shorts GND".into(),
             fix: "separate copper".into(),
         }],
@@ -137,6 +138,8 @@ fn drc_short_evidence_is_geometry_causal_and_cites_the_layout_artifact() {
         at_limit: vec![],
         version_warning: None,
         suppression_note: None,
+        tie_declaration_hint: None,
+        declared_tie_source: None,
     };
 
     let maps = evidence.maps_for_drc(&drc).unwrap();

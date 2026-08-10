@@ -386,14 +386,41 @@ the two nets, which trades a false positive for the worse kind of error (see
 needs Eagle's fill reconstructed from the outline, the pour settings and the
 foreign copper, which is not implemented.
 
-**A tie the net-tie recogniser cannot see.** The three true reports on that family
-are all a ground tie the designer DECLARED: `emonTx V3.4.5.sch` wires an AGND
-supply symbol to a GND supply symbol in one segment of net `GND`, from V3.4.1
-onward. So they are true about the copper and wrong to be SERIOUS. The Eagle
-net-tie exemption keys on jumper libraries and package conventions
+**A tie the `.brd` cannot declare, read from the `.sch`.** The three true reports
+on that family are all a ground tie the designer DECLARED: `emonTx V3.4.5.sch`
+wires an AGND supply symbol to a GND supply symbol in one segment of net `GND`,
+from V3.4.1 onward (V3.4.0 does not, and the parser reports 0 ties there against 1
+from V3.4.1 on). So they are true about the copper and wrong to be SERIOUS. The
+Eagle net-tie exemption keys on jumper libraries and package conventions
 ([`../checks/SHORTS.md`](../checks/SHORTS.md)), which cannot express that, and the
-declaration is in the `.sch` while this reader is handed the `.brd`. Reaching it
-needs the schematic's net segments, or a rule for the two-supply-symbol construct.
+declaration is in the `.sch` while the DRC is handed the `.brd`.
+
+That is now a supported upload rather than a limitation. Supply the schematic
+(`--schematic <FILE>`, or leave it beside the board under the board's own name)
+and the contact is RECLASSIFIED: it stays in the report, with the same layer,
+location and measured gap, as a note that names the symbols and the net
+(`AGND7 wired to SUPPLY6 in net GND`) instead of a serious short, and it stops
+failing `--strict`. The schematic enters the input inventory with its SHA-256 and
+what it contributed. With no schematic the finding stays SERIOUS and names the
+schematic as the unlocking upload, which is the honest state: an Eagle `.brd`
+records no net ties, so a `.brd`-only run genuinely cannot tell a star ground
+from a solder bridge.
+
+What the pathway deliberately does NOT do is widen. Matching is by net-name pair,
+against a declaration read from Eagle's own supply-symbol construct (a library
+symbol whose pin carries `direction="sup"`, placed on a net its own name does not
+match). A schematic that declares nothing qualifies nothing, so supplying one can
+never be a route to silence a short: V3.4.0 supplies its own schematic and its
+reported contacts stay serious, which is the false-negative guard the reverted
+`isolate` narrowing failed. The two over-reports above are unaffected; they are a
+fill-reconstruction problem, not a declaration problem.
+
+Scoped to Eagle. A `.kicad_pcb` declares its ties in the layout the DRC already
+has (`net_tie_pad_groups`, `(attr net_tie)`) and a `.kicad_sch` has no construct
+for a deliberate two-net join to read (see
+[`../ingest/SCHEMATICS.md`](../ingest/SCHEMATICS.md), "Net-tie footprints ... have
+no schematic counterpart"). Altium carries the native `COMPONENTTYPE=Net Tie`
+field. Eagle was the one format with the hole.
 
 That overlap keys on the polygons' vertex rings: same-rank pours whose rings
 miss by less than their drawn boundary stroke widths are not flagged, and
