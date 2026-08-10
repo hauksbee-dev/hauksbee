@@ -381,9 +381,10 @@ layer where one holds `0.00030625`.
 turns out to be necessary but not sufficient for the fills to meet. The emonTx
 V3.4.0 puts both of its top-layer ground pours at `isolate="0.00030625"` with
 overlapping outlines, and the copper gerbers it ships show the AGND body as a
-separate component from the GND body (nearest approach measured at 29 mm by one
-raster, 4.973 mm by an independent reviewer's exact-geometry pass; separate
-either way). hauksbee flags that layer. It is wrong to, and the finding stands
+separate component from the GND body. Four independent rasters put the separation
+between about 2.6 mm and 29 mm, the low end being the better-resolved ones; the
+number is unsettled and the separateness is not, which is why the finding rests on
+component membership rather than on a distance. hauksbee flags that layer. It is wrong to, and the finding stands
 only because the same rule is right about V3.4.0's bottom layer and V3.4.5's, and
 because it is silent on V3.4.5's top layer where the old rule was wrong: a strict
 improvement carrying one known error. No threshold on `isolate` can fix it, since
@@ -410,9 +411,7 @@ positives. Both bounds hold. What no threshold can fix is that the SAME value,
 0.00030625, appears on a merge and on a non-merge (V3.4.0's two layers), so the
 outcome is not a function of `isolate` and no cut through it gets all six right.
 The micrometre inside the measured band is a manufacturing judgement, not a
-documented Eagle boundary. The
-micrometre inside that is a manufacturing judgement, not a documented Eagle
-boundary.
+documented Eagle boundary.
 
 That overlap keys on the polygons' vertex rings: same-rank pours whose rings
 miss by less than their drawn boundary stroke widths are not flagged, and

@@ -396,8 +396,10 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
 
     // KiCad's expected keys come from the recording. The footprint pair is
     // derived from its "<REF> pad <n>" strings; the location check below pins the
-    // pad number only where the footprint's pads are more than 4 mm apart, which
-    // is D503's case and not R204's (1.825 mm) or D203's (1.9 mm).
+    // pad number only where the footprint's violating pads are at least 4 mm
+    // apart: D503's are exactly 4.000 mm, so a point on the wrong one is 4 mm from
+    // the right anchor and fails, and D203's violating pair (pad 1 to pad 3) is
+    // 2.102 mm, which also fails the 2 mm check. R204's 1.825 mm does not.
     let want: std::collections::BTreeSet<Key> = recorded
         .iter()
         .map(|r| {
