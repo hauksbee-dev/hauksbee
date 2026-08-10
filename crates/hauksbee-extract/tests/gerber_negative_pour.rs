@@ -73,3 +73,52 @@ fn a_pad_the_voids_leave_bridged_stays_on_the_pour() {
         "copper the voids leave standing still joins the pad to the pour"
     );
 }
+
+/// Corpus guard for the `-CuTop.gbr` / `-CuBottom.gbr` naming, read end to end.
+///
+/// Nothing in this crate referenced a board named that way, so when the copper token
+/// was tightened to require `cu` to END a word, both films of these boards silently
+/// became `Unknown`, which the directory scan drops without a note. The RoyalBlue
+/// board then failed outright with "no copper gerber layers found here", and thirteen
+/// corpus zips ship the same convention (the crkbd corne boards and six switch-plate
+/// PCBs). A unit test on `classify` would have caught it; there was none of those
+/// either, so this reads the actual films.
+///
+/// The crkbd zip additionally covers a drill MAP being read as a drill program:
+/// `corne-cherry-NPTH-drl_map.pdf` carries the `drl` token, and `read_to_string` on
+/// the PDF failed the whole extraction until non-film extensions were refused ahead
+/// of the drill rules.
+#[test]
+fn cutop_named_corpus_boards_still_reconstruct() {
+    if let Some(dir) = hauksbee_testkit::corpus_board(
+        env!("CARGO_MANIFEST_DIR"),
+        "kicad_demos/demos/royalblue54L_feather/nfc_antenna/RoyalBlue54L-NFC-Antenna/jlcpcb/gerber",
+    ) {
+        let e = from_gerber_dir(&dir).expect("a -CuTop/-CuBottom board must find its copper");
+        assert_eq!(e.stats.n_layers, 2, "CuTop and CuBottom are the two films");
+        assert_eq!(e.stats.n_holes, 2);
+        assert_eq!(
+            e.stats.n_nets, 1,
+            "an NFC antenna coil is one conductor; measured 1"
+        );
+    }
+    if let Some(zip) = hauksbee_testkit::corpus_board(
+        env!("CARGO_MANIFEST_DIR"),
+        "crkbd/pcbs/corne-cherry/hotswap/jlcpcb/production_files/GERBER-corne-cherry.zip",
+    ) {
+        let e = hauksbee_extract::gerber::from_gerber_zip(&zip)
+            .expect("the corne-cherry set must reconstruct, drill map and all");
+        assert_eq!(e.stats.n_layers, 2);
+        assert!(
+            e.stats.n_holes > 400,
+            "a hotswap keyboard is drill-heavy; measured 510, got {}",
+            e.stats.n_holes
+        );
+        assert!(
+            (120..=220).contains(&e.stats.n_nets),
+            "nets reconstructed: {}, expected the measured 166 within a band a \
+             systematic merge or split would leave",
+            e.stats.n_nets
+        );
+    }
+}

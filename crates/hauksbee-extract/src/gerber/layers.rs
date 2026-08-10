@@ -83,18 +83,59 @@ impl<'a> Name<'a> {
         self.ext.as_deref() == Some(e)
     }
 
-    /// `needle` present as the END of a word: the character after it, if any, is not
-    /// a letter. Nothing is required of what precedes it, so `TopCu` matches while
-    /// `circuit` does not.
-    fn has_word_end(&self, needle: &str) -> bool {
+    /// Does the name carry `cu` as a COPPER token?
+    ///
+    /// As a bare substring `cu` matches inside `circuit`, `accumulator`, `vcut`,
+    /// `document` and `cube`, so any project so named supplied the copper token and a
+    /// mechanical or documentation film became copper. Requiring `cu` to END a word
+    /// fixed that and broke the other side: `cu` glued to a FOLLOWING role word is a
+    /// real convention, and `-CuTop.gbr` / `-CuBottom.gbr` ship on thirteen corpus
+    /// zips plus a loose directory (the crkbd corne boards, six switch-plate PCBs and
+    /// the RoyalBlue54L antenna). Those went Unknown, which is dropped with no note,
+    /// and the RoyalBlue54L directory failed outright with "no copper gerber layers
+    /// found here".
+    ///
+    /// So: a whole word (`-F_Cu`, `_cu.gbr`), or ending one (`TopCu`), or abutting a
+    /// side or stack token on its right (`CuTop`, `CuBottom`, `CuIn1`). Nothing else.
+    fn has_cu_token(&self) -> bool {
+        const AFTER: [&str; 8] = ["top", "bot", "bottom", "front", "back", "in", "l", "mid"];
         let hay = self.full.as_bytes();
-        let ned = needle.as_bytes();
-        (0..hay.len().saturating_sub(ned.len()) + 1).any(|i| {
-            &hay[i..i + ned.len()] == ned && {
-                let j = i + ned.len();
-                j >= hay.len() || !hay[j].is_ascii_alphabetic()
+        self.match_positions("cu").any(|i| {
+            let j = i + 2;
+            match hay.get(j) {
+                // Word end: `-F_Cu.gbr`, `In1_Cu`, and `TopCu` where only the left
+                // side is glued.
+                None => true,
+                Some(&b) if !b.is_ascii_alphabetic() => true,
+                // Glued to a role word on the right.
+                _ => {
+                    let tail = &self.full[j..];
+                    AFTER.iter().any(|t| {
+                        tail.strip_prefix(*t).is_some_and(|rest| {
+                            // `in`/`l` only count when a stack number follows, so
+                            // `culminate` and `clone` are not copper.
+                            if *t == "in" || *t == "l" {
+                                rest.starts_with(|c: char| c.is_ascii_digit())
+                            } else {
+                                true
+                            }
+                        })
+                    })
+                }
             }
         })
+    }
+
+    /// Byte offsets where `needle` occurs. `None` of them when the needle is longer
+    /// than the name, which `0..len - needle_len + 1` did NOT express: with
+    /// `saturating_sub` the range became `0..1`, and indexing `hay[0..needle_len]`
+    /// then panicked. A fab folder holding a file called `a` or `x.g` aborted
+    /// extraction with a panic instead of an error, on the `border` test.
+    fn match_positions<'n>(&'n self, needle: &'n str) -> impl Iterator<Item = usize> + 'n {
+        let hay = self.full.as_bytes();
+        let ned = needle.as_bytes();
+        let upto = hay.len().checked_sub(ned.len()).map(|n| n + 1).unwrap_or(0);
+        (0..upto).filter(move |&i| &hay[i..i + ned.len()] == ned)
     }
 
     /// `needle` present as a whole word, i.e. not run together with other
@@ -104,21 +145,50 @@ impl<'a> Name<'a> {
     /// `1 - Top`, `L2-GND` and `top2` all match their role.
     fn has_word(&self, needle: &str) -> bool {
         let hay = self.full.as_bytes();
-        let ned = needle.as_bytes();
         let alpha = |b: u8| b.is_ascii_alphabetic();
-        for i in 0..hay.len().saturating_sub(ned.len()) + 1 {
-            if &hay[i..i + ned.len()] != ned {
-                continue;
-            }
+        self.match_positions(needle).any(|i| {
             let before_ok = i == 0 || !alpha(hay[i - 1]);
-            let j = i + ned.len();
+            let j = i + needle.len();
             let after_ok = j >= hay.len() || !alpha(hay[j]);
-            if before_ok && after_ok {
-                return true;
+            before_ok && after_ok
+        })
+    }
+}
+
+/// A KiCad-style layer suffix stating outright which copper layer a film is:
+/// `-F_Cu`, `-B_Cu`, `-In<n>_Cu`, with `.` accepted for `_`. Unambiguous, so it is
+/// read before the non-copper word sweep, which cannot otherwise be talked out of
+/// claiming a file whose project name happens to contain one of its words.
+fn explicit_kicad_copper(n: &Name) -> Option<LayerRole> {
+    if n.has("f_cu") || n.has("f.cu") {
+        return Some(LayerRole::Copper {
+            index: 0,
+            name: top_label(n.original),
+        });
+    }
+    if n.has("b_cu") || n.has("b.cu") {
+        return Some(LayerRole::Copper {
+            index: usize::MAX,
+            name: bottom_label(n.original),
+        });
+    }
+    for sep in ['_', '.'] {
+        let tail = format!("{sep}cu");
+        for pos in n.full.match_indices("in").map(|(p, _)| p) {
+            let rest = &n.full[pos + 2..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let Ok(k) = digits.parse::<usize>() else {
+                continue;
+            };
+            if (1..=32).contains(&k) && rest[digits.len()..].starts_with(&tail) {
+                return Some(LayerRole::Copper {
+                    index: k,
+                    name: n.original.to_string(),
+                });
             }
         }
-        false
     }
+    None
 }
 
 /// Extensions that are certainly NOT a plotted film: documents, data files and
@@ -176,6 +246,18 @@ fn is_gerber_film_ext(n: &Name) -> bool {
 pub fn classify(path: &Path) -> LayerRole {
     let n = Name::of(path);
 
+    // ── Nothing with a non-film extension is a fab film, of any role ────────
+    // Hoisted above the drill checks because a drill MAP is a drawing:
+    // `corne-cherry-NPTH-drl_map.pdf` carries the `drl` token, matched a name-based
+    // drill rule, and `read_to_string` on the PDF then failed the WHOLE extraction
+    // with "stream did not contain valid UTF-8". Thirteen corpus zips ship one. None
+    // of the extensions on this list is a drill or film extension, and returning
+    // Unknown is what routes a `.csv`/`.pos` to the placement reader, so hoisting
+    // costs nothing.
+    if n.ext.as_deref().is_some_and(is_definitely_not_a_film) {
+        return LayerRole::Unknown;
+    }
+
     // ── Drill first: extension is the strongest signal ──────────────────────
     if n.ext_is("drl") || n.ext_is("txt") || n.ext_is("xln") || n.ext_is("nc") || n.ext_is("tap") {
         // `.txt` is sometimes a readme; require a drill-ish hint when ambiguous.
@@ -203,6 +285,27 @@ pub fn classify(path: &Path) -> LayerRole {
 
     // ── Things that are explicitly NOT copper (check before generic copper) ──
     // Order matters: paste/mask/silk often also contain "top"/"bottom".
+    // ── Outline by extension, before the word sweep ─────────────────────────
+    // `.GKO`/`.GM1`/`.GML` are Altium's board-outline films, and `Mechanical_1` is
+    // what Altium calls the layer they are plotted from, so the word sweep below
+    // claimed `board-Mechanical_1.GM1` as Ignored and the outline was lost.
+    if n.ext_is("gko") || n.ext_is("gm1") || n.ext_is("gml") {
+        return LayerRole::Outline;
+    }
+
+    // ── An EXPLICIT copper suffix outranks the word sweep ───────────────────
+    // The sweep below returns Ignored unconditionally on a raw substring, so a
+    // project whose NAME contains a non-copper word lost its copper outright:
+    // `mechanical-keyboard-F_Cu.gbr`, `MechanicalKeyboard-B_Cu.gbr`,
+    // `mechanical_keyboard-In1_Cu.gbr`, `Documentation-F_Cu.gbr` and the
+    // pre-existing `fabricator-F_Cu.gbr` all classified Ignored. Mechanical
+    // keyboards are one of the largest open-hardware PCB categories and this
+    // corpus is full of them. `F_Cu`/`B_Cu`/`In<n>_Cu` is not a word that might
+    // appear in a project name; it is KiCad stating the layer, so it wins.
+    if let Some(role) = explicit_kicad_copper(&n) {
+        return role;
+    }
+
     let non_copper = [
         ("paste", &["gtp", "gbp"][..]),
         ("mask", &["gts", "gbs"][..]),
@@ -229,13 +332,22 @@ pub fn classify(path: &Path) -> LayerRole {
         // large false merge, the very bug the negative-pour work exists to fix,
         // reintroduced by a filename, and it inflates the layer count that
         // blind-via span resolution reads.
+        // Whole words, unlike the rest of this list. `MechanicalKeyboard-B_Cu.gbr`
+        // glues the word to the next one, and the explicit-suffix rule above already
+        // rescues the separated forms; requiring a word here means the raw substring
+        // cannot reach past a project name either.
         ("mechanical", &[][..]),
         ("documentation", &[][..]),
         ("adhes", &["gma", "gba"][..]),
         ("glue", &[][..]),
     ];
     for (word, exts) in non_copper {
-        if n.has(word) || exts.iter().any(|e| n.ext_is(e)) {
+        let hit = if word == "mechanical" || word == "documentation" {
+            n.has_word(word)
+        } else {
+            n.has(word)
+        };
+        if hit || exts.iter().any(|e| n.ext_is(e)) {
             return LayerRole::Ignored;
         }
     }
@@ -301,7 +413,7 @@ pub fn classify(path: &Path) -> LayerRole {
     // `accumulator`, `vcut`, `document` and `cube`, so any project name containing
     // one of those plus a role word read as copper. Requiring a word END keeps the
     // forms that occur (`-F_Cu`, `In1_Cu`, `TopCu`) and rejects the ones that do not.
-    let has_copper = |n: &Name| n.has_word_end("cu") || n.has("copper");
+    let has_copper = |n: &Name| n.has_cu_token() || n.has("copper");
     if n.has("f_cu")
         || n.has("f.cu")
         || (n.has("top") && has_copper(&n))
@@ -663,12 +775,28 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
     // `<board>_Copper_Layer_1.gbr` classifying Unknown and its copper discarded:
     // the same silent loss this function was fixed for on `_Copper_Signal_1`, one
     // marker over. The top and bottom rules already use both spellings.
-    let has_copper = n.has_word_end("cu") || n.has("copper");
+    let has_copper = n.has_cu_token() || n.has("copper");
     let accept = |marker: &str, k: usize, bounded: bool| -> Option<usize> {
         (k >= 1
             && (!bounded || k <= 32)
-            && (has_copper || marker == "signal" || marker == "inner" || marker == "plane"))
-            .then_some(k)
+            && (has_copper
+                || marker == "signal"
+                || marker == "inner"
+                // `plane` alone names no material: `Peelable Plane 1.gbr` and
+                // `Carbon Plane 1.gbr` are films, not copper. It counts only when the
+                // name also states a copper ROLE, which is what an internal plane
+                // does. `paste` staying Ignored was not evidence the marker was
+                // bounded; it survived only because `paste` is enumerated.
+                || (marker == "plane"
+                    && (n.has("internal")
+                        || n.has("inner")
+                        || n.has("gnd")
+                        || n.has("ground")
+                        || n.has("pwr")
+                        || n.has("power")
+                        || n.has("vcc")
+                        || n.has("vdd")))))
+        .then_some(k)
     };
     // Scan EVERY occurrence of a marker, not just the first: a project name that
     // itself contains one (e.g. "mainboard-In2_Cu", "arduino-In1_Cu") puts a
@@ -715,8 +843,14 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
                 // already. The separated form keeps the requirement for all of them,
                 // that being where a stray number after a word is the real hazard.
                 let at_token_start = pos == 0 || !n.full.as_bytes()[pos - 1].is_ascii_alphabetic();
+                // `plane` needs a token start in BOTH forms, like `in`: without it
+                // any project ending "...plane<digit>" had its TOP film reindexed as
+                // inner 1 (`Backplane1-Top.gbr`, `Airplane1-Top.gbr`), two films could
+                // then collide on an index, and `assign_inner_indices` densified them
+                // into the wrong stack order, which is what blind-via span resolution
+                // reads.
                 let k = if pass == 0 {
-                    (at_token_start || marker != "in")
+                    (at_token_start || !matches!(marker, "in" | "plane"))
                         .then(|| index_at(tail))
                         .flatten()
                 } else if at_token_start {
@@ -954,9 +1088,88 @@ mod tests {
         ] {
             assert!(!role(name).is_copper(), "{name} is not a copper film");
         }
-        // `cu` ending a word is still the copper token, however it is attached.
+        // `cu` is the copper token as a whole word, ending one, OR abutting a side or
+        // stack token on its RIGHT. `-CuTop.gbr` / `-CuBottom.gbr` is a real
+        // convention: thirteen corpus zips and a loose directory ship it, and
+        // requiring `cu` to end a word turned both films of those boards Unknown,
+        // which is dropped with no note. `cutop_named_corpus_boards_still_reconstruct`
+        // reads two of those boards end to end.
         assert!(role("TopCu.gbr").is_copper());
         assert!(role("board-F_Cu.gbr").is_copper());
+        assert!(matches!(
+            role("corne-cherry-CuTop.gbr"),
+            LayerRole::Copper { index: 0, .. }
+        ));
+        assert!(matches!(
+            role("corne-cherry-CuBottom.gbr"),
+            LayerRole::Copper {
+                index: usize::MAX,
+                ..
+            }
+        ));
+        assert!(matches!(
+            role("RoyalBlue54L-NFC-Antenna-CuTop.gbr"),
+            LayerRole::Copper { index: 0, .. }
+        ));
+        // An EXPLICIT copper suffix outranks the non-copper word sweep, which returns
+        // Ignored on a raw substring and so discarded the copper of any project whose
+        // NAME carried one of its words. Mechanical keyboards are one of the largest
+        // open-hardware PCB categories and this corpus is full of them.
+        for (name, want) in [
+            ("mechanical-keyboard-F_Cu.gbr", 0usize),
+            ("MechanicalKeyboard-B_Cu.gbr", usize::MAX),
+            ("mechanical_keyboard-In1_Cu.gbr", 1),
+            ("Documentation-F_Cu.gbr", 0),
+            ("fabricator-F_Cu.gbr", 0),
+        ] {
+            match role(name) {
+                LayerRole::Copper { index, .. } => assert_eq!(index, want, "{name}"),
+                other => panic!("{name} should be copper, got {other:?}"),
+            }
+        }
+        // `.GM1` is Altium's board-outline film and `Mechanical_1` is the layer it is
+        // plotted from, so the word sweep claimed it and the outline was lost.
+        assert_eq!(role("board-Mechanical_1.GM1"), LayerRole::Outline);
+        // `plane` counts only where the name states a copper ROLE, and only at a token
+        // start. Otherwise any project ending "...plane<digit>" had its TOP film
+        // reindexed as inner 1, which corrupts the stack order blind-via span
+        // resolution reads.
+        for name in ["Peelable Plane 1.gbr", "Carbon Plane 1.gbr"] {
+            assert!(!role(name).is_copper(), "{name} is a film, not copper");
+        }
+        for name in [
+            "Backplane1-Top.gbr",
+            "Airplane1-Top.gbr",
+            "Mainplane1-Top.gbr",
+        ] {
+            assert!(
+                matches!(role(name), LayerRole::Copper { index: 0, .. }),
+                "{name} is a TOP film, not inner 1"
+            );
+        }
+        assert!(matches!(
+            role("Backplane2-Bottom.gbr"),
+            LayerRole::Copper {
+                index: usize::MAX,
+                ..
+            }
+        ));
+        assert!(matches!(
+            role("GND Plane 2.gbr"),
+            LayerRole::Copper { index: 2, .. }
+        ));
+        // A drill MAP is a drawing. It carries the `drl` token, matched a name-based
+        // drill rule, and reading the PDF as text failed the whole extraction.
+        assert!(!matches!(
+            role("corne-cherry-NPTH-drl_map.pdf"),
+            LayerRole::Drill
+        ));
+        // And a name shorter than a marker must not panic. `hay.len() - needle.len()`
+        // under-flowed into `0..1`, and indexing then panicked, so a fab folder with a
+        // one-character filename aborted extraction instead of returning an error.
+        for name in ["a", "1", "ab", "abc", "x.g", ""] {
+            let _ = role(name);
+        }
         // An INTERNAL PLANE is copper, and is exactly the film drawn negatively.
         // Both of these classified Unknown, so their copper was discarded outright.
         for (name, want) in [

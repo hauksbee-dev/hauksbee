@@ -525,6 +525,8 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     // island". Only a REGION blocks promotion: a track, flash or via over the island
     // rejoins it to the pour through the ordinary connectivity passes, which is the
     // right answer and needs no help here.
+    // Shapes as they stand before any island is appended, for the exact overlap test.
+    let out_shapes: Vec<Shape> = out.iter().map(|p| p.shape.clone()).collect();
     let painted_tree = rstar::RTree::bulk_load(
         (0..out.len())
             .filter(|&i| matches!(out[i].kind, PrimKind::Region))
@@ -534,13 +536,25 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             })
             .collect(),
     );
-    let bridged = |hb: [f64; 4], painted_before: usize| -> bool {
+    let bridged = |island: &[(f64, f64)], hb: [f64; 4], painted_before: usize| -> bool {
+        let probe = Shape::Polygon {
+            pts: island.to_vec(),
+            r: 0.0,
+        };
         painted_tree
             .locate_in_envelope_intersecting(rstar::AABB::from_corners(
                 [hb[0], hb[1]],
                 [hb[2], hb[3]],
             ))
-            .any(|l| l.idx >= painted_before)
+            .filter(|l| l.idx >= painted_before)
+            // Bounds are only the prefilter; the verdict is whether the later
+            // region's COPPER actually reaches the island. Stopping at bounds let a
+            // 0.2 mm frame hugging the board edge, whose box is the whole board,
+            // veto promotion for every island under it, so the same geometry
+            // answered differently depending on paint order. Later dark regions are
+            // the NORM on a negatively-drawn film (the `%LPD*%` islands), so one
+            // long or L-shaped one disabled promotion board-wide.
+            .any(|l| super::geo::shape_gap(&probe, &out_shapes[l.idx]) <= 0.0)
     };
     for slot in cut {
         let i = regions[slot];
@@ -601,7 +615,7 @@ fn free_ringed_islands(
     shape: &mut Shape,
     applied: &VoidIndex,
     originals: &[Vec<(f64, f64)>],
-    bridged: &dyn Fn([f64; 4], usize) -> bool,
+    bridged: &dyn Fn(&[(f64, f64)], [f64; 4], usize) -> bool,
 ) -> Vec<((usize, usize, usize), Shape)> {
     let Shape::MultiPolygon { contours } = shape else {
         return Vec::new();
@@ -634,14 +648,21 @@ fn free_ringed_islands(
         }
         // Promotion REPARTITIONS primitives, which is not a parity operation, and
         // connectivity never unions one region to another however much their copper
-        // overlaps. So if anything was painted over this island AFTER the void was
-        // cut, and that something is a region, promoting the island cuts a
-        // conductor the film joined. An exporter re-adding a spoke across a cleared
-        // annulus as a dark region is exactly that: the plane, the spoke and the
-        // island came back as three nets on a film with one conductor. Leaving the
-        // island as a contour of the pour over-connects instead, which is this
-        // module's direction.
-        if bridged(hb, applied.unit_painted_before[uid]) {
+        // overlaps. So if a REGION painted after the void reaches this island,
+        // promoting it cuts a conductor the film joined. An exporter re-adding a
+        // spoke across a cleared annulus as a dark region is exactly that: the plane,
+        // the spoke and the island came back as three nets on a film with one
+        // conductor. Leaving the island as a contour of the pour over-connects
+        // instead, which is this module's direction.
+        //
+        // Only a region blocks promotion. A later FLASH over the island rejoins it
+        // through the containment pass's `penetrates` arm, so it needs no help. A
+        // later TRACK usually does too, its sample points landing in the island, but
+        // not always: a draw that laps onto the island with its WIDTH while every
+        // sample point sits in the void or the pour reads as two nets on a
+        // one-conductor film. No exporter is known to emit that and it is not a
+        // regression, so it is recorded here rather than guarded against.
+        if bridged(contour, hb, applied.unit_painted_before[uid]) {
             continue;
         }
         // The pour's OWN holes count too. Enclosure only requires a void's
@@ -1206,7 +1227,10 @@ struct Plotter<'a> {
     /// changes SCALE, and `normalize_rs274x` exists partly because real Allegro files
     /// arrive carrying `SFA1B1`, so the parameter does reach this reader. Its exact
     /// semantics are not something to reconstruct from memory, so a non-identity one
-    /// simply refuses every clear: no cost when it is benign.
+    /// refuses every clear. That is free for the `SFA1B1` that actually arrives, and
+    /// it is NOT free otherwise: on a negatively-drawn plane, refusing every clear
+    /// returns the board-sized solid slab, i.e. every net on that layer shorted. The
+    /// permitted direction, but a real cost, not a costless one.
     image_scale_identity: bool,
 }
 
