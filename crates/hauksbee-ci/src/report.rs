@@ -433,8 +433,10 @@ impl CiResult {
     /// True if every assertion passed or was waived. An INVALID assertion has
     /// `passed == false` and can never be waived, so it is not counted here.
     /// A waived failure is visible-but-not-gating (the whole point of a
-    /// waiver): it stays a FAIL on every surface but does not turn the build
-    /// red.
+    /// waiver): it stays visible as `[WAIVED]` in the terminal report, a
+    /// `<skipped>` JUnit testcase, a `::warning` annotation and the `waived`
+    /// JSON field, without turning the build red. The web checks panel is the
+    /// exception and renders it as a plain FAIL (see docs/ci/CI.md).
     pub fn passed(&self) -> bool {
         self.results.iter().all(|r| r.passed || r.waived.is_some())
     }
