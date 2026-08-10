@@ -666,8 +666,10 @@ clear gap looks like, one clear statement spanning two pours (all-or-none is
 applied per pour and enclosure demands every piece sit inside that pour, so
 such a statement voids NEITHER and on a film that concatenates a plane's
 clearances across two pours the solid-slab reading returns whole), and an
-island a later dark REGION bridges, which stays a contour of the pour because
-connectivity never unions one region to another.
+island whose copper a later dark REGION actually reaches, which stays a contour
+of the pour because connectivity never unions one region to another (the test
+is the region's copper against the island, not its bounding box: a frame
+hugging the board edge has a board-sized box and reaches no island).
 
 Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
 pour with two ringed pads must reconstruct to three conductors, and its
