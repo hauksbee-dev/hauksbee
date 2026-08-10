@@ -574,8 +574,8 @@ annular void's inner rim leaves its copper island standing, and that island is
 then moved out of the pour's primitive into its own, because connectivity
 unions per primitive and an island left inside the pour's shape is shorted
 straight back to the plane. An island is freed only when no other void's
-bounds overlap it; one another void may have touched stays a contour of the
-pour, over-connected. A void is cut
+bounds overlap it; one that another void may have touched stays a contour of
+the pour, over-connected. A void is cut
 from every `Region` primitive whose own contours, as drawn, contain every
 vertex of the void, and which was painted **before** it, gerber being a
 painter's model. A void already covered whole by an earlier void is skipped,
@@ -677,8 +677,16 @@ negative-drawn plane makes load-bearing: cutting its voids turns it into ONE
 board-sized shape carrying a contour per antipad. The grid also answers "is
 there any pour boundary inside this pad's bounds", which keeps the exact
 poly-distance penetration test off a hot path that a board-sized pour would
-otherwise reach for every pad on the layer. Measured on a synthetic 100 mm
-plane with 6084 antipads: 3.97 s before those two changes, 0.10 s after.
+otherwise reach for every pad on the layer. Its scanline classifier buckets
+edges by the rows they span, so the build is linear in vertices rather than
+rows-times-vertices, and a layer's gridded pours share a cell budget rather
+than each taking the resolution ceiling.
+
+Whole-extraction times for a synthetic 100 mm plane with 6084 rectangular
+antipads and a pad in each: 3.97 s before those changes, 60 ms after. With the
+antipads drawn as annular clear flashes, the shape a real negative plane
+carries, 92 ms; with 62500 non-overlapping annular ones, each leaving an
+island to free, 2.2 s.
 
 Two-layer boards extract in tens to hundreds of milliseconds. The 6-layer
 reform motherboard (about 75k draws and four 35k-vertex plane pours)
