@@ -63,7 +63,18 @@ impl BindOutcome {
             BindOutcome::Mcu { backend } => format!("mcu {backend}"),
             BindOutcome::PowerRail { volts } => format!("rail {volts:.2}V"),
             BindOutcome::Skipped { reason } => format!("skipped ({reason})"),
-            BindOutcome::Unresolved { reason } => format!("UNRESOLVED ({reason})"),
+            // The marker is stripped here too, and this was the last surface carrying
+            // it. A named abstention's `reason` arrives with its two halves joined by
+            // `UNLOCKED_BY_MARKER`; the bind table truncates before reaching it, but
+            // the TUI puts this whole label into a part's detail line, so it showed
+            // the reader the plumbing. `result.rs`'s own test asserts the marker never
+            // reaches a reader, and this label is a reader's.
+            BindOutcome::Unresolved { reason } => {
+                let reason = reason
+                    .split_once(hauksbee_ir::evidence::Assumption::UNLOCKED_BY_MARKER)
+                    .map_or(reason.as_str(), |(because, _)| because.trim());
+                format!("UNRESOLVED ({reason})")
+            }
         }
     }
 
