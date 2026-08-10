@@ -316,38 +316,96 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     let mut applied: Vec<VoidIndex> = bounds.iter().map(|&b| VoidIndex::new(b)).collect();
     // Which pours took a cut, so only those are re-split afterwards.
     let mut cut: Vec<usize> = Vec::new();
+    // Pours by bounding box, so a void reaches only the pours that could contain
+    // it. Scanning every pour for every void is the last quadratic in this
+    // function, and a film that draws its tracks as filled regions AND its plane
+    // negatively has both factors large at once: 500 pours and 500 voids cost
+    // 8.9 ms, 4000 and 4000 cost 107 ms.
+    let region_tree = rstar::RTree::bulk_load(
+        (0..regions.len())
+            .map(|slot| BoundsLeaf {
+                bounds: bounds[slot],
+                idx: slot,
+            })
+            .collect(),
+    );
 
-    for clear in clears {
-        let cb = contour_bounds(&clear.contours.concat());
-        for (slot, &i) in regions.iter().enumerate() {
-            if i >= clear.painted_before {
+    // The pieces of ONE clear image are decided together, and cut all or none.
+    // Each piece was gated independently before, on its own bounds and its own
+    // enclosure, and a void whose island touches its outer boundary at the very
+    // corner the interior witness keys on gets split into two pieces (both
+    // witnesses land on the shared boundary, so each reads as enclosed by the
+    // other). If such a void straddles the pour's edge, the outer piece is refused
+    // and the island piece is cut ALONE, which flips the island's interior from
+    // copper to empty: the pour loses copper the film explicitly kept and keeps
+    // the copper the film cleared. `group_contours` no longer produces that split,
+    // and deciding per image means no future misgrouping can turn into an erasure
+    // either.
+    let mut start = 0usize;
+    while start < clears.len() {
+        let mut end = start + 1;
+        while end < clears.len() && clears[end].statement == clears[start].statement {
+            end += 1;
+        }
+        let group = &clears[start..end];
+        start = end;
+        let painted_before = group[0].painted_before;
+        let gb = group.iter().fold(
+            [
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ],
+            |acc, c| {
+                let b = contour_bounds(&c.contours.concat());
+                [
+                    acc[0].min(b[0]),
+                    acc[1].min(b[1]),
+                    acc[2].max(b[2]),
+                    acc[3].max(b[3]),
+                ]
+            },
+        );
+        // Sorted so the cut order, and with it `already_void` and the painter
+        // model, depend on nothing but the film.
+        let mut slots: Vec<usize> = region_tree
+            .locate_in_envelope_intersecting(rstar::AABB::from_corners(
+                [gb[0], gb[1]],
+                [gb[2], gb[3]],
+            ))
+            .map(|l| l.idx)
+            .collect();
+        slots.sort_unstable();
+        for slot in slots {
+            let i = regions[slot];
+            if i >= painted_before {
                 continue; // painted after the void: an island, not cut copper
             }
             let rb = bounds[slot];
-            if cb[0] < rb[0] || cb[1] < rb[1] || cb[2] > rb[2] || cb[3] > rb[3] {
+            if gb[0] < rb[0] || gb[1] < rb[1] || gb[2] > rb[2] || gb[3] > rb[3] {
                 continue;
             }
-            let enclosed = match &enclose_grids[slot] {
-                Some(g) => clear
-                    .contours
-                    .iter()
-                    .flatten()
-                    .all(|&(x, y)| g.contains(x, y)),
-                None => contours_enclose(&originals[slot], &clear.contours),
-            };
+            let enclosed = group.iter().all(|c| match &enclose_grids[slot] {
+                Some(g) => c.contours.iter().flatten().all(|&(x, y)| g.contains(x, y)),
+                None => contours_enclose(&originals[slot], &c.contours),
+            });
             if !enclosed {
                 continue;
             }
-            // The already-void skip is a size optimisation and a guard against
-            // flipping copper back on, and it must never be able to drop ONE
-            // piece of a clear image whose other pieces were cut. The pieces of
-            // one image are only meaningful together: cutting a ring's outer
-            // boundary and skipping the piece that restores its island erases
-            // copper the film kept, which is the one thing this reader must not
-            // do. Cutting a redundant piece anyway is the safe error, since an
-            // extra contour can only flip empty back to copper.
-            let sibling_cut = applied[slot].statement_cut(clear.statement);
-            if !sibling_cut && already_void(&out[i].shape, &applied[slot], &clear.contours, cb) {
+            // Skip only when the WHOLE image is already void: that is the
+            // duplicate-emission case, where re-cutting every piece would flip the
+            // clearance back to copper. A partly-redundant image is cut in full,
+            // which at worst flips an overlap back to copper, the safe error.
+            let redundant = group.iter().all(|c| {
+                already_void(
+                    &out[i].shape,
+                    &applied[slot],
+                    &c.contours,
+                    contour_bounds(&c.contours.concat()),
+                )
+            });
+            if redundant {
                 continue;
             }
             let shape = &mut out[i].shape;
@@ -360,12 +418,18 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             let Shape::MultiPolygon { contours } = shape else {
                 continue;
             };
-            let mut indices = Vec::with_capacity(clear.contours.len());
-            for c in &clear.contours {
-                indices.push(contours.len());
-                contours.push(c.clone());
+            let mut units: Vec<(Vec<usize>, [f64; 4])> = Vec::with_capacity(group.len());
+            for clear in group {
+                let mut indices = Vec::with_capacity(clear.contours.len());
+                for c in &clear.contours {
+                    indices.push(contours.len());
+                    contours.push(c.clone());
+                }
+                units.push((indices, contour_bounds(&clear.contours.concat())));
             }
-            applied[slot].insert(indices, cb, clear.statement);
+            for (indices, b) in units {
+                applied[slot].insert(indices, b);
+            }
             cut.push(slot);
         }
     }
@@ -373,9 +437,21 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     // Free the islands the voids ringed off. See `free_ringed_islands`.
     cut.sort_unstable();
     cut.dedup();
+    // A void is cut from EVERY enclosing pour, so with two overlapping pours the
+    // same island is freed from both. It is one piece of copper, so it becomes one
+    // primitive: freeing it twice made two identical shapes that nothing unions
+    // (connectivity never unions region to region), i.e. one conductor counted as
+    // two.
+    let mut already_freed: Vec<Vec<(f64, f64)>> = Vec::new();
     for slot in cut {
         let i = regions[slot];
         for shape in free_ringed_islands(&mut out[i].shape, &applied[slot], &originals[slot]) {
+            if let Shape::Polygon { pts, .. } = &shape {
+                if already_freed.iter().any(|c| c == pts) {
+                    continue;
+                }
+                already_freed.push(pts.clone());
+            }
             // An island is still region copper, no longer the same conductor. It
             // does NOT inherit the pour's X2 identity: `%TO.N` on a pour names the
             // pour's net, and copper the film deliberately cut free of the pour is
@@ -522,8 +598,6 @@ struct VoidIndex {
     /// Per void id, the contour indices it occupies in the pour's contour list.
     /// The first is its outer boundary, the rest its holes.
     units: Vec<Vec<usize>>,
-    /// Clear-image ids that have already had a piece cut from this pour, sorted.
-    statements: Vec<usize>,
 }
 
 impl VoidIndex {
@@ -540,7 +614,6 @@ impl VoidIndex {
             all: Vec::new(),
             cells: Vec::new(),
             units: Vec::new(),
-            statements: Vec::new(),
         }
     }
 
@@ -558,15 +631,7 @@ impl VoidIndex {
 
     /// Register a void occupying `indices` in the pour's contour list, bounded
     /// by `b`.
-    /// Has a piece of this clear image already been cut from the pour?
-    fn statement_cut(&self, statement: usize) -> bool {
-        self.statements.binary_search(&statement).is_ok()
-    }
-
-    fn insert(&mut self, indices: Vec<usize>, b: [f64; 4], statement: usize) {
-        if let Err(at) = self.statements.binary_search(&statement) {
-            self.statements.insert(at, statement);
-        }
+    fn insert(&mut self, indices: Vec<usize>, b: [f64; 4]) {
         let id = self.units.len();
         self.units.push(indices);
         self.all.push((id, b));
@@ -872,6 +937,16 @@ struct Plotter<'a> {
     clears: Vec<Clear>,
     /// Next id for [`Clear::statement`]: one per clear image banked.
     next_clear_statement: usize,
+    /// Is the whole image positive (`%IPPOS*%`, the default, and the only value any
+    /// modern exporter writes)?
+    ///
+    /// On a NEGATIVE image the film is complemented, so the `%LPC*%` objects are the
+    /// copper and the dark ones are the voids. This plotter does not complement,
+    /// which used to be merely wrong in the same direction as the bug this module
+    /// fixes; now that clears subtract, believing them on a negative film would cut
+    /// real conductors out of a phantom pour, the one direction `apply_clears`
+    /// promises never to take. So no clear is banked while the image is negative.
+    image_positive: bool,
 }
 
 /// One image painted under clear polarity: copper the film removes.
@@ -963,6 +1038,7 @@ impl<'a> Plotter<'a> {
             out: Vec::new(),
             clears: Vec::new(),
             next_clear_statement: 0,
+            image_positive: true,
         }
     }
 
@@ -980,7 +1056,7 @@ impl<'a> Plotter<'a> {
     /// May clear geometry drawn right now be trusted to subtract? Not under an
     /// unapplied object transform, and not inside an `%AB` body (see `ab_depth`).
     fn may_bank_clears(&self) -> bool {
-        self.identity_transform() && self.ab_depth == 0
+        self.identity_transform() && self.ab_depth == 0 && self.image_positive
     }
 
     /// Record contours painted under clear polarity as voids, ONE PER CONNECTED
@@ -1071,6 +1147,9 @@ impl<'a> Plotter<'a> {
             },
             Command::ExtendedCode(ExtendedCode::LoadPolarity(p)) => {
                 self.dark = matches!(p, Polarity::Dark);
+            }
+            Command::ExtendedCode(ExtendedCode::ImagePolarity(p)) => {
+                self.image_positive = matches!(p, gerber_types::ImagePolarity::Positive);
             }
             // The object transforms. Not applied (see `identity_transform`), but
             // tracked, because a transform we ignore must not be allowed to
@@ -1240,9 +1319,22 @@ impl<'a> Plotter<'a> {
                         attrs: prim.attrs.clone(),
                     });
                 }
+                // Each replica's voids are a DIFFERENT clear image from the base
+                // cell's, so they take fresh statement ids. Sharing the base's id
+                // put every replica's void in one group with the base's, and the
+                // group's combined bounding box then spanned the whole panel, so it
+                // was enclosed by no single pour and NOTHING was cut.
+                let mut remap: HashMap<usize, usize> = HashMap::new();
                 for c in &base_clears {
                     let at = replica_start + (c.painted_before - block.start);
-                    self.clears.push(c.translated(dx, dy, at));
+                    let statement = *remap.entry(c.statement).or_insert_with(|| {
+                        let id = self.next_clear_statement;
+                        self.next_clear_statement += 1;
+                        id
+                    });
+                    let mut copy = c.translated(dx, dy, at);
+                    copy.statement = statement;
+                    self.clears.push(copy);
                 }
             }
         }
@@ -1914,6 +2006,22 @@ fn group_contours_into_pieces(contours: Vec<Vec<(f64, f64)>>) -> Vec<Shape> {
         .collect()
 }
 
+/// Twice the area a closed contour encloses, unsigned. Only ever compared, so the
+/// factor of two never needs undoing.
+fn contour_area2(c: &[(f64, f64)]) -> f64 {
+    let n = c.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut acc = 0.0;
+    let mut j = n - 1;
+    for i in 0..n {
+        acc += (c[j].0 - c[i].0) * (c[j].1 + c[i].1);
+        j = i;
+    }
+    acc.abs()
+}
+
 /// A point strictly INSIDE a simple closed contour.
 ///
 /// The nesting classification below cannot use a vertex. `point_in_polygon` is
@@ -2048,6 +2156,18 @@ fn group_contours(contours: Vec<Vec<(f64, f64)>>) -> Vec<Vec<Vec<(f64, f64)>>> {
             hits
         })
         .collect();
+    // Mutual enclosure is not a nesting relation. It means both witnesses landed on
+    // a boundary the two contours share, which happens when a hole reaches the very
+    // vertex `interior_witness` keys on: the outer's witness then sits inside the
+    // hole and the hole's inside the outer, both read depth 1, and one region
+    // statement splits into two pieces that are really a ring and its island. Area
+    // settles it, because the larger contour cannot be inside the smaller.
+    let area: Vec<f64> = contours.iter().map(|c| contour_area2(c)).collect();
+    let mutual = encloses.clone();
+    let mut encloses = encloses;
+    for i in 0..n {
+        encloses[i].retain(|&j| !(mutual[j].contains(&i) && area[i] >= area[j]));
+    }
     // Each contour's emit group: an outer owns itself; a hole belongs to its
     // immediate parent; the DEEPEST contour enclosing it (depth-1, which is
     // even, i.e. an outer).
@@ -2806,6 +2926,126 @@ X3000000Y12000000D01*
         let pieces = pieces_of(&negative_pour("", &rotated));
         assert_eq!(piece_at(&pieces, 11.0, 9.0), None);
         assert_eq!(piece_at(&pieces, 4.0, 10.0), None);
+    }
+
+    #[test]
+    fn an_island_touching_the_witness_corner_is_still_a_hole() {
+        // The interior witness keys on the LOWEST-then-leftmost vertex, so a hole
+        // that reaches that particular corner put the outer's witness inside the
+        // hole and the hole's inside the outer. Both then read depth 1 and one
+        // region statement split into two pieces that are really a ring and its
+        // island. When the void also straddles the pour's edge the outer piece was
+        // refused and the island piece cut ALONE, which flipped the island's
+        // interior from copper to empty: the pour lost copper the film explicitly
+        // kept and kept the copper the film cleared.
+        //
+        // Pour (-1,-1)..(7,7); void outer (0,0)..(10,10), straddling it; island
+        // touching the outer at (0,0).
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L1,Top*%
+G36*
+X-1000000Y-1000000D02*
+X7000000Y-1000000D01*
+X7000000Y7000000D01*
+X-1000000Y7000000D01*
+X-1000000Y-1000000D01*
+G37*
+%LPC*%
+G36*
+X0Y0D02*
+X10000000Y0D01*
+X10000000Y10000000D01*
+X0Y10000000D01*
+X0Y0D01*
+X0Y0D02*
+X6000000Y1000000D01*
+X6000000Y6000000D01*
+X1000000Y6000000D01*
+X0Y0D01*
+G37*
+M02*
+";
+        let pieces = pieces_of(g);
+        assert!(
+            piece_at(&pieces, 3.0, 3.0).is_some(),
+            "copper the film painted and never cleared must stay"
+        );
+        // The whole void straddles the pour, so nothing is cut at all: the outer
+        // and its island are one image and are decided together.
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].len(), 1, "the pour is untouched");
+        // Now a pour that DOES contain the void. The ring is cut and the island is
+        // freed as its own conductor, which only happens if the two contours were
+        // grouped as one void.
+        let contained = g.replace("X-1000000Y-1000000D02*\nX7000000Y-1000000D01*\nX7000000Y7000000D01*\nX-1000000Y7000000D01*\nX-1000000Y-1000000D01*", "X-1000000Y-1000000D02*\nX12000000Y-1000000D01*\nX12000000Y12000000D01*\nX-1000000Y12000000D01*\nX-1000000Y-1000000D01*");
+        let pieces = pieces_of(&contained);
+        assert_eq!(pieces.len(), 2, "the ring cuts the island free");
+        let island = piece_at(&pieces, 3.0, 3.0).expect("the island is copper");
+        let pour = piece_at(&pieces, 11.0, 11.0).expect("the pour is copper");
+        assert_ne!(island, pour);
+        assert_eq!(piece_at(&pieces, 8.0, 8.0), None, "the ring is void");
+    }
+
+    #[test]
+    fn an_island_freed_from_two_overlapping_pours_is_one_primitive() {
+        // A void is cut from every enclosing pour, so with two overlapping pours the
+        // same island is freed twice. It is one piece of copper, and nothing unions
+        // region to region, so emitting it twice counted one conductor as two.
+        let prims = parse_layer(
+            "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,3.000000X1.000000*%
+G36*
+X0Y0D02*
+X12000000Y0D01*
+X12000000Y12000000D01*
+X0Y12000000D01*
+X0Y0D01*
+G37*
+G36*
+X2000000Y2000000D02*
+X14000000Y2000000D01*
+X14000000Y14000000D01*
+X2000000Y14000000D01*
+X2000000Y2000000D01*
+G37*
+%LPC*%
+D10*
+X6000000Y6000000D03*
+M02*
+",
+        )
+        .unwrap();
+        let islands = prims
+            .iter()
+            .filter(|p| matches!(&p.shape, Shape::Polygon { pts, .. } if pts.len() == 32))
+            .count();
+        assert_eq!(islands, 1, "one piece of copper is one primitive");
+    }
+
+    #[test]
+    fn a_negative_image_banks_no_voids() {
+        // `%IPNEG*%` complements the whole film, so the clear objects are the copper
+        // and the dark ones are the voids. This plotter does not complement, and
+        // believing the clears on such a film would cut real conductors out of a
+        // phantom pour, which is the one direction this reader must never take.
+        let (n, is_copper) = pour_of(&negative_pour(
+            "%IPNEG*%\n",
+            "\
+G36*
+X8000000Y8000000D02*
+X12000000Y8000000D01*
+X12000000Y12000000D01*
+X8000000Y12000000D01*
+X8000000Y8000000D01*
+G37*
+",
+        ));
+        assert_eq!(n, 1, "no void is banked on a negative image");
+        assert!(is_copper(10.0, 10.0));
     }
 
     #[test]
