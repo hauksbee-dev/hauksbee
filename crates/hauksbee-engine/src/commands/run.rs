@@ -1136,6 +1136,11 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // JSON for the same board says invalid.
             let mut jr = JsonReport::new(&board_name, summary)
                 .with_bind_verdict_gate()
+                // The co-sim exit gate fails on ANY raised fault, and the
+                // plain-language classifier grades most of them `warning`, so
+                // without this the co-sim document read `pass` beside its own
+                // exit 2.
+                .with_surface_gate(!faults.is_empty())
                 .with_inputs(&inputs)
                 .with_evidence(&run_evidence);
             // A substitution is an info-level note that must never be silently
@@ -1494,6 +1499,13 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 ) {
                     write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
                 }
+                // The annotation surface too, independent of the artifact
+                // flags: a refusal that shows red in JUnit/SARIF and says
+                // nothing in the checks tab is the same split verdict the
+                // artifacts exist to prevent.
+                if let Some(refusal) = &strict_refusal {
+                    crate::reports::ci_artifacts::github_refusal_annotation(refusal);
+                }
                 if !cfg.json {
                     if let Some(refusal) = &strict_refusal {
                         eprintln!("{}", refusal.render_text());
@@ -1541,6 +1553,13 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                     &strict_refusal,
                 ) {
                     write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
+                }
+                // The annotation surface too, independent of the artifact
+                // flags: a refusal that shows red in JUnit/SARIF and says
+                // nothing in the checks tab is the same split verdict the
+                // artifacts exist to prevent.
+                if let Some(refusal) = &strict_refusal {
+                    crate::reports::ci_artifacts::github_refusal_annotation(refusal);
                 }
                 if !cfg.json {
                     if let Some(refusal) = &strict_refusal {

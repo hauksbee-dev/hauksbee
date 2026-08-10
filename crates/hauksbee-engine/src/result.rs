@@ -1531,6 +1531,32 @@ pub struct JsonReport {
     /// serialized: the gate's OUTCOME is the verdict field itself.
     #[serde(skip)]
     pub bind_gates_verdict: bool,
+    /// Whether THIS surface's own `--strict` gate fails the run on findings the
+    /// shared `serious` severity does not carry. Those gates are deliberately
+    /// wider than `serious`: `--lint` gates on medium-severity findings, `--si`
+    /// on any finding at all, and the co-sim gate on any raised fault, and all
+    /// three serialize as `warning`/`note`. Without this the same invocation
+    /// printed `"verdict":"pass","ok":true` and exited 2, so a consumer gating
+    /// on the document disagreed with a consumer gating on the exit code. Set
+    /// by the surface AFTER its waiver partition, so an overruled finding
+    /// neither gates nor flips the verdict. Not serialized: the gate's OUTCOME
+    /// is the verdict field itself.
+    #[serde(skip)]
+    pub surface_gate_fails: bool,
+    /// Whether this document only DESCRIBES the run (the `--report` bind table)
+    /// instead of making a pass/fail claim about it. Such a surface has no
+    /// `--strict` gate at all, and its subject IS the binding it prints in
+    /// full, so undermined binding/coverage evidence must not become a refusal
+    /// verdict here: binding completeness reaches a verdict only through the
+    /// verdict-critical bind gate, which this surface is deliberately exempt
+    /// from (see [`Self::bind_gates_verdict`]), and the specialist surfaces
+    /// trim those per-net maps out of their verdicts for the same reason.
+    /// Without this the descriptive document read `"ok":false` while the
+    /// command always exited 0, so the two ways to gate on it disagreed. A
+    /// refusal still invalidates. Not serialized: the evidence array and the
+    /// bind summary carry every binding fact this exemption does not gate on.
+    #[serde(skip)]
+    pub descriptive_only: bool,
     /// Every explicitly supplied input and what it contributed to this run.
     /// Empty on older/internal call paths that have no inventory context.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1684,6 +1710,8 @@ impl JsonReport {
             board: board_name.to_string(),
             bind,
             bind_gates_verdict: false,
+            surface_gate_fails: false,
+            descriptive_only: false,
             inputs: Vec::new(),
             inventory: Vec::new(),
             assumptions: Vec::new(),
@@ -1706,6 +1734,24 @@ impl JsonReport {
     /// mirror of the INCONCLUSIVE refusal the text surfaces print).
     pub fn with_bind_verdict_gate(mut self) -> Self {
         self.bind_gates_verdict = true;
+        self
+    }
+
+    /// Tell this report that the emitting surface's own `--strict` gate fails
+    /// the run, so its verdict reads `fail` instead of `pass` beside an exit 2
+    /// (see [`Self::surface_gate_fails`]). Pass the surface's post-waiver gate
+    /// predicate: `lint_fails`, `si_fails`, the combined `--check` gate, or the
+    /// co-sim fault gate.
+    pub fn with_surface_gate(mut self, fails: bool) -> Self {
+        self.surface_gate_fails = fails;
+        self
+    }
+
+    /// Mark this report as descriptive only, so undermined run-level evidence
+    /// does not become a refusal verdict on a surface that never gates (see
+    /// [`Self::descriptive_only`]).
+    pub fn describing_only(mut self) -> Self {
+        self.descriptive_only = true;
         self
     }
 
@@ -1752,7 +1798,9 @@ impl JsonReport {
     /// Returns `(ok, verdict, serious_count, actionable_count)` where `verdict`
     /// is `"pass"` | `"fail"` | `"invalid"`:
     ///   - `fail`, at least one serious finding (a DRC short, a co-sim stress
-    ///     fault, a serious lint/SI finding);
+    ///     fault, a serious lint/SI finding), or a finding the emitting
+    ///     surface's own `--strict` gate fails on where that gate is wider than
+    ///     `serious` (see [`Self::surface_gate_fails`]);
     ///   - `invalid`, nothing serious, but the run-level claim could not be
     ///     judged: a refusal, AC or thermal reported `valid:false`, or a
     ///     run-level evidence map (input coverage, bind completeness) is
@@ -1835,8 +1883,8 @@ impl JsonReport {
             .flatten()
             .map(|f| f.message.as_str())
             .collect();
-        let evidence_undermined =
-            run_level_undermined(&self.evidence, |a| finding_assertions.contains(a));
+        let evidence_undermined = !self.descriptive_only
+            && run_level_undermined(&self.evidence, |a| finding_assertions.contains(a));
         // The INCONCLUSIVE bind contract on the machine surface: a clean
         // result over an unbound verdict-critical part is vacuous, and the
         // model-dependent-claim surfaces' text renderings already refuse the
@@ -1851,7 +1899,11 @@ impl JsonReport {
             || self.ac.as_ref().is_some_and(|a| !a.validity.valid)
             || self.thermal.as_ref().is_some_and(|t| !t.validity.valid)
             || evidence_undermined;
-        let verdict = if serious > 0 {
+        // `fail` covers both routes to a failing gate: a serious finding, and a
+        // finding this surface's own (wider) strict gate fails on. The second
+        // route is what keeps the verdict field from reading `pass` in the very
+        // document a `--strict` exit 2 was printed beside.
+        let verdict = if serious > 0 || self.surface_gate_fails {
             "fail"
         } else if invalid {
             "invalid"

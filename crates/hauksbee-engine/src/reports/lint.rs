@@ -180,6 +180,10 @@ fn lint_json(
 ) -> Result<String, hauksbee_ir::evidence::EvidenceError> {
     let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
         .with_bind_verdict_gate()
+        // `lint_fails` is this surface's exit gate and it includes
+        // medium-severity findings, which serialize as `warning`; without
+        // telling the verdict so, the document read `pass` beside exit 2.
+        .with_surface_gate(lint_fails(report))
         .with_inputs(inputs)
         .with_evidence(evidence);
     jr.findings = Some(lint_findings_json(report));
@@ -249,6 +253,8 @@ pub fn emit_resources(
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
                 .with_bind_verdict_gate()
+                // Same gate as `--lint` below, so the same widening applies.
+                .with_surface_gate(lint_fails(&report))
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.findings = Some(lint_findings_json(&report));
