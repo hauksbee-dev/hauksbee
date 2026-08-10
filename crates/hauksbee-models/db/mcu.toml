@@ -52,6 +52,221 @@ max_voltage_v = 6.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ATmega1284P: the 128 KB / 16 KB-SRAM megaX4-line AVR, 44-lead TQFP and 44-pad
+# VQFN/QFN(MLF), which share one pinout.
+#
+# Source: Atmel/Microchip "ATmega1284P DATASHEET COMPLETE",
+#   Atmel-42719C-ATmega1284P_Datasheet_Complete-10/2016, the 44-pad figure in
+#   section 5.1.2 (titled "TQFN and QFN"; the figure itself is the shared
+#   TQFP/QFN/MLF pinout) and Table 29-1 "Absolute Maximum Ratings".
+#
+# WHY IT NEEDS ITS OWN ENTRY AND CANNOT BORROW THE 328P's. Different port count
+# (A/B/C/D vs B/C/D), different pad count, and a completely different pad order:
+# pad 1 is MOSI here and PC6/RESET on a 328P. Binding a 1284P board through the
+# 328P map would wire the SPI bus to the reset pin.
+#
+# THE VALUE STRINGS THIS MATCHES are wider than the marketing part number
+# because CAD libraries spell the package into the device name. Eagle's Atmel
+# library calls the 44-pad MLF part "ATMEGA1284M" (the trailing letter is
+# Eagle's package code: M = MLF, AU/A = TQFP, P = PDIP), and a board that fits
+# the QFN44 carries exactly that string in its value field.
+#
+# THE NON-P ATmega1284 GETS ITS OWN ENTRY, immediately below, rather than sharing
+# this one. It is a distinct simavr core, and there is no mechanism that would tell
+# a user their non-P part had been run on a P core: `detect_substitution` returns
+# None for every `simavr:` backend by design, because simavr models the part it is
+# asked for. So a shared entry would have been a silent substitution wearing a
+# comment that promised a warning. The two entries differ in exactly one line.
+#
+# DELIBERATELY NOT MODELLED: everything the co-sim does not read off the pad
+# map. The JTAG pins (PC2-PC5) carry their port role and nothing else, the
+# second USART is not distinguished from the first at this layer, and the clock
+# is whatever the AVR backend instantiates (16 MHz), NOT the 8 MHz crystal a
+# board may fit. That last one is the honest gap: firmware-timed results on a
+# non-16 MHz board are wrong by the clock ratio, and the fix is to carry the
+# crystal frequency through the MCU binding, not to guess it here.
+[[models]]
+id = "atmega1284p"
+kind = "mcu"
+description = "ATmega1284P 8-bit AVR MCU, 44-lead TQFP or 44-pad VQFN/MLF"
+
+[models.match]
+# Two families of spelling bind here, and the second needs its reasoning written
+# down because it is the weaker discriminator:
+#
+#   1. The part number with its `P`, optionally plus a HYPHENATED ordering code:
+#      "ATmega1284P", "ATmega1284P-AU", "ATmega1284P-MUR".
+#   2. A CAD library's device name, which is the part with an UNHYPHENATED package
+#      letter appended: "ATMEGA1284M" (Eagle's MLF44 device, and the margay
+#      datalogger's U1) and "ATMEGA1284A" (its TQFP one).
+#
+# Form 2 does not say P or non-P, so binding it here is a choice. Two things back
+# it. Atmel's own ordering codes ALWAYS hyphenate the package (-AU, -MU, -PU), so
+# an unhyphenated trailing letter cannot be an ordering code and is a library's
+# device name; and the board that produced this spelling carries an MPN attribute
+# reading "ATMEGA1284P-MUR", which the matcher prefers over the value field, so on
+# that board the P is not a guess at all. On a board that gives no MPN it is one,
+# and the cost of being wrong is small: the two cores share this pinout and differ
+# in picoPower sleep behaviour and fuse defaults, not in anything here.
+#
+# The BARE "ATmega1284" and its hyphenated codes belong to the entry below.
+value_re = "(?i)^ATmega1284(P([-_]?(AU|MU|PU|AUR|MUR))?|M|A)$"
+
+[models.params]
+# hauksbee-mcu backend identifier. simavr models `atmega1284` and `atmega1284p` as
+# distinct cores and this entry names the P.
+backend = "simavr:atmega1284p"
+
+[models.pins]
+# Section 5.1.2, 44-pad TQFP/VQFN. Cross-checked against the margay
+# datalogger's own net names, which agree pad for pad (pad 4 RST, pads 5/17/38
+# on the 3V3 rail, pads 6/18/28/39 on GND, pads 7/8 on the crystal, pad 27
+# AVCC, pad 29 AREF).
+"1"  = "pb5_mosi"
+"2"  = "pb6_miso"
+"3"  = "pb7_sck"
+"4"  = "reset"
+"5"  = "vcc"
+"6"  = "gnd"
+"7"  = "xtal2"
+"8"  = "xtal1"
+"9"  = "pd0_rxd0"
+"10" = "pd1_txd0"
+"11" = "pd2_rxd1_int0"
+"12" = "pd3_txd1_int1"
+"13" = "pd4_xck1_oc1b"
+"14" = "pd5_oc1a"
+"15" = "pd6_oc2b_icp1"
+"16" = "pd7_oc2a"
+"17" = "vcc2"
+"18" = "gnd2"
+"19" = "pc0_scl"
+"20" = "pc1_sda"
+"21" = "pc2_tck"
+"22" = "pc3_tms"
+"23" = "pc4_tdo"
+"24" = "pc5_tdi"
+"25" = "pc6_tosc1"
+"26" = "pc7_tosc2"
+"27" = "avcc"
+"28" = "gnd3"
+"29" = "aref"
+"30" = "pa7_adc7"
+"31" = "pa6_adc6"
+"32" = "pa5_adc5"
+"33" = "pa4_adc4"
+"34" = "pa3_adc3"
+"35" = "pa2_adc2"
+"36" = "pa1_adc1"
+"37" = "pa0_adc0"
+"38" = "vcc3"
+"39" = "gnd4"
+"40" = "pb0_xck0_t0"
+"41" = "pb1_clko_t1"
+"42" = "pb2_int2_ain0"
+"43" = "pb3_oc0a_ain1"
+"44" = "pb4_ss_oc0b"
+# The QFN/MLF exposed pad. The datasheet's package drawing shows it as a
+# thermal/ground land; every board that fits this part ties it to GND, and the
+# margay does. Named `gnd5` so the binder counts it as a ground connection
+# rather than reporting the pad as unmodelled.
+"TH" = "gnd5"
+
+[models.ratings]
+# Table 29-1 Absolute Maximum Ratings.
+max_pin_current_a = 0.04  # DC current per I/O pin, 40.0 mA
+max_current_a = 0.2       # DC current VCC and GND pins, 200.0 mA
+max_voltage_v = 6.0       # Maximum operating voltage
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ATmega1284, the non-P part. Same datasheet, same 44-pad map, DIFFERENT simavr
+# core, and that last difference is the only reason this is a separate entry.
+#
+# Source: as the ATmega1284P entry above (Atmel-42719C-ATmega1284P_Datasheet_
+#   Complete-10/2016), whose title covers both devices; section 5.1.2 for the pad
+#   map and Table 29-1 for the ratings.
+#
+# WHY NOT ONE ENTRY WITH ONE BACKEND. Nothing would tell the user. The scheduler's
+# `detect_substitution` deliberately returns None for every `simavr:` backend,
+# because the premise of that path is that simavr models the part it is handed; so
+# a shared entry naming `simavr:atmega1284p` would run a non-P board's firmware on
+# a P core with no warning anywhere in the report. The two parts differ in their
+# picoPower sleep behaviour and in fuse defaults rather than in anything this pad
+# map carries, but "the difference is small" is not the same as "the difference is
+# disclosed", and one extra entry costs nothing.
+[[models]]
+id = "atmega1284"
+kind = "mcu"
+description = "ATmega1284 (non-P) 8-bit AVR MCU, 44-lead TQFP or 44-pad VQFN/MLF"
+
+[models.match]
+# The bare part and its HYPHENATED ordering codes. The hyphen is what separates
+# these from the CAD-library device names ("ATMEGA1284M", "ATMEGA1284A"), which the
+# entry above claims for the reason set out there; and this regex has no optional
+# `P`, so no P spelling can reach it.
+value_re = "(?i)^ATmega1284(-(AU|MU|PU|AUR|MUR))?$"
+
+[models.params]
+# The non-P core, which simavr models separately from the P.
+backend = "simavr:atmega1284"
+
+[models.pins]
+# Identical to the ATmega1284P entry above: one datasheet, one pinout figure.
+"1"  = "pb5_mosi"
+"2"  = "pb6_miso"
+"3"  = "pb7_sck"
+"4"  = "reset"
+"5"  = "vcc"
+"6"  = "gnd"
+"7"  = "xtal2"
+"8"  = "xtal1"
+"9"  = "pd0_rxd0"
+"10" = "pd1_txd0"
+"11" = "pd2_rxd1_int0"
+"12" = "pd3_txd1_int1"
+"13" = "pd4_xck1_oc1b"
+"14" = "pd5_oc1a"
+"15" = "pd6_oc2b_icp1"
+"16" = "pd7_oc2a"
+"17" = "vcc2"
+"18" = "gnd2"
+"19" = "pc0_scl"
+"20" = "pc1_sda"
+"21" = "pc2_tck"
+"22" = "pc3_tms"
+"23" = "pc4_tdo"
+"24" = "pc5_tdi"
+"25" = "pc6_tosc1"
+"26" = "pc7_tosc2"
+"27" = "avcc"
+"28" = "gnd3"
+"29" = "aref"
+"30" = "pa7_adc7"
+"31" = "pa6_adc6"
+"32" = "pa5_adc5"
+"33" = "pa4_adc4"
+"34" = "pa3_adc3"
+"35" = "pa2_adc2"
+"36" = "pa1_adc1"
+"37" = "pa0_adc0"
+"38" = "vcc3"
+"39" = "gnd4"
+"40" = "pb0_xck0_t0"
+"41" = "pb1_clko_t1"
+"42" = "pb2_int2_ain0"
+"43" = "pb3_oc0a_ain1"
+"44" = "pb4_ss_oc0b"
+"TH" = "gnd5"
+
+[models.ratings]
+# Table 29-1 Absolute Maximum Ratings, shared with the P.
+max_pin_current_a = 0.04
+max_current_a = 0.2
+max_voltage_v = 6.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 [[models]]
 id = "arduino_nano"
 kind = "mcu"
@@ -103,6 +318,110 @@ module  = true        # flag: pin map is at the module header level
 [models.ratings]
 max_pin_current_a = 0.04
 max_current_a = 0.2
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pro Micro: the ATmega32U4 carrier board (SparkFun DEV-12640 and the very many
+# clones of it), a 24-pin 2 x 12 header at 0.1 in pitch. The single most common
+# controller in the hand-wired / split-keyboard world, where the whole board is
+# a switch matrix hanging off this one module.
+#
+# Sources:
+#   - ATmega32U4 pin functions and ADC channel numbers: Atmel/Microchip
+#     "ATmega16U4/32U4" datasheet, Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_
+#     04/2016, section 1.1 Pin descriptions (PD4 = ADC8, PD6 = ADC9,
+#     PD7 = ADC10, PB4 = ADC11, PB5 = ADC12, PB6 = ADC13, PF4..PF7 = ADC4..7)
+#     and section 29.1 Absolute Maximum Ratings.
+#   - Header-position to port-pin mapping: the SparkFun Pro Micro pinout, which
+#     every clone and every keyboard footprint copies. Cross-checked against the
+#     Sofle v2 keyboard's own symbol, which spells the port on every pin
+#     ("TX(PD3)" on 1, "D5(PC6)" on 8, "A0(PF7)" on 17), agreeing position for
+#     position with the map below.
+#
+# THE 1..24 NUMBERING IS THE FOOTPRINT'S, not SparkFun's schematic, which numbers
+# its two headers separately. Every keyboard footprint in circulation uses the
+# single 1..24 run below, which is what makes this map useful; a board built from
+# SparkFun's own symbol would number its pads differently and would not match.
+#
+# WHY THE ROLES ARE PORT NAMES AND NOT "d5" / "a0". The silkscreened Arduino
+# numbers are NOT a portable mapping: D5 is PC6 on a Pro Micro and PD5 on a
+# Nano, D8 is PB4 here and PB0 there. The binder's `module` d-number table is
+# the Nano's ATmega328P one, so naming these pins by their Arduino numbers would
+# wire every key row to the wrong port bit. Naming the port directly is both
+# correct and self-checking: the role IS the thing the co-sim toggles.
+#
+# DELIBERATELY NOT MODELLED: the carrier board itself. RAW (pin 24) feeds an
+# on-module regulator whose output is VCC (pin 21), and this entry does not
+# stamp that regulator, so a board powering the module from RAW sees no path to
+# VCC. That is the honest reading of a module entry whose pin map stops at the
+# header: the two pins are named, and nothing pretends to know what is between
+# them. The RX/TX LEDs (PB0, PD5) and the USB connector are likewise off-map,
+# and the clock is the AVR backend's 16 MHz, which is right for a 5 V Pro Micro
+# and a factor of two fast for a 3.3 V one.
+[[models]]
+id = "pro_micro"
+kind = "mcu"
+description = "Pro Micro module (ATmega32U4 carrier, 24-pin 2x12 header)"
+
+[models.match]
+# "ProMicro" is the value the Sofle and most keyboard projects carry, optionally
+# with the vendor name or the 5 V / 16 MHz speed grade spelled out.
+#
+# THE 3.3 V / 8 MHz SPELLINGS ARE DELIBERATELY NOT MATCHED. The AVR backend
+# instantiates every core at 16 MHz and emits no warning when the board asked for
+# something else (see the clock note above), so a value string that says 8 MHz out
+# loud is a board telling us its firmware timing would come out wrong by a factor
+# of two. Refusing it makes that an honest unresolved instead of a silent 2x error;
+# the bare "ProMicro" is genuinely ambiguous and is accepted, with the 16 MHz
+# assumption stated.
+#
+# Elite-C and nice!nano are pin-compatible successors with DIFFERENT MCUs (a 32U4
+# with more flash, and an nRF52840), so neither is matched: an nRF on the AVR core
+# would be the wrong instruction set.
+value_re = "(?i)^(SparkFun[ _-]?)?Pro[ _-]?Micro([ _-]?(5V|16MHz))?$"
+
+[models.params]
+backend = "simavr:atmega32u4"
+module  = true        # flag: pin map is at the module header level
+
+[models.pins]
+# Header position 1..24. Positions 3, 4 and 23 are all GND (the module bonds
+# them together); they carry distinct role names because the binder keys roles
+# by string, and a duplicate would drop a connection.
+"1"  = "pd3_txd1"
+"2"  = "pd2_rxd1"
+"3"  = "gnd"
+"4"  = "gnd2"
+"5"  = "pd1_sda"
+"6"  = "pd0_scl"
+"7"  = "pd4_adc8"
+"8"  = "pc6"
+"9"  = "pd7_adc10"
+"10" = "pe6"
+"11" = "pb4_adc11"
+"12" = "pb5_adc12"
+"13" = "pb6_adc13"
+"14" = "pb2_mosi"
+"15" = "pb3_miso"
+"16" = "pb1_sck"
+"17" = "pf7_adc7"
+"18" = "pf6_adc6"
+"19" = "pf5_adc5"
+"20" = "pf4_adc4"
+"21" = "vcc"
+"22" = "reset"
+"23" = "gnd3"
+# RAW: the module's unregulated input, ahead of the on-board regulator. NOT
+# named `vcc`: tying it to the VCC role would tell the solver the two pins are
+# the same node, which is exactly what the regulator makes them not.
+"24" = "raw"
+
+[models.ratings]
+# Section 29.1 Absolute Maximum Ratings, ATmega32U4.
+max_pin_current_a = 0.04  # DC current per I/O pin, 40.0 mA
+max_current_a = 0.2       # DC current VCC and GND pins, 200.0 mA
+max_voltage_v = 6.0       # Maximum operating voltage
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -757,3 +1076,138 @@ backend = "none:stm32h7"
 # examines them. Ref: ATmega328P datasheet (Rev. DS40002061B), sec "Boot Loader
 # Support" (BOOTRST fuse) and sec "System Control and Reset". This is recorded
 # so the absence is deliberate, not an oversight.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EFM32PG22: Silicon Labs Pearl Gecko 22, Cortex-M33, QFN-40.
+#
+# Source: Silicon Labs "EFM32PG22 Gecko MCU Family Data Sheet", Rev 1.4 (2024):
+#   Table 6.2 (QFN40 pin allocation, which Table 6.3 note 2 confirms applies to the
+#   EFM32PG22C200F512IM40 ordering code specifically), Table 4.17 (GPIO DC
+#   characteristics) and the Absolute Maximum Ratings table.
+#
+# NO CO-SIM BACKEND EXISTS FOR THIS PART, and the entry is here anyway. The same
+# reasoning as the Daisy Seed above: nothing in hauksbee-mcu models an EFM32, and
+# the engine's family router does not route one, so the alternative to this entry is
+# not "a board that runs firmware" but "a board whose only MCU is reported as an
+# unresolved open circuit". Leaving it unresolved costs the whole structural
+# analysis: no supply-rail stress watch on the MCU's four supply pads, no pin roles
+# for the straps and bus lints to read, and a bind report that cannot say what the
+# board's processor is. The explicit `none:` token is what makes the honesty work:
+# the scheduler refuses loudly and by name if firmware is handed to it, instead of
+# falling through to the AVR default and running ARM firmware on an 8-bit core.
+#
+# So: firmware-less analyses (lint, report, DRC, the static checks) work on a board
+# built around this part. Co-sim does not, and says so. If an EFM32 platform lands
+# in hauksbee-mcu, this becomes its `renode:<part>` string and nothing else changes.
+#
+# THE PIN ROLES ARE HONEST ABOUT WHAT THEY KNOW. The 26 GPIOs carry
+# `p<port><bit>` names, which is the convention `gpio_of_role` parses, so the binder
+# can stamp drivers on them the moment a backend exists and the strap/bus lints can
+# read them now. What they do NOT carry is any claim about which peripheral is on
+# which pin: on this family that is entirely software's choice (a full crossbar), so
+# a role like "pa05_i2c0_sda" would be a guess about firmware, not a fact about
+# silicon. The four supply domains are named separately (DVDD, AVDD, IOVDD,
+# VREGVDD) because they are separately bounded and a board may feed them differently.
+#
+# Datasheet figures used:
+#   DVDD / AVDD / IOVDD = 1.71 V min, 3.0 V typ, 3.8 V max
+#   VREGVDD             = 1.8 to 2.2 V min (mode dependent) to 3.8 V max
+#   GPIO VIL max = 0.3 x IOVDD, VIH min = 0.7 x IOVDD  (explicitly proportional to
+#                  IOVDD; the RESETn thresholds are the same ratios of DVDD)
+#   GPIO VOH min = 0.8 x IOVDD at 20 mA, 0.6 x IOVDD at 8 mA and 1.71 V
+#   GPIO VOL max = 0.2 x IOVDD at 20 mA, 0.4 x IOVDD at 8 mA
+#   Abs max: -0.3 to 3.8 V on any supply pin; 50 mA sink and 50 mA source per GPIO;
+#            200 mA sink and 200 mA source aggregate across all pins
+#
+# THE 3.8 V CEILING IS THE POINT OF THE RATINGS BLOCK. This is a 3.8 V-max part, not
+# a 5 V-tolerant or even a 6 V one like every AVR above it in this file, so a board
+# that hangs it off a 5 V rail is destroying it.
+#
+# For that ceiling to be compared against anything, the scheduler's supply-rail
+# watch has to recognise the ROLE NAMES this part's supply pads carry. Its
+# allowlist was `vcc`/`avcc`/`vdd`/`vdda`/`5v`, none of which is `dvdd`, `avdd`,
+# `iovdd` or `vregvdd`, so an earlier draft of this entry carried a rating that was
+# compared with nothing at all: a ceiling that reads as enforced and is not. The
+# allowlist is widened in the same commit. If a future entry names a supply pad
+# something else again, check that list before believing its `max_voltage_v`.
+#
+# THE EXPOSED PAD IS GROUND, and its NUMBER is the thing to be careful about.
+# Silicon Labs' pin-allocation TABLE runs 1..40 and stops; the pad appears in the
+# package figure, where it is labelled "Pin 0 / VSS". So the ROLE below is
+# datasheet-supported and the KEY is not: `"41"` is what CAD tools number it (both
+# the MWGEN-G1's footprint and its pin function agree), while a board generated
+# from the vendor's own headers would call it pin 0 and would not match this row.
+# That is a known gap in the key, not in the role.
+#
+# DELIBERATELY NOT MODELLED: the DECOUPLE and VREGSW pins' internal networks (they
+# are named and carry nothing), and the whole peripheral crossbar.
+[[models]]
+id = "efm32pg22"
+kind = "mcu"
+description = "Silicon Labs EFM32PG22 Cortex-M33 MCU, QFN-40 (structural bind only; no co-sim platform)"
+
+[models.match]
+# The ordering code is EFM32PG22<letter><flash-and-package digits>, e.g.
+# EFM32PG22C200F512IM40: "C200" is the part variant, "F512" the flash size, "I" the
+# temperature grade and "M40" the 40-pin QFN. The regex REQUIRES the M40 package
+# code, because the family also ships a 32-pin QFN and a 5x5 QFN40 with a different
+# allocation, and this map is Table 6.2's QFN40 one.
+value_re = "(?i)^EFM32PG22[A-Z]?[0-9]{3}F[0-9]+[A-Z]?M40$"
+
+[models.params]
+# No emulator models an EFM32. See the long note above: the explicit `none:` token
+# makes the scheduler refuse firmware by name rather than substituting a core.
+backend = "none:efm32pg22"
+
+[models.pins]
+# Table 6.2, QFN40. Corroborated pad for pad by the MWGEN-G1's own pin functions,
+# which is what raises this from "transcribed" to "cross-checked".
+"1"  = "pc00"
+"2"  = "pc01"
+"3"  = "pc02"
+"4"  = "pc03"
+"5"  = "pc04"
+"6"  = "pc05"
+"7"  = "pc06"
+"8"  = "pc07"
+"9"  = "hfxtal_i"    # high-frequency crystal in
+"10" = "hfxtal_o"    # high-frequency crystal out
+"11" = "reset"       # RESETn, active low; thresholds are ratios of DVDD
+"12" = "dvdd"        # digital supply
+"13" = "vss"
+"14" = "nc"          # not bonded
+"15" = "dvdd2"       # second DVDD pad
+"16" = "pb04"
+"17" = "pb03"
+"18" = "pb02"
+"19" = "pb01"
+"20" = "pb00"
+"21" = "pa00"
+"22" = "pa01"
+"23" = "pa02"
+"24" = "pa03"
+"25" = "pa04"
+"26" = "pa05"
+"27" = "pa06"
+"28" = "pa07"
+"29" = "pa08"
+"30" = "decouple"    # internal-regulator decoupling node; NOT a supply to feed
+"31" = "vregsw"      # DCDC switching node
+"32" = "vregvdd"     # DCDC input supply, its own limits (see the note)
+"33" = "vregvss"
+"34" = "dvdd3"       # third DVDD pad
+"35" = "avdd"        # analog supply
+"36" = "iovdd"       # I/O supply; every GPIO threshold is a ratio of THIS rail
+"37" = "pd03"
+"38" = "pd02"
+"39" = "pd01"
+"40" = "pd00"
+# The exposed pad, "Pin 0 / VSS" in the package figure. See the note above on why
+# the key is 41 and what that costs.
+"41" = "vss4"
+
+[models.ratings]
+# Absolute Maximum Ratings.
+max_pin_current_a = 0.05   # 50 mA sink / 50 mA source per GPIO
+max_current_a = 0.2        # 200 mA sink / 200 mA source aggregate
+max_voltage_v = 3.8        # any supply pin, -0.3 to 3.8 V. NOT a 5 V part.

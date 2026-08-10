@@ -953,14 +953,40 @@ impl Scheduler {
         // so without these a rail driven far past the chip's abs-max Vcc
         // raised no fault at all while the model DB carried the rating. One
         // watch per distinct supply node per part; direct-supply roles only
-        // (vin feeds a module's onboard regulator, its ceiling is different).
+        // (vin and raw feed a module's onboard regulator, and their ceiling is a
+        // different number from the core's).
         let mut supply_watches = Vec::new();
         for binding in &mcus {
             if let Some(max_v) = binding.max_supply_v {
                 let mut seen_nodes = std::collections::HashSet::new();
                 for (role, &node) in &binding.role_nets {
-                    let direct_supply =
-                        matches!(role.as_str(), "vcc" | "avcc" | "vdd" | "vdda" | "5v");
+                    // The role vocabulary a datasheet actually uses for a direct
+                    // supply pin, which is wider than the AVR/STM32 spellings this
+                    // list started with. `dvdd`/`avdd`/`iovdd`/`vddio`/`vregvdd`
+                    // are the EFM32 and sensor families' names for the same thing:
+                    // a pad fed straight from a board rail, whose ceiling is the
+                    // part's abs-max Vcc. Without them an entry could carry
+                    // `max_voltage_v` and have it compared against nothing, which
+                    // is a rating that reads as enforced and is not.
+                    //
+                    // A numbered second pad of the same domain (`vcc2`, `gnd2`,
+                    // `dvdd3`) does not need its own name here: the loop
+                    // deduplicates by NODE, and a board that feeds two pads of one
+                    // domain from two different rails still gets a watch per rail
+                    // through whichever pad carries the bare role.
+                    let direct_supply = matches!(
+                        role.as_str(),
+                        "vcc"
+                            | "avcc"
+                            | "vdd"
+                            | "vdda"
+                            | "dvdd"
+                            | "avdd"
+                            | "iovdd"
+                            | "vddio"
+                            | "vregvdd"
+                            | "5v"
+                    );
                     if direct_supply && !node.is_ground() && seen_nodes.insert(node) {
                         supply_watches.push(crate::stress::SupplyWatch {
                             reference: binding.reference.clone(),
@@ -5285,15 +5311,70 @@ pub fn backend_is_external(backend: &str) -> bool {
 }
 
 /// Build a simavr-backed AVR core for a `simavr:<part>` backend string.
+///
+/// The part token is passed STRAIGHT to simavr, which owns the list of cores it
+/// has and returns a null MCU for anything else (`AvrMcu::new` turns that into a
+/// named error). This used to silently substitute an ATmega328P for every token
+/// it did not literally recognise, which is the wrong-ISA failure the QEMU and
+/// Renode paths above refuse by name: an ATmega1284P board has ports A-D, 16 KB
+/// of SRAM and two USARTs, and running its firmware on a 2 KB three-port core
+/// produces a plausible-looking trace of a chip that is not on the board. A
+/// board asking for a core simavr does not have now fails loudly and says which
+/// cores it does have.
+///
+/// Port hooks are registered per part because the hook set is what connects
+/// firmware GPIO writes to the analog solve; a port the part does not have is
+/// skipped by `register_port_hooks` (its IRQ is null), so the lists below are
+/// upper bounds, not assertions.
+///
+/// NOT handled here: the clock. Every core is instantiated at 16 MHz regardless
+/// of the crystal the board fits, which is a pre-existing simplification (the
+/// binder records `external_clock_present` but no frequency), and it makes
+/// firmware-timed results wrong by the ratio of the two clocks on any board that
+/// is not a 16 MHz one. Carrying the crystal frequency through `McuBinding` is
+/// the fix; it is not this function's to make up.
 #[cfg(feature = "avr")]
 fn instantiate_avr(backend: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
-    let mut avr = if backend.contains("atmega328p") {
-        AvrMcu::atmega328p_16mhz()?
-    } else {
-        // Unknown simavr backend: fall back to atmega328p so the co-sim runs.
-        AvrMcu::new("atmega328p", 16_000_000)?
+    let part = backend.strip_prefix("simavr:").unwrap_or(backend);
+    let mut avr = AvrMcu::new(part, 16_000_000).map_err(|e| {
+        anyhow::anyhow!(
+            "{e}. The AVR co-sim runs whatever core simavr has, and will not \
+             substitute a different one: an ATmega328P standing in for the part \
+             the board fits would report a chip that is not on the board. \
+             simavr's AVR cores include atmega8/16/32/48/88/168/328/328p/328pb, \
+             atmega164/324/644/1284/1284p, atmega128/1280/1281/2560/2561, \
+             atmega16m1/32u4/64m1, at90usb162 and the attiny family. Override \
+             the part with a --models-dir entry that sets `backend` explicitly \
+             if the board's value string names a core by a different spelling."
+        )
+    })?;
+    // One superset list per family SHAPE, not per part. Registering a port the
+    // part does not have is a no-op (its IRQ is null), so a list may be generous;
+    // what it must not be is short, because a port left unhooked is a pin whose
+    // firmware writes never reach the analog solve.
+    //
+    // The lists below are honest about their coverage rather than complete:
+    //   - The megaX4 arm covers A-D, which is right for 164/324/644/1284. It also
+    //     claims A for the 16m1/64m1, which have no PORTA and do have PORTE; those
+    //     two parts therefore lose PORTE here.
+    //   - The mega1280/2560 arm stops at H because `port_hook_fn` has no J/K/L
+    //     hooks to register, so those ports are unreachable from this layer either
+    //     way.
+    //   - The default is B/C/D, which is right for the mega48/88/168/328 line and
+    //     WRONG for the attiny family the error message above advertises: an
+    //     ATtiny85 has only PORTB (harmless), but an ATtiny84 or 2313 has PORTA
+    //     and would lose it. No board in the corpus fits one; when one does, it
+    //     needs an arm here rather than the default.
+    let ports: &[char] = match part {
+        "atmega1280" | "atmega1281" | "atmega2560" | "atmega2561" | "atmega128" | "atmega128L"
+        | "atmega128rfa1" | "atmega128rfr2" => &['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'],
+        "atmega32u4" | "at90usb162" => &['B', 'C', 'D', 'E', 'F'],
+        "atmega164" | "atmega164p" | "atmega164pa" | "atmega324" | "atmega324a" | "atmega324p"
+        | "atmega324pa" | "atmega644" | "atmega644p" | "atmega1284" | "atmega1284p"
+        | "atmega16" | "atmega32" | "atmega16m1" | "atmega64m1" => &['A', 'B', 'C', 'D'],
+        _ => &['B', 'C', 'D'],
     };
-    avr.register_port_hooks(&['B', 'C', 'D']);
+    avr.register_port_hooks(ports);
     Ok(Box::new(avr))
 }
 
@@ -5714,6 +5795,49 @@ fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `instantiate_avr` used to SUBSTITUTE an ATmega328P for every simavr part
+    /// token it did not literally recognise, silently. That is the wrong-ISA
+    /// failure the QEMU and Renode arms of `instantiate_mcu` refuse by name: an
+    /// ATmega1284P has ports A-D, 16 KB of SRAM and two USARTs, and running its
+    /// firmware on a 2 KB three-port core produces a plausible-looking trace of a
+    /// chip that is not on the board.
+    ///
+    /// This test asserts the two halves of the fix. A part simavr HAS is built
+    /// as itself; a part it does not have fails LOUDLY, with an error that names
+    /// the cores available rather than quietly running the wrong one.
+    #[cfg(feature = "avr")]
+    #[test]
+    fn the_avr_backend_builds_the_part_the_board_asked_for_or_refuses() {
+        // The cores the external-five boards need, plus the one the fallback used
+        // to substitute. Each must instantiate as itself.
+        for part in ["atmega328p", "atmega1284p", "atmega1284", "atmega32u4"] {
+            assert!(
+                instantiate_avr(&format!("simavr:{part}")).is_ok(),
+                "simavr knows {part}; the co-sim must build it"
+            );
+        }
+
+        // A part simavr does not model must NOT come back as an ATmega328P. The
+        // error has to say what happened and what is available, because the whole
+        // point of failing here is that the user can act on it.
+        let err = match instantiate_avr("simavr:atmega4809") {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("an unmodelled AVR core must refuse, not substitute"),
+        };
+        assert!(
+            err.contains("atmega4809"),
+            "the error must name the part that was asked for: {err}"
+        );
+        assert!(
+            err.contains("1284p") && err.contains("32u4"),
+            "the error must enumerate the cores simavr does have: {err}"
+        );
+        assert!(
+            !err.to_ascii_lowercase().contains("falling back"),
+            "there is no fallback any more, and the message must not imply one: {err}"
+        );
+    }
 
     #[test]
     fn adc_promotion_keys_on_the_channels_own_pin_not_the_net() {

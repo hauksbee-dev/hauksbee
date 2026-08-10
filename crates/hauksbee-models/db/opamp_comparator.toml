@@ -414,3 +414,183 @@ rail_hi = 30.0      # VCC max, Recommended Operating Conditions, LM324xx column
 max_voltage_v = 32.0            # VCC, Absolute Maximum Ratings, LM324xx
 max_junction_temp_c = 150.0     # TJ, Absolute Maximum Ratings
 theta_ja_c_per_w = 83.5         # RthJA, 14-pin N (PDIP), Thermal Information
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TLV3691: TI 150 nA nanopower comparator, X2SON-6 (DPF) / SOT-563.
+#
+# Source: TI "TLV3691 0.9-V to 6.5-V, Nanopower Comparator", SBOS694A, December
+#   2013 - revised November 2015, Section 6 Pin Configuration and Functions,
+#   Section 6.5 Electrical Characteristics and Section 6.1 Absolute Maximum
+#   Ratings.
+#
+# Push-pull output (the datasheet says so in the feature list and in the OUT pin
+# description), so both `out_lo` and `out_hi` are real driven levels here, unlike
+# the open-drain supervisors in db/power_ics.toml.
+#
+# THE RAILS BELOW ARE 3.3 V AND THE DROPS ARE THE 0.9 V ROWS. That combination
+# needs justifying, because it mixes two operating points on purpose. The
+# datasheet tabulates the output swing at exactly two supplies, VS = 6.5 V and
+# VS = 0.9 V, and at neither 3.3 V nor anything near it:
+#     IO <= 100 uA:  6 mV typ / 10 mV max from either rail at VS = 6.5 V
+#                   70 mV typ (upper) and 35 mV typ (lower) at VS = 0.9 V
+#     IO = 2.5 mA:  155 mV typ / 165 mV max from either rail at VS = 6.5 V
+# A 3.3 V board sits between them, and interpolating a drop across a 7x supply
+# range would be invention. The 0.9 V rows are the LARGER drops, so using them at
+# 3.3 V understates the swing rather than overstating it: the comparator's output
+# is modelled slightly weaker than the real part, which is the direction an
+# honest model errs in. So `out_hi` = 3.3 - 0.070 = 3.230 and `out_lo` = 0.035:
+# the two drops differ by a factor of two and go on their OWN rails, which is easy
+# to get backwards and worth checking against the values below. Both are the
+# IO <= 100 uA rows; at 2.5 mA of load the real drop is 155 mV and this model is
+# optimistic by ~120 mV.
+#
+# `hysteresis` IS THE DATASHEET'S OWN VHYS ROW, 17 mV typ, and not the input
+# offset voltage. Those are different quantities and the sheet lists both (VOS is
+# +/-3 mV typ, +/-15 mV max); several entries elsewhere in this file conflate them
+# and this one does not.
+#
+# DELIBERATELY NOT MODELLED: the propagation delay is left unstated because the
+# datasheet's own figure is load- and overdrive-dependent and it publishes it as a
+# curve rather than a table row (the part is a 24 us-class nanopower comparator,
+# not a fast one, so a wrong single number here would matter). Also absent: the
+# 100 nA-class input bias current, the rail-to-rail input common-mode range
+# (V- - 0.1 to V+ + 0.1), and the short-circuit currents.
+[[models]]
+id = "tlv3691"
+kind = "comparator"
+description = "TI TLV3691 nanopower comparator, push-pull, X2SON-6, 3.3V rails"
+
+[models.match]
+# The DPF (X2SON-6) package ONLY, which is the map below and the code the margay
+# datalogger writes. "IDPF" is the industrial-grade spelling of it.
+#
+# THE DCK PACKAGE IS EXCLUDED because it is a FIVE-pin SC70 with VCC on pin 5,
+# where this map calls pin 5 a no-connect and puts VCC on a pin 6 that a DCK part
+# does not have. A DCK bound here would have its supply pad unmodelled.
+value_re = "(?i)^TLV3691I?DPFR?$"
+
+[models.params]
+out_lo     = 0.035   # the 0.9 V-row LOWER-rail drop at IO <= 100 uA
+out_hi     = 3.230   # 3.3 V rail minus the 0.9 V-row UPPER drop, which is 70 mV
+                     # and not the 35 mV of the lower rail: the sheet's two drops
+                     # differ by a factor of two and are not interchangeable
+hysteresis = 0.017   # VHYS typ, the datasheet's own row (NOT the offset voltage)
+supply_static_ua = 0.075   # IQ typ 75 nA at 25 C (150 nA max at 25 C, 200 nA
+                           # over -40 to 125 C)
+
+[models.pins]
+# Section 6, DPF (X2SON-6). Cross-checked against the margay datalogger, where
+# pad 4 drives the enable of the board's power mux and pad 6 sits on the 3.3 V
+# rail this entry's output levels assume, with pad 5 unconnected as the datasheet
+# expects.
+"1" = "in_plus"
+"2" = "vss"
+"3" = "in_minus"
+"4" = "out"
+"5" = "nc"      # no internal connection
+"6" = "vcc"
+
+[models.ratings]
+# Section 6.1 Absolute Maximum Ratings. NOTE WHAT READS THESE: the scheduler builds
+# supply-rail watches only for `mcu` bindings, and whole-device stress meta only for
+# the kinds `binder.rs`'s monitor list names, which does not include `comparator`.
+# So these are recorded for the report and for whatever consumes them later, and no
+# check compares them against a node today.
+max_voltage_v = 7.0        # supply voltage, 7 V
+max_pin_current_a = 0.01   # signal input terminal current, +/-10 mA
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TSV914: STMicroelectronics quad rail-to-rail input/output op-amp, SOIC-14.
+#
+# Source: ST "TSV911/TSV912/TSV914 Rail-to-rail input/output 8 MHz operational
+#   amplifiers", DS4899 Rev 13, May 2025: the SOIC-14 pin connections figure and
+#   the electrical characteristics tables at VCC+ = 3.3 V and 5 V.
+#
+# Datasheet figures used (VCC+ = 3.3 V, TA = 25 C unless noted):
+#   VCC       = 2.5 to 5.5 V   (2.3 to 5.5 V over 0 to 125 C)
+#   Avd       = 80 dB min, 89 dB typ @ RL = 10 kOhm, VCC = 3.3 V
+#                            (91 dB typ at VCC = 5 V)
+#   Vhigh/low = 15 mV typ, 40 mV max from either rail @ RL = 10 kOhm
+#                            (45 mV typ, 150 mV max @ RL = 600 Ohm)
+#   ICC       = 0.8 mA typ, 1.1 mA max PER AMPLIFIER @ VCC = 3.3 V
+#   GBP       = 8 MHz typ
+#   Vio       = 0.1 mV typ, 4.5 mV max at 25 C (standard grade)
+#
+# `gain` IS THE TYPICAL, NOT THE MINIMUM, and the difference is a factor of three:
+# 89 dB typ is 28184 V/V, while the guaranteed 80 dB min is 10000 V/V. The typical
+# is used because an op-amp's open-loop gain enters a closed-loop result only as a
+# small error term and the typical is the honest central estimate; a design whose
+# behaviour turns on the difference is one this ideal-gain model cannot judge either
+# way.
+#
+# THE RAILS ARE STATED AT 3.3 V and are the RL = 10 kOhm headroom figures. The
+# board that motivated this entry runs the part from a 3.3 V LDO. On a 5 V board
+# the output swing modelled here is 1.7 V short at the top; on one driving 600 Ohm
+# the real headroom is three times what this claims.
+#
+# THE SUPPLY FIGURE IS PER AMPLIFIER and this is a QUAD, so the package draws four
+# times ICC. It is recorded in prose only, because the opamp kind reads no supply
+# field at all: there is nothing here to be off by a factor of four.
+#
+# ALL FOUR AMPLIFIERS ARE STAMPED, and getting that required naming channel A's
+# roles with the `_a` suffix rather than bare. `bind_opamp` looks for
+# `out_a`/`in_plus_a`/`in_minus_a` through `..._d`, stamps one device per COMPLETE
+# channel, and returns as soon as it has stamped any; only if it finds none does it
+# fall back to the bare `out`/`in_plus`/`in_minus` single-channel names. So a quad
+# whose channel A used the bare names and B/C/D the suffixed ones would stamp
+# exactly the three suffixed channels and silently drop A, which is the reverse of
+# what such a map looks like it says. The MWGEN-G1 uses all four (a duty-cycle
+# error detector), so the difference is the whole circuit rather than a corner.
+#
+# DELIBERATELY NOT MODELLED: the four amplifiers share one supply leg and one set
+# of rails, so nothing here distinguishes them electrically beyond their nets.
+[[models]]
+id = "tsv914"
+kind = "opamp"
+description = "ST TSV914 quad rail-to-rail op-amp, SOIC-14, 3.3V rails, all four channels"
+
+[models.match]
+# The TSV911 (single, SOT-23-5) and TSV912 (dual, SOIC-8) share the die and the
+# electricals but NOT the pinout, so only the quad binds here. "TSV914IDT" and
+# "TSV914IYDT" are the SOIC-14 ordering codes and "TSV914AIDT" the A grade (tighter
+# offset, which this entry does not distinguish because it carries no offset field).
+#
+# BOTH PACKAGES SHARE THIS PIN ORDER, which is why the bare part number is safe
+# here where it is not on the other new entries in this batch. DS4899 Rev 13's
+# ordering table lists SOIC-14 (the "DT" codes) and TSSOP14 (the "PT" codes), and
+# the pin allocation figure is one figure for both; they differ in thermal
+# resistance (100 against 103 C/W), which this entry does not carry.
+value_re = "(?i)^TSV914A?I?Y?[DP]T$|^TSV914$"
+
+[models.params]
+gain    = 28184.0   # Avd 89 dB typ @ RL = 10 kOhm, VCC = 3.3 V (80 dB min = 1e4)
+rail_lo = 0.015     # Vlow typ, 15 mV from the negative rail @ RL = 10 kOhm
+rail_hi = 3.285     # 3.3 V rail minus the same 15 mV of headroom
+# NO supply leg: `hauksbee models lint` reports `supply_static_ua` as unread for
+# the opamp kind, so the datasheet's 0.8 mA typ / 1.1 mA max per amplifier at
+# VCC = 3.3 V lives in the note above rather than as a field nothing consumes.
+
+[models.pins]
+# DS4899 Rev 13, SOIC-14 pin connections. Corroborated by the MWGEN-G1's own pin
+# functions, which name pad 4 V+ and pad 11 V- and mark pads 2/6/9/13 inverting and
+# 3/5/10/12 non-inverting: the standard quad-op-amp order, and pad for pad this map.
+#
+# Every channel is suffixed, INCLUDING A: see the note above for why the bare
+# names would have dropped it.
+"1"  = "out_a"        # OUT1
+"2"  = "in_minus_a"   # IN1-
+"3"  = "in_plus_a"    # IN1+
+"4"  = "vcc"          # VCC+
+"5"  = "in_plus_b"    # IN2+
+"6"  = "in_minus_b"   # IN2-
+"7"  = "out_b"        # OUT2
+"8"  = "out_c"        # OUT3
+"9"  = "in_minus_c"   # IN3-
+"10" = "in_plus_c"    # IN3+
+"11" = "vss"          # VCC-
+"12" = "in_plus_d"    # IN4+
+"13" = "in_minus_d"   # IN4-
+"14" = "out_d"        # OUT4
+
+[models.ratings]
+max_voltage_v = 6.0   # supply abs max (2.5 to 5.5 V operating)
