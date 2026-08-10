@@ -554,13 +554,13 @@ known_good_note = """
 Adjudicated, not pending: one real copper join, GND <-> AGND on B.Cu. The two \
 nets are separate in the schematic, with no discrete part bridging them (the \
 only element with pads on both is U1 itself, the ATmega328P, whose GND and AGND \
-pins are internally common), and their pours \
-are same-rank with outlines that overlap in the same 0.349 mm band on both \
-layers. On F.Cu both pours hold `isolate="0.3048"` and the shipped \
-copper_top.gbr keeps them as two distinct filled regions. On B.Cu the AGND pour \
-carries `isolate="0.00030625"` and copper_bottom.gbr merges the pair into one \
-6378-vertex region: three tenths of a micrometre is not a gap, so the copper is \
-joined. The file proves the join is deliberate: the near-zero is a hand-set \
+pins are internally common), and their pours are same-rank with outlines that \
+overlap in the same 0.349 mm band on both layers. The shipped fabrication data \
+splits the layers regardless: in copper_top.gbr the two fills are separate \
+bodies 8.236 mm apart at their closest, and in copper_bottom.gbr they are one \
+6378-vertex region with no channel along the seam, so on the back layer the \
+copper is joined. The file proves the join is deliberate: the AGND pour that \
+abuts carries `isolate="0.00030625"`, a hand-set \
 override on one of nine ground pours, where six ask for 0.3048 mm and two set \
 nothing. WHY it is there is inference (an analogue return has to reach digital \
 ground somewhere, and this is where the layout does it), and the finding does \
