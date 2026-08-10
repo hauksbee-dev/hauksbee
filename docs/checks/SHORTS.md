@@ -206,9 +206,13 @@ V3.4.5's own fabrication output, which shows the same outline overlap
 resolving to separate copper on the layer where both pours hold `isolate="0.3048"`
 and to one body on the layer where one holds `0.00030625`
 ([`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md)).
-The cost is stated with it: an overlap at or above that isolate is silent even if
-a CAM run would merge it, and a sub-rule but non-zero isolate is not reported as
-a clearance finding either, because both answers need the fill
+The costs are stated with it, and one of them is a measured false positive rather
+than a risk: a near-zero `isolate` is necessary but not sufficient for the fills
+to meet, and the same upstream's V3.4.0 revision has both top-layer pours at the
+near-zero value with their fills apart, which this check flags anyway. An overlap
+at or above the threshold is likewise silent even if a CAM run would merge it, and
+a sub-rule non-zero isolate is not reported as a clearance finding either. All
+three need Eagle's fill reconstructed, which is not implemented
 ([`../about/LIMITATIONS.md`](../about/LIMITATIONS.md)).
 
 ### Deliberate ties exempted locally

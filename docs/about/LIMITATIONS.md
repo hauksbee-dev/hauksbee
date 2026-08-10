@@ -377,23 +377,36 @@ both copper layers, and the gerbers it ships beside the `.brd` show the pair
 separate on the layer where both pours hold `isolate="0.3048"` and joined on the
 layer where one holds `0.00030625`.
 
-**The false positive it keeps.** A pour with no `isolate` attribute at all parses
-as zero and still flags, so two same-rank pours that set nothing and overlap are
-reported. That is an extrapolation, not the measurement: the emonTx merge was
-observed at 0.00030625, and against a foreign track or pad an absent `isolate`
-means "rules only" rather than "no gap", as the paragraph above says. It is kept
-deliberately, on the grounds that an over-report of a contact costs a reader less
-than a miss, and that no board in the corpus carries the construct; it is written
-down here rather than left in the code.
+**A measured false positive the narrowing does NOT remove.** A near-zero `isolate`
+turns out to be necessary but not sufficient for the fills to meet. The emonTx
+V3.4.0 puts both of its top-layer ground pours at `isolate="0.00030625"` with
+overlapping outlines, and the copper gerbers it ships show the AGND body as a
+separate component from the GND body (nearest approach measured at 29 mm by one
+raster, 4.973 mm by an independent reviewer's exact-geometry pass; separate
+either way). hauksbee flags that layer. It is wrong to, and the finding stands
+only because the same rule is right about V3.4.0's bottom layer and V3.4.5's, and
+because it is silent on V3.4.5's top layer where the old rule was wrong: a strict
+improvement carrying one known error. No threshold on `isolate` can fix it, since
+`isolate` does not determine the answer. Closing it needs Eagle's fill
+reconstructed from the outline, the pour settings and the foreign copper, which is
+not implemented. See the emonTx section of
+[`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md).
+
+**A second, smaller one.** A pour with no `isolate` attribute at all parses as
+zero and still flags. That extrapolates a measurement taken at 0.00030625 down to
+zero, in the direction where the same file's rules-floor reasoning says an absent
+`isolate` means "rules only". Kept on the same grounds, and stated rather than
+left in the code.
 
 **The false-negative class the narrowing buys.** An overlap whose smaller
 `isolate` is at or above one micrometre is now silent, and the fill is still never reconstructed,
 so a pour pair that a CAM run merges anyway is not caught. Nor is a sub-rule but
 non-zero `isolate` reported as a clearance finding, because answering that needs
-the fill. The band where the threshold sits is bounded by measurement only from
-the two values that one board supplies (0.00030625 merges, 0.3048 does not); the
-micrometre inside that band is a manufacturing judgement, not a documented Eagle
-boundary, and a second board that merged at a wider `isolate` would move it.
+the fill. The threshold has no measured lower bound at all: 0.00030625 is observed
+merging on two layers and NOT merging on a third, so it bounds the band from
+neither side, and 0.3048 not merging is the only one-sided evidence there is. The
+micrometre inside that is a manufacturing judgement, not a documented Eagle
+boundary.
 
 That overlap keys on the polygons' vertex rings: same-rank pours whose rings
 miss by less than their drawn boundary stroke widths are not flagged, and
