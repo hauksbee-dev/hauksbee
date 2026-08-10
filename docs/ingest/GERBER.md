@@ -629,10 +629,9 @@ Containment there is judged from a constructed interior point, never a vertex:
 `point_in_polygon` is half-open, so a hole whose loop starts at a point it
 shares with its outer, which boolean-op CAM emits routinely, answered inside or
 outside by drawing orientation alone. And the pieces of one clear image are
-only meaningful together, so a piece may not be skipped as already-void once a
-sibling of its own statement has been cut from that pour: cutting a ring's
-outer while dropping the piece that restores its island erases copper the film
-kept.
+only meaningful together, so the whole image is decided as a unit, bounds,
+enclosure and redundancy alike, and cut all or none: cutting a ring's outer
+while dropping the piece that restores its island erases copper the film kept.
 That statement may legally carry several disjoint islands in any order, and
 treating everything after the first contour as a hole is a guess about draw
 order: a second disjoint void in one statement was cancelled outright, and an
@@ -646,8 +645,11 @@ polarity mid-way is painted, never dropped.
 
 The remaining limits all leave copper standing: the refusals above, a void
 straddling a pour's edge, a void laid over a track or a pad rather than over a
-pour, the intersection of two voids that only partially overlap, and an island
-ringed by several separate voids rather than by one void's own hole contour.
+pour, a void spanning a hole the pour was drawn with, the intersection of two
+voids that only partially overlap, an island ringed by several separate voids
+rather than by one void's own hole contour, and a concave pour severed by a
+void lying wholly inside it, which is what a plane deliberately split by a
+clear gap looks like.
 
 Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
 pour with two ringed pads must reconstruct to three conductors, and its

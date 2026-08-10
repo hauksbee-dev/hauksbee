@@ -31,10 +31,16 @@ pub enum Shape {
     /// single G36/G37 region carry several contours). Containment is even-odd,
     /// a point is copper iff it lies inside an odd number of contours, so the
     /// ring reads as copper and a hole's interior reads as empty. Disjoint
-    /// islands of one region are split into separate shapes upstream (one shape
-    /// = one conductor for the union-find), so a `MultiPolygon` is always a
-    /// single electrically-connected piece. No inflation radius: pours are
-    /// drawn at their true outline.
+    /// islands of one region are split into separate shapes upstream, so a
+    /// `MultiPolygon` built by the region reader is a single electrically-connected
+    /// piece. That is the INTENT of the shape, and the union-find relies on it: one
+    /// shape is one conductor. A pour that `gerber::rs274x::apply_clears` has cut
+    /// can fall short of it, and says so in its own comments: an island ringed by
+    /// several separate voids, a void the enclosure test refused, and a concave pour
+    /// severed by a void lying wholly inside it all leave disconnected copper in one
+    /// shape. Every one of those is over-connection, which is the direction that
+    /// reader is built to fail in. No inflation radius: pours are drawn at their true
+    /// outline.
     MultiPolygon { contours: Vec<Vec<(f64, f64)>> },
 }
 
