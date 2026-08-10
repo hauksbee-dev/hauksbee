@@ -107,6 +107,47 @@ impl<'a> Name<'a> {
     }
 }
 
+/// Extensions that are certainly NOT a plotted film: documents, data files and
+/// job metadata that a fab folder ships alongside the gerbers. Used to refuse
+/// copper classification for names that would otherwise match on a role word
+/// alone; anything not listed is left to the role rules, so an exporter's
+/// unusual film extension still reaches them.
+fn is_definitely_not_a_film(ext: &str) -> bool {
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "csv"
+            | "pos"
+            | "pdf"
+            | "xlsx"
+            | "xls"
+            | "doc"
+            | "docx"
+            | "json"
+            | "xml"
+            | "html"
+            | "htm"
+            | "md"
+            | "zip"
+            | "gz"
+            | "7z"
+            | "rar"
+            | "png"
+            | "jpg"
+            | "jpeg"
+            | "svg"
+            | "dxf"
+            | "step"
+            | "stp"
+            | "gbrjob"
+            | "ipc"
+            | "log"
+            | "ini"
+            | "toml"
+            | "yaml"
+            | "yml"
+    )
+}
+
 /// Extensions that hold a plotted gerber film. A file with one of these that
 /// survived every non-copper test is a candidate for the bare role-name rules.
 fn is_gerber_film_ext(n: &Name) -> bool {
@@ -548,15 +589,19 @@ fn protel_inner_index(n: &Name) -> Option<usize> {
 /// KiCad inner-copper name: `*-In1_Cu.gbr`, `*-In2_Cu.gbr`, … or
 /// `inner1`, `signal2`, `Copper_Signal_1`, etc.
 fn kicad_inner_index(n: &Name) -> Option<usize> {
-    // Only a plotted film can be copper. The `signal`/`inner` markers below do
-    // not require a `cu` token (Altium and Protel-lineage exporters omit it), so
-    // without this gate a `signal_1.csv` pick-and-place or an `inner_2.pdf`
-    // drawing classified as a copper layer, and the directory scan claims
-    // copper before it looks for placement data: the CSV was swallowed as an
-    // empty copper film and the components never bound. Every inner-copper film
-    // in the corpus (KiCad `-In1_Cu.gbr`, Altium `_Copper_Signal_1.gbr`,
-    // Protel-lineage `-Inner1.gbr`) carries a film extension or none at all.
-    if !is_gerber_film_ext(n) && n.ext.is_some() {
+    // Copper has to be a plotted film. The `signal`/`inner` markers below do not
+    // require a `cu` token (Altium and Protel-lineage exporters omit it), so
+    // without a gate here a `signal_1.csv` pick-and-place or an `inner_2.pdf`
+    // drawing classified as a copper layer, and the directory scan claims copper
+    // before it looks for placement data: the CSV was swallowed as an empty
+    // copper film and the components never bound.
+    //
+    // Stated as what a film is NOT, deliberately. An allowlist of film
+    // extensions drops the copper of any exporter using a name outside it
+    // (`-Inner1.gbx`, `-signal_2.gb`), which is the same silent loss this
+    // function was fixed for; the thing actually being excluded is a small,
+    // known set of non-films.
+    if n.ext.as_deref().is_some_and(is_definitely_not_a_film) {
         return None;
     }
     /// The layer index that follows a marker, allowing ONE separator between
@@ -589,8 +634,12 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
             let tail = &n.full[pos + marker.len()..];
             if let Some(k) = index_after(tail) {
                 // Require it to actually be a copper layer (mask/silk also have
-                // "layer" words; those were filtered already above).
-                if k >= 1 && (n.has("cu") || marker == "signal" || marker == "inner") {
+                // "layer" words; those were filtered already above), and a
+                // plausible stack position: `board-Inner 2024-05-01.gbr` must not
+                // report inner layer 2024. `bare_stack_index` bounds itself the
+                // same way and for the same reason.
+                if (1..=32).contains(&k) && (n.has("cu") || marker == "signal" || marker == "inner")
+                {
                     return Some(k);
                 }
             }

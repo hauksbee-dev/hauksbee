@@ -336,24 +336,49 @@ pub fn reconstruct(
                     })
                     .collect(),
             );
-            // Grid-accelerate containment only for *large* pours: a board-
-            // spanning plane carries tens of thousands of vertices and is tested
-            // against every primitive, so a raw even-odd test there is
-            // quadratic; the grid makes each query O(1) outside the boundary
-            // band. Small pours (the common case: a few hundred separate fill
-            // islands) are cheaper tested directly than gridded, so they are
-            // left to plain `point_in_polygon` and skip the build cost.
+            // Grid-accelerate containment for *large* pours: a board-spanning
+            // plane carries tens of thousands of vertices and is tested against
+            // every primitive, so a raw even-odd test there is quadratic; the
+            // grid makes each query O(1) outside the boundary band. Small pours
+            // (the common case: a few hundred separate fill islands) are cheaper
+            // tested directly than gridded, so they skip the build cost.
+            //
+            // Multi-contour pours take the grid too. They used to be left to the
+            // exact test on the grounds that they are "rare and small", which a
+            // negative-drawn plane broke outright: cutting its `%LPC%` voids
+            // turns it into ONE board-sized shape carrying a contour per antipad,
+            // exactly the case the grid exists for.
             const GRID_VERT_THRESHOLD: usize = 2000;
-            let region_grids: HashMap<usize, super::geo::PolyGrid> = regions
+            let grid_contours: Vec<(usize, Vec<Vec<(f64, f64)>>)> = regions
                 .iter()
                 .filter_map(|&rgi| {
-                    if let Shape::Polygon { pts, .. } = &prims[rgi].shape {
-                        if pts.len() >= GRID_VERT_THRESHOLD {
-                            let cells = (pts.len() / 4).clamp(64, 512);
-                            return Some((rgi, super::geo::PolyGrid::new(pts, cells)));
-                        }
-                    }
-                    None
+                    let contours = match &prims[rgi].shape {
+                        Shape::Polygon { pts, .. } => vec![pts.clone()],
+                        Shape::MultiPolygon { contours } => contours.clone(),
+                        Shape::Capsule(_) => return None,
+                    };
+                    let verts: usize = contours.iter().map(Vec::len).sum();
+                    (verts >= GRID_VERT_THRESHOLD).then_some((rgi, contours))
+                })
+                .collect();
+            let region_grids: HashMap<usize, super::geo::PolyGrid> = grid_contours
+                .iter()
+                .map(|(rgi, contours)| {
+                    let verts: usize = contours.iter().map(Vec::len).sum();
+                    // Resolution scales with vertex count, so detail buys cells,
+                    // and the ceiling is 2048 rather than 512 because the cell
+                    // size decides how often a query falls back to the exact
+                    // test. A negative plane's pads sit ~0.2 mm from the void rim
+                    // that isolates them, which at 512 cells over a 100 mm board
+                    // (0.2 mm a cell) is one cell: every pad landed in the
+                    // boundary band and paid the exact poly distance over the
+                    // pour's whole vertex count. Measured on a 100 mm plane with
+                    // 6084 antipads: 3.97 s at 512, 0.10 s at 2048, of which the
+                    // build is 73 ms. The grid is exact at any resolution
+                    // (scanline parity plus an exact test on a boundary cell), so
+                    // this only moves work, never answers.
+                    let cells = (verts / 4).clamp(64, 2048);
+                    (*rgi, super::geo::PolyGrid::new(contours, cells))
                 })
                 .collect();
             for &gi in members {
@@ -397,24 +422,23 @@ pub fn reconstruct(
                     if !matches!(prims[rgi].shape, Shape::Capsule(_)) {
                         // (a) Containment: a sample point inside the filled
                         // outline means the pour copper is *on* that primitive.
-                        // Large pours use the grid; small ones test directly. A
-                        // multi-contour pour (an outer with holes) uses even-odd
-                        // containment, inside the ring is in, inside a hole is
-                        // out; these are rare and small, so they take the exact
-                        // test without a grid.
+                        // Large pours use the grid; small ones test directly.
+                        // Either way containment is even-odd over every contour,
+                        // so inside a pour's ring is in and inside a void is out.
+                        let grid = region_grids.get(&rgi);
                         let inside = test_pts.iter().any(|&(px, py)| {
                             if px < b[0] || px > b[2] || py < b[1] || py > b[3] {
                                 return false;
                             }
-                            match &prims[rgi].shape {
-                                Shape::Polygon { pts, .. } => match region_grids.get(&rgi) {
-                                    Some(g) => g.contains(px, py),
-                                    None => super::geo::point_in_polygon(px, py, pts),
-                                },
-                                Shape::MultiPolygon { contours } => {
+                            match (grid, &prims[rgi].shape) {
+                                (Some(g), _) => g.contains(px, py),
+                                (None, Shape::Polygon { pts, .. }) => {
+                                    super::geo::point_in_polygon(px, py, pts)
+                                }
+                                (None, Shape::MultiPolygon { contours }) => {
                                     super::geo::point_in_contours(px, py, contours)
                                 }
-                                Shape::Capsule(_) => false,
+                                (None, Shape::Capsule(_)) => false,
                             }
                         });
                         // (b) Edge penetration: a pad/track whose finite-width
@@ -432,9 +456,16 @@ pub fn reconstruct(
                         // it (caught by containment), so the costly poly-poly is
                         // confined to the comparatively few pad primitives, which
                         // keeps board-sized pours from making this quadratic.
+                        // A gridded pour also answers "is there any boundary in
+                        // this pad's bounds at all" in O(1). Without that guard a
+                        // board-sized pour's bounds overlap EVERY pad, so every
+                        // antipad-isolated pad paid an exact poly distance over
+                        // the pour's whole vertex count, which is the quadratic
+                        // the grid was introduced to remove.
                         let penetrates = !inside && prims[gi].kind == PrimKind::Flash && {
                             let bp = prims[gi].bounds;
                             !(bp[2] < b[0] || bp[0] > b[2] || bp[3] < b[1] || bp[1] > b[3])
+                                && grid.is_none_or(|g| g.near_boundary(bp))
                                 && shape_gap(&prims[gi].shape, &prims[rgi].shape) < -0.04
                         };
                         if inside || penetrates {

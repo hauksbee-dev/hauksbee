@@ -34,6 +34,32 @@ fn voids_in_a_negative_pour_separate_the_copper_they_ring() {
 }
 
 #[test]
+fn an_antipad_island_is_its_own_net_not_the_planes() {
+    // The negative plane's other half. Where the previous test's voids ring
+    // nothing, an antipad drawn as an ANNULAR clear flash rings a 2 mm island of
+    // plane copper free: that island is the through-hole's annular pad, wired to
+    // the bottom-side track through the plated barrel, and it is emphatically not
+    // on the plane.
+    //
+    // The plane, and the via net (island + barrel + two bottom pads + track), are
+    // two nets. Reading it as one is the merge in miniature, and it happens by
+    // either of two mistakes: dropping the clear (the plane is then solid and
+    // swallows everything the barrel reaches) or cutting the ring but leaving the
+    // island inside the plane's own primitive, since connectivity unions per
+    // primitive.
+    let e = from_gerber_dir(&job("gerber_negative_antipad")).expect("negative antipad fixture");
+    assert_eq!(e.stats.n_layers, 2);
+    assert_eq!(
+        e.stats.n_holes, 1,
+        "one plated barrel stitches the two layers"
+    );
+    assert_eq!(
+        e.stats.n_nets, 2,
+        "the plane and the through-hole net are two conductors"
+    );
+}
+
+#[test]
 fn a_pad_the_voids_leave_bridged_stays_on_the_pour() {
     // The lookalike, and the side that stops the fix from simply splitting
     // everything. Identical pour, identical pads, identical void around the
