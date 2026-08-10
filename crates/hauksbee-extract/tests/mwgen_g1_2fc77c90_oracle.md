@@ -30,10 +30,15 @@ directions and is not what this oracle is about.
 
 ## What is committed, and what is trimmed
 
-`mwgen_g1_2fc77c90_kicad_9_0_3_shorts.json` carries the report's metadata
-(`kicad_version`, `coordinate_units`, `date`, `source`), the full per-type
-violation tally, the unconnected-item count, and the six `shorting_items`
-violations **verbatim**, item descriptions, pad UUIDs and positions included.
+`mwgen_g1_2fc77c90_kicad_9_0_3_shorts.json` carries KiCad's own metadata
+(`kicad_version`, `coordinate_units`, `date`, `source`) and the six
+`shorting_items` violations **verbatim**, item descriptions, pad UUIDs and
+positions included. Two keys are DERIVED here rather than emitted by KiCad, and
+are labelled as such in the file: `violation_counts_by_type` (the per-type tally
+of the full run) and `unconnected_items_count`. Because of them and the trim, the
+file is not a valid instance of KiCad's DRC schema, so it does not claim to be
+one: the schema URL is carried under `_kicad_schema` for reference instead of
+`$schema`.
 
 The other 1138 violations are trimmed, which is a deviation from the
 `openmower_62dd369` oracle beside this one (that report is committed unedited).

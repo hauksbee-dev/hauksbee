@@ -197,12 +197,12 @@ without ring overlap are not distance-checked either, since the fill extent
 near the boundary depends on those settings.
 
 One pour-to-pour construct **is** checked. Two overlapping same-rank pours of
-different signals get no arbitration from their rank, but the yielding pour is
-still carved back by its own `isolate`, so an outline overlap on its own is not a
-short. What is reported is an overlap where the smaller `isolate` is below one
+different signals get no arbitration from their rank, and the file names no
+yielder either, but whichever pour gives way is carved back by its own `isolate`,
+so an outline overlap on its own is not a short. What is reported is an overlap where the smaller `isolate` is below one
 micrometre, meaning nothing in the file asks for a gap at all, and the pour
-settings are disclosed on the finding. This was narrowed on 2026-08-09 against
-the emonTx V3.4.5's own fabrication output, which shows the same outline overlap
+settings are disclosed on the finding. This was narrowed against the emonTx
+V3.4.5's own fabrication output, which shows the same outline overlap
 resolving to separate copper on the layer where both pours hold `isolate="0.3048"`
 and to one body on the layer where one holds `0.00030625`
 ([`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md)).

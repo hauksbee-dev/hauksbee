@@ -1,5 +1,6 @@
 {
-  "$schema": "https://schemas.kicad.org/drc.v1.json",
+  "_note": "Trimmed excerpt of a kicad-cli pcb drc report, not a valid instance of KiCad's drc schema: `violations` holds only the shorting_items subset, and `violation_counts_by_type` and `unconnected_items_count` are derived here rather than emitted by KiCad. The unedited run is reproducible from the command in mwgen_g1_2fc77c90_oracle.md.",
+  "_kicad_schema": "https://schemas.kicad.org/drc.v1.json",
   "coordinate_units": "mm",
   "date": "2026-08-09T23:09:09+0100",
   "kicad_version": "9.0.3",
