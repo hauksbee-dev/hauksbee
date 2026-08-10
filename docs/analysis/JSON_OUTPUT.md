@@ -55,7 +55,7 @@ and failure parse the same way:
 |---|---|---|
 | `ok` | bool | `true` iff `verdict == "pass"` |
 | `verdict` | string | `"pass"` \| `"fail"` \| `"invalid"` (see below) |
-| `serious_count` | int | number of serious findings (DRC shorts + co-sim stress faults + serious lint/SI) |
+| `serious_count` | int | number of `serious` findings (DRC shorts, a destroyed part in co-sim, high-severity lint/SI). A co-sim overcurrent or overtemperature grades `warning` and is counted by its surface's gate instead, see `verdict` below |
 | `actionable_count` | int | findings a user can act on (serious + warnings + clearance groups) |
 
 `verdict` is `"fail"` when `serious_count > 0`, or when the emitting surface's
@@ -64,9 +64,8 @@ own `--strict` gate fails on a finding the `serious` severity does not carry
 including its low ones but not its informational notes, the co-sim surface on
 any raised fault; `--strict-boot` adds the boot advisory). It is
 `"invalid"` when nothing gates but the run-level claim could not be judged: a
-top-level `refusal`, AC or thermal reporting `valid:false`, undermined
-run-level evidence, or unbound verdict-critical parts on a model-dependent
-surface. Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`, and a
+top-level `refusal`, AC or thermal reporting `valid:false`, undermined run-level
+evidence, or unbound verdict-critical parts on a model-dependent surface. Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`, and a
 gating run's own document matches its own exit code (2 / 3 / 0). That is not
 the same as predicting a strict run from a non-strict one: on the co-sim path
 the zero-activity refusal is only constructed under `--strict`, and the boot
