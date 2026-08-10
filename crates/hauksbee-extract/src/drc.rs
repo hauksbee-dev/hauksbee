@@ -2814,19 +2814,22 @@ pub mod eagle_drc {
     /// board the pour at 0.00030625 ends up in contact and the pour at 0.3048
     /// does not.
     ///
-    /// **Chosen, twice over.** First, reading that as "the isolate decided it" is
-    /// an inference: the two layers differ in outline, routing and neighbouring
-    /// copper as well as in isolate, and the top layer's fills end up 8.236 mm
-    /// apart, which is crowding rather than a 0.3048 mm antipad. Second, even
-    /// granting the inference, the two values leave three orders of magnitude of
-    /// room and nothing in the file format says where inside it the behaviour
-    /// changes. One micrometre is picked on a manufacturing argument: it is 25x
-    /// below one mil, around the tightest separation board houses quote, so an
-    /// `isolate` below it is not asking for a manufacturable gap; and it is ten
-    /// orders above the f64 noise floor of the geometry it is compared against. A
-    /// board that merged at a wider isolate would narrow the band and move this
-    /// number; that measurement has not been made, and the false negatives this
-    /// leaves are recorded in `docs/about/LIMITATIONS.md`.
+    /// **Measured the other way, too.** The same upstream's V3.4.0 revision puts
+    /// BOTH of its top-layer ground pours at 0.00030625 with overlapping
+    /// outlines, and its shipped gerbers show those two fills as separate
+    /// components. So the near-zero value is necessary but NOT sufficient for a
+    /// merge, this test over-reports on that layer, and no threshold can fix it
+    /// because `isolate` does not decide the question. The false positive is
+    /// recorded in `docs/about/LIMITATIONS.md`; deciding it needs Eagle's fill
+    /// reconstructed, which is not implemented.
+    ///
+    /// **Chosen.** Given all that, the number is a manufacturing judgement rather
+    /// than a boundary anything documents: one micrometre is 25x below one mil,
+    /// around the tightest separation board houses quote, so an `isolate` below
+    /// it is not asking for a manufacturable gap, and it is ten orders above the
+    /// f64 noise floor of the geometry it is compared against. What the rule
+    /// buys, against the outline-only rule it replaced, is silence on V3.4.5's
+    /// top layer while both real contacts still flag.
     ///
     /// An `isolate` between this and the design rules leaves a gap that is real
     /// but too tight, which is a clearance question about a fill Eagle recomputes

@@ -1108,9 +1108,11 @@ fn explicit_cross_class_matrix_entry_is_applied() {
 // the computed fill (with isolate antipads) is derived data. Foreign copper
 // inside an outline is NOT a short (Eagle carves around it). Two overlapping
 // same-rank pours of different signals get no rank arbitration, but the
-// yielding pour is still carved back by its own `isolate`, so the overlap only
-// reaches copper when that isolate is zero. The emonTx V3.4.5 measurement
-// behind that split is in `docs/evidence/KNOWN_FAULTS_VALIDATION.md`.
+// pour that gives way is still carved back by its own `isolate`, so the overlap
+// is reported only when that isolate is under a micrometre. That is necessary but
+// not sufficient for the fills to actually meet, which is measured and recorded
+// in `docs/evidence/KNOWN_FAULTS_VALIDATION.md` and
+// `docs/about/LIMITATIONS.md`.
 // ---------------------------------------------------------------------------
 
 fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
