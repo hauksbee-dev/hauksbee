@@ -88,9 +88,9 @@ pub fn github_refusal_annotation(refusal: &Refusal) {
     }
     eprintln!(
         "::error title=hauksbee invalid for analysis::{}",
-        // `%` first, then the newline: a workflow command decodes the
-        // escapes, so escaping the newline before the percent would turn the
-        // refusal's own text into a mangled `%0A`.
+        // `%` first, then the newline: a workflow command decodes the escapes,
+        // so escaping the newline first would send its `%0A` back through the
+        // percent pass and arrive as a literal `%250A`.
         refusal
             .render_text()
             .replace('%', "%25")
