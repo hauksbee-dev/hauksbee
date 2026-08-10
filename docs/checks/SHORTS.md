@@ -150,7 +150,7 @@ face, swapping its side-specific copper 1↔16.
 | SMD pad (`<smd>` in a package) | Rect polygon (+ corner radius) | single layer (1 by default, flipped by mirror); `roundness` (0..100 %) carried as a corner-radius inflation on an inset rect, like KiCad roundrect; `rot` honoured |
 | Board rectangle (`<rectangle>` on copper) | Rect polygon | rotated by `rot` |
 | Board circle (`<circle>` on copper) | Annulus (covering capsule ring), or a solid disc when `width` is 0 | the stroke band is the copper; the interior is bare board (Eagle fills only zero-width circles) |
-| Signal polygon / pour (`<polygon>`) | settings parsed; same-rank overlaps shorted; fill **excluded from the pour-to-copper test** | see the honesty caveat below |
+| Signal polygon / pour (`<polygon>`) | settings parsed; a same-rank overlap with another signal's pour is shorted only when the smaller `isolate` is below 1 um; fill **excluded from the pour-to-copper test** | see the honesty caveat below |
 
 Package copper is placed with the full element transform: position rotated by the
 element's `rot` (CCW, y-up). A mirrored (`MR`) element negates local X and uses
