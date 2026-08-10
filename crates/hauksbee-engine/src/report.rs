@@ -241,10 +241,20 @@ impl BindReport {
     }
 
     /// All warnings raised during binding.
+    ///
+    /// [`Assumption::PARTIAL_MODEL_MARKER`] is stripped here: it is routing for
+    /// `BoardEvidence::from_bound`, which lifts a partial-model warning into an
+    /// assumption so it reaches `--plain` and `--json` too, and it has no business
+    /// in the printed line.
     pub fn warnings(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.rows
-            .iter()
-            .filter_map(|r| r.warning.as_deref().map(|w| (r.reference.as_str(), w)))
+        self.rows.iter().filter_map(|r| {
+            let w = r.warning.as_deref()?;
+            Some((
+                r.reference.as_str(),
+                w.strip_prefix(hauksbee_ir::evidence::Assumption::PARTIAL_MODEL_MARKER)
+                    .unwrap_or(w),
+            ))
+        })
     }
 
     /// Every pin-role GUESS warning: `(reference, message)` for each pad whose

@@ -449,15 +449,25 @@ theta_ja_c_per_w = 83.5         # RthJA, 14-pin N (PDIP), Thermal Information
 # +/-3 mV typ, +/-15 mV max); several entries elsewhere in this file conflate them
 # and this one does not.
 #
-# `tpd_s` IS THE SLOWEST TABULATED ROW, and an earlier version of this entry
-# carried no tpd at all on the false claim that the sheet publishes only curves.
-# It does publish curves, AND Section 6.5 tabulates tPHL and tPLH at four points:
-#   24 us   VS = 6.5 V, overdrive 100 mV      32 us   VS = 6.5 V, overdrive 50 mV
-#   28-35 us VS = 0.9 V, overdrive 100 mV     40 us   VS = 0.9 V, overdrive 50 mV
-# 40 us is the 0.9 V / 50 mV corner, which is the same conservative corner the
-# output levels above are taken from, so the entry is internally consistent: a
-# board driving this comparator harder than 50 mV of overdrive gets a real part
-# that is up to 40% faster than the model.
+# `tpd_s` IS THE SLOWEST TABULATED FIGURE. Section 6.6 Switching Characteristics
+# of SBOS694A (December 2013, revised November 2015) tabulates tPHL and tPLH as TWO
+# SEPARATE rows over four conditions each, eight typicals in all:
+#                          overdrive 50 mV      overdrive 100 mV
+#   tPHL  VS = 6.5 V              32 us                 24 us
+#   tPHL  VS = 0.9 V              45 us                 35 us
+#   tPLH  VS = 6.5 V              32 us                 24 us
+#   tPLH  VS = 0.9 V              40 us                 28 us
+# The slowest is tPHL at VS = 0.9 V with 50 mV of overdrive, 45 us, and that is what
+# `tpd_s` carries. Two earlier versions of this comment were wrong about this table:
+# one claimed the sheet publishes only curves and carried no tpd at all, and its
+# replacement listed four figures rather than eight and read the 0.9 V / 50 mV
+# corner as a single 40 us, which is tPLH alone. The schema has one delay param, so
+# one figure has to stand for both edges; the pessimistic edge is the one to carry,
+# and it is named here so nobody has to guess which direction it describes.
+#
+# 0.9 V is also the corner the output levels above are taken from, so the entry is
+# internally consistent: a board running this comparator at 3.3 V with more than
+# 50 mV of overdrive gets a real part substantially faster than the model.
 #
 # DELIBERATELY NOT MODELLED: the 100 nA-class input bias current, the rail-to-rail
 # input common-mode range (V- - 0.1 to V+ + 0.1), and the short-circuit currents.
@@ -481,8 +491,9 @@ out_hi     = 3.230   # 3.3 V rail minus the 0.9 V-row UPPER drop, which is 70 mV
                      # and not the 35 mV of the lower rail: the sheet's two drops
                      # differ by a factor of two and are not interchangeable
 hysteresis = 0.017   # VHYS typ, the datasheet's own row (NOT the offset voltage)
-tpd_s      = 4.0e-5  # tPHL/tPLH at VS = 0.9 V, overdrive 50 mV: the slowest row.
-                     # See the note above for all four.
+tpd_s      = 4.5e-5  # tPHL (the SLOWER edge) at VS = 0.9 V, overdrive 50 mV: the
+                     # slowest of the eight typicals. See the table in the note
+                     # above; tPLH at the same corner is 40 us.
 supply_static_ua = 0.075   # IQ typ 75 nA at 25 C (150 nA max at 25 C, 200 nA
                            # over -40 to 125 C)
 
@@ -511,13 +522,27 @@ max_pin_current_a = 0.01   # signal input terminal current, +/-10 mA
 # TSV914: STMicroelectronics quad rail-to-rail input/output op-amp, SOIC-14.
 #
 # Source: ST "TSV911/TSV912/TSV914 Rail-to-rail input/output 8 MHz operational
-#   amplifiers", DS4899 Rev 13, May 2025: the SOIC-14 pin connections figure and
-#   the electrical characteristics tables at VCC+ = 3.3 V and 5 V.
+#   amplifiers". TWO documents, and which figure came from which matters:
+#     DS4899 Rev 13, May 2025, the current datasheet, is what this entry was first
+#     written from. IT COULD NOT BE RE-OPENED to check the figures below: st.com
+#     refuses every request from this network (HTTP/2 INTERNAL_ERROR on the
+#     resource path, and a plain hang over HTTP/1.1).
+#     The TSV911-TSV912-TSV914 PRELIMINARY datasheet, Rev 2, June 2007, WAS opened,
+#     via the RS Components mirror at docs.rs-online.com/9c88/0900766b80a345ed.pdf.
+#     Its Table 4 is the VCC = +3.3 V table and Table 3 the VCC = +2.5 V one.
+#   Any figure below that is marked "Rev 2 Table 4" was read there. The rest carry
+#   the Rev 13 attribution they were written with and are UNVERIFIED against a
+#   document this lane could open; a 2007 preliminary sheet is not authority for what
+#   the 2025 revision says, so nothing is silently restated from it.
 #
 # Datasheet figures used (VCC+ = 3.3 V, TA = 25 C unless noted):
 #   VCC       = 2.5 to 5.5 V   (2.3 to 5.5 V over 0 to 125 C)
-#   Avd       = 80 dB min, 89 dB typ @ RL = 10 kOhm, VCC = 3.3 V
-#                            (91 dB typ at VCC = 5 V)
+#   Avd       = 80 dB min, 90 dB typ @ RL = 10 kOhm, Vout = 0.5 to 2.8 V, 25 C,
+#               VCC = 3.3 V. Rev 2 Table 4, read directly. 75 dB min over the full
+#               temperature range. THE FIGURE HERE WAS 89 dB AND THAT WAS THE WRONG
+#               TABLE: 89 dB typ is Table 3's number, at VCC = 2.5 V with
+#               Vout = 0.5 to 2 V. The two tables differ by one dB and the entry had
+#               taken the 2.5 V row while claiming 3.3 V.
 #   Vhigh/low = 15 mV typ, 40 mV max from either rail @ RL = 10 kOhm
 #                            (45 mV typ, 150 mV max @ RL = 600 Ohm)
 #   ICC       = 0.8 mA typ, 1.1 mA max PER AMPLIFIER @ VCC = 3.3 V
@@ -525,7 +550,7 @@ max_pin_current_a = 0.01   # signal input terminal current, +/-10 mA
 #   Vio       = 0.1 mV typ, 4.5 mV max at 25 C (standard grade)
 #
 # `gain` IS THE TYPICAL, NOT THE MINIMUM, and the difference is a factor of three:
-# 89 dB typ is 28184 V/V, while the guaranteed 80 dB min is 10000 V/V. The typical
+# 90 dB typ is 31623 V/V, while the guaranteed 80 dB min is 10000 V/V. The typical
 # is used because an op-amp's open-loop gain enters a closed-loop result only as a
 # small error term and the typical is the honest central estimate; a design whose
 # behaviour turns on the difference is one this ideal-gain model cannot judge either
@@ -571,7 +596,10 @@ description = "ST TSV914 quad rail-to-rail op-amp, SOIC-14, 3.3V rails, all four
 value_re = "(?i)^TSV914A?I?Y?[DP]T$|^TSV914$"
 
 [models.params]
-gain    = 28184.0   # Avd 89 dB typ @ RL = 10 kOhm, VCC = 3.3 V (80 dB min = 1e4)
+gain    = 31623.0   # Avd 90 dB typ, RL = 10 kOhm, Vout = 0.5 to 2.8 V, 25 C,
+                    # VCC = 3.3 V: Rev 2 Table 4, read directly (80 dB min = 1e4).
+                    # Was 28184, which is Table 3's 2.5 V figure. Nothing turns on
+                    # the difference in a closed loop; the citation was the defect.
 rail_lo = 0.015     # Vlow typ, 15 mV from the negative rail @ RL = 10 kOhm
 rail_hi = 3.285     # 3.3 V rail minus the same 15 mV of headroom
 # NO supply leg: `hauksbee models lint` reports `supply_static_ua` as unread for

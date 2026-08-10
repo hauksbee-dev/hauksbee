@@ -54,7 +54,11 @@
 use crate::schema::{ComponentKind, ModelEntry};
 
 /// Names any kind may carry: the resolve-report annotations and the free-text
-/// caveat the binder surfaces with an opamp.
+/// `warning` the binder surfaces for an entry that models only part of its part.
+/// `bind_opamp` and `bind_analog_switch` both read it, and a warning carrying
+/// [`hauksbee_ir::evidence::Assumption::PARTIAL_MODEL_MARKER`] also becomes an
+/// assumption on the evidence map, so it reaches `--plain` and `--json` and not
+/// only the bind report.
 const UNIVERSAL: &[&str] = &[
     "warning",
     "auto_bind",
