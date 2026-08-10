@@ -146,14 +146,18 @@ fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
     }
 }
 
-/// The exit-3 twin of [`strict_gate_exit`]: a run that could not be judged
-/// annotates the GitHub checks tab with its bind blockers, when it has any,
-/// before exiting, whether or not `--junit`/`--sarif` were asked for. A run
-/// that exits 3 for undermined coverage alone carries no blockers to name and
-/// annotates nothing. Without this the annotation surface
-/// was the only silent one on a refused run, because the blocker annotation
-/// rode inside the artifact-writing branch; a reviewer then saw a clean checks
-/// tab beside an exit 3. No-op outside GitHub Actions.
+/// Exit 3 for a bind-blocked run, naming the blockers on the GitHub checks tab
+/// on the way out whether or not `--junit`/`--sarif` were asked for. Before
+/// this the blocker annotation rode inside the artifact-writing branch, so a
+/// pipeline gating on the exit code alone saw a clean checks tab beside an
+/// exit 3.
+///
+/// Narrower than [`strict_gate_exit`], deliberately: it prints no failure line
+/// (the surfaces that exit 3 already printed their INCONCLUSIVE verdict) and it
+/// is not the chokepoint for every exit-3 route. A run that exits 3 for
+/// undermined coverage alone, and the analysis surfaces that refuse on their
+/// own validity (`--thermal`, `--ac`), carry no blockers to name and annotate
+/// nothing. No-op outside GitHub Actions.
 pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
     ci_artifacts::github_blocker_annotation(blockers);
     std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS)

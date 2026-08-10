@@ -1534,8 +1534,11 @@ pub struct JsonReport {
     /// Whether THIS surface's own `--strict` gate fails the run on findings the
     /// shared `serious` severity does not carry. Those gates are deliberately
     /// wider than `serious`: `--lint` gates on medium-severity findings, `--si`
-    /// on any finding at all, and the co-sim gate on any raised fault, and all
-    /// three serialize as `warning`/`note`. Without this the same invocation
+    /// on every real finding (its informational computed-value notes excluded),
+    /// and the co-sim gate on any raised fault. The findings those gates catch
+    /// beyond the shared grade serialize as `warning`/`note`, which is exactly
+    /// why the verdict cannot derive them from severity. Without this the same
+    /// invocation
     /// printed `"verdict":"pass","ok":true` and exited 2, so a consumer gating
     /// on the document disagreed with a consumer gating on the exit code. Set
     /// by the surface AFTER its waiver partition, so an overruled finding
@@ -1552,8 +1555,8 @@ pub struct JsonReport {
     /// from (see [`Self::bind_gates_verdict`]), and the specialist surfaces
     /// trim those per-net maps out of their verdicts for the same reason.
     /// Without this the descriptive document read `"ok":false` while the
-    /// command always exited 0, so the two ways to gate on it disagreed. A
-    /// With no findings, no analysis section and no refusal, `--report`'s only
+    /// command always exited 0, so the two ways to gate on it disagreed. With
+    /// no findings, no analysis section and no refusal, `--report`'s only
     /// caller leaves `verdict` constant at `pass`: on a surface that makes no
     /// pass/fail claim the rollup carries no information, and the bind summary
     /// and the evidence array (both rendered in full) are what a consumer reads
