@@ -69,9 +69,9 @@ evidence, or unbound verdict-critical parts on a model-dependent surface.
 Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`, and a
 gating run's own document matches its own exit code (2 / 3 / 0). That is not
 the same as predicting a strict run from a non-strict one: on the co-sim path
-the zero-activity refusal is only constructed under `--strict`, and the boot
-advisory is only gate-grade under `--strict-boot`, so both documents change
-with the flag. DRC shorts are excluded from `serious_count` when the board is
+the zero-activity and analog-abort refusals are only constructed under
+`--strict`, and the boot advisory is only gate-grade under `--strict-boot`, so
+those documents change with the flag. DRC shorts are excluded from `serious_count` when the board is
 newer than the validated copper extraction (a `drc.version_warning` is set).
 This is the same carve-out the exit gate makes.
 
@@ -120,7 +120,7 @@ when the corresponding analysis ran.
 | `ac` | `--ac` | `valid` (+ `reason`), `nets[]` (`{net, points:[[freq,mag_db,phase]]}`), `no_signal_path_nets[]`, `not_found_nets[]`, `coverage` |
 | `thermal` | `--thermal` | `valid` (+ `reason`), `ambient_c`, `devices[]` (`{reference, tj_c, over_limit}`), `coverage` |
 | `boot_gates` | boot-state panel | per-transistor-gate power-up state (informational) |
-| `notes` | at least one note fired | array of `{kind, message}`, bind roles, MCU substitution, coverage caveats; **informational, never gating** |
+| `notes` | at least one note fired | array of `{kind, message}`, bind roles, MCU substitution, coverage caveats. A note never gates on its own; where an `INCONCLUSIVE:` coverage note names unbound verdict-critical parts, the same parts move `verdict` (see above) |
 | `cosim` | a firmware co-sim ran | `CosimJson` (below) |
 | `waived` | a waiver overruled a finding | array of `{check, kind, subject, reason, until}` (below) |
 
