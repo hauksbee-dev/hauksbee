@@ -24,7 +24,10 @@
 //!    `--usb-c` leaves the copper (`--drc`) and descriptive (`--report`)
 //!    surfaces alone, on both the exit code and the verdict field. The CI
 //!    artifacts follow it as far as they can today: the GitHub annotations
-//!    agree on every gating run, and JUnit/SARIF agree on the `invalid` route
+//!    agree on every run the bind-gate and co-sim-refusal paths own (an
+//!    analysis surface that refuses on its own validity, and an exit 3 for
+//!    undermined coverage alone, name no blockers and annotate nothing), and
+//!    JUnit/SARIF agree on the `invalid` route
 //!    (whose blockers are gate-grade `serious` evidence findings), through the
 //!    co-sim rewrite and its refusal rewrite. They do NOT yet agree on the
 //!    widened `fail` route: JUnit/SARIF grade a testcase failure on
