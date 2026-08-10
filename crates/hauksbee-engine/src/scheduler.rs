@@ -667,9 +667,11 @@ impl AdcDrop {
     }
 }
 
-/// The one-line warning every surface emits for an entry of
-/// [`Scheduler::watchdog_limitations`], so text, `--plain`, `--json` notes and
-/// the CI report all name the same gap in the same words.
+/// The one-line warning the four batch surfaces emit for an entry of
+/// [`Scheduler::watchdog_limitations`], so the default text summary, `--plain`,
+/// the `--json` notes and the CI report all name the same gap in the same words.
+/// Four call sites, and the interactive TUI is not one of them: its co-sim pane
+/// carries no watchdog statement (see `docs/cosim/MCU.md`).
 ///
 /// `limitation` is the backend's own whole sentence and is passed through
 /// UNCHANGED. Two surfaces wording the same coverage hole differently is the
@@ -679,7 +681,7 @@ pub fn watchdog_limitation_message(mcu_ref: &str, limitation: &str) -> String {
     format!("MCU {mcu_ref}: {limitation}")
 }
 
-/// The one-line warning every surface emits for an entry of
+/// The one-line warning the same four batch surfaces emit for an entry of
 /// [`Scheduler::timing_limitations`]. Same verbatim-passthrough discipline as
 /// [`watchdog_limitation_message`]: the backend's whole sentence, unchanged,
 /// prefixed only with which MCU it is about.
@@ -687,7 +689,7 @@ pub fn timing_limitation_message(mcu_ref: &str, limitation: &str) -> String {
     format!("MCU {mcu_ref}: {limitation}")
 }
 
-/// The one-line finding every surface emits for an entry of
+/// The one-line finding the same four batch surfaces emit for an entry of
 /// [`Scheduler::watchdog_resets`]. Same shared-wording discipline as
 /// [`watchdog_limitation_message`] and [`AdcDrop::message`].
 pub fn watchdog_reset_message(mcu_ref: &str, resets: u64) -> String {
@@ -1746,10 +1748,10 @@ impl Scheduler {
     /// behaviour after a hang is fiction.
     ///
     /// The value is the backend's whole sentence, rendered verbatim through
-    /// [`watchdog_limitation_message`] on every surface. Backends whose armed,
-    /// never-fed watchdog reboots the core the way silicon does (simavr) report
-    /// nothing and are absent from this list: the silence is what makes the
-    /// warning mean something. Ordered by MCU reference.
+    /// [`watchdog_limitation_message`] on the four batch surfaces that read it.
+    /// Backends whose armed, never-fed watchdog reboots the core the way silicon
+    /// does (simavr) report nothing and are absent from this list: the silence is
+    /// what makes the warning mean something. Ordered by MCU reference.
     pub fn watchdog_limitations(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = self
             .mcus

@@ -640,10 +640,11 @@ until = "2026-12-31"
 
 For `check = "ci"`, `kind` is the assertion kind (`voltage`, `no_faults`,
 `boot_coverage`, ...), `nets` matches the assertion's `net`/`supply_net`, and
-`refs` matches its `ref`. A waived assertion failure stays on every surface:
+`refs` matches its `ref`. A waived assertion failure stays on four surfaces:
 `[WAIVED]` in the terminal report, a `<skipped>` testcase (with the reason) in
-the JUnit file, and a `::warning` annotation on GitHub; it just does not turn
-the exit code red. An INVALID result (exit 3) can never be waived: a waiver
+the JUnit file, a `::warning` annotation on GitHub, and the `waived` field under
+`--json`. It just does not turn the exit code red. The web checks panel is the
+one verdict surface that does not render the waiver reason. An INVALID result (exit 3) can never be waived: a waiver
 overrules a finding, and an INVALID is the absence of one, so waiving it would
 green an untrustworthy run.
 
@@ -1167,9 +1168,14 @@ describes the binding rather than judging it, so it never gates and its verdict
 never turns the incomplete binding it prints into a refusal.
 
 Exit 1 and exit 2 are worth keeping apart in a pipeline: 1 means your input was
-never analysed, 2 means it was analysed and the board is at fault. A CI step
-that treats both as "hardware failed" will report a broken file path as a
-broken board.
+never analysed, and 2 usually means it was analysed and the board is at fault.
+The exception is the usage errors listed in the table above, which also exit 2
+and analyse nothing: every invocation the argument parser rejects (two report
+flags at once, an unknown option, any of the nine `conflicts_with`
+declarations), plus two hand-written guards that name the corrected command
+instead of a parse error, for a board file passed with no subcommand and a board
+file passed to `check-code`. A CI step that treats exit 1 and exit 2 alike as
+"hardware failed" will report a broken file path as a broken board.
 
 What `--strict` gates on, per report: `--drc` true copper shorts (clearance
 notes never gate), `--lint` high/medium findings, `--si` any real finding,

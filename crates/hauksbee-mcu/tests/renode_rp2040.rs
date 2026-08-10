@@ -50,9 +50,13 @@ fn firmware(dir: &str, name: &str) -> Option<PathBuf> {
 /// Bring up an RP2040 with one of the bundled pico-sdk images, or skip.
 ///
 /// Renode has to compile ~380 KB of C# for the support bundle before the
-/// platform parses, which takes a few seconds on first machine creation. That is
-/// inside the backend's own 30 s Monitor timeout; it is called out here so a slow
-/// first test is not mistaken for a hang.
+/// platform parses, which takes a few seconds on first machine creation. That
+/// fits inside the backend's own 30 s Monitor timeout on an idle host, so a slow
+/// first test is not a hang. It does NOT fit under heavy contention: measured at
+/// load average 248, bring-up overran the budget and the tests died as "Renode
+/// monitor command timed out after 30s with no prompt", both in parallel and
+/// with `--test-threads=1`, a different test each run. Read a red here against
+/// the host's load first.
 macro_rules! rp2040_or_skip {
     ($name:ident, $dir:literal, $elf:literal) => {
         if !is_available() {
