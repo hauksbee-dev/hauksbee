@@ -66,9 +66,12 @@ any raised fault; `--strict-boot` adds the boot advisory). It is
 `"invalid"` when nothing gates but the run-level claim could not be judged: a
 top-level `refusal`, AC or thermal reporting `valid:false`, undermined
 run-level evidence, or unbound verdict-critical parts on a model-dependent
-surface. Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`,
-and it matches the exit code a `--strict` run of the same command produces
-(2 / 3 / 0). DRC shorts are excluded from `serious_count` when the board is
+surface. Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`, and a
+gating run's own document matches its own exit code (2 / 3 / 0). That is not
+the same as predicting a strict run from a non-strict one: on the co-sim path
+the zero-activity refusal is only constructed under `--strict`, and the boot
+advisory is only gate-grade under `--strict-boot`, so both documents change
+with the flag. DRC shorts are excluded from `serious_count` when the board is
 newer than the validated copper extraction (a `drc.version_warning` is set).
 This is the same carve-out the exit gate makes.
 

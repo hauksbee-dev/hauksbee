@@ -1133,8 +1133,8 @@ the CLI says so on stderr.
 |---|---|
 | 0 | clean, or a report-only run without `--strict` |
 | 1 | the run never happened: the board could not be read (unrecognized format, a Git LFS pointer, a missing file, an ASCII-Protel `.PcbDoc`) or the analysis could not be set up |
-| 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`). Also a usage error, such as two report flags at once |
-| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict`, thermal table with no usable coverage, a PARTIAL-coverage `--thermal` result, undermined run-level evidence under `--strict`, or unbound verdict-critical parts on a model-dependent surface under `--strict`, see below) |
+| 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`, and they outrank a zero-activity refusal: a run that saw faults was analysable). Also a usage error, such as two report flags at once |
+| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict` that raised no faults, thermal table with no usable coverage, a PARTIAL-coverage `--thermal` result, undermined run-level evidence under `--strict`, or unbound verdict-critical parts on a model-dependent surface under `--strict`, see below) |
 
 `--thermal` gates on coverage **by default**: a partial-coverage table (real
 rows while an active power IC on the live circuit is open/unresolved) exits 3,
@@ -1180,9 +1180,14 @@ own machine verdict on the same board: `fail` exits 2, `invalid` exits 3, `pass`
 exits 0. Those gates are deliberately wider than the `serious` severity
 (`--lint` gates on medium findings, `--si` on any real finding), so a run gating
 on a `warning`-severity finding reads `verdict: "fail"` in the very document its
-exit code was printed beside. Disarming a gate does not rewrite the document:
-without `--strict`, and under `--thermal --no-strict-thermal`, a refusing
-verdict still prints beside exit 0. `--report` has no gate at all.
+exit code was printed beside. On the static surfaces, disarming a gate does not rewrite the document: without
+`--strict`, and under `--thermal --no-strict-thermal`, a refusing verdict still
+prints beside exit 0, so a cheap non-strict `--json` run predicts what a strict
+one will exit with. Do not read that across to the co-sim path or to
+`--strict-boot`: the zero-activity refusal is only constructed under `--strict`
+and the boot advisory is only gate-grade under `--strict-boot`, so those
+documents read `pass` without the flag and `invalid` / `fail` with it. Run the
+gate you intend to gate on. `--report` has no gate at all.
 
 Two co-sim paths deliberately keep exit 3 over a `fail` document, because there
 the run is not analysable even though it observed faults: an aborted analog
