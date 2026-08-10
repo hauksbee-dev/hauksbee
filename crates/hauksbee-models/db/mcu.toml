@@ -1131,13 +1131,22 @@ backend = "none:stm32h7"
 # allowlist is widened in the same commit. If a future entry names a supply pad
 # something else again, check that list before believing its `max_voltage_v`.
 #
-# THE EXPOSED PAD IS GROUND, and its NUMBER is the thing to be careful about.
-# Silicon Labs' pin-allocation TABLE runs 1..40 and stops; the pad appears in the
-# package figure, where it is labelled "Pin 0 / VSS". So the ROLE below is
-# datasheet-supported and the KEY is not: `"41"` is what CAD tools number it (both
-# the MWGEN-G1's footprint and its pin function agree), while a board generated
-# from the vendor's own headers would call it pin 0 and would not match this row.
-# That is a known gap in the key, not in the role.
+# THE EXPOSED PAD IS TREATED AS GROUND, and neither its number nor that role comes
+# from the datasheet. Being exact about what is and is not sourced here:
+#   SOURCED. The pad EXISTS. The Package Dimensions note gives D2/E2 = 3.55 to
+#   3.85 mm for the QFN40, which is the exposed thermal pad.
+#   NOT SOURCED. Rev 1.4's pin-allocation table runs 1..40 and stops. It does not
+#   number the pad, does not call it "Pin 0", and nowhere states that it is tied to
+#   VSS internally or that a board must ground it. An earlier version of this
+#   comment asserted a package-figure label reading "Pin 0 / VSS"; that label was
+#   not found in the document and the claim is withdrawn.
+# So `vss4` below rests on the QFN convention that an exposed pad is grounded, which
+# is near-universal and is what the MWGEN-G1 does, NOT on Silicon Labs' text. It is
+# also the safe direction to be wrong in: grounding a pad the board also grounds
+# changes nothing, while a role that drove it would be a fabrication.
+# The KEY is `"41"`, which is what CAD tools number it (the MWGEN-G1's footprint and
+# its pin function agree). A board generated from the vendor's own headers might
+# number it differently and would not match this row.
 #
 # DELIBERATELY NOT MODELLED: the DECOUPLE and VREGSW pins' internal networks (they
 # are named and carry nothing), and the whole peripheral crossbar.
@@ -1202,8 +1211,9 @@ backend = "none:efm32pg22"
 "38" = "pd02"
 "39" = "pd01"
 "40" = "pd00"
-# The exposed pad, "Pin 0 / VSS" in the package figure. See the note above on why
-# the key is 41 and what that costs.
+# The exposed thermal pad, grounded by QFN convention rather than by anything the
+# datasheet says. See the note above for exactly what is sourced and what is not,
+# and why the key is 41.
 "41" = "vss4"
 
 [models.ratings]

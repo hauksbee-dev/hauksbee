@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 use hauksbee_extract::{Component, ExtractedBoard};
+use hauksbee_ir::evidence::Assumption;
 use hauksbee_ir::{
     BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, SourceKind,
 };
@@ -1930,11 +1931,13 @@ fn bind_component(
         let is_powered_oscillator = comp.footprint.to_ascii_lowercase().contains("oscillator");
         let warning = is_powered_oscillator.then(|| {
             format!(
-                "{} ({}): packaged oscillator skipped as high impedance; it has a \
+                "{}{} ({}): packaged oscillator skipped as high impedance; it has a \
                  supply pin and drives a clock, and neither its supply draw nor its \
                  output is modelled, so any result that depends on this clock \
                  existing is not evidence",
-                comp.reference, comp.value
+                Assumption::PARTIAL_MODEL_MARKER,
+                comp.reference,
+                comp.value
             )
         });
         return (
@@ -3349,10 +3352,14 @@ fn bind_analog_switch(
         BindOutcome::Behavioral {
             device: "vswitch".to_string(),
         },
-        model
-            .params
-            .get_str("warning")
-            .map(|w| format!("{} ({}): {w}", comp.reference, comp.value)),
+        model.params.get_str("warning").map(|w| {
+            format!(
+                "{}{} ({}): {w}",
+                Assumption::PARTIAL_MODEL_MARKER,
+                comp.reference,
+                comp.value
+            )
+        }),
     )
 }
 
