@@ -1,0 +1,152 @@
+# Named abstentions: parts this library has looked at and cannot model honestly,
+# each with the input that would unlock it.
+#
+# An entry here binds NOTHING. It cannot make a part resolve, cannot stamp a
+# device, and cannot move `critical_parts_bound`; the part stays an open circuit
+# and stays counted as one. What it changes is the two sentences the report prints
+# about that gap, from
+#
+#     because:  No model in the library matched this part.
+#     what to do: Add a model for U201 to your models directory, or mark it DNP.
+#
+# to a statement of what the blocker actually is and what would clear it. The
+# difference matters because those generic sentences are also what a part nobody
+# has ever looked at prints, and a reader cannot tell the two apart.
+#
+# THE BAR FOR AN ENTRY HERE. `unlocked_by` must name a specific, obtainable input:
+# a document, a parameter, a decision the board's author can make. "More work" is
+# not an unlocking input. If the honest answer is that no datasheet unlocks it
+# because the ambiguity is in the board file, say that, because it saves the reader
+# the search.
+#
+# WHEN AN ENTRY SHOULD BE DELETED: the moment a real `[[models]]` entry covers the
+# part. Resolution is checked first, so a stale entry here is dead text rather than
+# a wrong answer, but dead text in a disclosure is still a lie by omission about
+# how much the library knows.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Si53301: Skyworks (ex-Silicon Labs) 1-to-6 clock fanout buffer, QFN-32.
+#
+# The pad map is not the problem. It is corroborated twice over (the MWGEN-G1's own
+# pin functions and the vendor's pin table agree pin for pin on all 32 plus the
+# exposed pad), and the supply structure is clear: VDD on 7, VDDO_A on 18 and
+# VDDO_B on 19, GND on 6 and the pad.
+#
+# The problem is that there is no such thing as "the output level" of this part.
+# Each output bank's electrical format is selected by strapping SFOUTA[1:0] and
+# SFOUTB[1:0], across LVDS, LVPECL, CML, HCSL and LVCMOS, and those are not
+# variations on a theme: LVDS is a 350 mV differential swing about a 1.2 V common
+# mode, HCSL is a current-steering standard into 50 Ohm to ground, and LVCMOS is a
+# rail-to-rail single-ended level. A `digital` entry has one `voh` and one `vol`,
+# so any value it carried would be a guess about a strap, and the guess would be
+# wrong for four of the five formats.
+[[unmodelled]]
+id = "si53301"
+value_re = "(?i)^Si5330[0-9]"
+because = """
+The Si53301's output electrical format is strap-selected per bank (SFOUTA/SFOUTB \
+choose between LVDS, LVPECL, CML, HCSL and LVCMOS), and those formats have \
+different swings, common modes and terminations. A single output level would be a \
+guess about a strap that is wrong for most of the choices, so this library states \
+none. The pad map and the supply structure ARE known; it is the driven level that \
+is not.
+"""
+unlocked_by = """
+Either the strap state for this board (read SFOUTA[1:0] and SFOUTB[1:0] off the \
+schematic and put a --models-dir entry carrying that format's levels), or a \
+differential-output device kind in the engine, which would let one entry describe \
+LVDS and LVPECL properly instead of collapsing them to a single-ended pair.
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LMX2572: TI wideband PLL synthesizer with integrated VCO, QFN-40.
+#
+# As with the Si53301, the pad map is corroborated twice (the MWGEN-G1's pin
+# functions match TI's names on all 40 pins plus the RF ground pad) and is not what
+# blocks this.
+#
+# What blocks it is that the part's outputs are differential RF pairs
+# (RFoutA_P/RFoutA_N, RFoutB_P/RFoutB_N), AC-coupled, specified as a power into a
+# matched load rather than as a logic level. There is no single-ended VOH to carry,
+# and the schema has no field for a differential output, so a `digital` entry would
+# have to either omit the outputs (leaving the part's whole purpose unmodelled while
+# claiming to be a model of it) or invent a level for a pin that does not have one.
+# The SPI side (SCK/SDI/CSB, VIH 1.4 V min, VIL 0.4 V max) is well specified and is
+# not enough on its own to make an honest entry.
+[[unmodelled]]
+id = "lmx2572"
+value_re = "(?i)^LMX257[0-9]"
+because = """
+The LMX2572's outputs are AC-coupled differential RF pairs specified as a power \
+into a matched load, not as logic levels, and this library has no \
+differential-output device kind to describe them with. An entry would have to invent a \
+single-ended level for a pin that does not have one, or omit the outputs and still \
+call itself a model of a synthesizer. Its SPI interface levels ARE specified; they \
+are not enough on their own.
+"""
+unlocked_by = """
+A differential-output device kind in the engine (a pair of pins carrying a swing and \
+a common mode rather than one pin carrying a level). The datasheet already has \
+everything else: the QFN-40 pin table, the 3.3 V supply structure and the SPI \
+thresholds are all published and transcribed in the note beside this entry.
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BFP181: Infineon low-noise silicon bipolar RF transistor.
+#
+# TWO separate blockers, and the second one is a finding about the board rather
+# than a gap in this library.
+#
+# 1. No usable SPICE card. Infineon's BFP181 datasheet (edition 2013-10-15) carries
+#    maximum ratings, a noise figure and S-parameters, and NO Gummel-Poon parameter
+#    set; their RF SPICE library is behind a login. The only card in circulation is
+#    a third-party mirror, which does not meet this library's provenance bar (every
+#    parameter traces to a named vendor document or is marked derived with the
+#    arithmetic shown).
+#
+# 2. THE PACKAGE DOES NOT MATCH THE FOOTPRINT, on the board that raised this. The
+#    datasheet lists exactly one package, SOT143, with FOUR leads and the pin
+#    configuration 1 = C, 2 = E, 3 = B, 4 = E. The MWGEN-G1 fits Q501 and Q502 into
+#    a three-pad `Package_TO_SOT_SMD:SOT-23_Handsoldering` with pin functions
+#    1 = B, 2 = E, 3 = C: a different pin count AND a different order.
+#
+# WHICH IS IT, a board defect or a library substitution? A footprint substitution,
+# on the balance of evidence. A three-pad footprint cannot physically seat a
+# four-lead SOT143 part (its second emitter lead has nowhere to land), so if the
+# board were built as drawn the part would not fit at all, which is the kind of
+# error that shows up the first time someone assembles one. The pin functions the
+# symbol carries (B/E/C, pads 1/2/3) are the generic KiCad SOT-23 BJT convention,
+# not Infineon's SOT143 order, which is what a designer gets by attaching a generic
+# transistor symbol to a generic SOT-23 footprint and typing the part number into
+# the value field. So the most likely reading is that the board is built with a
+# SOT-23 transistor in these positions and the value field names the part the
+# designer intended rather than the one the footprint fits.
+#
+# That reading is a guess about someone else's board, which is why it is stated as
+# one and why the disclosure tells the reader what was found instead of choosing for
+# them. Either way the consequence for THIS library is the same: it will not bind a
+# four-lead pin map to a three-pad footprint, and it will not silently assume the
+# substitute part either.
+[[unmodelled]]
+id = "bfp181"
+value_re = "(?i)^BFP18[0-9]"
+because = """
+Two things block it. Infineon's BFP181 datasheet publishes maximum ratings, noise \
+figure and S-parameters but NO SPICE parameter set (their RF model library is \
+login-gated), so there is no vendor-traceable card to carry. And the package does \
+not match: the datasheet lists only SOT143, which has FOUR leads with \
+1 = collector, 2 = emitter, 3 = base, 4 = emitter, while boards carrying this value \
+are commonly laid out on a three-pad SOT-23 with the generic 1 = base, \
+2 = emitter, 3 = collector convention. A three-pad land cannot seat a four-lead \
+part, so on such a board either the footprint or the value is the substitution, and \
+this library will not guess which.
+"""
+unlocked_by = """
+Check which part this position is actually built with, because the board's own \
+footprint and value disagree: a three-pad SOT-23 land cannot seat the four-lead \
+SOT143 the BFP181 datasheet specifies. If it is a SOT-23 transistor, correct the \
+value to that part and it will bind against an existing entry or need a short one. \
+If it really is a BFP181, the footprint needs its fourth (second emitter) pad, and \
+the model then needs a Gummel-Poon card from Infineon's RF SPICE library, which is \
+available on request from them and is not redistributable from third-party mirrors.
+"""
