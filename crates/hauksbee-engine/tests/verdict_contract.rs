@@ -25,19 +25,17 @@
 //!    and the two co-sim paths that keep exit 3 over a `fail` document because
 //!    the run was not analysable even though it observed faults (an aborted
 //!    analog solve, a runtime timing refusal), which are documented in
-//!    docs/ci/CI.md and not pinned here. The gate is per
-//!    surface, so the bind gate that invalidates `--lint`/`--si`/`--check`/
-//!    `--usb-c` leaves the copper (`--drc`) and descriptive (`--report`)
-//!    surfaces alone, on both the exit code and the verdict field. The CI
-//!    artifacts follow it as far as they can today: the GitHub annotations
-//!    agree on every run the bind-gate and co-sim-refusal paths own (an
-//!    analysis surface that refuses on its own validity, and an exit 3 for
-//!    undermined coverage alone, name no blockers and annotate nothing; and
-//!    with an artifact flag the whole-suite artifact writer annotates
-//!    regardless of the selected surface), and
-//!    JUnit/SARIF agree on the `invalid` route
-//!    (whose blockers are gate-grade `serious` evidence findings), through the
-//!    co-sim rewrite and its refusal rewrite. They do NOT yet agree on the
+//!    docs/ci/CI.md and not pinned here. The gate is per surface, so the bind
+//!    gate that invalidates `--lint`/`--si`/`--check`/`--usb-c` leaves the
+//!    copper (`--drc`) and descriptive (`--report`) surfaces alone, on both the
+//!    exit code and the verdict field. The CI artifacts follow it as far as they
+//!    can today: the GitHub annotations agree on every run the bind-gate and
+//!    co-sim-refusal paths own (an analysis surface that refuses on its own
+//!    validity, and an exit 3 for undermined coverage alone, name no blockers
+//!    and annotate nothing; and with an artifact flag the whole-suite artifact
+//!    writer annotates regardless of the selected surface), and JUnit/SARIF
+//!    agree on the `invalid` route (whose blockers are gate-grade `serious`
+//!    evidence findings), through the co-sim rewrite and its refusal rewrite. They do NOT yet agree on the
 //!    widened `fail` route: JUnit/SARIF grade a testcase failure on
 //!    `severity == "serious"` alone, so a run that gates on a medium lint
 //!    finding or on co-sim faults is red in its exit code and its verdict and
@@ -419,7 +417,8 @@ fn si_json_carries_the_inconclusive_note_and_exit_zero() {
     assert_eq!(
         out.status.code(),
         Some(0),
-        "INCONCLUSIVE is prose + notes, never an exit-code change for --si; stderr: {}",
+        "without --strict, INCONCLUSIVE is prose + notes and changes no exit code \
+         for --si; stderr: {}",
         stderr(&out)
     );
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
