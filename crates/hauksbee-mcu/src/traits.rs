@@ -379,8 +379,10 @@ pub trait Mcu {
     ///   to leave unstated.
     ///
     /// The string is a whole sentence, because it is rendered verbatim on the
-    /// report surfaces and nothing downstream should have to compose prose from
-    /// a flag.
+    /// four batch report surfaces (`hauksbee run` default text, `--plain`,
+    /// `--json`, hauksbee-ci) and in `hauksbee models lint`, and nothing
+    /// downstream should have to compose prose from a flag. The TUI and the web
+    /// front door do not render it; see `docs/cosim/MCU.md`.
     fn watchdog_limitation(&self) -> Option<String> {
         None
     }
@@ -402,8 +404,9 @@ pub trait Mcu {
     ///   post-PLL 72 MHz against an 8 MHz reset-default core, so a bare-metal
     ///   TIMx time base runs 9x fast (stated in the descriptor).
     ///
-    /// The string is a whole sentence rendered verbatim on every report
-    /// surface, exactly like the watchdog sentence.
+    /// The string is a whole sentence rendered verbatim on the same five
+    /// surfaces as the watchdog sentence, and on neither the TUI nor the web
+    /// front door.
     fn timing_limitation(&self) -> Option<String> {
         None
     }

@@ -393,28 +393,34 @@ matrix below, because they do not read a finished run's caveats:
 
 Ten classes of per-run co-sim coverage caveat name something the run could not
 do, and the six run-report surfaces do not all carry all ten. Counted from the
-emitting call sites rather than from intent:
+emitting call sites rather than from intent. The `--plain` column is yes
+throughout because `--plain` renders the default text co-sim summary AND its own
+heads-ups (`run_headless` is called with `quiet = cfg.json`, so only `--json`
+silences the text block):
 
 | Coverage caveat | default text | `--plain` | `--json` | hauksbee-ci | TUI | web front door |
 |---|---|---|---|---|---|---|
-| dropped ADC injections | yes | yes | yes | yes | no | no [^avr] |
-| unexercised buses | yes | yes | yes | yes | no | no [^avr] |
-| watchdog limitation | yes | yes | yes | yes | no | no [^avr] |
+| dropped ADC injections | yes | yes | yes | yes | no | no |
+| unexercised buses | yes | yes | yes | yes | no | no |
+| watchdog limitation | yes | yes | yes | yes | no | no |
 | watchdog reboots | yes | yes | yes | yes | no | **no** |
-| timing limitation | yes | yes | yes | yes | no | no [^avr] |
-| per-core timing coverage | yes | no | yes (field) | yes | no | no |
+| timing limitation | yes | yes | yes | yes | no | no |
+| per-core timing coverage | yes | yes | yes (field) | yes | no | **no** |
 | short pulses | yes | yes | yes | yes | no | yes |
 | driver contentions | yes | yes | yes | no | no | yes |
 | drive conflicts | no | yes | yes | no | no | yes |
 | heuristic SPI framing | yes | yes | yes | assertion detail | yes | yes (field) |
 
-[^avr]: The web front door co-sims AVR in-process, and on that backend these
-four are structurally empty: `simavr` reports no watchdog and no timing
-limitation, its ADC injection is exact, and it decodes TWI and SPI natively. So
-the gap is unreachable rather than hidden. **Watchdog reboots are the
-exception and a real gap**: simavr's watchdog does bite and `Mcu::watchdog_resets`
-counts the reboots, and the front door renders nothing, so a run whose firmware
-was rebooted mid-window reads quiet there.
+Reading the web column: the front door co-sims AVR in-process, and on that
+backend four of its six `no` cells are structurally empty rather than hidden
+(marked plain `no` above). `simavr` reports no watchdog limitation and no timing
+limitation, its ADC injection is exact, and it decodes TWI and SPI natively, so
+there is no dropped injection or unexercised bus to report. The other two `no`
+cells (bolded above) are real gaps that an AVR run does reach: `simavr`'s
+watchdog does bite and `Mcu::watchdog_resets` counts the reboots, and
+`Scheduler::timing_coverage` returns a row per live MCU unconditionally. The
+front door reads neither, so a run whose firmware was rebooted mid-window, or
+whose timing coverage is coarse, reads quiet there.
 
 "yes (field)" means the caveat arrives as a structured field with no caveat
 sentence attached, so a consumer has to read the field to learn about it.
@@ -430,11 +436,14 @@ the TUI does not carry are a gap in the pane, not a judgement that they do not
 apply there: each needs a row in `tui::cosim::CosimUpdate` and a line in the
 pane.
 
-Three further co-sim caveats are deliberately outside this count because they
-are refusals or accuracy statements rather than "the run could not do this":
-the `analog_valid` / failed-window refusal, the `TIMING INVALID:` unmet-contract
-refusal, and the per-window fallback-integration error estimates. Each reaches
-its own surfaces and is documented where it is raised.
+Four further co-sim caveats sit outside this count, each for a stated reason.
+Three are refusals or accuracy statements rather than "the run could not do
+this": the `analog_valid` / failed-window refusal, the `TIMING INVALID:`
+unmet-contract refusal, and the per-window fallback-integration error estimates.
+Each reaches its own surfaces and is documented where it is raised. The fourth,
+`Scheduler::uart_rx_overflow`, is the same class as a dropped ADC injection but
+is read by one consumer only, `hauksbee run --serial-attach`, so it belongs to
+that command rather than to the report surfaces.
 
 | Platform | ADC injection map | I2C controllers | SPI controllers |
 |----------|-------------------|-----------------|-----------------|

@@ -173,12 +173,14 @@ pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
 /// failing.
 ///
 /// Not every exit 2 in the binary comes through here, so do not read this as the
-/// exit-2 chokepoint. Three other paths exit 2 with their own message:
+/// exit-2 chokepoint. Three other paths exit 2 with a message of their own:
 /// `--strict-boot` in `commands::run` prints a `BOOT HAZARD` line per held-high
 /// net (its subjects are nets, not the `<check> <subject>` items this helper
 /// formats), `hauksbee models lint` exits 2 on its own finding count, and
-/// `hauksbee sim` uses `EXIT_MALFORMED_DECK`. The usage errors in `main` exit 2
-/// too and are not gates at all.
+/// `hauksbee sim` uses `EXIT_MALFORMED_DECK`. Two more reach exit 2 without a
+/// message of their own: the usage guards in `main`, which are not gates, and
+/// `hauksbee reproduce`, which forwards a replayed run's code verbatim. The
+/// exit-code contract itself is in docs/ci/CI.md.
 ///
 /// Stream per house style: the line is part of the report on the text/plain
 /// surfaces (stdout); under `--json` stdout must stay one JSON document, so it

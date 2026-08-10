@@ -96,7 +96,7 @@ impl Server {
                     "title": "hauksbee: the verifier for AI-designed hardware",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
-                "instructions": "hauksbee analyzes PCB design files with real device physics and co-simulates firmware on emulated MCUs. Honesty contract: a result with status \"invalid_for_analysis\" is a structured refusal, the run declined to vouch for itself; never read it as pass or fail, and never retry expecting a different answer. Coverage holes arrive as data fields; surface them alongside any verdict. Which holes reach which tool differs: substituted cores reach both `analyze_board` and `run_checks`, while dropped ADC channels and unexercised buses reach `run_checks` (its `coverage_warnings`) and NOT `analyze_board`, whose front-door report does not carry them.",
+                "instructions": "hauksbee analyzes PCB design files with real device physics and co-simulates firmware on emulated MCUs. Honesty contract: a result with status \"invalid_for_analysis\" is a structured refusal, the run declined to vouch for itself; never read it as pass or fail, and never retry expecting a different answer. Coverage holes arrive as data fields; surface them alongside any verdict. Which holes reach which tool differs: substituted cores reach both `analyze_board` and `run_checks`, while dropped ADC channels, unexercised buses, watchdog reboots and per-core timing coverage reach `run_checks` (its `coverage_warnings`) and NOT `analyze_board`, whose front-door report does not carry those four.",
             }),
         )
     }
