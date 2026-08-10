@@ -533,3 +533,131 @@ max_power_w = 0.25             # standard footprint (0.345 W on a 1 cm^2 pad)
 max_voltage_v = 45.0           # |VCEO|
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 500.0       # standard footprint (362 K/W with a 1 cm^2 pad)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BC807: the UNGRADED PNP, and why a bare part number needs its own card.
+#
+# Source: Nexperia BC807_SER Rev. 8, 1 July 2022, for the limiting values and the
+#   hFE table; Nexperia's SPICE card BC807.txt (`.MODEL Transistor PNP`,
+#   extraction week 44/2018) for the parameters below, verbatim. Read the note on
+#   what that card is before treating BF as an ungraded figure.
+#
+# THE ENTRY THIS SITS BESIDE EXPLAINS WHY IT EXISTS. `bc807_40` above demands the
+# "-40" suffix, correctly, because it carries the -40 bin's card (BF = 535 against
+# an hFE bin of 250..600). A board that writes the bare "BC807" is not naming that
+# bin, and before this entry all eight of them on the MWGEN-G1 were reported as
+# open circuits: the nearest thing in this file was a card for a different gain bin
+# and the match rule for it was right to refuse.
+#
+# WHAT THE BARE CARD ACTUALLY IS, stated exactly, because it is less independent
+# than "ungraded" suggests. Nexperia publishes BC807.txt under the bare part
+# number, and its header gives the ungraded hFE window, 100..600 at
+# VCE = -1 V / IC = -100 mA. Its NUMBERS, however, are identical to BC807-25.txt:
+# same BF = 300, same `.SUBCKT` areas 0.9101 / 0.08993, same RQ = 40.42, same D1
+# branch, same extraction week 44/2018. The two files differ in their subcircuit
+# name and their hFE header line and in nothing else. So this entry is not carrying
+# an extraction of its own; it is carrying the vendor's answer for the bare part
+# number, which is the -25 extraction republished.
+#
+# THE CONSEQUENCE FOR A READER: BF = 300 is the middle of the 100..600 window in
+# the sense that Nexperia chose it, not in the sense that it represents the window.
+# A part from the bottom of the ungraded distribution has roughly a third of this
+# beta. That is a real limitation of modelling an ungraded part at all, and it is
+# the vendor's limitation rather than this file's, but it is not removed by the fact
+# that the number came from a vendor card.
+#
+# THE RULE FOR THIS FAMILY is therefore ONE ENTRY PER PUBLISHED CARD, matched on
+# exactly the spelling that card belongs to, and BC807-16 and BC807-25 still
+# resolve to nothing here. Two notes for whoever adds them:
+#   - BC807-25 would duplicate this entry's parameters exactly, for the reason
+#     above. It is worth adding anyway, so the -25 spelling stops being an open
+#     circuit, but it is a second name for these numbers and not a second
+#     measurement.
+#   - BC807-16 is NOT "an entry in this shape". It is a 2009 extraction with a
+#     different card structure (`.MODEL MAIN PNP`, a single transistor rather than
+#     the split pair, BF = 185.2, RS = 5099), so it needs its own reading of its own
+#     file rather than this one edited.
+#
+# WHAT IS AND IS NOT TRANSFERRED. Every parameter the engine's Gummel-Poon reads
+# is carried, which is the full set the `bc807_40` entry above carries: the
+# leakage pair ISE/NE and ISC/NC, both high-injection knees, NR, and the
+# temperature pair EG/XTI. Leaving those out would have been a quiet loss of the
+# rolloff and leakage behaviour, not a simplification.
+#
+# NOT TRANSFERRED, for the reason the BC817-40 note above sets out at length: the
+# card's two-transistor split, and the parameters the Gummel-Poon does not read
+# (RBM, IRB, XTB, the junction-profile group, the substrate group).
+#
+# This card has MORE structure than the -40's, not less, which is worth saying
+# because it is the opposite of what "ungraded" suggests: it is a `.SUBCKT` of two
+# transistors of area 0.9101 and 0.08993 with a 40.42 Ohm base resistor between
+# them, AND a base-emitter diode branch (IS = 3.478e-15, RS = 760.4) that the -40
+# card does not have. The areas sum to 1.0 and the base resistor is a short at low
+# current, so collapsing the pair to one unit-area transistor is the same trade
+# the -40 entry documents; the D1 branch is a reverse-conduction fit and is not
+# stamped either.
+[[models]]
+id = "bc807"
+kind = "bjt_pnp"
+description = "BC807 (ungraded) PNP 45V 500mA SOT23, hFE 100-600, Nexperia SPICE card"
+
+[models.match]
+# The bare part and its packing/package suffixes: BC807, BC807W (SOT323),
+# BC807,215 / ,235 (reel codes). The hyphen is NOT in the character class, so the
+# graded parts BC807-16 / -25 / -40 cannot reach this entry and take the ungraded
+# beta; -40 has its own card above.
+#
+# The '.' in the class is not decoration: the matcher runs
+# `normalise_value_str` before any regex, which rewrites a comma to a period as a
+# European decimal separator, so a reel code reaches the rule as "BC807.215" and
+# a class containing only ',' would never see one. (The sibling entries above
+# spell ',' and therefore do not in fact match their own documented reel codes;
+# they match the bare part, which is what saves them.)
+value_re = "(?i)^BC807[A-Z0-9.,]*$"
+
+[models.params]
+# Source: Nexperia BC807.txt SPICE card, `.MODEL Transistor PNP`, verbatim.
+# Params are magnitudes; the kind carries the polarity.
+is  = 4.209e-14    # IS
+bf  = 300.0        # BF   (ungraded hFE bin 100..600 @ VCE=-1V, IC=-100mA)
+nf  = 0.9144       # NF
+vaf = 30.0         # VAF
+br  = 30.0         # BR
+nr  = 0.913        # NR
+var = 25.0         # VAR
+ikf = 0.45         # IKF  forward high-injection knee. NOT optional on this part:
+                   # it is a 500 mA transistor used as a gate driver, so the knee
+                   # sits inside its working range and omitting it would give no
+                   # beta rolloff exactly where the board operates it.
+ikr = 0.2415       # IKR  reverse knee
+ise = 1.532e-14    # ISE  B-E leakage saturation current
+ne  = 1.321        # NE   B-E leakage emission coefficient
+isc = 6.368e-15    # ISC  B-C leakage saturation current
+nc  = 1.08         # NC   B-C leakage emission coefficient
+rb  = 20.0         # RB
+rc  = 0.1943       # RC
+re  = 0.05838      # RE
+cje = 5.547e-11    # CJE
+cjc = 2.004e-11    # CJC
+tf  = 9.2e-10      # TF
+tr  = 8.0e-10      # TR
+eg  = 1.11         # EG
+xti = 10.02        # XTI
+
+[models.pins]
+# BC807_SER Rev. 8, Table 3 Pinning, SOT23 (TO-236AB). Corroborated by the
+# MWGEN-G1's own pin functions, which name pad 1 B, pad 2 E and pad 3 C on all
+# eight instances.
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"
+
+[models.ratings]
+# Source: BC807_SER Rev. 8, Table 6 Limiting values and Table 7 Thermal. Same
+# package and same die as the -40 above, so the same figures.
+max_current_a = 0.5            # |IC| continuous, Tamb = 25 C
+max_surge_current_a = 1.0      # |ICM|, single pulse tp <= 1 ms
+max_power_w = 0.25             # Ptot, standard footprint (0.345 W on a 1 cm^2 pad)
+max_voltage_v = 45.0           # |VCEO| (|VCBO| is 50 V, |VEBO| 5 V)
+max_junction_temp_c = 150.0    # Tj
+theta_ja_c_per_w = 500.0       # Rth(j-a), standard footprint, free air

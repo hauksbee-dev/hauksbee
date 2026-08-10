@@ -26,10 +26,26 @@ fn every_builtin_passive_entry_declares_its_class() {
         if path.extension().and_then(|e| e.to_str()) != Some("toml") {
             continue;
         }
-        // pin_rules.toml is a rule table, not a `[[models]]` array.
+        // Some db files hold other schemas entirely: `pin_rules.toml` is a rule
+        // table, `unmodelled.toml` an abstention list, and `load_profiles.toml`
+        // reuses the `[[models]]` array name for piecewise current profiles whose
+        // entries have no `kind`. Those contribute nothing here. A file that is a
+        // model file and fails to parse must FAIL, not be skipped: skipping it turns
+        // this sweep off for every entry in it while still reporting green, which is
+        // how an invariant quietly stops being enforced.
         let text = std::fs::read_to_string(&path).expect("db file readable");
-        let Ok(db) = toml::from_str::<DbFile>(&text) else {
-            continue;
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let non_model = ["pin_rules.toml", "load_profiles.toml", "unmodelled.toml"];
+        let db = match toml::from_str::<DbFile>(&text) {
+            Ok(db) => db,
+            Err(e) => {
+                assert!(
+                    non_model.contains(&name.as_str()),
+                    "{name} is a model db file that does not deserialize, so every \
+                     passive entry in it goes unchecked: {e}"
+                );
+                continue;
+            }
         };
         for entry in &db.models {
             if entry.kind != ComponentKind::Passive {

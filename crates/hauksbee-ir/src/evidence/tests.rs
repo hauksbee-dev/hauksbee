@@ -1235,3 +1235,54 @@ fn the_ideal_source_wording_is_composed_here_too() {
         EvidenceStatus::Qualified
     );
 }
+
+/// A named abstention splits into the two fields a reader looks at, and an
+/// ordinary reason is untouched.
+///
+/// The binder has ONE `reason` channel to the report but two things to say about a
+/// part it has examined and cannot model: what blocks it, and what would unlock it.
+/// Those belong in different fields, so the halves travel joined by
+/// [`Assumption::UNLOCKED_BY_MARKER`] and are split here. Getting this wrong is
+/// quiet in the worst way: the reader would be told the blocker and then told to
+/// "add a model to your models directory", which is the thing the blocker just
+/// explained is not yet possible.
+#[test]
+fn a_named_abstention_puts_its_unlocking_input_in_the_what_to_do() {
+    let a = Assumption::open_part(
+        "U201",
+        "Si53301",
+        &format!(
+            "its output format is strap-selected.{}read the SFOUT straps off the schematic.",
+            Assumption::UNLOCKED_BY_MARKER
+        ),
+    );
+    assert_eq!(a.because, "Its output format is strap-selected.");
+    // `build` sentence-cases every field, so the expectation is capitalised too.
+    assert_eq!(
+        a.replacement, "Read the SFOUT straps off the schematic.",
+        "the unlocking input is the next step, and must REPLACE the generic one"
+    );
+    assert!(
+        !a.replacement.contains("models directory"),
+        "the generic next step must not survive beside a specific one: {}",
+        a.replacement
+    );
+    // The marker itself is plumbing and must not reach the reader.
+    assert!(!a.because.contains("Unlocked by"));
+    assert!(!a.replacement.contains("Unlocked by"));
+
+    // An ORDINARY reason carries no marker and keeps the generic next step, so the
+    // unexamined case is unchanged.
+    let plain = Assumption::open_part("R7", "10k", "no model");
+    assert_eq!(plain.because, "No model.");
+    assert!(
+        plain.replacement.contains("models directory"),
+        "a part nobody has examined still gets the generic route: {}",
+        plain.replacement
+    );
+
+    // And a reason with no explanation at all keeps both defaults.
+    let bare = Assumption::open_part("R7", "10k", "");
+    assert_eq!(bare.because, "No model in the library matched this part.");
+    assert!(bare.replacement.contains("models directory"));
+}

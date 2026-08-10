@@ -2224,11 +2224,18 @@
           "type": "string"
         },
         "reason": {
-          "description": "Why it could not be bound (e.g. \"no model; left open\").",
+          "description": "Why it could not be bound (e.g. \"no model; left open\").\n\nNever carries a routing marker. The binder joins a named abstention's two\nhalves into one `reason` string with [`Assumption::UNLOCKED_BY_MARKER`], the\nway `Assumption::open_part` expects, and this surface splits it the same way\nrather than handing the reader plumbing.",
           "type": "string"
         },
         "reference": {
           "type": "string"
+        },
+        "unlocked_by": {
+          "description": "For a named abstention, the input that would let the tool model this part.\n\nIts own field rather than a sentence glued onto `reason`, because this is the\nactionable half and `--json` is the surface a pipeline reads: a consumer that\nwants to tell someone what to upload should not have to parse prose.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "value": {
           "type": "string"

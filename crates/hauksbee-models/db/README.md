@@ -167,6 +167,45 @@ These bounds are the single source of truth in `crates/hauksbee-models/src/valid
 | ron         | 0.01   | 10000.0| switch on-resistance (Ω, ron < roff)  |
 | roff        | 1e3    | 1e12   | switch off-resistance (Ω)             |
 
+## Named abstentions (`unmodelled.toml`)
+
+Some parts cannot be modelled honestly yet, and the reason is worth writing down.
+Without somewhere to write it, the report says the same two sentences for a part
+nobody has examined and for one somebody examined closely and concluded is blocked:
+
+```
+because:     No model in the library matched this part.
+what to do:  Add a model for U201 to your models directory, or mark it DNP.
+```
+
+`db/unmodelled.toml` replaces those two sentences for a named part:
+
+```toml
+[[unmodelled]]
+# Stable id, so a user file can be seen to override a built-in.
+id = "si53301"
+# Case-insensitive regex matched against the component value OR its MPN property.
+value_re = "(?i)^Si5330[0-9]"
+# Becomes the disclosure's "because".
+because = "its output format is strap-selected per bank, so a single output level
+           would be a guess about a strap."
+# Becomes the disclosure's "what to do". REQUIRED, and it must name a specific
+# obtainable input: a document, a parameter, a decision the board's author can make.
+unlocked_by = "the strap state for this board, or a differential-output device kind."
+```
+
+An entry here **binds nothing**. It cannot make a part resolve, cannot stamp a
+device, and cannot move `critical_parts_bound`; resolution is tried first and the
+table is consulted only when nothing matched. That containment is why this is a
+separate table rather than a `[[models]]` entry with an escape hatch: an entry that
+meant "do not model this" would be one bad merge away from counting as coverage.
+
+Layered like `pin_rules.toml`: drop an `unmodelled.toml` (or any file with an
+`[[unmodelled]]` array) into a model directory and its entries go **ahead** of the
+built-ins, so a reader who disagrees with an abstention can override its text.
+
+Delete an entry the moment a real `[[models]]` entry covers the part.
+
 ## `mpn_re` narrows, it does not widen
 
 Worth knowing before adding a rule, because the shape of it is a trap. All
