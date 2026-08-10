@@ -275,12 +275,14 @@ fn contour_bounds(c: &[(f64, f64)]) -> [f64; 4] {
 /// is meaningless across the voids of a whole film, which cross one another, and
 /// applying it here promoted 11890 of 12000 voids on an overlapping-antipad plane
 /// and brought the board-sized sheet straight back (see `group_contours`, which is
-/// valid only inside one region statement). Narrow is also sufficient: a void whose
-/// vertices all lie inside a pour cannot sever it, and one reaching past the pour's
-/// edge is refused for that pour entirely, so a ring-shaped void is the only cut
-/// that can separate copper. A ring formed by SEVERAL separate voids is not one
-/// void's hole and is not found this way; that island stays a contour of the pour,
-/// over-connected.
+/// valid only inside one region statement). Narrow is sufficient for a CONVEX pour:
+/// a void whose vertices all lie inside one cannot sever it, and one reaching past
+/// the pour's edge is refused for that pour entirely, so a ring-shaped void is the
+/// only cut that separates copper. A CONCAVE pour can be severed by a void lying
+/// wholly inside it, a gap drawn across the arms of a U, and a ring formed by
+/// SEVERAL separate voids is not one void's hole either; in both cases the pieces
+/// stay contours of one pour, over-connected. A plane deliberately split by a clear
+/// gap therefore reads as one conductor, which is on the limits list.
 fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     if clears.is_empty() {
         return;
@@ -437,6 +439,21 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
                 None => contours_enclose(&originals[slot], &c.contours),
             });
             if !enclosed {
+                continue;
+            }
+            // The pour's OWN drawn holes are not fair game either. Enclosure only
+            // asks that the void's vertices sit on even-odd copper, so a void can
+            // span a hole the pour was drawn with while every vertex is on copper;
+            // parity over pour-outer ^ pour-hole ^ void is then ODD inside the
+            // intersection and the pour's hole fills with phantom copper, which can
+            // short a conductor routed through the pour's slot to the plane.
+            // Refusing the cut leaves the pour's copper standing instead, and
+            // `free_ringed_islands` refuses to promote an island for the same reason.
+            let over_a_drawn_hole = originals[slot].iter().skip(1).any(|c| {
+                let ob = contour_bounds(c);
+                !(ob[2] < gb[0] || ob[0] > gb[2] || ob[3] < gb[1] || ob[1] > gb[3])
+            });
+            if over_a_drawn_hole {
                 continue;
             }
             // Skip only when the WHOLE image is already void: that is the
@@ -653,13 +670,20 @@ fn contours_enclose(outer: &[Vec<(f64, f64)>], inner: &[Vec<(f64, f64)>]) -> boo
 struct VoidIndex {
     origin: (f64, f64),
     cell: (f64, f64),
-    /// Every void, in insertion order. This is the whole index until a pour
-    /// collects more voids than `GRID_AT`, so the common pour, which takes a
-    /// handful, never allocates `RES * RES` buckets it would put one entry in.
-    all: Vec<(usize, [f64; 4])>,
-    /// `RES * RES` buckets of `(void id, void bounds)`, once the pour has enough
-    /// voids for a bucket lookup to beat scanning `all`.
-    cells: Vec<Vec<(usize, [f64; 4])>>,
+    /// Every void's bounds, indexed by void id. Scanned whole until a pour collects
+    /// more voids than `GRID_AT`, so the common pour, which takes a handful, never
+    /// allocates `RES * RES` buckets it would put one entry in.
+    all: Vec<[f64; 4]>,
+    /// `RES * RES` buckets of void ids, once the pour has enough voids for a bucket
+    /// lookup to beat scanning `all`. Ids only, not bounds: a copy of the bounds in
+    /// every cell a void spans cost 55 kB for a void with large bounds.
+    cells: Vec<Vec<usize>>,
+    /// Voids whose bounds span more than `MAX_STAMP` cells, which are scanned for
+    /// every query instead of being stamped into hundreds of buckets. Long clear
+    /// STROKES, which is how some exporters draw a plane's splits, span nearly the
+    /// whole grid each: stamping 8000 of them took 575 MB and 1.25 s, almost all of
+    /// it allocation churn.
+    overflow: Vec<usize>,
     /// Per void id, the contour indices it occupies in the pour's contour list.
     /// The first is its outer boundary, the rest its holes.
     units: Vec<Vec<usize>>,
@@ -673,6 +697,8 @@ impl VoidIndex {
     const RES: usize = 48;
     /// Void count at which the grid is worth its allocation.
     const GRID_AT: usize = 128;
+    /// Cells a void may be stamped into before it goes to `overflow` instead.
+    const MAX_STAMP: usize = 64;
 
     fn new(bounds: [f64; 4]) -> Self {
         let w = (bounds[2] - bounds[0]).max(f64::MIN_POSITIVE);
@@ -682,6 +708,7 @@ impl VoidIndex {
             cell: (w / Self::RES as f64, h / Self::RES as f64),
             all: Vec::new(),
             cells: Vec::new(),
+            overflow: Vec::new(),
             units: Vec::new(),
             unit_id: Vec::new(),
         }
@@ -705,20 +732,18 @@ impl VoidIndex {
         let id = self.units.len();
         self.units.push(indices);
         self.unit_id.push(void_id);
-        self.all.push((id, b));
+        self.all.push(b);
         if self.cells.is_empty() {
             if self.all.len() < Self::GRID_AT {
                 return;
             }
-            // Crossing the threshold: build the grid from everything so far, in
-            // insertion order, so the buckets read the same as if it had always
-            // existed.
+            // Crossing the threshold: bucket everything so far, in insertion order,
+            // so the lists read the same as if the grid had always existed.
             self.cells = vec![Vec::new(); Self::RES * Self::RES];
-            let seen = std::mem::take(&mut self.all);
-            for &(prev, pb) in &seen {
+            for prev in 0..self.all.len() {
+                let pb = self.all[prev];
                 self.stamp(prev, pb);
             }
-            self.all = seen;
             return;
         }
         self.stamp(id, b);
@@ -726,9 +751,13 @@ impl VoidIndex {
 
     fn stamp(&mut self, id: usize, b: [f64; 4]) {
         let (x0, y0, x1, y1) = self.span(b);
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > Self::MAX_STAMP {
+            self.overflow.push(id);
+            return;
+        }
         for cy in y0..=y1 {
             for cx in x0..=x1 {
-                self.cells[cy * Self::RES + cx].push((id, b));
+                self.cells[cy * Self::RES + cx].push(id);
             }
         }
     }
@@ -741,21 +770,20 @@ impl VoidIndex {
     /// pour, once per island, which is quadratic in the antipad count: a plane
     /// with 64000 annular antipads spent 9.3 s there.
     fn any_other_overlaps(&self, b: [f64; 4], own: usize) -> bool {
-        let overlaps =
-            |ob: [f64; 4]| !(ob[2] < b[0] || ob[0] > b[2] || ob[3] < b[1] || ob[1] > b[3]);
+        let hit = |&other: &usize| {
+            let ob = self.all[other];
+            other != own && !(ob[2] < b[0] || ob[0] > b[2] || ob[3] < b[1] || ob[1] > b[3])
+        };
+        if self.overflow.iter().any(hit) {
+            return true;
+        }
         if self.cells.is_empty() {
-            return self
-                .all
-                .iter()
-                .any(|&(other, ob)| other != own && overlaps(ob));
+            return (0..self.all.len()).any(|other| hit(&other));
         }
         let (x0, y0, x1, y1) = self.span(b);
         for cy in y0..=y1 {
             for cx in x0..=x1 {
-                if self.cells[cy * Self::RES + cx]
-                    .iter()
-                    .any(|&(other, ob)| other != own && overlaps(ob))
-                {
+                if self.cells[cy * Self::RES + cx].iter().any(hit) {
                     return true;
                 }
             }
@@ -763,13 +791,30 @@ impl VoidIndex {
         false
     }
 
-    /// Every void whose bounds could contain `b`, each listed once.
-    fn candidates(&self, b: [f64; 4]) -> &[(usize, [f64; 4])] {
-        if self.cells.is_empty() {
-            return &self.all;
-        }
-        let (x0, y0, ..) = self.span(b);
-        &self.cells[y0 * Self::RES + x0]
+    /// The bounds of void `id`.
+    fn bounds_of(&self, id: usize) -> [f64; 4] {
+        self.all[id]
+    }
+
+    /// Every void whose bounds could contain `b`. A void with large bounds lives in
+    /// `overflow` rather than in hundreds of buckets, so both lists are consulted.
+    fn candidates(&self, b: [f64; 4]) -> impl Iterator<Item = usize> + '_ {
+        let bucket: &[usize] = if self.cells.is_empty() {
+            &[]
+        } else {
+            let (x0, y0, ..) = self.span(b);
+            &self.cells[y0 * Self::RES + x0]
+        };
+        let ungridded = if self.cells.is_empty() {
+            0..self.all.len()
+        } else {
+            0..0
+        };
+        self.overflow
+            .iter()
+            .copied()
+            .chain(bucket.iter().copied())
+            .chain(ungridded)
     }
 }
 
@@ -829,7 +874,8 @@ fn already_void(
             })
         })
         .collect();
-    applied.candidates(bounds).iter().any(|&(id, ab)| {
+    applied.candidates(bounds).any(|id| {
+        let ab = applied.bounds_of(id);
         if bounds[0] < ab[0] - NUDGE_MM
             || bounds[1] < ab[1] - NUDGE_MM
             || bounds[2] > ab[2] + NUDGE_MM
@@ -951,6 +997,15 @@ struct Plotter<'a> {
     /// side of any CONCAVE stretch of a void's boundary, so a clear region with
     /// one cannot be trusted to erase only what the film erased.
     region_has_arc: bool,
+    /// Could a clear be banked when the current region OPENED?
+    ///
+    /// Snapshotted for the same reason `region_dark` is: the graphics state can move
+    /// inside a region. A `%LS0.5*%` in force while the contour is drawn and reset
+    /// before `G37` otherwise banked the UNTRANSFORMED void, which is larger than
+    /// what the film cleared, and erased copper the film kept. Both ends have to
+    /// agree, so a transform, an `%AB` body or a negative image anywhere across the
+    /// region refuses it.
+    region_bankable: bool,
     /// Current load polarity. Clear (LPC) geometry is banked as a void and cut
     /// from the copper beneath it (see [`apply_clears`]).
     dark: bool,
@@ -1101,6 +1156,7 @@ impl<'a> Plotter<'a> {
             region: None,
             region_dark: true,
             region_has_arc: false,
+            region_bankable: true,
             dark: true,
             scale_identity: true,
             rotation_identity: true,
@@ -1211,6 +1267,7 @@ impl<'a> Plotter<'a> {
                     // A region takes the polarity in effect when it opens.
                     self.region_dark = self.dark;
                     self.region_has_arc = false;
+                    self.region_bankable = self.may_bank_clears();
                     // One (empty) current contour; further contours are opened
                     // by D02 moves while the region is open.
                     self.region = Some(vec![Vec::new()]);
@@ -1996,7 +2053,7 @@ impl<'a> Plotter<'a> {
         // could bridge nets outside the pour rather than merely leaving the pour's
         // own copper standing.
         if !self.region_dark && !self.dark {
-            if !self.region_has_arc {
+            if !self.region_has_arc && self.region_bankable {
                 self.add_clear_contours(contours);
             }
             return;
@@ -3170,6 +3227,84 @@ G37*
             piece_at(&pieces, 12.5, 8.0),
             None,
             "the second ring is void"
+        );
+    }
+
+    #[test]
+    fn a_transform_reset_before_g37_still_refuses_the_void() {
+        // The clear gates were read only when the region CLOSED, so a `%LS` in force
+        // while the contour was drawn and reset before `G37` banked the
+        // UNTRANSFORMED void, which is larger than what the film cleared. Here the
+        // film clears a 5 mm square and the reader would have subtracted a 10 mm one,
+        // erasing the copper at (6,6). Both ends have to agree, exactly as the
+        // polarity does.
+        let (n, is_copper) = pour_of(&negative_pour(
+            "",
+            "\
+%LS0.500000*%
+G36*
+X5000000Y5000000D02*
+X15000000Y5000000D01*
+X15000000Y15000000D01*
+X5000000Y15000000D01*
+X5000000Y5000000D01*
+%LS1.000000*%
+G37*
+",
+        ));
+        assert_eq!(n, 1, "a region drawn under a transform cuts nothing");
+        assert!(is_copper(6.0, 6.0), "copper the film keeps is still there");
+    }
+
+    #[test]
+    fn a_void_spanning_a_pours_own_hole_is_refused() {
+        // Enclosure only asks that a void's vertices sit on even-odd copper, so a
+        // void can span a hole the pour was DRAWN with while every vertex is on
+        // copper. Parity over pour-outer ^ pour-hole ^ void is then odd inside the
+        // intersection and the pour's hole fills with phantom copper, which can
+        // short a conductor routed through the pour's slot to the plane. The cut is
+        // refused, leaving the pour exactly as drawn.
+        let prims = parse_layer(
+            "\
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L1,Top*%
+G36*
+X0Y0D02*
+X20000000Y0D01*
+X20000000Y20000000D01*
+X0Y20000000D01*
+X0Y0D01*
+X9000000Y9000000D02*
+X11000000Y9000000D01*
+X11000000Y11000000D01*
+X9000000Y11000000D01*
+X9000000Y9000000D01*
+G37*
+%LPC*%
+G36*
+X5000000Y5000000D02*
+X15000000Y5000000D01*
+X15000000Y15000000D01*
+X5000000Y15000000D01*
+X5000000Y5000000D01*
+G37*
+M02*
+",
+        )
+        .unwrap();
+        let regions: Vec<&CopperPrim> = prims
+            .iter()
+            .filter(|p| p.kind == PrimKind::Region)
+            .collect();
+        assert_eq!(regions.len(), 1);
+        let Shape::MultiPolygon { contours } = &regions[0].shape else {
+            panic!("the pour was drawn with a hole, so it is a MultiPolygon");
+        };
+        assert_eq!(contours.len(), 2, "the pour keeps its two contours, uncut");
+        assert!(
+            !super::super::geo::point_in_contours(10.0, 10.0, contours),
+            "the hole the pour was drawn with stays empty"
         );
     }
 
