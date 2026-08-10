@@ -567,35 +567,44 @@ Inkplate 6 to 18. Cutting the voids gives 284 and 181.
 
 A void becomes an extra contour on the pour it sits inside, which is what
 `Shape::MultiPolygon` already means: even-odd containment reads the void's
-interior as empty and the copper around it as copper. That is not a general
-polygon boolean and does not need to be. A void is cut from every `Region`
-primitive that **encloses it entirely** (judged against that pour's own
-contours as drawn) and was painted **before** it, gerber being a painter's
-model. A void already covered whole by an earlier void is skipped, because
-that copper is gone and re-cutting it would flip it back to copper under
-even-odd. Even-odd handles the rest: a thermal relief's separate arc-shaped
-voids leave the spokes standing, so the pad stays on the pour exactly as
-fabricated, and an annular void's inner rim leaves its copper island
-standing. Clear *flashes* (the classic negative-plane antipad) and clear
-*draws* are banked the same way, and a `%SR%` cell carries its voids into
-every repeat, even a cell that is nothing but voids.
+interior as empty and the copper around it as copper. Even-odd does most of
+the work by itself: a thermal relief's separate arc-shaped voids leave the
+spokes standing, so the pad stays on the pour exactly as fabricated, and an
+annular void's inner rim leaves its copper island standing. A void is cut
+from every `Region` primitive whose own contours, as drawn, contain every
+vertex of the void, and which was painted **before** it, gerber being a
+painter's model. A void already covered whole by an earlier void is skipped,
+because that copper is gone and re-cutting it would flip it back to copper.
+Clear *flashes* (the classic negative-plane antipad) and clear *draws* are
+banked the same way, and a `%SR%` cell carries its voids into every repeat,
+even a cell that is nothing but voids.
 
-**Only exactly-reproduced geometry may erase copper.** Several aperture
-images are deliberate over-approximations: a macro flash becomes the convex
-hull of its primitives (a fixed disc when it cannot be evaluated at all), a
-draw with an aperture that declares no width takes a 0.1 mm hairline, and a
-circular draw flattens into inscribed chords. Each is correct while it only
-*adds* copper, since a flash that claims a little too much never invents a
-gap, and destructive the moment it subtracts, since it would erase copper the
-film never cleared and split a conductor that is really whole. So those
-clears are refused outright. Standard apertures are polygonized *inscribed*,
-so they under-remove, which is the safe side.
+This is not a general polygon boolean, so it is imprecise, and the shape of
+that imprecision is the whole safety argument. Appending a contour flips the
+even-odd parity inside it, so wherever a void lands on copper the film really
+kept, the parity flips from empty to **copper**, not the other way. A void
+placed imperfectly therefore leaves a phantom speck of pour, which reads as
+over-connection: the same direction as the bug this fixes, recoverable, and
+never a fabricated break in a conductor that is really whole.
 
-Where this stops short it stops short in one direction, leaving copper
-standing, which reads as over-connection rather than as a fabricated split:
-the refusals above, a void straddling a pour's edge, a void laid over a track
-or a pad rather than over a pour, and the intersection of two voids that only
-partially overlap.
+What that argument rests on is the void's own **geometry** never being larger
+than the void the film cleared, so **only exactly-reproduced geometry may
+erase copper**. Several aperture images are deliberate over-approximations: a
+macro flash becomes the convex hull of its primitives (a fixed disc when it
+cannot be evaluated at all), a draw whose aperture declares no width takes a
+0.1 mm hairline, and a circular draw or a circular region boundary flattens
+into inscribed chords, which stay inside a convex stretch of a boundary but
+cut across the copper on a concave one. Each is correct while it only *adds*
+copper, since a flash that claims a little too much never invents a gap, and
+destructive the moment it subtracts. Those clears are refused outright.
+Standard apertures are polygonized *inscribed*, so they under-remove; the one
+exception is a holed aperture's rim, which for a clear flash bounds the copper
+island the void leaves standing and is therefore **circumscribed** so the
+island reads slightly wide rather than slightly short.
+
+The remaining limits all leave copper standing: the refusals above, a void
+straddling a pour's edge, a void laid over a track or a pad rather than over a
+pour, and the intersection of two voids that only partially overlap.
 
 Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
 pour with two ringed pads must reconstruct to three conductors, and its
