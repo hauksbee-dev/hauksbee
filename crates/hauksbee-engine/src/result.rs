@@ -1543,8 +1543,7 @@ pub struct JsonReport {
     /// exit code. On the routes that load waivers it is set AFTER the partition,
     /// so an overruled finding neither gates nor flips the verdict; the bare
     /// machine report and the co-sim surface load none and gate on everything
-    /// they found. Not serialized: the gate's OUTCOME
-    /// is the verdict field itself.
+    /// they found. Not serialized: the gate's OUTCOME is the verdict field.
     #[serde(skip)]
     pub surface_gate_fails: bool,
     /// Whether this document only DESCRIBES the run (the `--report` bind table)

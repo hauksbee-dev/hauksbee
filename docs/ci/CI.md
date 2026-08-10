@@ -1180,7 +1180,9 @@ own machine verdict on the same board: `fail` exits 2, `invalid` exits 3, `pass`
 exits 0. Those gates are deliberately wider than the `serious` severity
 (`--lint` gates on medium findings, `--si` on any real finding), so a run gating
 on a `warning`-severity finding reads `verdict: "fail"` in the very document its
-exit code was printed beside. Do not use a non-strict run to predict a strict one. On the static surfaces the
+exit code was printed beside.
+
+Do not use a non-strict run to predict a strict one. On the static surfaces the
 document does not change with the flag (a refusing verdict prints beside exit 0
 without `--strict`), so reading it there is at worst incomplete. On the co-sim
 path it is misleading: the zero-activity refusal is only constructed under

@@ -74,6 +74,14 @@ fn boot_gate_board() -> PathBuf {
         .join("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb")
 }
 
+/// A real board whose SI report carries a medium (`warning`) crystal-load-cap
+/// finding and nothing serious, so `--si`'s own gate is the only thing that can
+/// make it fail.
+fn medium_si_board() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/public/boards/stickhub.kicad_pcb")
+}
+
 fn run(args: &[&str]) -> Output {
     // Scrubbed, not inherited: under GitHub Actions the CLI adds workflow
     // annotations, so a suite that inherited the variable would exercise a
@@ -799,6 +807,24 @@ fn a_medium_lint_finding_fails_the_verdict_because_it_fails_the_gate() {
     }
     // The bare machine report shares `--check`'s gate.
     assert_bare_json_gate_matches_verdict(&b, "fail");
+    // Under GitHub Actions a gating run's stdout is STILL exactly one JSON
+    // document: the workflow annotations are stderr, not report content. This
+    // is the exit-2 route, the one that used to append `::error` lines after
+    // the document and break a consumer parsing it.
+    let out = run_in_actions(&["run", b.to_str().unwrap(), "--lint", "--json", "--strict"]);
+    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
+    assert_eq!(
+        json_verdict(&out).0,
+        "fail",
+        "stdout must parse as one document under GitHub Actions:\n{}",
+        stdout(&out)
+    );
+    let err = stderr(&out);
+    assert!(
+        err.lines()
+            .any(|l| l.starts_with("::error ") && l.contains("--strict gate")),
+        "the gate annotated the checks tab, on stderr:\n{err}"
+    );
 }
 
 /// The `--si` half of the same widening, on a real board: `si_fails` counts its
@@ -806,8 +832,7 @@ fn a_medium_lint_finding_fails_the_verdict_because_it_fails_the_gate() {
 /// while both the verdict and the exit code have to say the run failed.
 #[test]
 fn a_medium_si_finding_fails_the_verdict_because_it_fails_the_gate() {
-    let b = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/public/boards/stickhub.kicad_pcb");
+    let b = medium_si_board();
     let out = run(&["run", b.to_str().unwrap(), "--si", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_eq!(v["serious_count"], 0, "{v}");
@@ -960,8 +985,6 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
                 && l.contains("INCONCLUSIVE:")),
             "{surface} annotates the blocker in the shared sentence:\n{err}"
         );
-        // And stdout stayed exactly one JSON document: a workflow command is
-        // not report content.
         assert_eq!(json_verdict(&out).0, "invalid");
 
         let bound = fixture("verdict_fet_bound.kicad_pcb");

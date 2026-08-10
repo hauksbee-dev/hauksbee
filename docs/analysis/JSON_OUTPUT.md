@@ -65,7 +65,8 @@ including its low ones but not its informational notes, the co-sim surface on
 any raised fault; `--strict-boot` adds the boot advisory). It is
 `"invalid"` when nothing gates but the run-level claim could not be judged: a
 top-level `refusal`, AC or thermal reporting `valid:false`, undermined run-level
-evidence, or unbound verdict-critical parts on a model-dependent surface. Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`, and a
+evidence, or unbound verdict-critical parts on a model-dependent surface.
+Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`, and a
 gating run's own document matches its own exit code (2 / 3 / 0). That is not
 the same as predicting a strict run from a non-strict one: on the co-sim path
 the zero-activity refusal is only constructed under `--strict`, and the boot
