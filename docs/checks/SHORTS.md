@@ -200,8 +200,11 @@ One pour-to-pour construct **is** checked. Two overlapping same-rank pours of
 different signals get no arbitration from their rank, and the file names no
 yielder either, but whichever pour gives way is carved back by its own `isolate`,
 so an outline overlap on its own is not a short. What is reported is an overlap where the smaller `isolate` is below one
-micrometre, meaning nothing in the file asks for a gap at all, and the pour
-settings are disclosed on the finding. This was narrowed against the emonTx
+micrometre, meaning nothing in the file asks for a gap at all. The pour settings
+ride along on the finding's `Item::owner` field, which `drc_probe` prints and the
+tests assert; `--drc` renders the item KIND rather than the owner, so a reader of
+the report does not see the `isolate` that triggered it. That is a gap, and it
+bites hardest on the false positive below. This was narrowed against the emonTx
 V3.4.5's own fabrication output, which shows the same outline overlap
 resolving to separate copper on the layer where both pours hold `isolate="0.3048"`
 and to one body on the layer where one holds `0.00030625`

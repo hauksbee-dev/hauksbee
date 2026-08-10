@@ -3016,10 +3016,12 @@ pub mod eagle_drc {
             /// filled region, where a rules floor would have held them apart. On
             /// that evidence the pour-to-pour pass reads the raw value, with
             /// `POUR_MERGE_ISOLATE_MM` as the band in which it is taken to mean
-            /// "no gap at all". Autodesk documents `isolate` as one distance to
-            /// all foreign copper with the rules taking precedence, so this is a
-            /// measurement disagreeing with the general documentation on the
-            /// pour-to-pour case, not a reading of it.
+            /// "no gap at all". Nothing in this repository establishes what
+            /// Autodesk documents for the pour-to-pour case, so this is a reading
+            /// taken from measurement rather than from the format's own
+            /// specification, and it is one that the general description of
+            /// `isolate` (a single distance to all foreign copper, rules taking
+            /// precedence) would not predict.
             isolate: f64,
             /// Pour priority. With differing ranks the higher-numbered pour
             /// yields; same-rank pours of different signals get no arbitration
