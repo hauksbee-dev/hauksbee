@@ -1134,7 +1134,7 @@ the CLI says so on stderr.
 | 0 | clean, or a report-only run without `--strict` |
 | 1 | the run never happened: the board could not be read (unrecognized format, a Git LFS pointer, a missing file, an ASCII-Protel `.PcbDoc`) or the analysis could not be set up |
 | 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`). Also a usage error, such as two report flags at once |
-| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict`, thermal table with no usable coverage, or a PARTIAL-coverage `--thermal` result, see below) |
+| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict`, thermal table with no usable coverage, a PARTIAL-coverage `--thermal` result, undermined run-level evidence under `--strict`, or unbound verdict-critical parts on a model-dependent surface under `--strict`, see below) |
 
 `--thermal` gates on coverage **by default**: a partial-coverage table (real
 rows while an active power IC on the live circuit is open/unresolved) exits 3,
@@ -1148,14 +1148,21 @@ still prints on stderr and rides the JSON `notes`. `--strict-thermal` is
 accepted as a quiet no-op: it used to opt in to what is now the default, so
 invocations that passed it keep their exact behaviour.
 
-The INCONCLUSIVE verdict itself never moves an exit code. When
+The INCONCLUSIVE verdict never moves an exit code on its own. When
 current-carrying / active parts have no model, `--lint` / `--si` / `--check`
 print "INCONCLUSIVE: N current-carrying / active part(s) have no model (U3,
 Q1, ...)" instead of a clean bill, and the same sentence rides the JSON
-`notes` (kind `coverage`); the exit code stays whatever the table above says
-for the run. Prose honesty and exit-code policy are deliberately separate
-contracts: making INCONCLUSIVE alone exit non-zero would change what `--lint`
-and `--si` mean to every pipeline that calls them without `--strict`.
+`notes` (kind `coverage`). Without `--strict` the exit code stays 0: prose
+honesty and exit-code policy are deliberately separate contracts, and making
+INCONCLUSIVE alone exit non-zero would change what `--lint` and `--si` mean to
+every pipeline that calls them without `--strict`. Under `--strict` those
+same model-dependent surfaces exit 3, because their machine `verdict` field
+already reads `invalid` for the unbound part and an exit code that disagreed
+with the document beside it would give a pipeline two answers. The copper
+(`--drc`) and descriptive (`--report`) surfaces are exempt on both: copper
+reads the layout and owes nothing to device models, and `--report` describes
+the binding rather than judging it, so it never gates and its verdict never
+turns the incomplete binding it prints into a refusal.
 
 Exit 1 and exit 2 are worth keeping apart in a pipeline: 1 means your input was
 never analysed, 2 means it was analysed and the board is at fault. A CI step that
@@ -1167,6 +1174,13 @@ notes never gate), `--lint` high/medium findings, `--si` any real finding,
 `--usb-c` a serious CC verdict, and `--check` / bare `--json` the union of
 these. On a board format newer than the validated range (KiCad 10+),
 possibly-phantom shorts do not gate. The printed caveat says to cross-check.
+
+Each gate is per surface and agrees with that surface's own machine verdict on
+the same board: `fail` exits 2, `invalid` exits 3, `pass` exits 0. Those gates
+are deliberately wider than the `serious` severity (`--lint` gates on medium
+findings, `--si` on any finding), so a run gating on a `warning`-severity
+finding reads `verdict: "fail"` in the very document its exit code was printed
+beside. `--report` has no gate at all.
 
 ## Limitations
 

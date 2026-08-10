@@ -1139,8 +1139,10 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 // The co-sim exit gate fails on ANY raised fault, and the
                 // plain-language classifier grades most of them `warning`, so
                 // without this the co-sim document read `pass` beside its own
-                // exit 2.
-                .with_surface_gate(!faults.is_empty())
+                // exit 2. `--strict-boot` is the same story one flag over: it
+                // turns the boot advisory into an exit 2, so under that flag
+                // the advisory is gate-grade for this document too.
+                .with_surface_gate(!faults.is_empty() || (cfg.strict_boot && has_boot_advisory))
                 .with_inputs(&inputs)
                 .with_evidence(&run_evidence);
             // A substitution is an info-level note that must never be silently
@@ -1511,7 +1513,15 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                         eprintln!("{}", refusal.render_text());
                     }
                 }
-                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                // `fail` outranks `invalid`, the same precedence the verdict
+                // field applies: a run that raised real electrical faults CAN
+                // be judged, so the fault gate below owns the exit (2) and this
+                // refusal stays on stderr and in the artifacts. Exiting 3 here
+                // put "invalid for analysis" beside a document reading
+                // `"verdict":"fail"`.
+                if faults.is_empty() {
+                    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                }
             }
         }
 
@@ -1566,7 +1576,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                         eprintln!("{}", refusal.render_text());
                     }
                 }
-                std::process::exit(code);
+                // Same precedence as the zero-activity refusal above: raised
+                // faults are a judgement this run CAN make, so they own the
+                // exit code.
+                if faults.is_empty() {
+                    std::process::exit(code);
+                }
             }
         }
 
