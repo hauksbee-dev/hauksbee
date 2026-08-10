@@ -2798,45 +2798,6 @@ pub mod eagle_drc {
     use quick_xml::events::Event;
     use quick_xml::Reader;
     use std::collections::HashMap;
-
-    /// The `isolate` below which a pour keeps no separation at all, so a
-    /// same-rank overlap with another signal's pour reaches copper as a short.
-    ///
-    /// One micrometre, and it is a choice inside measured bounds rather than a
-    /// boundary Eagle documents. Being straight about which:
-    ///
-    /// **Measured.** The emonTx V3.4.5 sets `isolate` to 0.00030625 mm on
-    /// exactly one of its nine ground pours (six of the others ask for
-    /// 0.3048 mm and the rest carry no isolate attribute), and the fabrication
-    /// gerbers the upstream ships beside the `.brd` show that pour merged with
-    /// the GND pour into a single filled region, while the same net pouring at
-    /// 0.3048 mm on the other layer stays a separate copper body. So on that
-    /// board the pour at 0.00030625 ends up in contact and the pour at 0.3048
-    /// does not.
-    ///
-    /// **Measured the other way, too.** The same upstream's V3.4.0 revision puts
-    /// BOTH of its top-layer ground pours at 0.00030625 with overlapping
-    /// outlines, and its shipped gerbers show those two fills as separate
-    /// components. So the near-zero value is necessary but NOT sufficient for a
-    /// merge, this test over-reports on that layer, and no threshold can fix it
-    /// because `isolate` does not decide the question. The false positive is
-    /// recorded in `docs/about/LIMITATIONS.md`; deciding it needs Eagle's fill
-    /// reconstructed, which is not implemented.
-    ///
-    /// **Chosen.** Given all that, the number is a manufacturing judgement rather
-    /// than a boundary anything documents: one micrometre is 25x below one mil,
-    /// around the tightest separation board houses quote, so an `isolate` below
-    /// it is not asking for a manufacturable gap, and it is ten orders above the
-    /// f64 noise floor of the geometry it is compared against. What the rule
-    /// buys, against the outline-only rule it replaced, is silence on the two top
-    /// layers where the fills are apart, while all three known real contacts
-    /// still flag: five of the six measured layer-instances right, against three.
-    ///
-    /// An `isolate` between this and the design rules leaves a gap that is real
-    /// but too tight, which is a clearance question about a fill Eagle recomputes
-    /// and does not store. This module does not answer it; Eagle's own DRC does.
-    const POUR_MERGE_ISOLATE_MM: f64 = 1e-3;
-
     type Attrs = HashMap<String, String>;
 
     /// A `<polygon>` (signal pour) being streamed: which signal owns it, its
@@ -3010,19 +2971,13 @@ pub mod eagle_drc {
             ///
             /// Against foreign TRACKS, PADS and VIAS, Eagle applies
             /// max(isolate, design-rule / class clearance), so 0 means "rules
-            /// only" and the fill can never crowd them. Against another POUR
-            /// the emonTx V3.4.5 does not behave that way: it pours at
-            /// `isolate="0.00030625"` against a GND pour under an 8 mil
-            /// `mdWireWire` rule, and its own CAM output emits the two as one
-            /// filled region, where a rules floor would have held them apart. On
-            /// that evidence the pour-to-pour pass reads the raw value, with
-            /// `POUR_MERGE_ISOLATE_MM` as the band in which it is taken to mean
-            /// "no gap at all". Nothing in this repository establishes what
-            /// Autodesk documents for the pour-to-pour case, so this is a reading
-            /// taken from measurement rather than from the format's own
-            /// specification, and it is one that the general description of
-            /// `isolate` (a single distance to all foreign copper, rules taking
-            /// precedence) would not predict.
+            /// only" and the fill can never crowd them.
+            ///
+            /// Pour-to-POUR it is NOT a sufficient predictor of contact, which is
+            /// measured: the emonTx V3.4.0 pours at 0.00030625 against a GND pour
+            /// under an 8 mil `mdWireWire` rule on both layers, and its shipped
+            /// gerbers show one layer joined and the other not. The value is
+            /// parsed and disclosed on the finding; nothing keys a verdict on it.
             isolate: f64,
             /// Pour priority. With differing ranks the higher-numbered pour
             /// yields; same-rank pours of different signals get no arbitration
@@ -3869,9 +3824,9 @@ pub mod eagle_drc {
                         // outline as solid copper would turn every legitimate
                         // crossing track and every isolated foreign pad into a
                         // false short. Two overlapping same-rank pours of
-                        // different signals are the one pair the settings can
-                        // leave touching, and only when an `isolate` is under
-                        // `POUR_MERGE_ISOLATE_MM`; see the rank check below.
+                        // different signals are the one pair the settings cannot
+                        // make safe on their own; see the rank check below, and
+                        // its measured error rate.
                         if !cutout {
                             pours.push(Pour {
                                 net,
@@ -4056,32 +4011,30 @@ pub mod eagle_drc {
         let mut report = sweep_buckets(buckets, &rules, &no_net, &net_ties, &name_of);
 
         // ── Pour-to-pour rank arbitration ────────────────────────────────────
-        // Differing ranks are arbitrated (the higher-numbered pour carves
-        // around the lower), so they stay silent. Same-rank pours of different
-        // signals whose OUTLINES overlap are not, on their own, a short: with
-        // equal rank the file names no yielder, but whichever pour gives way is
-        // carved back by its own `isolate`, and the outline says nothing about
-        // where the fill lands. What this pass treats as reaching copper is an
-        // overlap where the smaller `isolate` is under
-        // `POUR_MERGE_ISOLATE_MM`, so nothing in the file asks for a gap.
+        // Differing ranks are arbitrated (the higher-numbered pour carves around
+        // the lower), so they stay silent. Same-rank pours of different signals
+        // get no arbitration from the rank, and their overlap is reported.
         //
-        // The emonTx V3.4.5 (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`) is the
-        // measurement behind that: GND and AGND carry same-rank pours whose
-        // outlines overlap in the same 0.349 mm band on BOTH copper layers at
-        // the corner where the finding sits, and the fabrication gerbers the
-        // upstream ships beside the `.brd` disagree between the two. On the top
-        // layer, where AGND pours with `isolate="0.3048"`, the two fills are
-        // separate copper bodies 8.236 mm apart at their closest. On the bottom,
-        // where the same net pours with `isolate="0.00030625"`, they are one
-        // contiguous body. So the outline overlap plainly does not decide it.
+        // This is a coarse rule and its error rate is measured, not guessed. The
+        // emonTx revision family (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`)
+        // supplies six layer-instances whose shipped gerbers say whether the two
+        // nets actually share copper, and the rule is right about four: it flags
+        // the three layers where they do, and over-reports two top layers where
+        // the pour outlines overlap but nothing bridges them.
         //
-        // Keying on `isolate` is an inference on top of that, and a narrow one:
-        // it is the only pour-fill setting in the file that can grant a pour
-        // permission to keep no gap, and it sits on exactly the pour that abuts.
-        // The 8.236 mm on the top layer is crowding, not a 0.3048 mm antipad, so
-        // that layer shows pours with a working isolate ending up apart without
-        // showing the isolate is what put them there. The evidence doc keeps the
-        // measured and inferred halves separate.
+        // Keying on `isolate` instead was tried and reverted. It is necessary but
+        // not sufficient for a merge (V3.4.0 has both top pours at 0.00030625 and
+        // their fills apart), it fixes only one of the two over-reports, and it
+        // silences V3.4.5's top layer, where a trace does join the two nets. That
+        // trade is the wrong way round: see SHORT_TOUCH_EPS_MM above on
+        // under-reporting a short being the worst failure this detector has.
+        //
+        // What the over-reports need is Eagle's fill reconstructed from the
+        // outline, the pour settings and the foreign copper, which is not
+        // implemented. What the emonTx findings separately need is net-tie
+        // recognition that can see a tie DECLARED IN THE SCHEMATIC (that board
+        // wires an AGND supply symbol to a GND one from V3.4.1 on), which this
+        // reader cannot: it is handed a `.brd` and the tie is in the `.sch`.
         for (i, a) in pours.iter().enumerate() {
             for b in pours.iter().skip(i + 1) {
                 if a.layer != b.layer
@@ -4090,14 +4043,6 @@ pub mod eagle_drc {
                     || no_net.contains(&a.net)
                     || no_net.contains(&b.net)
                 {
-                    continue;
-                }
-                // With equal rank the file does not say which pour yields, so
-                // take the smaller `isolate`: it is the more conservative of the
-                // two readings, since it is the one that can put copper in
-                // contact. Above the threshold, both readings leave a gap the
-                // fill would have to hold, however far the outlines overlap.
-                if a.isolate.min(b.isolate) >= POUR_MERGE_ISOLATE_MM {
                     continue;
                 }
                 // Overlap means the vertex rings themselves cross or one

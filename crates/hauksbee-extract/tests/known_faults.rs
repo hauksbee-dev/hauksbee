@@ -516,51 +516,44 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
 }
 
 // ---------------------------------------------------------------------------
-// emonTx V3.4.5 pour-overlap row: one file, one net pair, two layers, opposite
-// verdicts, and the fabrication output to settle which is which.
+// emonTx V3.4.5: GND and AGND really are in contact, on both copper layers, and
+// the tie is declared in the schematic.
 //
-// GND and AGND are separate nets with no discrete part bridging them, and their
-// same-rank pours overlap in the same 0.349 mm band on both copper layers where
-// the finding sits (GND's outline runs along y=43.205 with fill below; AGND's
-// runs along y=42.856 with fill above). Nothing in that geometry separates the
-// layers, and reading the outline overlap as copper reported a short on both.
+// hauksbee reports GND <-> AGND on both layers, and the shipped gerbers say both
+// reports are right about the substance. The oracle here is net attribution over
+// the fabrication data: does any single filled region of a copper layer contain
+// vias of BOTH nets?
 //
-// The gerbers upstream ships beside the `.brd` separate them, and this test reads
-// those gerbers rather than trusting the write-up: on F.Cu, where both pours hold
-// isolate="0.3048", a point inside the AGND pour and a point inside the GND pour
-// land in DIFFERENT filled contours (8.236 mm apart at their closest); on B.Cu,
-// where the AGND pour carries isolate="0.00030625", the same two points land in
-// the SAME contour. So the oracle is asserted, not described, and if a future
-// fetch landed different fabrication data the test would say so instead of
-// quietly agreeing with whatever the checker now returns.
+//   * `copper_bottom.gbr`: yes. The two pours abut along the seam and the AGND
+//     pour there carries `isolate="0.00030625"`.
+//   * `copper_top.gbr`: also yes, and this is the part that is easy to get wrong.
+//     The two POUR FILLS on that layer are 8.236 mm apart, so the pours do not
+//     meet; but one 770-vertex dark region near U1 holds five GND vias and an
+//     AGND via at (81.915, 47.498), joined by a trace. Reading only the pours
+//     concludes "no contact on F.Cu", which is false about the layer.
 //
-// What the oracle settles is which layer has contact. That the isolate is the
-// setting which PERMITTED it is an inference on top, argued in the evidence doc
-// and deliberately not smuggled into this test's assertions.
+// The tie is intentional and the schematic says so outright: `emonTx V3.4.5.sch`
+// wires the AGND supply symbol AGND7 (library `supply1`, no package) to the GND
+// supply symbol SUPPLY6 in one segment of net GND. That segment is absent from
+// V3.4.0 and present from V3.4.1 on, the same boundary at which three of the four
+// ground pours were given real isolation. So these findings are a designer's
+// declared ground tie being reported as a short, and the class fix is net-tie
+// recognition that can see a tie declared in the `.sch` -- which this reader
+// cannot, because it is handed the `.brd`. `docs/about/LIMITATIONS.md` records it.
 //
-// The emontx3 corpus entry is known_good = false because of the B.Cu contact.
-// That is not a claim the board is defective; a silence gate needs boards the
-// tool says nothing about, and here it correctly says something.
+// This test therefore pins BOTH reports as present, and pins the oracle that says
+// they are about real copper. It does not bless the location hauksbee gives for
+// the F.Cu one, which is the pour-outline crossing rather than the trace.
 // ---------------------------------------------------------------------------
 
-/// Which `G36`/`G37` region fill of a Gerber copper layer encloses a point.
+/// Every `G36`/`G37` region fill of a Gerber copper layer, as (ring, dark).
 ///
-/// Returns `(contour index, dark)`: the index identifies the fill, and `dark` is
-/// the layer polarity in force when it was drawn (`%LPD*%` adds copper, `%LPC*%`
-/// erases). Two points in the same dark contour are in one poured body; two
-/// points in different dark contours are in two.
-///
-/// What this deliberately does NOT model, because the claims made from it are
-/// scoped to match: strokes (`D01`), flashes (`D03`) and arc curvature are
-/// ignored, so it cannot see a track or an annulus bridging two fills, and it
-/// carries no net attribution. The write-up's separate, polarity-and-stroke-aware
-/// raster experiments are where those questions are settled; this is the part
-/// worth pinning in CI, because it is cheap, exact on the vector data, and is the
-/// step the verdict turns on. As a guard against the polarity hole mattering
-/// here, callers assert that no CLEAR contour encloses the probe points.
-fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<(usize, bool)> {
-    // (ring, dark) per region fill, in file order.
-    let mut contours: Vec<(Vec<(f64, f64)>, bool)> = Vec::new();
+/// `%LPD*%` adds copper and `%LPC*%` erases, so polarity has to be read before
+/// the `%`-prefixed statements are skipped. Strokes (`D01`) and flashes (`D03`)
+/// are NOT collected: this answers questions about the filled regions only, which
+/// is what the callers below ask.
+fn gerber_dark_regions(text: &str) -> Vec<Vec<(f64, f64)>> {
+    let mut out: Vec<Vec<(f64, f64)>> = Vec::new();
     let mut current: Option<Vec<(f64, f64)>> = None;
     let (mut cx, mut cy) = (0.0f64, 0.0f64);
     let mut dark = true;
@@ -570,24 +563,14 @@ fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<(usize, bool)> {
         text.contains("%FSLAX34Y34*%") && text.contains("%MOMM*%"),
         "this reader assumes the Eagle export's own X34Y34 millimetre format"
     );
-    let flush =
-        |cur: &mut Option<Vec<(f64, f64)>>, out: &mut Vec<(Vec<(f64, f64)>, bool)>, dark: bool| {
-            if let Some(pts) = cur.take() {
-                if pts.len() > 2 {
-                    out.push((pts, dark));
-                }
-            }
-        };
-    // Line by line, then statement by statement. Splitting the whole file on
-    // `*` does not work: an extended command is `%...*%`, so its own `*` cuts
-    // the following statement in half and 139 of this layer's 156 `G36`s arrive
+    // Line by line, then statement by statement. Splitting the whole file on `*`
+    // does not work: an extended command is `%...*%`, so its own `*` cuts the
+    // following statement in half and 139 of the top layer's 156 `G36`s arrive
     // glued to a stray `%` and get skipped as extended commands.
     for block in text.lines().flat_map(|line| line.split('*')).map(str::trim) {
         if block.starts_with("G04") {
             continue;
         }
-        // Polarity is an extended command, so it has to be read BEFORE the
-        // `%`-prefixed statements are skipped.
         if block.starts_with("%LPD") {
             dark = true;
             continue;
@@ -600,12 +583,15 @@ fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<(usize, bool)> {
             continue;
         }
         if block.ends_with("G36") {
-            flush(&mut current, &mut contours, dark);
             current = Some(Vec::new());
             continue;
         }
         if block.ends_with("G37") {
-            flush(&mut current, &mut contours, dark);
+            if let Some(pts) = current.take() {
+                if pts.len() > 2 && dark {
+                    out.push(pts);
+                }
+            }
             continue;
         }
         let coord = |tag: char, fallback: f64| -> f64 {
@@ -620,9 +606,9 @@ fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<(usize, bool)> {
                 None => fallback,
             }
         };
-        let op = if block.ends_with("D01") || block.ends_with("D1") {
+        let op = if block.ends_with("D01") {
             1
-        } else if block.ends_with("D02") || block.ends_with("D2") {
+        } else if block.ends_with("D02") {
             2
         } else {
             continue;
@@ -631,8 +617,8 @@ fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<(usize, bool)> {
         if let Some(pts) = current.as_mut() {
             if op == 2 {
                 // A move inside a region statement starts a new contour.
-                if pts.len() > 2 {
-                    contours.push((std::mem::take(pts), dark));
+                if pts.len() > 2 && dark {
+                    out.push(std::mem::take(pts));
                 } else {
                     pts.clear();
                 }
@@ -643,33 +629,54 @@ fn gerber_fill_contour(text: &str, x: f64, y: f64) -> Option<(usize, bool)> {
         }
         (cx, cy) = (nx, ny);
     }
-    flush(&mut current, &mut contours, dark);
     assert!(
-        !contours.is_empty(),
-        "no G36 region fills found; this is not the copper layer we think it is"
+        !out.is_empty(),
+        "no dark G36 region fills found; this is not the copper layer we think it is"
     );
-    // Even-odd crossing count. Last enclosing contour wins, because a later
-    // clear region erases what an earlier dark one laid down.
-    let hit = |pts: &Vec<(f64, f64)>| {
-        let mut inside = false;
-        for i in 0..pts.len() {
-            let (x1, y1) = pts[i];
-            let (x2, y2) = pts[(i + 1) % pts.len()];
-            if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
-                inside = !inside;
-            }
+    out
+}
+
+/// Even-odd point-in-ring.
+fn in_ring(pts: &[(f64, f64)], x: f64, y: f64) -> bool {
+    let mut inside = false;
+    for i in 0..pts.len() {
+        let (x1, y1) = pts[i];
+        let (x2, y2) = pts[(i + 1) % pts.len()];
+        if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
+            inside = !inside;
         }
-        inside
-    };
-    contours
-        .iter()
-        .enumerate()
-        .rfind(|(_, (pts, _))| hit(pts))
-        .map(|(i, (_, dark))| (i, *dark))
+    }
+    inside
+}
+
+/// Vias of one Eagle signal, from the `.brd` text.
+fn eagle_signal_vias(brd: &str, net: &str) -> Vec<(f64, f64)> {
+    // The opening tag carries a `class` attribute, so match the name only.
+    let open = format!("<signal name=\"{net}\"");
+    let start = brd.find(&open).unwrap_or_else(|| panic!("no signal {net}")) + open.len();
+    let body = &brd[start..start + brd[start..].find("</signal>").expect("signal closes")];
+    let mut out = Vec::new();
+    for chunk in body.split("<via ").skip(1) {
+        let num = |tag: &str| -> f64 {
+            let at = chunk
+                .find(tag)
+                .unwrap_or_else(|| panic!("via without {tag}"))
+                + tag.len();
+            chunk[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-' || *c == '.')
+                .collect::<String>()
+                .parse()
+                .expect("numeric via coordinate")
+        };
+        out.push((num("x=\""), num("y=\"")));
+    }
+    assert!(!out.is_empty(), "signal {net} has no vias");
+    out
 }
 
 #[test]
-fn emontx_ground_pour_join_is_flagged_on_the_merged_layer_only() {
+fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
     let Some(brd) = board("emontx3/hardware/V3.4.5/emonTx V3.4.5.brd") else {
         return;
     };
@@ -685,63 +692,65 @@ fn emontx_ground_pour_join_is_flagged_on_the_merged_layer_only() {
     let Some(bottom) = gerber("copper_bottom.gbr") else {
         return;
     };
-    hauksbee_testkit::scanned("emonTx V3.4.5 pour-overlap row", 1);
+    hauksbee_testkit::scanned("emonTx V3.4.5 ground-tie row", 1);
 
-    // The oracle. Two probe points well inside each pour's own territory, away
-    // from the seam: (60, 60) is inside the AGND outline on both layers,
-    // (10, 20) is inside the GND outline on both.
-    let (agnd, gnd) = ((60.0, 60.0), (10.0, 20.0));
-    for (path, layer, want_same) in [(&top, "F.Cu", false), (&bottom, "B.Cu", true)] {
+    // The oracle: on each layer, at least one filled region holds vias of both
+    // nets. Read from the fabrication data, independent of anything hauksbee says.
+    let brd_text = std::fs::read_to_string(&brd).expect("read emonTx board");
+    let gnd = eagle_signal_vias(&brd_text, "GND");
+    let agnd = eagle_signal_vias(&brd_text, "AGND");
+    for (path, layer) in [(&top, "F.Cu"), (&bottom, "B.Cu")] {
         let text = std::fs::read_to_string(path).expect("read gerber");
-        let (a, a_dark) = gerber_fill_contour(&text, agnd.0, agnd.1)
-            .unwrap_or_else(|| panic!("{layer}: no fill at the AGND probe point"));
-        let (g, g_dark) = gerber_fill_contour(&text, gnd.0, gnd.1)
-            .unwrap_or_else(|| panic!("{layer}: no fill at the GND probe point"));
-        // Both layers carry clear-polarity regions (136 on F.Cu, 99 on B.Cu),
-        // which is why polarity is read at all: a probe landing in one would mean
-        // the enclosing fill had been erased there and the comparison below would
-        // be meaningless. Neither probe does, and this asserts it.
+        let shared = gerber_dark_regions(&text)
+            .into_iter()
+            .filter(|ring| {
+                gnd.iter().any(|&(x, y)| in_ring(ring, x, y))
+                    && agnd.iter().any(|&(x, y)| in_ring(ring, x, y))
+            })
+            .count();
         assert!(
-            a_dark && g_dark,
-            "{layer}: a probe point sits in a CLEAR region (AGND dark={a_dark}, \
-             GND dark={g_dark}), so it is not in poured copper"
-        );
-        assert_eq!(
-            a == g,
-            want_same,
-            "{layer}: AGND fill contour {a}, GND fill contour {g}; expected \
-             {} copper body/bodies",
-            if want_same { "one" } else { "two separate" }
+            shared >= 1,
+            "{layer}: expected at least one filled region holding vias of both GND \
+             and AGND, found {shared}"
         );
     }
 
-    // The verdict, which must follow the oracle layer for layer.
-    let text = std::fs::read_to_string(&brd).expect("read emonTx board");
-    let report = hauksbee_extract::ExtractedBoard::drc(&text).expect("drc runs");
-    let shorts: Vec<_> = report.shorts().collect();
+    // The verdict, which must cover both layers.
+    let report = hauksbee_extract::ExtractedBoard::drc(&brd_text).expect("drc runs");
+    let mut layers: Vec<&str> = report
+        .shorts()
+        .map(|s| {
+            let mut nets = [s.net_a_name.as_str(), s.net_b_name.as_str()];
+            nets.sort_unstable();
+            assert_eq!(nets, ["AGND", "GND"], "only the ground pair is in contact");
+            s.layer.as_str()
+        })
+        .collect();
+    layers.sort_unstable();
     assert_eq!(
-        shorts.len(),
-        1,
-        "only the layer whose fill actually merged, got: {:?}",
-        shorts
-            .iter()
-            .map(|s| format!("{} <-> {} on {}", s.net_a_name, s.net_b_name, s.layer))
-            .collect::<Vec<_>>()
+        layers,
+        ["B.Cu", "F.Cu"],
+        "both layers carry the tie and both are reported"
     );
-    let s = shorts[0];
-    let mut nets = [s.net_a_name.as_str(), s.net_b_name.as_str()];
-    nets.sort_unstable();
-    assert_eq!(nets, ["AGND", "GND"]);
-    assert_eq!(
-        s.layer, "B.Cu",
-        "copper_bottom.gbr is the layer with one merged contour"
-    );
+
+    // And the schematic declares the tie, which is why these are a net-tie class
+    // rather than a defect: an AGND supply symbol wired to a GND supply symbol.
+    let Some(sch) = board("emontx3/hardware/V3.4.5/emonTx V3.4.5.sch") else {
+        return;
+    };
+    let sch_text = std::fs::read_to_string(&sch).expect("read emonTx schematic");
+    let gnd_net = sch_text
+        .split("<net name=\"GND\"")
+        .nth(1)
+        .expect("a GND net in the schematic");
+    let gnd_net = &gnd_net[..gnd_net.find("</net>").expect("GND net closes")];
+    let tie = gnd_net
+        .split("<segment>")
+        .any(|seg| seg.contains("part=\"AGND7\"") && seg.contains("part=\"SUPPLY6\""));
     assert!(
-        s.item_a.owner.contains("isolate 0.00030625")
-            || s.item_b.owner.contains("isolate 0.00030625"),
-        "the finding names the zeroed isolate that let the pours meet, got {:?} / {:?}",
-        s.item_a.owner,
-        s.item_b.owner
+        tie,
+        "the GND net should carry the segment tying AGND7 to SUPPLY6, which is what \
+         makes this a declared tie rather than an accident"
     );
 }
 
@@ -755,16 +764,18 @@ fn emontx_ground_pour_join_is_flagged_on_the_merged_layer_only() {
 // emonTxV3.4_GERBERS export (registered to the board by its own drill file, all
 // 108 vias inside 30 um) and attributing each body by the `.brd`'s GND-net and
 // AGND-net items puts the AGND body in a different component from the GND body.
-// A near-zero `isolate` is necessary but not sufficient for the fills to meet,
-// and no threshold on `isolate` can fix that.
+// A near-zero `isolate` is necessary but not sufficient for the fills to meet, so
+// no threshold on `isolate` can fix that. This board is why the narrowing that was
+// once proposed for the pour-to-pour rule was measured and reverted; the scoring is
+// in the evidence doc.
 //
 // This test therefore asserts a result that is partly wrong, on purpose. It is
 // here so the error is a failing assertion away from being noticed rather than a
 // paragraph nobody re-reads: whoever implements fill reconstruction will see this
 // test go red, and the note in `docs/about/LIMITATIONS.md` is the next thing they
 // should edit. The gerber measurement itself is not re-run here, because reading a
-// stroked inch-unit pour needs a raster rather than the contour walk above; it
-// lives in the evidence doc with its numbers.
+// stroked inch-unit pour needs a raster and net attribution rather than the region
+// walk above; it lives in the evidence doc with its numbers.
 // ---------------------------------------------------------------------------
 
 #[test]
