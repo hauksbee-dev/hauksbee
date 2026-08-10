@@ -1793,6 +1793,18 @@ supply_static_ua = 8000.0  # ICC1 typ, normal operation (8.4 mA max); USB-suspen
 # so the whole figure sits on the core supply either way.
 supply_pin = "12"          # VCC
 gnd_pin    = "3"
+# WHAT THIS ENTRY IS AND IS NOT. It is a pad map plus VCCIO logic levels; there is
+# no USB stack behind it, and `bind_digital` stamps no driver on TXD or the modem
+# outputs (see the note in the pin map on why they are not `y`-prefixed). So the
+# part answers "what levels does this bridge present, and which pad is which" and
+# nothing about traffic. Said as a `warning` and not only in these comments because
+# comments reach no report surface: `entry_warning` puts this on the bind report and
+# on the evidence map, where a reader deciding whether a UART result means anything
+# will actually meet it.
+warning = """pad map and VCCIO logic levels only: there is no USB stack and no \
+driver is stamped on TXD or the modem-status outputs, so this part cannot source \
+or answer for any UART traffic, and a result that depends on data arriving through \
+this bridge is not evidence"""
 
 [models.pins]
 # Section 3, QFN-20. Cross-checked against the margay datalogger: pad 18 sits on

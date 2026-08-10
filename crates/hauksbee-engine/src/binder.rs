@@ -1973,7 +1973,7 @@ fn bind_component(
                     BindOutcome::Digital {
                         kind: kind.to_string(),
                     },
-                    None,
+                    entry_warning(comp, model),
                 ),
                 // A part whose logic spec does not compile is NOT bound: its
                 // nets float. Reporting it as `Digital` anyway made a broken
@@ -2006,7 +2006,7 @@ fn bind_component(
                     BindOutcome::Digital {
                         kind: "adc".to_string(),
                     },
-                    None,
+                    entry_warning(comp, model),
                 ),
                 Err(e) => (
                     BindOutcome::Unresolved {
@@ -2894,6 +2894,30 @@ fn bind_mosfet(
     )
 }
 
+/// An entry's own `warning` param, as a caveat ready for the bind report AND the
+/// evidence map.
+///
+/// ONE helper rather than a copy per binder, because the copies were the bug. The
+/// param existed and only `bind_opamp` read it, so an `analog_switch`, a `vreg` and
+/// a `digital` entry could describe its own gap in the database and have that text
+/// reach nobody: the `Digital` dispatch arms hard-coded `None` and `bind_vreg` had no
+/// warning channel at all. Five regulator entries and six logic entries were added
+/// against exactly those two paths, so the disclosure mechanism this file builds was
+/// unavailable to most of the coverage it shipped.
+///
+/// The marker is what makes it evidence. See [`Assumption::PARTIAL_MODEL_MARKER`]:
+/// without it the text lands only on `--report`, and a caveat present on one surface
+/// and absent on another is worse than one absent everywhere.
+fn entry_warning(comp: &Component, model: &ModelEntry) -> Option<String> {
+    let w = model.params.get_str("warning")?;
+    Some(format!(
+        "{}{} ({}): {w}",
+        Assumption::PARTIAL_MODEL_MARKER,
+        comp.reference,
+        comp.value
+    ))
+}
+
 fn bind_vreg(
     comp: &Component,
     model: &ModelEntry,
@@ -2922,7 +2946,7 @@ fn bind_vreg(
             BindOutcome::Behavioral {
                 device: format!("vreg {:.1}V behavioral converter", conv.vout_setpoint),
             },
-            None,
+            entry_warning(comp, model),
         );
     }
     let out = roles.get("out").copied();
@@ -2956,11 +2980,72 @@ fn bind_vreg(
         n: NodeId::GROUND,
         kind: SourceKind::Dc(vout),
     });
+    // THE ENABLE IS NOT MODELLED, and this says so for every entry that has one
+    // rather than making each entry repeat the sentence.
+    //
+    // Nothing above reads an `en` or `shdn` role. The stamp is an unconditional ideal
+    // source, so a regulator held OFF by its enable still presents its output rail at
+    // full voltage, and the board reads as having a rail it does not have. That is
+    // the silent-wrongness direction: the rail is asserted, not withheld.
+    //
+    // Keyed on the ENTRY's pin map, not on the resolved roles, because an enable pad
+    // the board left unconnected produces the same asserted rail and deserves the
+    // same caveat. Emitted here rather than in the database so that every regulator
+    // entry, including ones added later, is covered by construction; when `bind_vreg`
+    // learns to gate on the enable this block is what to delete.
+    let names_an_enable = model
+        .pins
+        .values()
+        .any(|r| matches!(r.as_str(), "en" | "shdn"));
+    let enable_warning = names_an_enable.then(|| {
+        format!(
+            "{}{} ({}): its {} pin is not modelled; the output rail is stamped as an \
+             unconditional ideal source, so a board that holds this regulator OFF \
+             still reads as having this rail present at {vout:.2} V",
+            Assumption::PARTIAL_MODEL_MARKER,
+            comp.reference,
+            comp.value,
+            if model.pins.values().any(|r| r == "shdn") {
+                "shutdown"
+            } else {
+                "enable"
+            },
+        )
+    });
+    // SEVERAL caveats can apply to one regulator and there is one channel, so they
+    // are joined rather than one silently winning. Each is a full sentence already;
+    // the leading one keeps the marker that makes the whole string evidence, and the
+    // followers drop their own "REF (VALUE): " so the reference is not repeated.
+    let mut caveats: Vec<String> = [entry_warning(comp, model), enable_warning, vout_warning]
+        .into_iter()
+        .flatten()
+        .collect();
+    let warning = if caveats.is_empty() {
+        None
+    } else {
+        let lead = caveats.remove(0);
+        let rest: Vec<String> = caveats
+            .iter()
+            .map(|c| {
+                let c = c
+                    .strip_prefix(Assumption::PARTIAL_MODEL_MARKER)
+                    .unwrap_or(c);
+                c.split_once(": ")
+                    .map(|(_, tail)| tail.to_string())
+                    .unwrap_or_else(|| c.to_string())
+            })
+            .collect();
+        if rest.is_empty() {
+            Some(lead)
+        } else {
+            Some(format!("{lead}; also {}", rest.join("; also ")))
+        }
+    };
     (
         BindOutcome::Behavioral {
             device: format!("vreg {vout:.1}V source"),
         },
-        vout_warning,
+        warning,
     )
 }
 
@@ -2977,10 +3062,7 @@ fn bind_opamp(
     let slew = model.params.get_f64("slew");
     let rail_lo = model.params.get_f64("rail_lo").unwrap_or(0.0);
     let rail_hi = model.params.get_f64("rail_hi").unwrap_or(5.0);
-    let warning = model
-        .params
-        .get_str("warning")
-        .map(|w| format!("{} ({}): {w}", comp.reference, comp.value));
+    let warning = entry_warning(comp, model);
 
     // Multi-channel packages (LM358 dual, INA2181 dual, LM324 quad) carry
     // per-channel roles out_a/in_plus_a/in_minus_a, ..._b/_c/_d. Stamp one
@@ -3290,11 +3372,41 @@ fn bind_analog_switch(
     let (a, b) = match (a, b) {
         (Some(a), Some(b)) if a != b => (a, b),
         _ => {
-            // Fall back: first two non-power roles. The control role is EXCLUDED:
-            // it is the switch's gate, not a signal terminal. Wiring it as a
-            // throw would stamp a VSwitch whose `b` equals its own `ctrl_p`,
-            // fabricating a ~ron path that shorts a signal net to the control
-            // line (and injects/loads the control voltage) when the gate goes
+            // AN ENTRY THAT NAMES ITS TERMINALS IS BELIEVED ABOUT WHICH PADS THEY
+            // ARE. If the map declares `in_out_a`/`in_out_b` (or `com`/`s0`) and the
+            // pair did not resolve, the board did not connect one of them, and the
+            // honest answer is an open switch. Scanning for two other pads instead
+            // invents a conducting path between terminals the datasheet says are not
+            // a switch at all.
+            //
+            // The PCA9306 is the case that showed it. Its map names SCL2 `in_out_a`
+            // and SCL1 `in_out_b`, and its other pads are VREF1, VREF2, SDA1, SDA2.
+            // `is_power_role` matches only vcc/vdd/vss/gnd, so VREF1 and the two SDA
+            // pads are all candidates here: a board leaving one SCL pad unconnected
+            // got 25.5 Ohm stamped from VREF1 onto SDA1, a path that exists on no
+            // board, WHILE the entry's own disclosure said the modelled channel was
+            // SCL1<->SCL2. A wrong path described by a confident caveat is worse than
+            // either alone.
+            let names_its_terminals = model.pins.values().any(|r| {
+                matches!(
+                    r.as_str(),
+                    "com" | "s0" | "s1" | "in_out_a" | "in_out_b" | "in_out_1a" | "in_out_1b"
+                )
+            });
+            if names_its_terminals {
+                return open_warning(
+                    comp,
+                    "analog switch terminal not connected: the model names which pads \
+                     are the switched path and one of them has no net, so no path is \
+                     stamped rather than guessing which other pads to bridge",
+                );
+            }
+            // Only for an entry with NO named terminals, where the roles came from
+            // the pin-rule table and there is nothing better to go on. The control
+            // role is EXCLUDED: it is the switch's gate, not a signal terminal.
+            // Wiring it as a throw would stamp a VSwitch whose `b` equals its own
+            // `ctrl_p`, fabricating a ~ron path that shorts a signal net to the
+            // control line (and injects/loads the control voltage) when the gate goes
             // high, a conductive path that does not exist on the real board.
             let mut nodes: Vec<NodeId> = roles
                 .iter()
@@ -3352,14 +3464,7 @@ fn bind_analog_switch(
         BindOutcome::Behavioral {
             device: "vswitch".to_string(),
         },
-        model.params.get_str("warning").map(|w| {
-            format!(
-                "{}{} ({}): {w}",
-                Assumption::PARTIAL_MODEL_MARKER,
-                comp.reference,
-                comp.value
-            )
-        }),
+        entry_warning(comp, model),
     )
 }
 
@@ -6581,6 +6686,239 @@ mod crystal_fallback_tests {
     /// switch closes above the threshold and opens below it. The spelling itself is
     /// pinned in the models suite; what is checked here is that the spelling buys
     /// the polarity.
+    /// A regulator whose entry names an enable must say that the enable is not
+    /// modelled, and a three-terminal regulator that has none must stay silent.
+    ///
+    /// `bind_vreg` stamps an UNCONDITIONAL ideal source on the output net. It never
+    /// reads `en` or `shdn`, so a board that holds its regulator off still reads as
+    /// having that rail present at full voltage, and the report counted the part as
+    /// resolved with nothing said. That is the silent-wrongness direction: the rail
+    /// is asserted rather than withheld, and a downstream check that passes because
+    /// the rail is "present" is measuring the model, not the board.
+    ///
+    /// This was unreachable before `entry_warning`: `bind_vreg` had no warning
+    /// channel at all, so nothing an entry or the binder knew about a regulator could
+    /// reach a reader.
+    #[test]
+    fn a_regulator_says_its_enable_is_not_modelled_and_a_plain_one_says_nothing() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+
+        // (value, expects a caveat). The LM7805 is the control: a genuine
+        // three-terminal regulator with no enable pin to leave unmodelled.
+        for (value, expects_enable_caveat) in [("XC6204B332MR", true), ("LM7805", false)] {
+            let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+            q.mpn = Some(value.to_string());
+            let model = lib
+                .resolve(&q)
+                .model
+                .unwrap_or_else(|| panic!("{value} must resolve"));
+
+            let pad_for = |role: &str| -> Option<String> {
+                model
+                    .pins
+                    .iter()
+                    .find(|(_, r)| r.as_str() == role)
+                    .map(|(pad, _)| pad.clone())
+            };
+            let mut c = comp("U1", value);
+            let mut pins = vec![pin(&pad_for("out").expect("an out pad"), 1)];
+            if let Some(inp) = pad_for("in") {
+                pins.push(pin(&inp, 2));
+            }
+            if let Some(gnd) = pad_for("gnd").or_else(|| pad_for("vss")) {
+                pins.push(pin(&gnd, 0));
+            }
+            // The enable is wired to GROUND, i.e. this regulator is held OFF.
+            if let Some(en) = pad_for("en").or_else(|| pad_for("shdn")) {
+                pins.push(pin(&en, 0));
+            }
+            c.pins = pins;
+
+            let mut circuit = Circuit::new();
+            let (out, inn) = (circuit.node("RAIL_OUT"), circuit.node("RAIL_IN"));
+            let node_of = move |net: Option<i64>| match net {
+                Some(1) => Some(out),
+                Some(2) => Some(inn),
+                Some(0) => Some(NodeId::GROUND),
+                _ => None,
+            };
+
+            let (outcome, warning, _) = bind_component(
+                &c,
+                &model,
+                Confidence::Exact,
+                &mut circuit,
+                &node_of,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                false,
+                &HashMap::new(),
+                pin_rules,
+            );
+            assert!(
+                !matches!(outcome, BindOutcome::Unresolved { .. }),
+                "{value} did not bind: {outcome:?}"
+            );
+
+            if expects_enable_caveat {
+                let w = warning.unwrap_or_else(|| {
+                    panic!(
+                        "{value} names an enable, is stamped as an unconditional source, \
+                         and says nothing about it"
+                    )
+                });
+                assert!(
+                    w.starts_with(Assumption::PARTIAL_MODEL_MARKER),
+                    "the caveat must be marked so it reaches the evidence map, not \
+                     only the bind report: {w}"
+                );
+                assert!(
+                    w.contains("not modelled") && w.contains("OFF"),
+                    "the caveat must say what is unmodelled and what it costs: {w}"
+                );
+            } else {
+                assert!(
+                    warning.is_none(),
+                    "{value} has no enable to leave unmodelled, so a caveat here is \
+                     noise: {warning:?}"
+                );
+            }
+        }
+    }
+
+    /// A `digital` entry's own caveat has to reach a reader. The dispatch arm used to
+    /// hard-code `None`, so an entry that modelled a pad map and nothing else could
+    /// describe that in the database and be heard by nobody.
+    #[test]
+    fn a_logic_entry_that_models_only_a_pad_map_discloses_it() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+        let value = "FT231X-Q";
+
+        let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+        q.mpn = Some(value.to_string());
+        let model = lib.resolve(&q).model.expect("FT231X resolves");
+
+        let mut c = comp("U2", value);
+        c.pins = vec![pin("12", 1), pin("3", 0), pin("17", 2), pin("20", 1)];
+        let mut circuit = Circuit::new();
+        let (vcc, txd) = (circuit.node("V3V3"), circuit.node("MCU_RX"));
+        let node_of = move |net: Option<i64>| match net {
+            Some(1) => Some(vcc),
+            Some(2) => Some(txd),
+            Some(0) => Some(NodeId::GROUND),
+            _ => None,
+        };
+
+        let (outcome, warning, _) = bind_component(
+            &c,
+            &model,
+            Confidence::Exact,
+            &mut circuit,
+            &node_of,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            false,
+            &HashMap::new(),
+            pin_rules,
+        );
+        assert!(
+            matches!(outcome, BindOutcome::Digital { .. }),
+            "the bridge binds as digital: {outcome:?}"
+        );
+        let w = warning.expect(
+            "a digital entry carrying a `warning` param must surface it; the dispatch \
+             arm used to discard it",
+        );
+        assert!(
+            w.starts_with(Assumption::PARTIAL_MODEL_MARKER) && w.contains("USB stack"),
+            "the caveat must be marked and must name the gap: {w}"
+        );
+    }
+
+    /// When an entry NAMES which pads are the switched path and the board wired only
+    /// one of them, no path may be stamped at all.
+    ///
+    /// The fallback used to scan for two arbitrary non-power roles instead.
+    /// `is_power_role` matches only vcc/vdd/vss/gnd, so on a PCA9306 the VREF and SDA
+    /// pads were all candidates: a board leaving one SCL pad open got ~25 Ohm stamped
+    /// between VREF1 and SDA1, a path on no real board, while the entry's own
+    /// disclosure said the modelled channel was SCL1<->SCL2. A confident caveat
+    /// describing a fabricated path is worse than either mistake alone.
+    #[test]
+    fn a_switch_with_one_terminal_unwired_stamps_nothing_rather_than_bridging_other_pads() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+        let value = "PCA9306";
+
+        let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+        q.mpn = Some(value.to_string());
+        let model = lib.resolve(&q).model.expect("PCA9306 resolves");
+
+        // Everything EXCEPT pad 3 (SCL1, the modelled channel's low side): the
+        // enable, ground, both VREFs and both SDA pads are wired, and pad 6 (SCL2) is
+        // wired too. Only one of the two named terminals is missing.
+        let mut c = comp("U3", value);
+        c.pins = vec![
+            pin("1", 0),
+            pin("2", 3),
+            pin("4", 4),
+            pin("5", 5),
+            pin("6", 1),
+            pin("7", 6),
+            pin("8", 2),
+        ];
+        let mut circuit = Circuit::new();
+        let scl2 = circuit.node("SCL_HI");
+        let en = circuit.node("EN");
+        let vref1 = circuit.node("VREF1");
+        let sda1 = circuit.node("SDA1");
+        let sda2 = circuit.node("SDA2");
+        let vref2 = circuit.node("VREF2");
+        let node_of = move |net: Option<i64>| match net {
+            Some(1) => Some(scl2),
+            Some(2) => Some(en),
+            Some(3) => Some(vref1),
+            Some(4) => Some(sda1),
+            Some(5) => Some(sda2),
+            Some(6) => Some(vref2),
+            Some(0) => Some(NodeId::GROUND),
+            _ => None,
+        };
+
+        let before = circuit.devices.len();
+        let (outcome, warning, _) = bind_component(
+            &c,
+            &model,
+            Confidence::Exact,
+            &mut circuit,
+            &node_of,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            false,
+            &HashMap::new(),
+            pin_rules,
+        );
+        assert_eq!(
+            circuit.devices.len(),
+            before,
+            "no switch may be stamped: every remaining pad pair is a fabricated path"
+        );
+        assert!(
+            matches!(outcome, BindOutcome::Unresolved { .. }),
+            "an unwired terminal is an open switch, disclosed as such: {outcome:?}"
+        );
+        let w = warning.expect("an open switch warns");
+        assert!(
+            w.contains("terminal"),
+            "the warning must say a named terminal is missing: {w}"
+        );
+    }
+
     /// A switch entry that models only part of the part must say so on a surface a
     /// reader sees, not in a TOML comment.
     ///

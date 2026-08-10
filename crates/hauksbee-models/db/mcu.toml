@@ -111,7 +111,25 @@ description = "ATmega1284P 8-bit AVR MCU, 44-lead TQFP or 44-pad VQFN/MLF"
 # in picoPower sleep behaviour and fuse defaults, not in anything here.
 #
 # The BARE "ATmega1284" and its hyphenated codes belong to the entry below.
-value_re = "(?i)^ATmega1284(P([-_]?(AU|MU|PU|AUR|MUR))?|M|A)$"
+#
+# `PU` IS DELIBERATELY ABSENT FROM THE PACKAGE CODES, and it used to be present.
+# Atmel-42719C Section 3 Ordering Information maps the codes to packages:
+# ATmega1284P-AU and -AUR are `44A` (44-lead TQFP), -MU and -MUR are the 44-pad
+# VQFN, and ATmega1284P-PU is `40P6`, which the same table's package list spells out
+# as "40-pin, 0.600in Wide, Plastic Dual Inline Package (PDIP)".
+#
+# A PDIP part is a DIFFERENT PINOUT, not a different body for the same one. Table 6-1
+# gives the 40-pin numbering beside the small-package one, and they do not line up
+# anywhere: PDIP pin 10 is VCC, 11 is GND, 14 is PD0/RxD0 and 15 is PD1/TxD0, while
+# the map below (the 44-pad one) has pad 10 as PD1/TXD0 and pad 11 as PD2/RXD1. So a
+# board fitting the PDIP part and writing its ordering code got the MCU's UART
+# TRANSMIT pin bound onto the board's VCC net, with a driven output stamped on a
+# power rail and nothing warning, because every pad the binder wanted was present.
+#
+# There is no 40-pin map in this library, so the honest answer for a PDIP board is
+# that nothing resolves and the part is disclosed as open. When someone adds the
+# 40-pin allocation it wants its own entry keyed on `PU`, not a widened regex here.
+value_re = "(?i)^ATmega1284(P([-_]?(AU|MU|AUR|MUR))?|M|A)$"
 
 [models.params]
 # hauksbee-mcu backend identifier. simavr models `atmega1284` and `atmega1284p` as
@@ -205,7 +223,10 @@ description = "ATmega1284 (non-P) 8-bit AVR MCU, 44-lead TQFP or 44-pad VQFN/MLF
 # these from the CAD-library device names ("ATMEGA1284M", "ATMEGA1284A"), which the
 # entry above claims for the reason set out there; and this regex has no optional
 # `P`, so no P spelling can reach it.
-value_re = "(?i)^ATmega1284(-(AU|MU|PU|AUR|MUR))?$"
+#
+# `PU` is absent here for the same reason as in the entry above, and it matters
+# identically: the ordering code says 40-pin PDIP and this map is the 44-pad one.
+value_re = "(?i)^ATmega1284(-(AU|MU|AUR|MUR))?$"
 
 [models.params]
 # The non-P core, which simavr models separately from the P.
