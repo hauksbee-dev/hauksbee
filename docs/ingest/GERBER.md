@@ -635,7 +635,13 @@ touch sweep; R-tree-pruned region lookups). Pour containment over
 board-spanning plane layers (tens of thousands of vertices, tested against
 every primitive) is accelerated by `PolyGrid`: a scanline-rasterised
 inside/outside/boundary grid built once per large pour, making each query
-O(1) outside a thin boundary band.
+O(1) outside a thin boundary band. Multi-contour pours use it too, which a
+negative-drawn plane makes load-bearing: cutting its voids turns it into ONE
+board-sized shape carrying a contour per antipad. The grid also answers "is
+there any pour boundary inside this pad's bounds", which keeps the exact
+poly-distance penetration test off a hot path that a board-sized pour would
+otherwise reach for every pad on the layer. Measured on a synthetic 100 mm
+plane with 6084 antipads: 3.97 s before those two changes, 0.10 s after.
 
 Two-layer boards extract in tens to hundreds of milliseconds. The 6-layer
 reform motherboard (about 75k draws and four 35k-vertex plane pours)
