@@ -172,10 +172,17 @@ Response:
 
 - Reports exit 0 by default even with findings. Gate on `--strict` or a spec.
 - Exit 3 means the run refused to vouch for itself. Do not average it away.
-- A `verdict: "pass"` can be INCONCLUSIVE: when current-carrying / active
-  parts have no model, `--lint`/`--si`/`--check` add a `notes` entry (kind
-  `coverage`) starting `INCONCLUSIVE:` naming them. That pass is not a clean
-  bill; the exit code does not change on its own.
+- When current-carrying / active parts have no model, `--lint`/`--si`/`--check`
+  add a `notes` entry (kind `coverage`) starting `INCONCLUSIVE:` naming them,
+  and their `verdict` reads `invalid` when nothing else gates (a `--strict` run
+  of the same command exits 3). If the run also has a gating finding, `fail`
+  outranks it: verdict `fail`, exit 2. `--drc` and `--report` are exempt:
+  copper reads the layout, and the bind table describes rather than judges.
+- Gate on `ok`/`verdict`, or on the exit code, never on one expecting the other
+  to differ: a gating run's document and its exit code say the same thing
+  (`fail`/2, `invalid`/3, `pass`/0). Three exceptions are deliberate and
+  documented in `docs/ci/CI.md`: the `--thermal --no-strict-thermal` opt-out, an
+  aborted analog solve, and a runtime timing refusal.
 - Treat a finding on a known-good board as a hauksbee bug, not noise. False
   positives are the failure mode this project optimizes against.
 - The plain-language rendering (`--plain`) and the JSON carry the same

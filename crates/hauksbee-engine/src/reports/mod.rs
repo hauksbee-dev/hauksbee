@@ -146,6 +146,25 @@ fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
     }
 }
 
+/// Exit 3 for a bind-blocked run, naming the blockers on the GitHub checks tab
+/// on the way out whether or not `--junit`/`--sarif` were asked for. The
+/// artifact writer annotates the same blockers for a non-gating run, but it
+/// only runs when an artifact flag is present, so a pipeline gating on the exit
+/// code alone saw a clean checks tab beside an exit 3.
+/// [`ci_artifacts::github_blocker_annotation`] is once-per-process, so a run
+/// that passes through both sites still annotates once.
+///
+/// Narrower than [`strict_gate_exit`], deliberately: it prints no failure line
+/// (the surfaces that exit 3 already printed their INCONCLUSIVE verdict) and it
+/// is not the chokepoint for every exit-3 route. A run that exits 3 for
+/// undermined coverage alone, and the analysis surfaces that refuse on their
+/// own validity (`--thermal`, `--ac`), carry no blockers to name and annotate
+/// nothing. No-op outside GitHub Actions.
+pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
+    ci_artifacts::github_blocker_annotation(blockers);
+    std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS)
+}
+
 /// The mandatory last word of every `--strict` gate: name WHY the process is
 /// about to exit 2, then exit. Exit 2 with no line saying why reads as a tool
 /// crash, and `--plain --strict` used to print a "not a failure" verdict while
