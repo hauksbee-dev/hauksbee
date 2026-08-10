@@ -533,16 +533,16 @@ license = "CC-BY-SA-4.0"
 axes = ["kicad5", "power-electronics", "stm32", "small"]
 expect = ["control-pcb/BMS-5s.kicad_pcb", "power-pcb/Switch-N-Sense.kicad_pcb"]
 
-# The only EAGLE board in the corpus that ships its own fabrication output beside
-# the design file, which is why it is here. Several KiCad entries ship gerbers too
-# (watchy, gb_hardware, olimex_esp32 and more), but a KiCad `.kicad_pcb` already
-# carries its computed pour fill; an Eagle `.brd` does not, so this is the one
-# place an Eagle pour question can be answered from the same upstream. `subdir` keeps only V3.4.5, whose
-# `GERBERS .../CAMOutputs/GerberFiles/` directory holds the copper Eagle
-# actually computed from the pours the `.brd` only describes. That turned an
-# Eagle pour question into a measurement rather than an argument: see the
-# emonTx row in `docs/evidence/KNOWN_FAULTS_VALIDATION.md`, and the two-sided
-# test it drives in `crates/hauksbee-extract/tests/known_faults.rs`.
+# Here for its fabrication output as much as its design file. `subdir` keeps only
+# V3.4.5, whose `GERBERS .../CAMOutputs/GerberFiles/` directory holds the copper
+# Eagle actually computed from pours the `.brd` only describes: an Eagle `.brd`
+# omits the fill a `.kicad_pcb` carries, so gerbers shipped beside one are how a
+# pour question gets an answer instead of an argument. Other corpus entries ship
+# gerbers too, including Eagle ones (the SparkFun Pro Micro panel's `.GTL` sits
+# beside its `.brd` and has 240 poured regions); what is particular here is that
+# the fill in question is the subject of an adjudicated finding. See the emonTx row
+# in `docs/evidence/KNOWN_FAULTS_VALIDATION.md`, and the two-sided test it drives
+# in `crates/hauksbee-extract/tests/known_faults.rs`.
 [[board]]
 id = "emontx3"
 name = "OpenEnergyMonitor emonTx V3.4.5 energy monitor"
