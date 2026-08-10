@@ -760,9 +760,13 @@ struct RunArgs {
 
     /// Exit non-zero if a report (--check/--drc/--lint/--si/--resources/--usb-c) finds problems,
     /// so it can gate a CI pipeline directly. Default stays exit 0 (scripts that
-    /// only read the text are unaffected). Counts shorts, serious/medium lint
-    /// findings and every real SI finding; DRC clearance notes and the lint
-    /// low-severity notes do not fail the gate.
+    /// only read the text are unaffected). Exit 2 counts shorts, serious/medium
+    /// lint findings, every real SI finding and a serious USB-C CC verdict; DRC
+    /// clearance notes and the lint low-severity notes do not fail the gate.
+    /// Exit 3 is the other half: a board with NO findings still fails the gate
+    /// when the run could not be judged (an unbound current-carrying / active
+    /// part on a model-dependent surface, undermined run-level evidence), which
+    /// is what that surface's `verdict: "invalid"` says in --json.
     #[arg(long, visible_alias = "fail-on-findings")]
     strict: bool,
 
