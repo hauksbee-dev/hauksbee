@@ -1921,6 +1921,7 @@ mod tests {
                 critical_parts_total: 4,
                 mcu_bound: true,
                 active_path_unresolved: vec![UnresolvedActive {
+                    unlocked_by: None,
                     reference: "U7".to_string(),
                     value: "LTC4020".to_string(),
                     reason: "no model".to_string(),
