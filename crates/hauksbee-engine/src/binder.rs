@@ -1924,11 +1924,55 @@ fn bind_component(
     // ignored ones and the bind report prints; the reason string alone would reach
     // only the bind table's own line.
     if model.passive_class == Some(hauksbee_models::schema::PassiveClass::Crystal) {
-        // The footprint is the discriminator because it is the same evidence that
-        // admitted the class: a bare crystal's footprint says Crystal, a packaged
-        // oscillator's says Oscillator. Pad count would not do it, since a 4-pad
-        // crystal is just a 2-pad crystal with two grounded shield pads.
-        let is_powered_oscillator = comp.footprint.to_ascii_lowercase().contains("oscillator");
+        // THE DISCRIMINATOR IS THE WIRING, NOT THE FOOTPRINT STRING. An earlier
+        // version of this tested only `footprint.contains("oscillator")`, which is
+        // the KiCad library's spelling and nobody else's. `crystal_value` in
+        // db/passives.toml matches a bare frequency with no footprint constraint at
+        // all, so a TCXO in an Eagle-style land ("complib:OSC_SMD_3225_4P",
+        // "XO-5032") resolved to this class and took the SILENT path: measured on a
+        // corpus board, renaming the footprint alone moved the part from 52 mentions
+        // under `--check --plain` to zero. That was also a REGRESSION, and the worst
+        // kind. Before this branch such a part reached `bind_passive_array`, failed
+        // `parse_value("40MHz")`, and came out `Unresolved`, i.e. disclosed as an
+        // open active part. Skipping it silently moved it from disclosed to
+        // undisclosed, which is the one transition this project forbids.
+        //
+        // What actually separates the two kinds is that a POWERED part has a pin on a
+        // supply rail. A quartz blank has two terminals that go to the MCU's
+        // oscillator pins and, on a 4-pad part, two shield pads that go to GROUND: it
+        // is never wired to a rail. So the board's own resolved power nets answer the
+        // question, and the footprint string stays as a third-chance signal for a
+        // part whose supply net the rail detector did not classify.
+        //
+        // A COUNT OF NON-GROUND NETS DOES NOT WORK, and it is worth recording why so
+        // nobody tries it again. The idea was that a quartz blank presents exactly two
+        // non-ground nets, so more than two means a powered part. Two corpus boards
+        // break it. corne-cherry grounds its 4-pad crystal's shield pads to a net
+        // called "GNDR", which is not `NodeId::GROUND`, and lily58's Pro_V2 wires its
+        // shield pads to the load-capacitor nets rather than to ground at all, giving
+        // four non-ground nets on an ordinary 12 MHz crystal. Both produced a caveat
+        // about a part that is modelled correctly, and a warning list with false
+        // entries in it is how the true ones lose their audience.
+        //
+        // What is left is the two signals that do not depend on how a board names or
+        // wires its ground: a pin on a RESOLVED SUPPLY RAIL, which is what a powered
+        // oscillator has and a crystal never does, and the footprint string, which
+        // catches a KiCad-library part whose supply net the rail detector missed.
+        let mut on_a_supply_rail = false;
+        for pin in &comp.pins {
+            let Some(node) = node_of(pin.net) else {
+                continue;
+            };
+            if node.is_ground() {
+                continue;
+            }
+            if power_nets.contains_key(circuit.node_name(node)) {
+                on_a_supply_rail = true;
+                break;
+            }
+        }
+        let is_powered_oscillator =
+            on_a_supply_rail || comp.footprint.to_ascii_lowercase().contains("oscillator");
         let warning = is_powered_oscillator.then(|| {
             format!(
                 "{}{} ({}): packaged oscillator skipped as high impedance; it has a \
@@ -3032,15 +3076,17 @@ fn bind_vreg(
         None
     } else {
         let lead = caveats.remove(0);
+        // The follower's own "REF (VALUE): " comes off so the reference is not said
+        // twice in one sentence. The KNOWN prefix is stripped rather than cutting at
+        // the first ": ", which a component value containing a colon would break.
+        let prefix = format!("{} ({}): ", comp.reference, comp.value);
         let rest: Vec<String> = caveats
             .iter()
             .map(|c| {
                 let c = c
                     .strip_prefix(Assumption::PARTIAL_MODEL_MARKER)
                     .unwrap_or(c);
-                c.split_once(": ")
-                    .map(|(_, tail)| tail.to_string())
-                    .unwrap_or_else(|| c.to_string())
+                c.strip_prefix(prefix.as_str()).unwrap_or(c).to_string()
             })
             .collect();
         if rest.is_empty() {
@@ -6694,6 +6740,103 @@ mod crystal_fallback_tests {
     /// switch closes above the threshold and opens below it. The spelling itself is
     /// pinned in the models suite; what is checked here is that the spelling buys
     /// the polarity.
+    /// The powered-oscillator caveat must key on the WIRING, not on whether the
+    /// footprint string happens to contain the word "oscillator".
+    ///
+    /// `crystal_value` matches a bare frequency with no footprint constraint, so a
+    /// TCXO in an Eagle-style land resolves to the crystal class and reaches the
+    /// `Skipped` branch. `Skipped` is `is_ignored()`: it leaves the resolve
+    /// denominator and produces no assumption. Keying the caveat on the KiCad
+    /// library's spelling meant such a part was skipped in total silence, which is
+    /// also a REGRESSION: before the crystal branch existed it failed
+    /// `parse_value("40MHz")` and came out `Unresolved`, i.e. disclosed. Measured on a
+    /// corpus board: renaming the footprint alone moved it from 52 mentions under
+    /// `--check --plain` to zero.
+    ///
+    /// A pin on a resolved supply rail is what separates the two kinds and it does not
+    /// depend on any string: a powered oscillator has one, a quartz blank never does.
+    /// The bare-crystal half of this test is the half that keeps the report quiet, and
+    /// two real corpus boards (corne-cherry's "GNDR" ground, lily58's shield pads on
+    /// the load-cap nets) are why the discriminator is not a count of non-ground nets.
+    #[test]
+    fn a_powered_oscillator_is_disclosed_by_its_wiring_not_by_its_footprint_string() {
+        let lib = ModelLibrary::builtin();
+        let pin_rules = lib.pin_rules();
+
+        // (footprint, does pad 4 sit on a 3.3 V rail, must warn)
+        for (footprint, on_rail, expect_warning) in [
+            // The case that regressed: an Eagle land, powered.
+            ("complib:OSC_SMD_3225_4P", true, true),
+            // The KiCad spelling still works, rail or no rail.
+            ("Oscillator:Oscillator_SMD_2520_4Pin", false, true),
+            // A four-pad QUARTZ CRYSTAL: no rail, no oscillator in the name. Silent.
+            ("Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm", false, false),
+        ] {
+            let mut c = comp("X1", "40MHz");
+            c.footprint = footprint.to_string();
+            c.pins = vec![pin("1", 1), pin("2", 0), pin("3", 2), pin("4", 3)];
+
+            let mut circuit = Circuit::new();
+            let xin = circuit.node("XIN");
+            let clk = circuit.node("CLK_OUT");
+            let rail = circuit.node("+3V3");
+            let node_of = move |net: Option<i64>| match net {
+                Some(1) => Some(xin),
+                Some(2) => Some(clk),
+                Some(3) => Some(rail),
+                Some(0) => Some(NodeId::GROUND),
+                _ => None,
+            };
+            let mut power_nets = HashMap::new();
+            if on_rail {
+                power_nets.insert("+3V3".to_string(), 3.3);
+            }
+
+            let mut q = ComponentQuery::new(None, Some(c.value.clone()), Some(c.footprint.clone()));
+            q.mpn = Some(c.value.clone());
+            let model = lib
+                .resolve(&q)
+                .model
+                .unwrap_or_else(|| panic!("{footprint} must resolve to a crystal entry"));
+
+            let (outcome, warning, _) = bind_component(
+                &c,
+                &model,
+                Confidence::Exact,
+                &mut circuit,
+                &node_of,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                false,
+                &power_nets,
+                pin_rules,
+            );
+            assert!(
+                matches!(outcome, BindOutcome::Skipped { .. }),
+                "{footprint} is high impedance either way: {outcome:?}"
+            );
+            if expect_warning {
+                let w = warning.unwrap_or_else(|| {
+                    panic!(
+                        "{footprint} (on_rail={on_rail}) is a powered oscillator excluded \
+                         from the resolve denominator with nothing said about it"
+                    )
+                });
+                assert!(
+                    w.starts_with(Assumption::PARTIAL_MODEL_MARKER),
+                    "the caveat must be marked so it reaches the evidence map: {w}"
+                );
+            } else {
+                assert!(
+                    warning.is_none(),
+                    "{footprint} is a quartz blank; a caveat here is a false entry that \
+                     costs the true ones their audience: {warning:?}"
+                );
+            }
+        }
+    }
+
     /// A regulator whose entry names an enable must say that the enable is not
     /// modelled, and a three-terminal regulator that has none must stay silent.
     ///
