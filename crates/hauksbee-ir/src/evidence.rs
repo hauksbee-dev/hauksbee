@@ -748,7 +748,29 @@ impl Assumption {
     /// let a = Assumption::open_part("U2", "XC6206", "no model matched");
     /// assert!(a.replacement().contains("U2"));
     /// ```
+    /// Separates the two halves of a named abstention inside the binder's single
+    /// `reason` string: what blocks the model, and what would unlock it.
+    ///
+    /// Written by the binder when `db/unmodelled.toml` matches a part, read by
+    /// [`Assumption::open_part`] below, and defined here so the two cannot drift.
+    /// A reason that does not contain it is an ordinary one and is passed through
+    /// whole.
+    pub const UNLOCKED_BY_MARKER: &'static str = " Unlocked by: ";
+
     pub fn open_part(reference: &str, value: &str, reason: &str) -> Self {
+        // A NAMED ABSTENTION arrives as one string carrying both halves, joined by
+        // [`UNLOCKED_BY_MARKER`]: the binder has one `reason` channel to the report
+        // and the two halves belong in two different fields here, so the split
+        // happens at the point of use rather than by widening every BindRow
+        // constructor in the tree. The marker is a shared const precisely so the
+        // producer and this consumer cannot drift.
+        //
+        // Everything else, including every generic reason and every extractor
+        // explanation, contains no marker and takes the `None` arm untouched.
+        let (reason, unlocked_by) = match reason.split_once(Self::UNLOCKED_BY_MARKER) {
+            Some((because, unlock)) => (because.trim(), Some(unlock.trim())),
+            None => (reason, None),
+        };
         // A board can carry a footprint with a blank designator, and a gap on one
         // is still a gap. So the SENTENCES get prose ("an unnamed part") while
         // the ID keeps the raw subject and lets `AssumptionId` disambiguate:
@@ -782,10 +804,18 @@ impl Assumption {
                 "Nets through {reference} are isolated in simulation, so any current path \
                  across it is missing from every result that depends on it."
             ),
-            format!(
-                "Add a model for {reference} to your models directory, or mark it DNP if the \
-                 board does not fit it."
-            ),
+            // The "what to do" is the generic route ONLY when nobody has looked at
+            // this part. When the library has looked and named the blocker, that
+            // named input IS the next step, and printing "add a model to your models
+            // directory" beside it would be telling the reader to do the thing the
+            // sentence above just explained is not yet possible.
+            match unlocked_by {
+                Some(unlock) => unlock.to_string(),
+                None => format!(
+                    "Add a model for {reference} to your models directory, or mark it DNP if \
+                     the board does not fit it."
+                ),
+            },
             None,
         )
     }
