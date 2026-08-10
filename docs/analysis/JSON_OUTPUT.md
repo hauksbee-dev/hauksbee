@@ -62,8 +62,8 @@ and failure parse the same way:
 own `--strict` gate fails on a finding the `serious` severity does not carry
 (`--lint` gates on medium-severity findings, `--si` on any real finding
 including its low ones but not its informational notes, the co-sim surface on
-any raised fault; `--strict-boot` adds the boot advisory). It is
-`"invalid"` when nothing gates but the run-level claim could not be judged: a
+any raised fault; `--strict-boot` adds the boot advisory). It is `"invalid"`
+when nothing gates but the run-level claim could not be judged: a
 top-level `refusal`, AC or thermal reporting `valid:false`, undermined run-level
 evidence, or unbound verdict-critical parts on a model-dependent surface.
 Otherwise it is `"pass"`. Precedence is `fail` > `invalid` > `pass`, and a
@@ -95,15 +95,15 @@ Read `verdict` together with `notes` and the `bind` fields, never on its own:
 `thermal.valid: true` under `--thermal --no-strict-thermal` means the table is
 usable, not that the coverage is complete, and the top-level `verdict` can
 still be `invalid` for the undermined evidence behind it while the opt-out
-returns exit 0. That opt-out is one of three places the exit code and the verdict
-deliberately part company, the same way omitting `--strict` leaves a `fail`
-verdict at exit 0. The other two are on the co-sim path: an aborted analog
-solve exits 3 (invalid for analysis) even where the document grades the faults
-it observed as `fail`, because those faults may come from the stale-voltage
-windows the solve failed on; and a runtime timing refusal exits 3 beside
-whatever verdict the document already printed. In all three the document is the
-record of what was observed and the exit code is the policy; where the gate is
-armed and the run is analysable they agree.
+returns exit 0. That opt-out is one of three places the exit code and the
+verdict deliberately part company, the same way omitting `--strict` leaves a
+`fail` verdict at exit 0. The other two are on the co-sim path: an aborted
+analog solve exits 3 (invalid for analysis) even where the document grades the
+faults it observed as `fail`, because those faults may come from the
+stale-voltage windows the solve failed on; and a runtime timing refusal exits
+3 beside whatever verdict the document already printed. In all three the
+document is the record of what was observed and the exit code is the policy;
+where the gate is armed and the run is analysable they agree.
 
 ## Sections
 
