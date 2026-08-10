@@ -604,42 +604,54 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
     if n.ext.as_deref().is_some_and(is_definitely_not_a_film) {
         return None;
     }
-    /// The layer index that follows a marker, allowing ONE separator between
-    /// the word and the number. Altium 24 plots its inner copper as
-    /// `<board>_Copper_Signal_1.gbr`; requiring the digit to butt straight up
-    /// against `signal` matched `signal1` and missed `signal_1`, so the inner
-    /// layers of every Altium four-layer job fell through to `Unknown` and
-    /// their copper was silently discarded. A single `-`, `_` or space is the
-    /// separator every exporter uses; `.` is not, because that is the
-    /// extension boundary.
-    fn index_after(tail: &str) -> Option<usize> {
-        let digits = |s: &str| -> Option<usize> {
-            let d: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
-            d.parse().ok()
-        };
-        digits(tail).or_else(|| match tail.as_bytes().first() {
-            Some(b'-' | b'_' | b' ') => digits(&tail[1..]),
-            _ => None,
-        })
+    /// The layer index that butts straight up against a marker.
+    fn index_at(tail: &str) -> Option<usize> {
+        let d: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+        d.parse().ok()
     }
-    // Look for "in<k>" followed by "cu", or "inner<k>", or "signal<k>".
-    for marker in ["in", "inner", "signal", "layer"] {
-        // Scan EVERY occurrence of the marker, not just the first: a project
-        // name that itself contains the marker (e.g. "mainboard-In2_Cu",
-        // "arduino-In1_Cu") puts a non-digit-tailed "in" ahead of the real
-        // `In<k>_Cu` token. `find` stopped at that first match and gave up,
-        // silently dropping the inner copper layer; walk all positions and take
-        // the first whose tail actually begins with a layer index.
-        for (pos, _) in n.full.match_indices(marker) {
-            let tail = &n.full[pos + marker.len()..];
-            if let Some(k) = index_after(tail) {
-                // Require it to actually be a copper layer (mask/silk also have
-                // "layer" words; those were filtered already above), and a
-                // plausible stack position: `board-Inner 2024-05-01.gbr` must not
-                // report inner layer 2024. `bare_stack_index` bounds itself the
-                // same way and for the same reason.
-                if (1..=32).contains(&k) && (n.has("cu") || marker == "signal" || marker == "inner")
-                {
+    /// The layer index one separator after a marker. Altium 24 plots its inner
+    /// copper as `<board>_Copper_Signal_1.gbr`; requiring the digit to butt
+    /// straight up against `signal` matched `signal1` and missed `signal_1`, so
+    /// the inner layers of every Altium four-layer job fell through to `Unknown`
+    /// and their copper was silently discarded. A single `-`, `_` or space is the
+    /// separator every exporter uses; `.` is not, because that is the extension
+    /// boundary.
+    fn index_after_sep(tail: &str) -> Option<usize> {
+        match tail.as_bytes().first() {
+            Some(b'-' | b'_' | b' ') => index_at(&tail[1..]),
+            _ => None,
+        }
+    }
+    // A copper layer, and a plausible stack position: `board-Inner 2024-05-01.gbr`
+    // must not report inner layer 2024. `bare_stack_index` bounds itself the same
+    // way and for the same reason.
+    let accept = |marker: &str, k: usize| -> Option<usize> {
+        ((1..=32).contains(&k) && (n.has("cu") || marker == "signal" || marker == "inner"))
+            .then_some(k)
+    };
+    // Scan EVERY occurrence of a marker, not just the first: a project name that
+    // itself contains one (e.g. "mainboard-In2_Cu", "arduino-In1_Cu") puts a
+    // non-digit-tailed "in" ahead of the real `In<k>_Cu` token. `find` stopped at
+    // that first match and gave up, silently dropping the inner copper layer.
+    //
+    // A BUTT-UP digit wins over a separated one, everywhere, before any separated
+    // match is considered. `Main_2-In1_Cu.gbr` otherwise reads its own project
+    // name: the "in" inside "main" is followed by `_2`, which the separator form
+    // accepts, and the film came back as inner layer 2 instead of 1. The separated
+    // form additionally requires the marker to start a token, so an "in" buried in
+    // a word cannot claim a number that follows the word.
+    for pass in 0..2 {
+        for marker in ["in", "inner", "signal", "layer"] {
+            for (pos, _) in n.full.match_indices(marker) {
+                let tail = &n.full[pos + marker.len()..];
+                let k = if pass == 0 {
+                    index_at(tail)
+                } else if pos == 0 || !n.full.as_bytes()[pos - 1].is_ascii_alphabetic() {
+                    index_after_sep(tail)
+                } else {
+                    None
+                };
+                if let Some(k) = k.and_then(|k| accept(marker, k)) {
                     return Some(k);
                 }
             }
@@ -781,6 +793,27 @@ mod tests {
         assert!(!role("signal_1.csv").is_copper());
         assert!(!role("inner_2.pdf").is_copper());
         assert!(!role("board-Inner1.xlsx").is_copper());
+        // A butt-up digit wins over a separated one, everywhere, and a marker
+        // buried inside a word cannot claim a number that follows the word.
+        // `Main_2-In1_Cu.gbr` otherwise read its own project name: the "in" inside
+        // "main" is followed by `_2`, so the film came back as inner layer 2.
+        assert!(matches!(
+            role("Main_2-In1_Cu.gbr"),
+            LayerRole::Copper { index: 1, .. }
+        ));
+        assert!(matches!(
+            role("Pin_3-In1_Cu.gbr"),
+            LayerRole::Copper { index: 1, .. }
+        ));
+        assert!(matches!(
+            role("Origin_4-In2_Cu.gbr"),
+            LayerRole::Copper { index: 2, .. }
+        ));
+        assert!(matches!(
+            role("Austin 1-In2_Cu.gbr"),
+            LayerRole::Copper { index: 2, .. }
+        ));
+        assert!(!role("board-Inner 2024-05-01.gbr").is_copper());
     }
 
     #[test]
