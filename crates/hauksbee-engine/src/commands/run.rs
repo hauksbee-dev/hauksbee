@@ -513,6 +513,10 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 check: "evidence".into(),
                 kind: "undermined".into(),
                 severity: "serious".into(),
+                // Unbound verdict-critical parts ARE the exit-3 gate on the
+                // model-dependent-claim surfaces, so this synthetic blocker
+                // finding is gate-grade by definition.
+                gating: true,
                 nets: Vec::new(),
                 location_mm: None,
                 layer: None,
@@ -1065,6 +1069,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
 
         let budget = engine.scheduler().error_budget()?;
         let fault_findings = crate::result::fault_findings_json(&faults);
+        // The co-sim fault gate, asked of the findings the CI artifacts carry
+        // rather than of the fault list beside them: `fault_findings_json`
+        // emits one finding per fault, so this is the same set the JUnit
+        // `<failure>` count and the SARIF error levels are built from, and the
+        // exit code cannot grade the run differently from the archived file.
+        let faults_gate = fault_findings.iter().any(|f| f.gating);
         let mut cosim_maps = Vec::new();
         for finding in &fault_findings {
             cosim_maps.push(board_evidence.simulation_map(
@@ -1147,7 +1157,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 // exit 2. `--strict-boot` is the same story one flag over: it
                 // turns the boot advisory into an exit 2, so under that flag
                 // the advisory is gate-grade for this document too.
-                .with_surface_gate(!faults.is_empty() || (cfg.strict_boot && has_boot_advisory))
+                .with_surface_gate(faults_gate || (cfg.strict_boot && has_boot_advisory))
                 .with_inputs(&inputs)
                 .with_evidence(&run_evidence);
             // A substitution is an info-level note that must never be silently
@@ -1308,7 +1318,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // --plain path renders them and --strict gates on them, but --json used
             // to omit them entirely, so a CI consumer parsing the JSON saw a clean
             // run over a board the co-sim flagged (a destroyed MOSFET, overcurrent…).
-            if !faults.is_empty() {
+            if !fault_findings.is_empty() {
                 jr.findings = Some(fault_findings.clone());
             }
             jr.cosim = cosim;
@@ -1526,7 +1536,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 // `"verdict":"fail"`. A timing refusal, if this run also had
                 // one, still exits 3 from between here and that gate: that
                 // exception is documented in docs/ci/CI.md.
-                if faults.is_empty() {
+                if !faults_gate {
                     std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
                 }
             }
@@ -1597,7 +1607,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // Strict: any fault raised during the run fails the gate, and the last
         // line says so; a bare exit 2 reads as a tool crash, and --plain's
         // "worth a look" verdict used to contradict the failing code.
-        if cfg.strict && !faults.is_empty() {
+        if cfg.strict && faults_gate {
             let items: Vec<String> = faults
                 .iter()
                 .map(|f| format!("cosim-{} {}", f.kind.as_str(), f.component))

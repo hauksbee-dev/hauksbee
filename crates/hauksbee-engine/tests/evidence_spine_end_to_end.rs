@@ -90,6 +90,9 @@ fn actual_finding_scope_selects_only_its_causal_path() {
         check: "lint".into(),
         kind: "fixture".into(),
         severity: "warning".into(),
+        // A medium lint finding gates (this suite asserts nothing about that;
+        // the value is the one the real lint path would set).
+        gating: true,
         nets: vec!["3V3".into()],
         location_mm: None,
         layer: None,
@@ -589,6 +592,7 @@ fn finding_on_3v3_kind(check: &str, kind: &str) -> JsonFinding {
         check: check.into(),
         kind: kind.into(),
         severity: "info".into(),
+        gating: false,
         nets: vec!["3V3".into()],
         location_mm: None,
         layer: None,
