@@ -56,9 +56,9 @@ pub fn evidence_findings_with_gate(
 /// blockers produce. No-op outside GitHub Actions.
 ///
 /// At most once per process. Two call sites reach it for the same run: the
-/// artifact writer (which must annotate a NON-gating run, the only surface that
-/// would otherwise say nothing) and the invalid-for-analysis exit (which must
-/// annotate a gating run whether or not artifacts were asked for). A run that
+/// artifact writer, which is the only one a NON-gating run reaches at all, and
+/// the invalid-for-analysis exit, which must annotate a gating run whether or
+/// not artifacts were asked for. A run that
 /// passes through both would otherwise spend two of GitHub's ten
 /// annotations-per-type-per-step on the same refusal. The artifact writer runs
 /// first and names the whole run's blockers, so the surviving annotation is the

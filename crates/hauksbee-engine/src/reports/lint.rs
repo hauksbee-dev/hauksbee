@@ -190,8 +190,10 @@ fn lint_json(
     jr.findings = Some(lint_findings_json(report));
     jr.attach_finding_evidence(evidence, Vec::new())?;
     // The INCONCLUSIVE verdict on the machine surface: a coverage note with the
-    // same sentence the text/plain verdicts print. Informational, never gating;
-    // the structured part list is already in `bind.active_path_unresolved`.
+    // same sentence the text/plain verdicts print. The note itself gates
+    // nothing, but the parts it names are the bind gate's, so this document's
+    // `verdict` reads `invalid` beside it and --strict exits 3. The structured
+    // part list is already in `bind.active_path_unresolved`.
     if !blockers.is_empty() {
         jr.notes.push(JsonNote {
             kind: JsonNoteKind::Coverage,

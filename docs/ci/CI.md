@@ -1187,10 +1187,11 @@ exit code was printed beside.
 Do not use a non-strict run to predict a strict one. On the static surfaces the
 document does not change with the flag (a refusing verdict prints beside exit 0
 without `--strict`), so reading it there is at worst incomplete. On the co-sim
-path it is misleading: the zero-activity refusal is only constructed under
-`--strict` and the boot advisory is only gate-grade under `--strict-boot`, so
-neither reaches the document until its flag is passed (whatever else the run
-found on its own, such as bind blockers or raised faults, is there either way).
+path it is misleading: the zero-activity and analog-abort refusals are only
+constructed under `--strict` and the boot advisory is only gate-grade under
+`--strict-boot`, so none of the three reaches the document until its flag is
+passed. What the run found on its own, bind blockers and raised faults, is in
+the document either way.
 In the other direction, `--thermal --no-strict-thermal` opts out of the
 PARTIAL-coverage escalation permanently, so that document can read `invalid` at
 exit 0 whatever else is passed; a thermal table with no usable coverage at all
