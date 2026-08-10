@@ -359,9 +359,11 @@ no ADC peripheral at all (verified live), and shipping a wrong-layout model or a
 invented RAM word would be fake fidelity. RP2040 is mapped on inputs 0..3
 because its converter is one of the models hauksbee vendors, so there is a real
 peripheral to feed a voltage into. hauksbee DROPS an unmapped
-channel's injections, and it surfaces that drop on **every** report surface
-(`hauksbee run` text, `--plain`, `--json` `CosimJson.adc_dropped` and coverage
-notes, and all hauksbee-ci report formats), naming the channel, MCU, and net.
+channel's injections, and it surfaces that drop on all four batch report
+surfaces (`hauksbee run` text, `--plain`, `--json` `CosimJson.adc_dropped` and
+coverage notes, and all hauksbee-ci report formats), naming the channel, MCU,
+and net. The interactive TUI does not carry it; the per-surface matrix is in
+[docs/cosim/MCU.md](../cosim/MCU.md#which-surface-carries-a-coverage-hole).
 A board that knows where its counts land adds `[[soc.adc]]` to its own
 descriptor, with no recompile needed.
 
@@ -377,9 +379,9 @@ directions with real pico-sdk firmware; no SPI, because the vendored PL022
 never dispatches to a registered slave). FE310 models no bus controllers.
 hauksbee
 records a sensor bound on such a platform as **unexercised** and surfaces that
-on every report surface, and a hauksbee-ci `peripheral` assertion against it
-**fails** rather than green-passing on the slave's power-on defaults. The
-run summary likewise prints the per-SPI-bus transaction-framing tier (exact /
+on the same four batch surfaces, and a hauksbee-ci `peripheral` assertion
+against it **fails** rather than green-passing on the slave's power-on defaults.
+The run summary likewise prints the per-SPI-bus transaction-framing tier (exact /
 backend / heuristic), flags it as a `--plain` heads-up and `--json` note when
 heuristic, and attaches it to each CI peripheral assertion's detail. Exact
 framing is reached two ways: the spec's `cs_net`, or the `cs` pin role of the

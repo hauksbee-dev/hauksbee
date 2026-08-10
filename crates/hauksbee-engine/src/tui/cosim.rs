@@ -59,9 +59,20 @@ pub struct CosimUpdate {
     /// chunk: the run held stale node voltages and cannot vouch for the GPIO/net
     /// levels shown in this pane (05 §3b). A clean run reports `true`. Read from
     /// `Scheduler::analog_valid()`, the same signal the CLI `--json` and the web
-    /// report surface, so the TUI stops being the one place a diverged co-sim
-    /// looks quiet. `Default` is `false`, so build every real snapshot through
+    /// report surface, so a diverged co-sim no longer looks quiet HERE.
+    /// `Default` is `false`, so build every real snapshot through
     /// `build_update` (which sets it) rather than relying on the derive.
+    ///
+    /// It closed one hole, not the class. Of the ten co-sim coverage caveats the
+    /// batch surfaces carry between them (nine of them printed by
+    /// `reports::cosim::run_headless`; drive conflicts ride `--json`/`--plain`
+    /// only), this pane carries exactly one, heuristic SPI framing, alongside
+    /// this flag, the failed-chunk count and the substitution caveat. Dropped
+    /// ADC injections, unexercised buses, watchdog limitations, watchdog
+    /// reboots, timing limitations, per-core timing coverage, short pulses,
+    /// driver contentions and drive conflicts are still silent here and loud
+    /// elsewhere; the matrix is in `docs/cosim/MCU.md`. Adding a caveat to the
+    /// batch surfaces does not add it here.
     pub analog_valid: bool,
     /// SPI buses still framed by the chunk-boundary heuristic (no CS pin
     /// resolved and the backend does not frame itself): their transaction
