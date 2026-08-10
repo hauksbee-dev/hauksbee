@@ -1186,9 +1186,10 @@ without `--strict`), so reading it there is at worst incomplete. On the co-sim
 path it is misleading: the zero-activity refusal is only constructed under
 `--strict` and the boot advisory is only gate-grade under `--strict-boot`, so
 those documents read `pass` until the flag is passed. In the other direction,
-`--thermal --no-strict-thermal` is a permanent opt-out rather than a disarmed
-gate, so its `invalid` document stays at exit 0 whatever else is passed. Run the
-gate you intend to gate on. `--report` has no gate at all.
+`--thermal --no-strict-thermal` opts out of the PARTIAL-coverage escalation
+permanently, so that document can read `invalid` at exit 0 whatever else is
+passed; a thermal table with no usable coverage at all still exits 3 through the
+flag. Run the gate you intend to gate on. `--report` has no gate at all.
 
 Two co-sim paths deliberately keep exit 3 over a `fail` document, because there
 the run is not analysable even though it observed faults: an aborted analog

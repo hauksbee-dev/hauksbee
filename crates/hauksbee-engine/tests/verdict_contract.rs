@@ -20,11 +20,12 @@
 //! 3. **Cross-surface parity.** Each surface's `--strict` exit code says the
 //!    same thing as that surface's own JSON verdict, on the same board:
 //!    `invalid` exits 3, `fail` exits 2, `pass` exits 0. Three exceptions are
-//!    deliberate and documented rather than pinned here: the `--thermal`
-//!    opt-out below, and the two co-sim paths that keep exit 3 over a `fail`
-//!    document because the run was not analysable even though it observed
-//!    faults (an aborted analog solve, a runtime timing refusal). The gate is
-//!    per
+//!    deliberate: the `--thermal --no-strict-thermal` opt-out, pinned below
+//!    because its document must keep refusing even though its exit does not,
+//!    and the two co-sim paths that keep exit 3 over a `fail` document because
+//!    the run was not analysable even though it observed faults (an aborted
+//!    analog solve, a runtime timing refusal), which are documented in
+//!    docs/ci/CI.md and not pinned here. The gate is per
 //!    surface, so the bind gate that invalidates `--lint`/`--si`/`--check`/
 //!    `--usb-c` leaves the copper (`--drc`) and descriptive (`--report`)
 //!    surfaces alone, on both the exit code and the verdict field. The CI
@@ -800,6 +801,27 @@ fn a_medium_lint_finding_fails_the_verdict_because_it_fails_the_gate() {
     assert_bare_json_gate_matches_verdict(&b, "fail");
 }
 
+/// The `--si` half of the same widening, on a real board: `si_fails` counts its
+/// medium finding, which serializes as `warning`, so `serious_count` stays 0
+/// while both the verdict and the exit code have to say the run failed.
+#[test]
+fn a_medium_si_finding_fails_the_verdict_because_it_fails_the_gate() {
+    let b = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/public/boards/stickhub.kicad_pcb");
+    let out = run(&["run", b.to_str().unwrap(), "--si", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert_eq!(v["serious_count"], 0, "{v}");
+    assert!(
+        v["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|f| f["severity"] == "warning"),
+        "the gating SI finding is a medium/warning one:\n{v}"
+    );
+    assert_gate_matches_verdict(&["--si"], &b, "fail");
+}
+
 #[test]
 fn the_resources_subset_and_the_bare_machine_report_gate_like_their_verdicts() {
     // Two more routes with verdict/gate code of their own: `--resources` (the
@@ -1150,13 +1172,13 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
 }
 
 /// `--thermal` gates by default rather than under `--strict`, and its exit code
-/// agrees with its verdict on both sides of that gate. `--no-strict-thermal` is
-/// the documented opt-out, so it is the one place a non-zero-worthy document
-/// deliberately exits 0: the same situation as omitting `--strict` elsewhere,
-/// and the caveat still prints. Pinned so nobody "fixes" the split by
-/// silencing the verdict instead.
+/// agrees with its verdict on both sides of that gate. Under the documented
+/// `--no-strict-thermal` opt-out a refusing document deliberately exits 0, the
+/// same situation as omitting `--strict` elsewhere. Pinned so nobody "fixes"
+/// that split by silencing the document instead: the opt-out is about the exit
+/// code, and the coverage is still partial either way.
 #[test]
-fn thermal_gates_by_default_and_the_opt_out_is_the_only_exit_gap() {
+fn thermal_gates_by_default_and_the_opt_out_keeps_the_refusing_document() {
     let b = fixture("thermal_partial_coverage.kicad_pcb");
     let base = [
         "run",
@@ -1191,6 +1213,11 @@ fn thermal_gates_by_default_and_the_opt_out_is_the_only_exit_gap() {
     // The document is NOT rewritten to match: the coverage is still partial and
     // the evidence still undermined, so the machine verdict still refuses. The
     // user opted out of the exit code, not out of the truth.
+    assert_eq!(
+        json_verdict(&out).0,
+        "invalid",
+        "the opt-out must not silence the verdict, only the exit code"
+    );
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_eq!(v["thermal"]["coverage"]["partial"], true);
     assert!(

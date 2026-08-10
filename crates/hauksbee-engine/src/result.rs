@@ -1539,11 +1539,11 @@ pub struct JsonReport {
     /// beyond the shared grade serialize as `warning`/`note`, which is exactly
     /// why the verdict cannot derive them from severity. Without this the same
     /// invocation printed `"verdict":"pass","ok":true` and exited 2, so a
-    /// consumer gating
-    /// on the document disagreed with a consumer gating on the exit code. On the
-    /// routes that load waivers it is set AFTER the partition, so an overruled
-    /// finding neither gates nor flips the verdict; the bare machine report and
-    /// the co-sim surface load none, and gate on everything they found. Not serialized: the gate's OUTCOME
+    /// consumer gating on the document disagreed with a consumer gating on the
+    /// exit code. On the routes that load waivers it is set AFTER the partition,
+    /// so an overruled finding neither gates nor flips the verdict; the bare
+    /// machine report and the co-sim surface load none and gate on everything
+    /// they found. Not serialized: the gate's OUTCOME
     /// is the verdict field itself.
     #[serde(skip)]
     pub surface_gate_fails: bool,
@@ -1804,10 +1804,10 @@ impl JsonReport {
     /// consumer can read pass/fail without re-deriving it from every finding.
     /// Returns `(ok, verdict, serious_count, actionable_count)` where `verdict`
     /// is `"pass"` | `"fail"` | `"invalid"`:
-    ///   - `fail`, at least one serious finding (a DRC short, a co-sim stress
-    ///     fault, a serious lint/SI finding), or a finding the emitting
-    ///     surface's own `--strict` gate fails on where that gate is wider than
-    ///     `serious` (see [`Self::surface_gate_fails`]);
+    ///   - `fail`, at least one serious finding (a DRC short, a destroyed part
+    ///     in co-sim, a high-severity lint/SI finding), or a finding the
+    ///     emitting surface's own `--strict` gate fails on where that gate is
+    ///     wider than `serious` (see [`Self::surface_gate_fails`]);
     ///   - `invalid`, nothing gates, but the run-level claim could not be
     ///     judged: a refusal, AC or thermal reported `valid:false`, or a
     ///     run-level evidence map (input coverage, bind completeness) is
