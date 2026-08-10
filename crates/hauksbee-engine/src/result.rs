@@ -1538,10 +1538,12 @@ pub struct JsonReport {
     /// and the co-sim gate on any raised fault. The findings those gates catch
     /// beyond the shared grade serialize as `warning`/`note`, which is exactly
     /// why the verdict cannot derive them from severity. Without this the same
-    /// invocation printed `"verdict":"pass","ok":true` and exited 2, so a consumer gating
-    /// on the document disagreed with a consumer gating on the exit code. Set
-    /// by the surface AFTER its waiver partition, so an overruled finding
-    /// neither gates nor flips the verdict. Not serialized: the gate's OUTCOME
+    /// invocation printed `"verdict":"pass","ok":true` and exited 2, so a
+    /// consumer gating
+    /// on the document disagreed with a consumer gating on the exit code. On the
+    /// routes that load waivers it is set AFTER the partition, so an overruled
+    /// finding neither gates nor flips the verdict; the bare machine report and
+    /// the co-sim surface load none, and gate on everything they found. Not serialized: the gate's OUTCOME
     /// is the verdict field itself.
     #[serde(skip)]
     pub surface_gate_fails: bool,
@@ -1755,7 +1757,7 @@ impl JsonReport {
     /// Mark this report as descriptive only, so undermined run-level evidence
     /// does not become a refusal verdict on a surface that never gates (see
     /// [`Self::descriptive_only`]).
-    pub fn describing_only(mut self) -> Self {
+    pub fn with_descriptive_only(mut self) -> Self {
         self.descriptive_only = true;
         self
     }

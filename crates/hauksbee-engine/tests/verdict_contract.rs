@@ -19,7 +19,12 @@
 //!
 //! 3. **Cross-surface parity.** Each surface's `--strict` exit code says the
 //!    same thing as that surface's own JSON verdict, on the same board:
-//!    `invalid` exits 3, `fail` exits 2, `pass` exits 0. The gate is per
+//!    `invalid` exits 3, `fail` exits 2, `pass` exits 0. Three exceptions are
+//!    deliberate and documented rather than pinned here: the `--thermal`
+//!    opt-out below, and the two co-sim paths that keep exit 3 over a `fail`
+//!    document because the run was not analysable even though it observed
+//!    faults (an aborted analog solve, a runtime timing refusal). The gate is
+//!    per
 //!    surface, so the bind gate that invalidates `--lint`/`--si`/`--check`/
 //!    `--usb-c` leaves the copper (`--drc`) and descriptive (`--report`)
 //!    surfaces alone, on both the exit code and the verdict field. The CI
@@ -69,8 +74,13 @@ fn boot_gate_board() -> PathBuf {
 }
 
 fn run(args: &[&str]) -> Output {
+    // Scrubbed, not inherited: under GitHub Actions the CLI adds workflow
+    // annotations, so a suite that inherited the variable would exercise a
+    // different annotation path in CI than on a laptop. The tests that WANT
+    // annotations use `run_in_actions`.
     Command::new(bin())
         .args(args)
+        .env_remove("GITHUB_ACTIONS")
         .output()
         .expect("hauksbee binary runs")
 }
@@ -1191,5 +1201,36 @@ fn thermal_gates_by_default_and_the_opt_out_is_the_only_exit_gap() {
             .filter_map(|n| n["message"].as_str())
             .any(|m| m.starts_with("INCONCLUSIVE:")),
         "the caveat survives the opt-out:\n{v}"
+    );
+}
+
+/// `ok` is true iff `verdict == "pass"`, on the refusal envelopes too. A board
+/// with no component placement refuses before any surface renders, and that
+/// hand-built envelope read `ok:true` beside `verdict:"invalid"` and exit 3, so
+/// a pipeline gating on `ok` took a refusal for a clean run.
+#[test]
+fn the_placement_free_refusal_envelope_keeps_ok_iff_pass() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("no_parts.kicad_pcb");
+    std::fs::write(
+        &board,
+        "(kicad_pcb (version 20171130) (host pcbnew 5.1.0)\n  (net 0 \"\")\n  (net 1 \"GND\")\n  \
+         (segment (start 0 0) (end 10 0) (width 0.25) (layer F.Cu) (net 1))\n)\n",
+    )
+    .expect("fixture written");
+    let out = run(&["run", board.to_str().unwrap(), "--check", "--json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "no placement means no part-level verdict; stderr: {}",
+        stderr(&out)
+    );
+    let (verdict, ok) = json_verdict(&out);
+    assert_eq!(verdict, "invalid");
+    assert!(!ok, "ok must mirror the verdict word on the envelope too");
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert!(
+        v["refusal"]["next_action"].is_string(),
+        "the envelope still carries the structured refusal:\n{v}"
     );
 }
