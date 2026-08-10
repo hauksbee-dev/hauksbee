@@ -613,13 +613,20 @@ island reads slightly wide rather than slightly short, and refused when the
 hole is so nearly as wide as its aperture that the circumscribed rim escapes
 the outer boundary.
 
-Nesting depth is NOT used to classify a cut pour's contours. That classifier,
-which does group the contours of a single `G36`/`G37` region, needs contours
-that never cross, and voids across a whole film do cross: two overlapping
-antipads put one void's witness vertex inside the other, which reads as an
-outer boundary and promotes the void to a phantom polygon of copper. On a
-12000-antipad plane whose columns overlap that promoted 11890 voids and the
-board-sized sheet came back.
+Nesting depth is NOT used to classify a cut pour's contours. That classifier
+needs contours that never cross, and voids across a whole film do cross: two
+overlapping antipads put one void's witness vertex inside the other, which
+reads as an outer boundary and promotes the void to a phantom polygon of
+copper. On a 12000-antipad plane whose columns overlap that promoted 11890
+voids and the board-sized sheet came back.
+
+Where nesting depth IS valid is inside one `G36`/`G37` statement, whose
+contours do not cross, so a clear region is split into its connected pieces at
+the moment it is banked, each piece's outer boundary first and its holes after.
+That statement may legally carry several disjoint islands in any order, and
+treating everything after the first contour as a hole is a guess about draw
+order: a second disjoint void in one statement was cancelled outright, and an
+annular void drawn hole-first had its cleared ring promoted to copper.
 
 A region counts as clear only when the polarity is clear at **both** `G36` and
 `G37`. Which end decides is a reading of when the region object is created, and

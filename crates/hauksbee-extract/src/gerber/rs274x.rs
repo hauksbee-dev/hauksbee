@@ -425,44 +425,34 @@ fn free_ringed_islands(shape: &mut Shape, applied: &VoidIndex) -> Vec<Shape> {
     if holes.is_empty() {
         return Vec::new();
     }
-    let mut freed: Vec<(usize, Shape)> = Vec::new();
+    let mut promoted = vec![false; contours.len()];
+    let mut freed: Vec<Shape> = Vec::new();
     for (uid, h) in holes {
         let Some(contour) = contours.get(h) else {
             continue;
         };
-        let hb = contour_bounds(contour);
-        let untouched = applied.all.iter().all(|&(other, ob)| {
-            other == uid || ob[2] < hb[0] || ob[0] > hb[2] || ob[3] < hb[1] || ob[1] > hb[3]
-        });
-        if untouched {
-            freed.push((
-                h,
-                Shape::Polygon {
-                    pts: contour.clone(),
-                    r: 0.0,
-                },
-            ));
+        if applied.any_other_overlaps(contour_bounds(contour), uid) {
+            continue;
         }
+        promoted[h] = true;
+        freed.push(Shape::Polygon {
+            pts: contour.clone(),
+            r: 0.0,
+        });
     }
     if freed.is_empty() {
         return Vec::new();
     }
-    // Drop the promoted contours from the pour, highest index first so the
-    // remaining indices stay put. The pour's parity inside a removed hole becomes
-    // outer(1) ^ void-outer(1) = empty, which is right: the island's copper is
-    // now the island's shape, and the pour has a plain hole there.
-    let mut drop_at: Vec<usize> = freed.iter().map(|(h, _)| *h).collect();
-    drop_at.sort_unstable_by(|a, b| b.cmp(a));
-    for h in drop_at {
-        contours.remove(h);
-    }
-    if contours.len() == 1 {
-        *shape = Shape::Polygon {
-            pts: contours.remove(0),
-            r: 0.0,
-        };
-    }
-    freed.into_iter().map(|(_, s)| s).collect()
+    // Drop the promoted contours from the pour in ONE pass. Removing them one at a
+    // time shifts the tail each time, which is quadratic when half the contours go.
+    // The pour's parity inside a removed hole becomes outer(1) ^ void-outer(1) =
+    // empty, which is right: the island's copper is now the island's own shape,
+    // and the pour has a plain hole there. Contour 0 is the pour's own boundary and
+    // a void's outer is never promoted, so the pour always keeps at least two
+    // contours and stays a `MultiPolygon`.
+    let mut keep = promoted.iter();
+    contours.retain(|_| !keep.next().copied().unwrap_or(false));
+    freed
 }
 
 /// Does `outer`'s copper (even-odd over its contours) contain every vertex of
@@ -568,6 +558,36 @@ impl VoidIndex {
                 self.cells[cy * Self::RES + cx].push((id, b));
             }
         }
+    }
+
+    /// Does any void other than `own` have bounds overlapping `b`?
+    ///
+    /// A void is stamped into every cell its bounds span, so a void overlapping
+    /// `b` has an entry in some cell `b` spans; scanning that span is therefore
+    /// complete. Without the grid this was a scan of every void ever cut from the
+    /// pour, once per island, which is quadratic in the antipad count: a plane
+    /// with 64000 annular antipads spent 9.3 s there.
+    fn any_other_overlaps(&self, b: [f64; 4], own: usize) -> bool {
+        let overlaps =
+            |ob: [f64; 4]| !(ob[2] < b[0] || ob[0] > b[2] || ob[3] < b[1] || ob[1] > b[3]);
+        if self.cells.is_empty() {
+            return self
+                .all
+                .iter()
+                .any(|&(other, ob)| other != own && overlaps(ob));
+        }
+        let (x0, y0, x1, y1) = self.span(b);
+        for cy in y0..=y1 {
+            for cx in x0..=x1 {
+                if self.cells[cy * Self::RES + cx]
+                    .iter()
+                    .any(|&(other, ob)| other != own && overlaps(ob))
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Every void whose bounds could contain `b`, each listed once.
@@ -901,7 +921,20 @@ impl<'a> Plotter<'a> {
         self.identity_transform() && self.ab_depth == 0
     }
 
-    /// Record a set of contours painted under clear polarity as one void.
+    /// Record contours painted under clear polarity as voids, ONE PER CONNECTED
+    /// PIECE, each piece's outer boundary first and its holes after.
+    ///
+    /// A region statement may carry several contours in any order, and RS-274X
+    /// 4.10.4 allows them to be an outer plus its holes OR several disjoint
+    /// islands. Banking them verbatim as one void and then treating everything
+    /// after the first as a hole is a guess about draw order, and when it is wrong
+    /// the void is undone and re-emitted as copper: a second disjoint void in one
+    /// statement was cancelled outright, and an annular void drawn hole-first had
+    /// its cleared RING promoted to copper. Splitting into pieces here makes
+    /// "index 0 is the outer, the rest are its holes" true by construction.
+    /// Nesting-depth classification is valid at this point, and only at this
+    /// point: the contours of one region statement do not cross, which is exactly
+    /// what it needs and exactly what the voids of a whole film violate.
     fn add_clear_contours(&mut self, contours: Vec<Vec<(f64, f64)>>) {
         if !self.may_bank_clears() {
             return;
@@ -911,10 +944,13 @@ impl<'a> Plotter<'a> {
         if contours.is_empty() {
             return;
         }
-        self.clears.push(Clear {
-            contours,
-            painted_before: self.out.len(),
-        });
+        let painted_before = self.out.len();
+        for piece in group_contours(contours) {
+            self.clears.push(Clear {
+                contours: piece,
+                painted_before,
+            });
+        }
     }
 
     /// The X2 identity for a primitive painted right now: the object
@@ -1282,10 +1318,28 @@ impl<'a> Plotter<'a> {
     /// The circle is exact, and the rect/obround min-dimension under-covers the
     /// true swept image, so both under-remove: the safe direction.
     fn declared_line_width(&self) -> Option<f64> {
+        // A HOLED aperture declares no usable stroke width. The hole is bare board
+        // (RS-274X 4.4.6), so the swept clear is an annular band with a strip of
+        // copper standing along the centreline, and subtracting the solid capsule
+        // would erase it. Stroking with a holed aperture is spec-illegal, so this
+        // only guards a malformed file, but the direction it guards is the one that
+        // fabricates an open.
+        let holed = |h: &Option<f64>| h.is_some_and(|h| h > 0.0);
         match self.aperture.and_then(|a| self.doc.apertures.get(&a)) {
-            Some(Aperture::Circle(Circle { diameter, .. })) => Some(diameter * self.to_mm),
-            Some(Aperture::Rectangle(Rectangular { x, y, .. }))
-            | Some(Aperture::Obround(Rectangular { x, y, .. })) => Some(x.min(*y) * self.to_mm),
+            Some(Aperture::Circle(Circle {
+                diameter,
+                hole_diameter,
+            })) if !holed(hole_diameter) => Some(diameter * self.to_mm),
+            Some(Aperture::Rectangle(Rectangular {
+                x,
+                y,
+                hole_diameter,
+            }))
+            | Some(Aperture::Obround(Rectangular {
+                x,
+                y,
+                hole_diameter,
+            })) if !holed(hole_diameter) => Some(x.min(*y) * self.to_mm),
             _ => None,
         }
     }
@@ -1771,11 +1825,31 @@ impl rstar::RTreeObject for BoundsLeaf {
 /// cut plane's contour count IS its antipad count: on a 6000-antipad plane that
 /// pair scan was the single most expensive thing in the reader.
 fn group_contours_into_pieces(contours: Vec<Vec<(f64, f64)>>) -> Vec<Shape> {
-    if contours.len() == 1 {
-        return vec![Shape::Polygon {
-            pts: contours.into_iter().next().unwrap(),
-            r: 0.0,
-        }];
+    group_contours(contours)
+        .into_iter()
+        .map(|mut bucket| {
+            if bucket.len() == 1 {
+                // A hole-less island: a plain polygon, like a lone contour.
+                Shape::Polygon {
+                    pts: bucket.remove(0),
+                    r: 0.0,
+                }
+            } else {
+                // Outer + holes: even-odd containment reads the ring as copper
+                // and the hole interiors as empty.
+                Shape::MultiPolygon { contours: bucket }
+            }
+        })
+        .collect()
+}
+
+/// Group closed contours into one bucket per connected piece of copper, each
+/// bucket's OUTER boundary first and its holes after. The classification is the
+/// nesting depth described on [`group_contours_into_pieces`], and its precondition
+/// is the same: the contours must not cross one another.
+fn group_contours(contours: Vec<Vec<(f64, f64)>>) -> Vec<Vec<Vec<(f64, f64)>>> {
+    if contours.len() <= 1 {
+        return contours.into_iter().map(|c| vec![c]).collect();
     }
     let n = contours.len();
     let bounds: Vec<[f64; 4]> = contours.iter().map(|c| contour_bounds(c)).collect();
@@ -1828,23 +1902,7 @@ fn group_contours_into_pieces(contours: Vec<Vec<(f64, f64)>>) -> Vec<Shape> {
             buckets[group_of[i]].push(c);
         }
     }
-    buckets
-        .into_iter()
-        .filter(|b| !b.is_empty())
-        .map(|bucket| {
-            if bucket.len() == 1 {
-                // A hole-less island: a plain polygon, like a lone contour.
-                Shape::Polygon {
-                    pts: bucket.into_iter().next().unwrap(),
-                    r: 0.0,
-                }
-            } else {
-                // Outer + holes: even-odd containment reads the ring as copper
-                // and the hole interiors as empty.
-                Shape::MultiPolygon { contours: bucket }
-            }
-        })
-        .collect()
+    buckets.into_iter().filter(|b| !b.is_empty()).collect()
 }
 
 /// The boundary of a stadium (capsule) as a polygon: each end cap sampled as
@@ -2418,6 +2476,65 @@ G37*
             "the upper antipad is void"
         );
         assert!(piece_at(&pieces, 2.0, 2.0).is_some(), "the plane stands");
+    }
+
+    #[test]
+    fn one_clear_region_may_hold_several_voids_in_any_order() {
+        // RS-274X 4.10.4 lets ONE region statement carry several contours, an
+        // outer plus its holes OR several disjoint islands, in any order. Banking
+        // them as one void and calling everything after the first a hole is a guess
+        // about draw order, and it undoes the void: the contour is dropped from the
+        // pour AND re-emitted as copper.
+        //
+        // (a) Two disjoint voids in one statement. The second was cancelled
+        // outright, so on a film whose exporter batches a net's clearances into one
+        // region statement only the first antipad survived and the sheet came back.
+        let pieces = pieces_of(&negative_pour(
+            "",
+            "\
+G36*
+X4000000Y4000000D02*
+X6000000Y4000000D01*
+X6000000Y6000000D01*
+X4000000Y6000000D01*
+X4000000Y4000000D01*
+X14000000Y14000000D02*
+X16000000Y14000000D01*
+X16000000Y16000000D01*
+X14000000Y16000000D01*
+X14000000Y14000000D01*
+G37*
+",
+        ));
+        assert_eq!(piece_at(&pieces, 5.0, 5.0), None, "the first void is cut");
+        assert_eq!(piece_at(&pieces, 15.0, 15.0), None, "so is the second");
+        // (b) An annular void drawn HOLE FIRST. Promoting its outer boundary read
+        // the cleared ring as copper and shorted the island back to the plane.
+        let pieces = pieces_of(&negative_pour(
+            "",
+            "\
+G36*
+X9000000Y9000000D02*
+X11000000Y9000000D01*
+X11000000Y11000000D01*
+X9000000Y11000000D01*
+X9000000Y9000000D01*
+X6000000Y6000000D02*
+X14000000Y6000000D01*
+X14000000Y14000000D01*
+X6000000Y14000000D01*
+X6000000Y6000000D01*
+G37*
+",
+        ));
+        assert_eq!(
+            piece_at(&pieces, 12.5, 10.0),
+            None,
+            "the ring the film cleared is void whichever contour came first"
+        );
+        let island = piece_at(&pieces, 10.0, 10.0).expect("the island is copper");
+        let pour = piece_at(&pieces, 18.0, 10.0).expect("the pour is copper");
+        assert_ne!(island, pour, "and the island is not the pour's conductor");
     }
 
     #[test]
