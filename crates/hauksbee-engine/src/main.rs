@@ -763,10 +763,11 @@ struct RunArgs {
     /// only read the text are unaffected). Exit 2 counts shorts, serious/medium
     /// lint findings, every real SI finding and a serious USB-C CC verdict; DRC
     /// clearance notes and the lint low-severity notes do not fail the gate.
-    /// Exit 3 is the other half: a board with NO findings still fails the gate
-    /// when the run could not be judged (an unbound current-carrying / active
-    /// part on a model-dependent surface, undermined run-level evidence), which
-    /// is what that surface's `verdict: "invalid"` says in --json.
+    /// Exit 3 is the other half: a board whose findings do not gate (or has
+    /// none at all) still fails the gate when the run could not be judged (an
+    /// unbound current-carrying / active part on a model-dependent surface,
+    /// undermined run-level evidence), which is what that surface's
+    /// `verdict: "invalid"` says in --json.
     #[arg(long, visible_alias = "fail-on-findings")]
     strict: bool,
 
