@@ -1826,7 +1826,18 @@ gnd_pin    = "3"
 "18" = "dtr_n"      # modem-status output
 "19" = "rts_n"      # flow-control output
 "20" = "vccio"      # I/O-ring supply, 1.62 to 3.63 V; sets every level above
-"EP" = "gnd3"       # exposed pad, tied to ground on every board
+# THE EXPOSED PAD IS KEYED TWICE because the two CAD tools number it differently
+# and the binder matches the BOARD's pad string, not the datasheet's. Eagle's
+# QFN20 land (the margay datalogger's, checked in its .brd: pads 1..20 plus "EP",
+# with EP on GND) calls it "EP"; KiCad's Package_DFN_QFN:QFN-20-1EP_3.5x3.5mm land
+# calls it "21", and `package_electrical_pad_count` already reads the `-1EP` suffix
+# as one more electrical pad. Keying only "EP" left the pad unmapped on every KiCad
+# board, which drops the IC's thermal-and-ground tie. FTDI's own numbering for it
+# could not be read: their PDF host refused every request from here, so this pair
+# rests on the two footprint conventions, which is the evidence the binder uses
+# anyway. Both keys name the same node on every board that fits either land.
+"EP" = "gnd3"       # exposed pad, tied to ground on every board (Eagle spelling)
+"21" = "gnd4"       # the same exposed pad under KiCad's numbering
 
 [models.ratings]
 # Section 5 Absolute maximum ratings. VCCIO's -0.3 to 4.0 V is the TIGHTER of the

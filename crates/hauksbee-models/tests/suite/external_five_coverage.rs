@@ -944,6 +944,44 @@ fn an_mcu_with_no_cosim_platform_binds_but_cannot_run_firmware() {
     }
 }
 
+/// The db files that are NOT model files, and therefore contribute no entries.
+///
+/// `load_profiles.toml` is the trap here: it reuses the `[[models]]` array name for
+/// an entirely different schema (`profile.rs`'s piecewise current profiles, whose
+/// entries have no `kind`), so "does the text contain `[[models]]`" cannot tell a
+/// model file from a non-model one. This list can, and it is deliberately an
+/// ALLOWLIST rather than a skip-on-error: a new db file with a new schema has to be
+/// named here before the sweeps will pass, which is the point.
+const NON_MODEL_DB_FILES: &[&str] = &["pin_rules.toml", "load_profiles.toml", "unmodelled.toml"];
+
+/// Every `[[models]]` entry in one db file, for the three library-wide sweeps below.
+///
+/// A model file that fails to deserialize must FAIL the sweep rather than be skipped.
+/// The sweeps below exist to catch a class of silently-wrong entry, and an entry in an
+/// unparsed file is exactly as unswept as an entry nobody wrote a test for. Each
+/// sweep used to `continue` past that case, so one typo'd key anywhere in a file
+/// would switch the invariant off for every entry in it and still pass green.
+fn models_in(path: &std::path::Path, text: &str) -> Vec<hauksbee_models::ModelEntry> {
+    #[derive(serde::Deserialize)]
+    struct DbFile {
+        #[serde(default)]
+        models: Vec<hauksbee_models::ModelEntry>,
+    }
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    if NON_MODEL_DB_FILES.contains(&name.as_str()) {
+        return Vec::new();
+    }
+    match toml::from_str::<DbFile>(text) {
+        Ok(parsed) => parsed.models,
+        Err(e) => panic!(
+            "{name} is a model db file that does not deserialize, so every entry in \
+             it would go unswept by the library-wide invariants. Either fix it, or if \
+             it is a new schema rather than a model file, name it in \
+             NON_MODEL_DB_FILES: {e}"
+        ),
+    }
+}
+
 /// The P-channel threshold sign, swept over the WHOLE model database rather than
 /// the entries this file added.
 ///
@@ -960,12 +998,6 @@ fn an_mcu_with_no_cosim_platform_binds_but_cannot_run_firmware() {
 /// find it in an entry nobody thought to write one for. So this walks the TOML.
 #[test]
 fn every_mosfet_states_its_threshold_with_the_sign_its_polarity_needs() {
-    #[derive(serde::Deserialize)]
-    struct DbFile {
-        #[serde(default)]
-        models: Vec<hauksbee_models::ModelEntry>,
-    }
-
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
     let mut checked = 0usize;
     let mut failures: Vec<String> = Vec::new();
@@ -984,12 +1016,7 @@ fn every_mosfet_states_its_threshold_with_the_sign_its_polarity_needs() {
 
     for path in files {
         let text = std::fs::read_to_string(&path).expect("readable db file");
-        // pin_rules.toml and load_profiles.toml hold other shapes; a file with no
-        // `[[models]]` array simply contributes nothing here.
-        let Ok(parsed) = toml::from_str::<DbFile>(&text) else {
-            continue;
-        };
-        for m in parsed.models {
+        for m in models_in(&path, &text) {
             let polarity_is_p = match m.kind {
                 ComponentKind::Pmos => true,
                 ComponentKind::Nmos => false,
@@ -1054,12 +1081,6 @@ fn every_mosfet_states_its_threshold_with_the_sign_its_polarity_needs() {
 /// behaves like a device.
 #[test]
 fn no_entry_names_a_driven_output_it_has_no_logic_to_drive() {
-    #[derive(serde::Deserialize)]
-    struct DbFile {
-        #[serde(default)]
-        models: Vec<hauksbee_models::ModelEntry>,
-    }
-
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
     let mut with_logic = 0usize;
     let mut failures: Vec<String> = Vec::new();
@@ -1078,10 +1099,7 @@ fn no_entry_names_a_driven_output_it_has_no_logic_to_drive() {
 
     for path in files {
         let text = std::fs::read_to_string(&path).expect("readable db file");
-        let Ok(parsed) = toml::from_str::<DbFile>(&text) else {
-            continue;
-        };
-        for m in parsed.models {
+        for m in models_in(&path, &text) {
             let y_roles: Vec<&String> = m.pins.values().filter(|r| r.starts_with('y')).collect();
             if y_roles.is_empty() {
                 continue;
@@ -1223,14 +1241,52 @@ fn each_abstention_names_its_unlocking_input_and_binds_nothing() {
 /// part that names both throws reaches the true-SPDT branch, where `s0` means what
 /// the binder thinks it means. It also requires the two terminals a single-throw
 /// entry does name to be pickable, so an entry cannot pass by naming nothing.
+/// Does this role set give `bind_analog_switch`'s single-throw path two terminals it
+/// can actually PICK?
+///
+/// `a` comes from com / in_out_a / in_out_1a / s0 and `b` from s0 / in_out_b /
+/// in_out_1b / com, and the path requires `a != b`. So `com` pairs with `s0` and with
+/// nothing else: an entry naming `com` and `s1` but no `s0` resolves BOTH ends to
+/// `com`, gets `a == b`, and drops through to the pick-two-arbitrary-non-power-nodes
+/// fallback, stamping a switch between whatever the board happened to wire. An
+/// earlier version of the sweep below accepted `com` + `s1` and let that shape past,
+/// which is why this is a named function with the case written out below rather than
+/// an expression inline in a loop.
+fn names_a_pickable_pair(roles: &std::collections::HashSet<&str>) -> bool {
+    (roles.contains("in_out_a") && roles.contains("in_out_b"))
+        || (roles.contains("com") && roles.contains("s0"))
+        || (roles.contains("in_out_1a") && roles.contains("in_out_1b"))
+}
+
+/// The predicate has to REJECT the shape it was tightened for, or the sweep that uses
+/// it is decoration. `com` + `s1` is the case: two named switch terminals, neither of
+/// which the single-throw path can pair.
+#[test]
+fn a_switch_naming_com_and_only_the_high_throw_has_no_pickable_pair() {
+    let set = |roles: &[&'static str]| roles.iter().copied().collect();
+    assert!(
+        !names_a_pickable_pair(&set(&["com", "s1", "ctrl", "vss"])),
+        "com + s1 resolves both ends of the switch to com, so the binder falls back \
+         to two arbitrary nodes and this must not read as a pickable pair"
+    );
+    assert!(
+        !names_a_pickable_pair(&set(&["com", "ctrl", "vss"])),
+        "one terminal is not a pair"
+    );
+    // And the three shapes that are genuinely pickable still are.
+    assert!(names_a_pickable_pair(&set(&["com", "s0", "ctrl"])));
+    assert!(names_a_pickable_pair(&set(&[
+        "in_out_a", "in_out_b", "ctrl"
+    ])));
+    assert!(names_a_pickable_pair(&set(&[
+        "in_out_1a",
+        "in_out_1b",
+        "ctrl_1"
+    ])));
+}
+
 #[test]
 fn no_single_throw_switch_names_the_control_low_throw() {
-    #[derive(serde::Deserialize)]
-    struct DbFile {
-        #[serde(default)]
-        models: Vec<hauksbee_models::ModelEntry>,
-    }
-
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
     let mut checked = 0usize;
     let mut failures: Vec<String> = Vec::new();
@@ -1244,10 +1300,7 @@ fn no_single_throw_switch_names_the_control_low_throw() {
 
     for path in files {
         let text = std::fs::read_to_string(&path).expect("readable db file");
-        let Ok(parsed) = toml::from_str::<DbFile>(&text) else {
-            continue;
-        };
-        for m in parsed.models {
+        for m in models_in(&path, &text) {
             if m.kind != ComponentKind::AnalogSwitch {
                 continue;
             }
@@ -1270,10 +1323,7 @@ fn no_single_throw_switch_names_the_control_low_throw() {
             // And an entry that names neither pair has nothing for the binder to
             // stamp between, which would fall to the scan-two-nodes fallback and
             // pick whatever the board happened to wire.
-            let has_pair = (roles.contains("in_out_a") && roles.contains("in_out_b"))
-                || (roles.contains("com") && (roles.contains("s0") || roles.contains("s1")))
-                || (roles.contains("in_out_1a") && roles.contains("in_out_1b"));
-            if !has_pair {
+            if !names_a_pickable_pair(&roles) {
                 failures.push(format!(
                     "{file}: {} names no switch-terminal pair, so the binder falls \
                      back to picking two arbitrary non-power nodes",
