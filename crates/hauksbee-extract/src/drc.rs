@@ -2828,8 +2828,9 @@ pub mod eagle_drc {
     /// around the tightest separation board houses quote, so an `isolate` below
     /// it is not asking for a manufacturable gap, and it is ten orders above the
     /// f64 noise floor of the geometry it is compared against. What the rule
-    /// buys, against the outline-only rule it replaced, is silence on V3.4.5's
-    /// top layer while both real contacts still flag.
+    /// buys, against the outline-only rule it replaced, is silence on the two top
+    /// layers where the fills are apart, while all three known real contacts
+    /// still flag: five of the six measured layer-instances right, against three.
     ///
     /// An `isolate` between this and the design rules leaves a gap that is real
     /// but too tight, which is a clearance question about a fill Eagle recomputes

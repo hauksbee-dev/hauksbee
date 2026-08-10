@@ -402,9 +402,10 @@ left in the code.
 `isolate` is at or above one micrometre is now silent, and the fill is still never reconstructed,
 so a pour pair that a CAM run merges anyway is not caught. Nor is a sub-rule but
 non-zero `isolate` reported as a clearance finding, because answering that needs
-the fill. The threshold has no measured lower bound at all: 0.00030625 is observed
-merging on two layers and NOT merging on a third, so it bounds the band from
-neither side, and 0.3048 not merging is the only one-sided evidence there is. The
+the fill. The threshold has no measured lower bound at all: across the six layer-instances
+with fabrication data, an `isolate` of 0.00030625 merges on three and does NOT
+merge on a fourth, so it bounds the band from neither side, and 0.3048 not merging
+(twice) is the only one-sided evidence there is. The
 micrometre inside that is a manufacturing judgement, not a documented Eagle
 boundary.
 

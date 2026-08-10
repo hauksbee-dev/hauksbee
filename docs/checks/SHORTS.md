@@ -190,8 +190,8 @@ keeps or widens gaps, so a correctly derived fill cannot short or crowd foreign
 copper in the same file, while treating the drawn outline as solid copper would
 turn every trace the fill legitimately carves around into a false short. The
 fill itself is never reconstructed and the isolate distance never numerically
-re-verified; the settings are parsed, drive this reasoning, and are disclosed
-verbatim on pour findings. Pour-to-copper pairs are therefore *not checked*
+re-verified; the settings are parsed, drive this reasoning, and travel verbatim on
+a pour finding's `Item::owner` field, which the report does not render (see below). Pour-to-copper pairs are therefore *not checked*
 (rather than checked and found clean), and same-rank pours that approach
 without ring overlap are not distance-checked either, since the fill extent
 near the boundary depends on those settings.
@@ -202,9 +202,10 @@ yielder either, but whichever pour gives way is carved back by its own `isolate`
 so an outline overlap on its own is not a short. What is reported is an overlap where the smaller `isolate` is below one
 micrometre, meaning nothing in the file asks for a gap at all. The pour settings
 ride along on the finding's `Item::owner` field, which `drc_probe` prints and the
-tests assert; `--drc` renders the item KIND rather than the owner, so a reader of
-the report does not see the `isolate` that triggered it. That is a gap, and it
-bites hardest on the false positive below. This was narrowed against the emonTx
+tests assert. No user surface shows it: `--drc`, `--drc --plain` and `--drc --json`
+all go through `plain_drc_structured`, whose per-short output is nets, layer, gap
+and location, so a reader of the report does not see the `isolate` that triggered
+the finding. That is a gap, and it bites hardest on the false positive below. This was narrowed against the emonTx
 V3.4.5's own fabrication output, which shows the same outline overlap
 resolving to separate copper on the layer where both pours hold `isolate="0.3048"`
 and to one body on the layer where one holds `0.00030625`
