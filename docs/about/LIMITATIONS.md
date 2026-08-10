@@ -363,55 +363,36 @@ boundary depends on those settings. The argument above says a fill Eagle
 derives from these settings would not violate; a hand-edited file whose fill
 was never re-derived is outside it.
 
-One pour-to-pour construct IS checked, and it was narrowed after being measured
-against real fabrication output. Two overlapping same-rank pours of different
-signals get no arbitration from their rank, and the file names no yielder either,
-but whichever pour gives way is carved back by its own `isolate`, so the outline
-overlap alone does not put copper in contact. The check reads the smaller of the
-two, as the conservative choice. What is reported is an overlap where the smaller `isolate` is
-below one micrometre (`POUR_MERGE_ISOLATE_MM`), meaning nothing in the file asks
-for a gap at all. The measurement is in
-[`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md):
-the emonTx V3.4.5 overlaps its GND and AGND pour outlines in the same band on
-both copper layers, and the gerbers it ships beside the `.brd` show the pair
-separate on the layer where both pours hold `isolate="0.3048"` and joined on the
-layer where one holds `0.00030625`.
-
-**A measured false positive the narrowing does NOT remove.** A near-zero `isolate`
-turns out to be necessary but not sufficient for the fills to meet. The emonTx
-V3.4.0 puts both of its top-layer ground pours at `isolate="0.00030625"` with
-overlapping outlines, and the copper gerbers it ships show the AGND body as a
-separate component from the GND body. Four independent rasters put the separation
-between about 2.6 mm and 29 mm, the low end being the better-resolved ones; the
-number is unsettled and the separateness is not, which is why the finding rests on
-component membership rather than on a distance. hauksbee flags that layer. It is wrong to, and the finding stands
-only because the same rule is right about V3.4.0's bottom layer and V3.4.5's, and
-because it is silent on V3.4.5's top layer where the old rule was wrong: a strict
-improvement carrying one known error. No threshold on `isolate` can fix it, since
-`isolate` does not determine the answer. Closing it needs Eagle's fill
-reconstructed from the outline, the pour settings and the foreign copper, which is
-not implemented. See the emonTx section of
+One pour-to-pour construct IS checked: two overlapping same-rank pours of
+different signals get no arbitration from their rank, and the overlap is reported.
+Its error rate is measured rather than assumed, because the emonTx revision family
+ships fabrication output beside the design and so can be scored. Across the six
+layer-instances with copper gerbers, the rule is right about four: it flags the
+three layers where the two nets really do share copper, and over-reports two top
+layers where the outlines overlap and nothing bridges them. The scoring table is in
 [`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md).
 
-**A second, smaller one.** A pour with no `isolate` attribute at all parses as
-zero and still flags. That extrapolates a measurement taken at 0.00030625 down to
-zero, in the direction where the same file's rules-floor reasoning says an absent
-`isolate` means "rules only". Kept on the same grounds, and stated rather than
-left in the code.
+**The two over-reports, and why no threshold removes them.** Whether two
+overlapping pours end up in contact is a property of the fill, and the `.brd` does
+not carry the fill. `isolate` is not a substitute: it is necessary but not
+sufficient, which is measured, because the emonTx V3.4.0 sets BOTH of its top-layer
+pours to 0.00030625 with overlapping outlines and their fills still come out as
+separate components. A narrowing that reported the overlap only below a
+one-micrometre `isolate` was implemented and reverted for that reason: it fixed one
+of the two over-reports and silenced a third layer where a trace genuinely joins
+the two nets, which trades a false positive for the worse kind of error (see
+`SHORT_TOUCH_EPS_MM` in `drc.rs` on under-reporting a short). Closing them properly
+needs Eagle's fill reconstructed from the outline, the pour settings and the
+foreign copper, which is not implemented.
 
-**The false-negative class the narrowing buys.** An overlap whose smaller
-`isolate` is at or above one micrometre is now silent, and the fill is still never reconstructed,
-so a pour pair that a CAM run merges anyway is not caught. Nor is a sub-rule but
-non-zero `isolate` reported as a clearance finding, because answering that needs
-the fill. The band is measured on both sides, and the trouble is elsewhere. Across the six
-layer-instances with fabrication data, 0.00030625 merges three times, so the
-threshold has to sit above it or all three real contacts go unreported; 0.3048 does
-not merge twice, so it has to sit at or below that or those two become false
-positives. Both bounds hold. What no threshold can fix is that the SAME value,
-0.00030625, appears on a merge and on a non-merge (V3.4.0's two layers), so the
-outcome is not a function of `isolate` and no cut through it gets all six right.
-The micrometre inside the measured band is a manufacturing judgement, not a
-documented Eagle boundary.
+**A tie the net-tie recogniser cannot see.** The three true reports on that family
+are all a ground tie the designer DECLARED: `emonTx V3.4.5.sch` wires an AGND
+supply symbol to a GND supply symbol in one segment of net `GND`, from V3.4.1
+onward. So they are true about the copper and wrong to be SERIOUS. The Eagle
+net-tie exemption keys on jumper libraries and package conventions
+([`../checks/SHORTS.md`](../checks/SHORTS.md)), which cannot express that, and the
+declaration is in the `.sch` while this reader is handed the `.brd`. Reaching it
+needs the schematic's net segments, or a rule for the two-supply-symbol construct.
 
 That overlap keys on the polygons' vertex rings: same-rank pours whose rings
 miss by less than their drawn boundary stroke widths are not flagged, and

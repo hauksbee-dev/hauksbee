@@ -554,22 +554,19 @@ axes = ["eagle", "power-electronics", "rf", "avr", "small"]
 subdir = "hardware/V3.4.5"
 known_good = false
 known_good_note = """
-Adjudicated, not pending: one real copper join, GND <-> AGND on B.Cu. The two \
-nets are separate in the schematic, with no discrete part bridging them (the \
-only element with pads on both is U1 itself, the ATmega328P, whose GND and AGND \
-pins are internally common), and their pours are same-rank with outlines that \
-overlap in the same 0.349 mm band on both layers. The shipped fabrication data \
-splits the layers regardless: in copper_top.gbr the two fills are separate \
-bodies 8.236 mm apart at their closest, and in copper_bottom.gbr they are one \
-6378-vertex region with no channel along the seam, so on the back layer the \
-copper is joined, and erasing the only two GND vias near the seam leaves that \
-connection intact, so it is the pours meeting rather than a via standing in. The \
-files record a near-zero `isolate="0.00030625"` on the abutting pour, one of nine \
-ground pours (six ask for 0.3048 mm, two set nothing), carried unchanged across \
-five consecutive revisions. Deliberate is an inference from that pattern, not a \
-proof, and the finding does not rest on it: two named nets are in contact, which \
-is what the check reports. Hence known_good = false, which says the gate cannot \
-grade its silence on this directory, not that the board is defective.
+Adjudicated, not pending: GND and AGND are in contact on BOTH copper layers, and \
+hauksbee reports both. The shipped gerbers settle it by net attribution: on the \
+back layer the two pours abut along the seam, and on the front layer a \
+770-vertex filled region near U1 holds five GND vias and the AGND via at \
+(81.915, 47.498), joined by a trace. (The front-layer POURS are 8.236 mm apart, \
+which is true and answers a question about pours rather than about the layer.) \
+The tie is declared, not inferred: emonTx V3.4.5.sch wires the AGND supply \
+symbol AGND7 to the GND supply symbol SUPPLY6 in one segment of net GND, absent \
+in V3.4.0 and present from V3.4.1. So both findings are true about the copper and \
+wrong to be SERIOUS, and the class fix is net-tie recognition that can read a tie \
+declared in the .sch, which the Eagle DRC path is not given. Hence \
+known_good = false, which says the gate cannot grade its silence on this \
+directory, not that the board is defective.
 """
 expect = [
   "hardware/V3.4.5/emonTx V3.4.5.brd",
@@ -581,9 +578,10 @@ expect = [
 # The same product, three revisions earlier, kept for one measurement: V3.4.0 sets
 # BOTH of its top-layer ground pours to isolate="0.00030625" where V3.4.5 sets one,
 # and its shipped gerbers show those two fills as SEPARATE copper. That makes the
-# near-zero isolate necessary but not sufficient for a merge, and makes the
-# pour-to-pour check's flag on this layer a known false positive. The test pins it
-# so the error is visible in CI rather than only in prose.
+# near-zero isolate necessary but not sufficient for a merge, which is what sank a
+# proposed narrowing of the pour-to-pour check, and makes that check's flag on this
+# layer a known false positive. The test pins it so the error is visible in CI
+# rather than only in prose.
 [[board]]
 id = "emontx3_v340"
 name = "OpenEnergyMonitor emonTx V3.4 (the both-layers-near-zero pour revision)"
@@ -596,15 +594,16 @@ axes = ["eagle", "power-electronics", "avr", "small"]
 subdir = "hardware/V3.4.0"
 known_good = false
 known_good_note = """
-Adjudicated, and the awkward half of the adjudication: hauksbee reports GND <-> \
-AGND on both copper layers here, and the top-layer one is WRONG. Both top pours \
-carry isolate="0.00030625" with overlapping outlines, so the check fires, but \
-labelling the copper in the shipped emonTxV3.4_GERBERS export and attributing each \
-body by the .brd's own GND-net and AGND-net items puts the AGND body in a \
-different connected component from the GND body. The bottom-layer finding is real, \
-the same as V3.4.5's. Kept in the corpus because a measured false positive is \
-worth more to the next reader than a clean story: see the emonTx section of \
-docs/evidence/KNOWN_FAULTS_VALIDATION.md and the false-positive entry in \
+Adjudicated, and the awkward half of it: hauksbee reports GND <-> AGND on both \
+copper layers here, and the top-layer one is WRONG. Both top pours carry \
+isolate="0.00030625" with overlapping outlines, so the check fires, but labelling \
+the copper in the shipped emonTxV3.4_GERBERS export and attributing each body by \
+the .brd's own GND-net and AGND-net items finds NO component holding both nets on \
+that layer. The bottom-layer finding is real. This revision is also the reason a \
+proposed narrowing of the rule was reverted: a near-zero isolate is necessary but \
+not sufficient for two pours to merge, and V3.4.0 is the proof. Kept in the corpus \
+because a measured false positive is worth more to the next reader than a clean \
+story: see the emonTx section of docs/evidence/KNOWN_FAULTS_VALIDATION.md and \
 docs/about/LIMITATIONS.md.
 """
 expect = [
