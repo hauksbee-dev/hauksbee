@@ -147,8 +147,10 @@ fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
 }
 
 /// The exit-3 twin of [`strict_gate_exit`]: a run that could not be judged
-/// annotates the GitHub checks tab with the reason before exiting, whether or
-/// not `--junit`/`--sarif` were asked for. Without this the annotation surface
+/// annotates the GitHub checks tab with its bind blockers, when it has any,
+/// before exiting, whether or not `--junit`/`--sarif` were asked for. A run
+/// that exits 3 for undermined coverage alone carries no blockers to name and
+/// annotates nothing. Without this the annotation surface
 /// was the only silent one on a refused run, because the blocker annotation
 /// rode inside the artifact-writing branch; a reviewer then saw a clean checks
 /// tab beside an exit 3. No-op outside GitHub Actions.

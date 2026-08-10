@@ -1553,9 +1553,11 @@ pub struct JsonReport {
     /// trim those per-net maps out of their verdicts for the same reason.
     /// Without this the descriptive document read `"ok":false` while the
     /// command always exited 0, so the two ways to gate on it disagreed. A
-    /// top-level refusal would still invalidate, though no descriptive surface
-    /// sets one today. Not serialized: the evidence array and the bind summary
-    /// carry every binding fact this exemption does not gate on.
+    /// With no findings, no analysis section and no refusal, `--report`'s only
+    /// caller leaves `verdict` constant at `pass`: on a surface that makes no
+    /// pass/fail claim the rollup carries no information, and the bind summary
+    /// and the evidence array (both rendered in full) are what a consumer reads
+    /// instead. Not serialized: the gate's outcome is the verdict field.
     #[serde(skip)]
     pub descriptive_only: bool,
     /// Every explicitly supplied input and what it contributed to this run.
@@ -1802,7 +1804,7 @@ impl JsonReport {
     ///     fault, a serious lint/SI finding), or a finding the emitting
     ///     surface's own `--strict` gate fails on where that gate is wider than
     ///     `serious` (see [`Self::surface_gate_fails`]);
-    ///   - `invalid`, nothing serious, but the run-level claim could not be
+    ///   - `invalid`, nothing gates, but the run-level claim could not be
     ///     judged: a refusal, AC or thermal reported `valid:false`, or a
     ///     run-level evidence map (input coverage, bind completeness) is
     ///     undermined. Undermined maps backing individual findings do NOT
