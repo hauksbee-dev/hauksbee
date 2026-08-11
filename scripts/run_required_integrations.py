@@ -8,6 +8,7 @@ import ctypes
 import json
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -140,14 +141,49 @@ def _merge_capture(earlier: str | bytes | None, final: str | bytes | None) -> st
     return earlier_text + final_text
 
 
-def _process_table() -> list[tuple[int, int, int, int]]:
+RUN_TOKEN_ENV = "HAUKSBEE_REQUIRED_PROCESS_TOKEN"
+
+
+def _darwin_process_arguments(pid: int) -> bytes:
+    """Return argv+environment for one same-user Darwin process."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2, pid
+    size = ctypes.c_size_t()
+    if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+        return b""
+    if size.value <= 0 or size.value > 16 * 1024 * 1024:
+        return b""
+    buffer = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) != 0:
+        return b""
+    return buffer.raw[: size.value]
+
+
+def _process_has_run_token(pid: int, run_token: str) -> bool:
+    """Recognize descendants after they reparent or create a new session."""
+
+    assignment = f"{RUN_TOKEN_ENV}={run_token}".encode()
+    try:
+        if sys.platform.startswith("linux"):
+            environment = Path(f"/proc/{pid}/environ").read_bytes()
+        elif sys.platform == "darwin":
+            environment = _darwin_process_arguments(pid)
+        else:
+            return False
+    except (OSError, PermissionError):
+        return False
+    return assignment in environment.split(b"\0")
+
+
+def _process_table(run_token: str | None = None) -> list[tuple[int, int, int, int, bool]]:
     """Return a POSIX pid/ppid/pgid/session snapshot or fail closed."""
 
     if os.name != "posix":
         return []
     try:
         table = subprocess.run(
-            ("ps", "-axo", "pid=,ppid=,pgid="),
+            ("ps", "-axo", "pid=,ppid=,pgid=,uid="),
             text=True,
             capture_output=True,
             check=True,
@@ -160,7 +196,7 @@ def _process_table() -> list[tuple[int, int, int, int]]:
     rows = []
     for line in table.splitlines():
         try:
-            pid, parent, group = map(int, line.split())
+            pid, parent, group, uid = map(int, line.split())
         except ValueError:
             continue
         try:
@@ -172,13 +208,18 @@ def _process_table() -> list[tuple[int, int, int, int]]:
             # them in the ancestry table but make them ineligible for session
             # ownership rather than weakening cleanup for our own children.
             session = -1
-        rows.append((pid, parent, group, session))
+        tagged = bool(
+            run_token
+            and uid == os.geteuid()
+            and _process_has_run_token(pid, run_token)
+        )
+        rows.append((pid, parent, group, session, tagged))
     return rows
 
 
 def _direct_children(parent_pid: int) -> set[int]:
     candidates = {
-        pid for pid, parent, _, _ in _process_table() if parent == parent_pid
+        pid for pid, parent, _, _, _ in _process_table() if parent == parent_pid
     }
     live = set()
     for pid in candidates:
@@ -205,27 +246,28 @@ def _enable_child_subreaper() -> None:
 
 
 def _owned_processes(
-    root_pid: int, baseline_runner_children: set[int]
+    root_pid: int, baseline_runner_children: set[int], run_token: str
 ) -> tuple[set[int], set[int]]:
     """Snapshot groups/PIDs rooted at cargo or newly adopted by this runner."""
 
     groups: set[int] = set()
     pids: set[int] = {root_pid}
-    rows = _process_table()
+    rows = _process_table(run_token)
 
     children: dict[int, list[tuple[int, int]]] = {}
-    for pid, parent, group, _ in rows:
+    for pid, parent, group, _, _ in rows:
         children.setdefault(parent, []).append((pid, group))
 
     adopted = {
         pid
-        for pid, parent, _, _ in rows
+        for pid, parent, _, _, _ in rows
         if parent == os.getpid()
         and pid not in baseline_runner_children
         and pid != root_pid
     }
-    session_members = {pid for pid, _, _, session in rows if session == root_pid}
-    group_by_pid = {pid: group for pid, _, group, _ in rows}
+    session_members = {pid for pid, _, _, session, _ in rows if session == root_pid}
+    tagged_members = {pid for pid, _, _, _, tagged in rows if tagged}
+    group_by_pid = {pid: group for pid, _, group, _, _ in rows}
     if root_pid not in group_by_pid:
         try:
             os.kill(root_pid, 0)
@@ -234,7 +276,7 @@ def _owned_processes(
         else:
             # start_new_session=True makes the command PID its initial PGID.
             groups.add(root_pid)
-    pending = [root_pid, *adopted, *session_members]
+    pending = [root_pid, *adopted, *session_members, *tagged_members]
     seen: set[int] = set()
     while pending:
         parent = pending.pop()
@@ -268,6 +310,43 @@ def _signal_process_groups(
             os.killpg(group, sig)
         except ProcessLookupError:
             pass
+
+
+def _signal_known_root_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:
+    """Best-effort fallback that never depends on process enumeration."""
+
+    try:
+        os.killpg(process.pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _known_root_group_is_live(process: subprocess.Popen[str]) -> bool:
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _stop_known_root_group(process: subprocess.Popen[str]) -> tuple[str, bool]:
+    """Terminate the session root when descendant enumeration is unavailable."""
+
+    _signal_known_root_group(process, signal.SIGTERM)
+    killed = False
+    try:
+        output, _ = process.communicate(timeout=1)
+    except subprocess.TimeoutExpired as error:
+        _signal_known_root_group(process, signal.SIGKILL)
+        killed = True
+        output, _ = process.communicate()
+        return _merge_capture(error.output, output), killed
+    if _known_root_group_is_live(process):
+        _signal_known_root_group(process, signal.SIGKILL)
+        killed = True
+    return _text(output), killed
 
 
 def _live_process_groups(groups: set[int]) -> set[int]:
@@ -311,11 +390,23 @@ def _wait_for_process_groups(
 
 
 def _audit_completed_command(
-    process: subprocess.Popen[str], baseline_runner_children: set[int]
+    process: subprocess.Popen[str], baseline_runner_children: set[int], run_token: str
 ) -> tuple[bool, bool]:
     """Terminate any group a completed command left behind and prove it exited."""
 
-    groups, pids = _owned_processes(process.pid, baseline_runner_children)
+    try:
+        groups, pids = _owned_processes(
+            process.pid, baseline_runner_children, run_token
+        )
+    except RuntimeError:
+        _signal_known_root_group(process, signal.SIGTERM)
+        killed = False
+        if _known_root_group_is_live(process):
+            _signal_known_root_group(process, signal.SIGKILL)
+            killed = True
+        # The known session is stopped, but detached groups could not be
+        # enumerated. Evidence must fail because cleanup cannot be proved.
+        return False, killed
     live = _live_process_groups(groups)
     if not live:
         _reap_owned_children(pids)
@@ -331,20 +422,30 @@ def _audit_completed_command(
 
 
 def _stop_process_group(
-    process: subprocess.Popen[str], baseline_runner_children: set[int]
+    process: subprocess.Popen[str], baseline_runner_children: set[int], run_token: str
 ) -> tuple[str, bool, bool]:
     """Stop cargo/emulator groups; return output, KILL use, and cleanup proof."""
 
-    groups, pids = _owned_processes(process.pid, baseline_runner_children)
+    try:
+        groups, pids = _owned_processes(
+            process.pid, baseline_runner_children, run_token
+        )
+    except RuntimeError:
+        output, killed = _stop_known_root_group(process)
+        return output, killed, False
     _signal_process_groups(groups, process.pid, signal.SIGTERM)
     try:
         output, _ = process.communicate(timeout=5)
         # The root can double-fork between the first snapshot and TERM. Once
         # communicate confirms it exited, every surviving orphan has been
         # adopted by this Linux subreaper and is visible in this second scan.
-        later_groups, later_pids = _owned_processes(
-            process.pid, baseline_runner_children
-        )
+        try:
+            later_groups, later_pids = _owned_processes(
+                process.pid, baseline_runner_children, run_token
+            )
+        except RuntimeError:
+            _signal_known_root_group(process, signal.SIGKILL)
+            return _text(output), True, False
         groups.update(later_groups)
         pids.update(later_pids)
         live_descendants = _live_process_groups(groups)
@@ -358,9 +459,14 @@ def _stop_process_group(
         # Retain the first snapshot: cargo commonly exits on TERM while Renode
         # or QEMU keeps a separately-created process group alive and becomes
         # reparented before this second lookup can see it.
-        later_groups, later_pids = _owned_processes(
-            process.pid, baseline_runner_children
-        )
+        try:
+            later_groups, later_pids = _owned_processes(
+                process.pid, baseline_runner_children, run_token
+            )
+        except RuntimeError:
+            _signal_known_root_group(process, signal.SIGKILL)
+            output, _ = process.communicate()
+            return _merge_capture(error.output, output), True, False
         groups.update(later_groups)
         pids.update(later_pids)
         _signal_process_groups(groups, process.pid, signal.SIGKILL)
@@ -383,6 +489,8 @@ def run_command(
     env["CARGO_TERM_COLOR"] = "never"
     if env_updates:
         env.update(env_updates)
+    run_token = secrets.token_hex(32)
+    env[RUN_TOKEN_ENV] = run_token
     _enable_child_subreaper()
     baseline_runner_children = _direct_children(os.getpid())
     process = subprocess.Popen(
@@ -396,7 +504,9 @@ def run_command(
     )
     try:
         output, _ = process.communicate(timeout=timeout_seconds)
-        clean, killed = _audit_completed_command(process, baseline_runner_children)
+        clean, killed = _audit_completed_command(
+            process, baseline_runner_children, run_token
+        )
         if killed:
             output += (
                 "\nREQUIRED INTEGRATION CLEANUP: a completed command left a "
@@ -411,7 +521,7 @@ def run_command(
         return subprocess.CompletedProcess(command, process.returncode, output)
     except subprocess.TimeoutExpired:
         output, killed, clean = _stop_process_group(
-            process, baseline_runner_children
+            process, baseline_runner_children, run_token
         )
         termination = "SIGTERM then SIGKILL" if killed else "SIGTERM"
         output += (
@@ -423,9 +533,10 @@ def run_command(
                 "REQUIRED INTEGRATION CLEANUP FAILED: descendant process groups "
                 "remain after timeout cleanup\n"
             )
+            return subprocess.CompletedProcess(command, 125, output)
         return subprocess.CompletedProcess(command, 124, output)
     except KeyboardInterrupt:
-        _stop_process_group(process, baseline_runner_children)
+        _stop_process_group(process, baseline_runner_children, run_token)
         raise
 
 
