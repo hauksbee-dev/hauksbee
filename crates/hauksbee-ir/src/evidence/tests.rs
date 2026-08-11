@@ -844,6 +844,7 @@ fn the_judgement_types_are_serialize_only() {
     // Provenance serializes for reports but invariant-bearing references cannot
     // be minted by deserializing arbitrary JSON.
     let parameter = ParameterProvenance {
+        subject: None,
         parameter: "R7.resistance".into(),
         value: "10k".into(),
         origin: ValueOrigin::Artifact {
@@ -1027,6 +1028,7 @@ fn error_budget_plain_summary_distinguishes_settings_measurement_and_unknown() {
 #[test]
 fn provenance_and_origin_shapes() {
     let p = ParameterProvenance {
+        subject: None,
         parameter: "U2.vout".into(),
         value: "3.3 V".into(),
         origin: ValueOrigin::Model {
