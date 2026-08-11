@@ -88,8 +88,10 @@ impl Refusal {
 
 /// Version of the `run --json` document contract (`JsonReport` plus the
 /// `ok`/`verdict`/`serious_count`/`actionable_count` rollup `to_json`
-/// prepends). Bump on a breaking change only; additive fields keep it.
-pub const RUN_REPORT_SCHEMA_VERSION: u32 = 3;
+/// prepends). Bump on a breaking change only; additive fields keep it. Expanding
+/// a closed enum is a versioned change because an older JSON Schema rejects the
+/// new value even though older documents remain readable by the new schema.
+pub const RUN_REPORT_SCHEMA_VERSION: u32 = 4;
 
 /// Exit code a strict headless run (`--strict`) or hauksbee-ci must use when the
 /// analog co-sim tripped the consecutive-failed-chunk abort. Centralised so both
@@ -1109,29 +1111,6 @@ pub struct NetActivity {
 // DRC grouping (Fix #8 / Theme D)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A schematic's declaration that a reported copper contact is deliberate.
-///
-/// Mirrors [`hauksbee_extract::DeclaredTie`]. The extract crate carries no
-/// schema derives on purpose, so the published shape lives here with the rest of
-/// the report schema rather than leaking `schemars` into the readers.
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
-pub struct DeclaredTieNote {
-    /// The declaration in the schematic's own vocabulary, naming the symbols and
-    /// the net, e.g. `AGND7 wired to SUPPLY6 in net GND`.
-    pub declaration: String,
-    /// The companion input it was read from, as the user named it.
-    pub source: String,
-}
-
-impl From<&hauksbee_extract::DeclaredTie> for DeclaredTieNote {
-    fn from(tie: &hauksbee_extract::DeclaredTie) -> Self {
-        Self {
-            declaration: tie.declaration.clone(),
-            source: tie.source.clone(),
-        }
-    }
-}
-
 /// A real short between two nets (gap <= 0: touching copper).
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct DrcShort {
@@ -1143,11 +1122,6 @@ pub struct DrcShort {
     /// "serious" for a short, "note" when the run could not validate the
     /// board format or a companion schematic declares this tie deliberate.
     pub severity: String,
-    /// Set when a companion schematic declares these two nets deliberately
-    /// tied. The copper contact above is unchanged and still reported; this says
-    /// the design intends it, and names the symbols and file that say so.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub declared_tie: Option<DeclaredTieNote>,
     /// Human one-line description, mirroring `JsonFinding.plain` so every
     /// `--json` finding category reads uniformly (SI/lint already carry it).
     pub plain: String,
@@ -1248,19 +1222,18 @@ pub struct DrcStructured {
     /// are different claims, so every renderer states this one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppression_note: Option<String>,
-    /// Set when NO companion schematic was supplied on a format that can declare
-    /// deliberate net ties in one, naming that schematic as the unlocking upload.
-    /// Mutually exclusive with [`Self::declared_tie_source`]: an input is either
-    /// missing or it is not.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tie_declaration_hint: Option<String>,
-    /// Set when a companion schematic WAS read: which file, and what it declared.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub declared_tie_source: Option<String>,
 }
 
 impl DrcStructured {
     pub fn from_report(report: &DrcReport) -> Self {
+        Self::from_report_with_ties(report, None, false)
+    }
+
+    pub fn from_report_with_ties(
+        report: &DrcReport,
+        qualification: Option<&hauksbee_extract::DrcTieQualification>,
+        missing_eagle_schematic: bool,
+    ) -> Self {
         let mut shorts = Vec::new();
         // Group clearance findings by (net_a, net_b, layer). Within a group we
         // split at_limit (gap >= rule, i.e. exactly at or, defensively, above)
@@ -1280,6 +1253,7 @@ impl DrcStructured {
         let phantom = report.version_warning.is_some();
 
         for f in &report.findings {
+            let declared_tie = qualification.and_then(|ties| ties.tie_for(f));
             match f.kind {
                 // A short is serious unless something specific says otherwise:
                 // the format was unvalidated, or a companion schematic declares
@@ -1293,16 +1267,15 @@ impl DrcStructured {
                     layer: f.layer.clone(),
                     gap_mm: f.gap_mm,
                     loc_mm: [f.x, f.y],
-                    severity: if phantom || f.declared_tie.is_some() {
+                    severity: if phantom || declared_tie.is_some() {
                         "note".to_string()
                     } else {
                         "serious".to_string()
                     },
-                    declared_tie: f.declared_tie.as_ref().map(DeclaredTieNote::from),
                     // The geometry sentence is identical either way: the nets DO
                     // share copper, and a declared tie does not make that less
                     // true. Only the clause after it changes.
-                    plain: match &f.declared_tie {
+                    plain: match declared_tie {
                         Some(tie) => format!(
                             "{} and {} are joined in copper on {} at ({:.2}, {:.2}) mm \
                              (gap {:.3} mm), and the schematic declares the tie: {} ({})",
@@ -1320,7 +1293,7 @@ impl DrcStructured {
                             f.net_a_name, f.net_b_name, f.layer, f.x, f.y, f.gap_mm
                         ),
                     },
-                    fix: match (&f.declared_tie, &report.tie_declaration_hint) {
+                    fix: match (declared_tie, missing_eagle_schematic) {
                         (Some(_), _) => "nothing to fix if the tie is intended: the schematic \
                              declares it. Check the join is where the schematic puts it (a star \
                              ground should meet at one point), and that the copper carries the \
@@ -1329,12 +1302,11 @@ impl DrcStructured {
                         // No schematic was supplied and this format can declare
                         // ties in one. Name that upload rather than leaving the
                         // reader to guess what would settle it.
-                        (None, Some(hint)) => format!(
-                            "separate the two nets' copper: widen the gap or reroute so the \
-                             trace/pad spacing clears the clearance rule. If this contact is \
-                             deliberate, {hint}"
-                        ),
-                        (None, None) => "separate the two nets' copper: widen the gap or reroute \
+                        (None, true) => "separate the two nets' copper: widen the gap or reroute \
+                             so the trace/pad spacing clears the clearance rule. If this contact \
+                             is deliberate, supply the same-named Eagle .sch companion and rerun"
+                            .to_string(),
+                        (None, false) => "separate the two nets' copper: widen the gap or reroute \
                              so the trace/pad spacing clears the clearance rule"
                             .to_string(),
                     },
@@ -1411,10 +1383,6 @@ impl DrcStructured {
             at_limit,
             version_warning: report.version_warning.clone(),
             suppression_note: report.suppression_note(),
-            // `qualify_with_declared_ties` clears the hint when it sets the
-            // source, so at most one of these is ever present.
-            tie_declaration_hint: report.tie_declaration_hint.clone(),
-            declared_tie_source: report.declared_tie_source.clone(),
         }
     }
 
@@ -1435,14 +1403,6 @@ impl DrcStructured {
         // Before any "clean" claim: a suppressed class is not a checked class.
         if let Some(n) = &self.suppression_note {
             let _ = writeln!(s, "\nNOT CHECKED: {n}");
-        }
-        // And before any short is read as a defect: whether the input that says
-        // which contacts are deliberate was available at all.
-        if let Some(n) = &self.declared_tie_source {
-            let _ = writeln!(s, "\nDECLARED TIES: {n}");
-        }
-        if let Some(n) = &self.tie_declaration_hint {
-            let _ = writeln!(s, "\nNOT DECLARED: {n}");
         }
         if self.shorts.is_empty() && self.violations.is_empty() && self.at_limit.is_empty() {
             let _ = writeln!(s, "no shorts or clearance violations.");
@@ -1468,13 +1428,6 @@ impl DrcStructured {
                     "  [{tag}] {} touches {} on {} (gap {:.4} mm) at x={:.1}, y={:.1}",
                     sh.net_a, sh.net_b, sh.layer, sh.gap_mm, sh.loc_mm[0], sh.loc_mm[1]
                 );
-                if let Some(tie) = &sh.declared_tie {
-                    let _ = writeln!(
-                        s,
-                        "          declared in the schematic: {} ({})",
-                        tie.declaration, tie.source
-                    );
-                }
             }
         }
         if !self.violations.is_empty() {
@@ -1787,7 +1740,8 @@ pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFind
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct JsonReport {
     /// Version of the `run --json` document contract. Bumped when a field
-    /// changes meaning or is removed; purely additive fields do not bump it.
+    /// changes meaning, is removed, or a closed enum gains a value; purely
+    /// additive optional fields do not bump it.
     /// The generated schema lives in `crates/hauksbee-engine/schemas/`.
     pub schema_version: u32,
     pub board: String,
@@ -2143,7 +2097,7 @@ impl JsonReport {
                     // a declared star ground through `ok`/`verdict` while every
                     // per-finding surface, the strict gate and the JUnit artifact
                     // all call it a note.
-                    if s.declared_tie.is_some() {
+                    if s.severity != "serious" {
                         continue;
                     }
                     let nets = vec![s.net_a.clone(), s.net_b.clone()];
@@ -2536,7 +2490,6 @@ mod tests {
             gap_mm: 0.0,
             loc_mm: [1.0, 2.0],
             severity: "serious".into(),
-            declared_tie: None,
             plain: "GND shorts VCC on F.Cu at (1.00, 2.00) mm (gap 0.000 mm)".into(),
             fix: "separate the two nets' copper".into(),
         };
@@ -2659,7 +2612,6 @@ mod tests {
                 net: 2,
                 owner: String::new(),
             },
-            declared_tie: None,
         }
     }
 
@@ -2680,8 +2632,6 @@ mod tests {
             primitive_count: 2,
             version_warning: Some("unreliable on this version".into()),
             zone_pad_overlaps_suppressed: Some(0),
-            tie_declaration_hint: None,
-            declared_tie_source: None,
         };
         let st = DrcStructured::from_report(&report);
         assert_eq!(st.shorts.len(), 1);
@@ -2701,12 +2651,16 @@ mod tests {
         assert!(st.version_warning.is_none());
     }
 
-    /// A tie the schematic declares, for the reclassification tests below.
-    fn declared(declaration: &str) -> hauksbee_extract::DeclaredTie {
-        hauksbee_extract::DeclaredTie {
-            declaration: declaration.to_string(),
-            source: "emonTx V3.4.5.sch".to_string(),
-        }
+    fn declared_qualification(report: &DrcReport) -> hauksbee_extract::DrcTieQualification {
+        report.qualify_with_declared_ties(
+            "emonTx V3.4.5.sch",
+            &[hauksbee_extract::DeclaredNetTie {
+                net: "GND".into(),
+                tied_net: "AGND".into(),
+                symbol: "AGND7".into(),
+                tied_to: vec!["SUPPLY6".into()],
+            }],
+        )
     }
 
     fn eagle_report(findings: Vec<DrcFinding>) -> DrcReport {
@@ -2716,20 +2670,15 @@ mod tests {
             primitive_count: 2,
             version_warning: None,
             zone_pad_overlaps_suppressed: Some(0),
-            tie_declaration_hint: None,
-            declared_tie_source: None,
         }
     }
 
     #[test]
     fn a_declared_tie_becomes_a_note_that_still_states_the_copper_contact() {
-        let mut finding = short("GND", "AGND");
-        finding.declared_tie = Some(declared("AGND7 wired to SUPPLY6 in net GND"));
-        let mut report = eagle_report(vec![finding]);
-        report.declared_tie_source =
-            Some("emonTx V3.4.5.sch (1 declared net tie, 1 copper contact qualified)".into());
+        let report = eagle_report(vec![short("GND", "AGND")]);
+        let qualification = declared_qualification(&report);
 
-        let st = DrcStructured::from_report(&report);
+        let st = DrcStructured::from_report_with_ties(&report, Some(&qualification), false);
         assert_eq!(st.shorts.len(), 1, "the finding is not deleted");
         assert_eq!(
             st.shorts[0].severity, "note",
@@ -2766,22 +2715,15 @@ mod tests {
             rendered.contains("[NOTE] GND touches AGND on F.Cu"),
             "{rendered}"
         );
-        assert!(
-            rendered.contains("declared in the schematic: AGND7 wired to SUPPLY6"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("DECLARED TIES:"), "{rendered}");
+        assert!(rendered.contains("[NOTE] GND touches AGND"), "{rendered}");
     }
 
     #[test]
     fn without_a_schematic_the_short_stays_serious_and_names_the_upload() {
-        let mut report = eagle_report(vec![short("GND", "AGND")]);
-        report.tie_declaration_hint =
-            Some("Supply the board's Eagle .sch alongside it, then re-run.".into());
+        let report = eagle_report(vec![short("GND", "AGND")]);
 
-        let st = DrcStructured::from_report(&report);
+        let st = DrcStructured::from_report_with_ties(&report, None, true);
         assert_eq!(st.shorts[0].severity, "serious");
-        assert!(st.shorts[0].declared_tie.is_none());
         // The abstention rule: a finding that cannot be settled from this input
         // must name the input that settles it.
         assert!(
@@ -2789,12 +2731,6 @@ mod tests {
             "the fix must name the unlocking upload: {}",
             st.shorts[0].fix
         );
-        assert_eq!(
-            st.tie_declaration_hint.as_deref(),
-            Some("Supply the board's Eagle .sch alongside it, then re-run.")
-        );
-        assert!(st.declared_tie_source.is_none());
-        assert!(st.render().contains("NOT DECLARED:"));
 
         // And the plain-language surface carries it too.
         let plain = crate::plain::plain_drc_structured(&st).render();
@@ -2805,11 +2741,10 @@ mod tests {
     fn one_declared_tie_does_not_downgrade_an_undeclared_short_beside_it() {
         // Severity is per finding. A board with a declared star ground and a real
         // bridge elsewhere must report one note and one serious short.
-        let mut tied = short("GND", "AGND");
-        tied.declared_tie = Some(declared("AGND7 wired to SUPPLY6 in net GND"));
-        let report = eagle_report(vec![tied, short("+5V", "VBAT")]);
+        let report = eagle_report(vec![short("GND", "AGND"), short("+5V", "VBAT")]);
+        let qualification = declared_qualification(&report);
 
-        let st = DrcStructured::from_report(&report);
+        let st = DrcStructured::from_report_with_ties(&report, Some(&qualification), false);
         assert_eq!(st.shorts.len(), 2);
         let by_pair: std::collections::BTreeMap<&str, &str> = st
             .shorts

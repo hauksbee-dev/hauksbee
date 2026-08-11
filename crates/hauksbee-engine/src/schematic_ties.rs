@@ -58,6 +58,7 @@ pub struct SchematicTies {
 /// project for no gain.
 pub fn resolve(
     board_path: &Path,
+    board: &hauksbee_extract::ExtractedBoard,
     explicit: Option<&Path>,
     board_is_eagle: bool,
 ) -> anyhow::Result<Option<SchematicTies>> {
@@ -79,6 +80,17 @@ pub fn resolve(
         return Ok(None);
     }
     if let Some(path) = explicit {
+        let board_stem = board_path.file_stem().and_then(|stem| stem.to_str());
+        let schematic_stem = path.file_stem().and_then(|stem| stem.to_str());
+        if board_stem.is_none() || schematic_stem.is_none() || board_stem != schematic_stem {
+            anyhow::bail!(
+                "--schematic {}: design identity does not match board {}. Eagle companion files \
+                 must be the same named .brd/.sch pair; refusing to qualify shorts using a \
+                 schematic from another design.",
+                path.display(),
+                board_path.display()
+            );
+        }
         let raw = std::fs::read(path)
             .map_err(|e| anyhow::anyhow!("--schematic {}: {e}", path.display()))?;
         let text = String::from_utf8_lossy(&raw);
@@ -100,6 +112,7 @@ pub fn resolve(
         }
         let ties = hauksbee_extract::declared_net_ties(&text)
             .map_err(|e| anyhow::anyhow!("--schematic {}: {e}", path.display()))?;
+        verify_design_identity(board_path, board, path, &text)?;
         return Ok(Some(SchematicTies {
             path: path.to_path_buf(),
             raw,
@@ -125,6 +138,7 @@ pub fn resolve(
     let Ok(ties) = hauksbee_extract::declared_net_ties(&text) else {
         return Ok(None);
     };
+    verify_design_identity(board_path, board, &sibling, &text)?;
     Ok(Some(SchematicTies {
         path: sibling,
         raw,
@@ -133,14 +147,49 @@ pub fn resolve(
     }))
 }
 
+fn verify_design_identity(
+    board_path: &Path,
+    board: &hauksbee_extract::ExtractedBoard,
+    schematic_path: &Path,
+    schematic: &str,
+) -> anyhow::Result<()> {
+    let mut board_parts: Vec<_> = board
+        .components
+        .iter()
+        .map(|component| hauksbee_extract::SchematicPartIdentity {
+            reference: component.reference.clone(),
+            value: component.value.clone(),
+        })
+        .collect();
+    board_parts.sort();
+    board_parts.dedup();
+    let schematic_parts = hauksbee_extract::schematic_part_identities(schematic)
+        .map_err(|error| anyhow::anyhow!("--schematic {}: {error}", schematic_path.display()))?;
+    if board_parts != schematic_parts {
+        anyhow::bail!(
+            "--schematic {}: design identity does not match board {}: physical reference/value \
+             sets differ (board {}, schematic {}). Refusing to qualify any copper contact.",
+            schematic_path.display(),
+            board_path.display(),
+            board_parts.len(),
+            schematic_parts.len(),
+        );
+    }
+    Ok(())
+}
+
 impl SchematicTies {
-    /// Apply these declarations to a DRC report and describe what happened, for
-    /// the inventory's contribution row.
-    ///
-    /// Reclassifies; never deletes. See
-    /// [`hauksbee_extract::DrcReport::qualify_with_declared_ties`].
-    pub fn apply(&self, report: &mut hauksbee_extract::DrcReport) -> String {
-        let qualified = report.qualify_with_declared_ties(&self.path.to_string_lossy(), &self.ties);
+    /// Qualify the measured report without changing its established public
+    /// shape. Renderers and gates consume the returned side data.
+    pub fn qualify(
+        &self,
+        report: &hauksbee_extract::DrcReport,
+    ) -> hauksbee_extract::DrcTieQualification {
+        report.qualify_with_declared_ties(&self.path.to_string_lossy(), &self.ties)
+    }
+
+    pub fn contribution(&self, qualification: &hauksbee_extract::DrcTieQualification) -> String {
+        let qualified = qualification.qualified_count();
         format!(
             "{} declared net tie{} read from the schematic's supply symbols; {qualified} copper \
              contact{} reclassified from serious short to a declared tie",
@@ -155,13 +204,26 @@ impl SchematicTies {
 mod tests {
     use super::*;
 
+    fn empty_board() -> hauksbee_extract::ExtractedBoard {
+        hauksbee_extract::ExtractedBoard {
+            name: "board".into(),
+            nets: Vec::new(),
+            components: Vec::new(),
+        }
+    }
+
     #[test]
     fn a_non_eagle_board_never_looks_for_a_companion() {
         // A `.kicad_pcb` declares its ties in the layout the DRC already reads, so
         // there is no companion to find and none is looked for, even if a `.sch`
         // happens to sit beside it (KiCad 5 legacy `.sch` files often do).
-        let resolved = resolve(Path::new("/nonexistent/board.kicad_pcb"), None, false)
-            .expect("no error without an explicit path");
+        let resolved = resolve(
+            Path::new("/nonexistent/board.kicad_pcb"),
+            &empty_board(),
+            None,
+            false,
+        )
+        .expect("no error without an explicit path");
         assert!(resolved.is_none());
     }
 
@@ -173,6 +235,7 @@ mod tests {
         // could reclassify a KiCad board's short on a net-name coincidence.
         let err = resolve(
             Path::new("/nonexistent/board.kicad_pcb"),
+            &empty_board(),
             Some(Path::new("/nonexistent/other.sch")),
             false,
         )
@@ -189,6 +252,7 @@ mod tests {
     fn a_missing_explicit_schematic_is_an_error_not_a_shrug() {
         let err = resolve(
             Path::new("/nonexistent/board.brd"),
+            &empty_board(),
             Some(Path::new("/nonexistent/absent.sch")),
             true,
         )
@@ -200,15 +264,20 @@ mod tests {
     fn an_explicit_path_that_is_not_an_eagle_schematic_is_refused() {
         let dir = std::env::temp_dir().join("hauksbee-sch-ties-test");
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join("not-a-schematic.sch");
+        let path = dir.join("board.sch");
         // An Eagle BOARD, not a schematic: the discriminator is `<schematic>`.
         std::fs::write(
             &path,
             r#"<?xml version="1.0"?><eagle version="6.6.0"><drawing><board><signals/></board></drawing></eagle>"#,
         )
         .expect("write fixture");
-        let err = resolve(Path::new("/nonexistent/board.brd"), Some(&path), true)
-            .expect_err("a .brd passed as the schematic is an error");
+        let err = resolve(
+            Path::new("/nonexistent/board.brd"),
+            &empty_board(),
+            Some(&path),
+            true,
+        )
+        .expect_err("a .brd passed as the schematic is an error");
         assert!(format!("{err}").contains("not an Eagle .sch"), "{err}");
     }
 
@@ -216,8 +285,74 @@ mod tests {
     fn a_missing_sibling_is_silent() {
         // The overwhelmingly common case for an Eagle board: no companion on
         // disk. That is not an error, and the shorts keep their unlocking hint.
-        let resolved = resolve(Path::new("/nonexistent/board.brd"), None, true)
-            .expect("absence is not an error");
+        let resolved = resolve(
+            Path::new("/nonexistent/board.brd"),
+            &empty_board(),
+            None,
+            true,
+        )
+        .expect("absence is not an error");
         assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn an_explicit_schematic_with_a_different_design_name_is_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let schematic = dir.path().join("revision-b.sch");
+        std::fs::write(
+            &schematic,
+            r#"<?xml version="1.0"?><eagle><drawing><schematic><libraries/><parts/><sheets/></schematic></drawing></eagle>"#,
+        )
+        .expect("write schematic");
+
+        let error = resolve(
+            &dir.path().join("revision-a.brd"),
+            &empty_board(),
+            Some(&schematic),
+            true,
+        )
+        .expect_err("a differently named design must fail closed");
+        assert!(
+            error.to_string().contains("design identity"),
+            "the refusal must explain the identity contract: {error}"
+        );
+    }
+
+    #[test]
+    fn the_same_filename_from_a_different_design_is_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let schematic = dir.path().join("design.sch");
+        std::fs::write(
+            &schematic,
+            r#"<?xml version="1.0"?><eagle><drawing><schematic><libraries/><parts><part name="R1" library="device" deviceset="R" value="10k"/></parts><sheets/></schematic></drawing></eagle>"#,
+        )
+        .expect("write schematic");
+        let board = hauksbee_extract::ExtractedBoard {
+            name: "design".into(),
+            nets: Vec::new(),
+            components: vec![hauksbee_extract::Component {
+                reference: "U1".into(),
+                value: "MCU".into(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: String::new(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: Vec::new(),
+            }],
+        };
+
+        let error = resolve(
+            &dir.path().join("design.brd"),
+            &board,
+            Some(&schematic),
+            true,
+        )
+        .expect_err("same basename alone cannot establish design identity");
+        assert!(
+            error.to_string().contains("reference/value sets differ"),
+            "{error}"
+        );
     }
 }

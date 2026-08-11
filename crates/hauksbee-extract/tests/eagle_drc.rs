@@ -1622,31 +1622,7 @@ fn an_eagle_short_names_the_schematic_as_the_unlocking_upload() {
     // than leaving the reader with an unresolvable finding.
     let report = drc("", "", CROSSING_GND_AGND);
     assert_eq!(report.short_count(), 1);
-    assert_eq!(
-        report.undeclared_short_count(),
-        1,
-        "with no schematic nothing is declared, so the short still gates"
-    );
-    assert!(
-        report.declared_tie_source.is_none(),
-        "no schematic was read"
-    );
-    let hint = report
-        .tie_declaration_hint
-        .as_deref()
-        .expect("an Eagle short must name the unlocking upload");
-    assert!(
-        hint.contains(".sch"),
-        "the hint must name the schematic: {hint}"
-    );
-    assert!(
-        hint.contains("Supply") && hint.contains("re-run"),
-        "the hint must say what to do with it: {hint}"
-    );
-    assert!(
-        report.shorts().all(|f| f.declared_tie.is_none()),
-        "nothing is qualified without a schematic"
-    );
+    assert_eq!(report.short_count(), 1, "extraction never guesses intent");
 }
 
 #[test]
@@ -1666,7 +1642,7 @@ fn a_clean_eagle_board_gains_no_unlocking_hint() {
 "#,
     );
     assert_eq!(report.short_count(), 0);
-    assert!(report.tie_declaration_hint.is_none());
+    assert!(report.findings.is_empty());
 }
 
 #[test]
@@ -1674,14 +1650,14 @@ fn a_declared_tie_reclassifies_the_short_without_removing_it() {
     // Side (a): the schematic declares GND/AGND tied, so the contact stops being
     // a defect. It must NOT stop being reported: the copper claim, its layer,
     // its location and its measured gap all survive intact.
-    let mut report = drc("", "", CROSSING_GND_AGND);
+    let report = drc("", "", CROSSING_GND_AGND);
     let before = report.shorts().next().cloned().expect("one short");
     let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
         .expect("schematic parses");
     assert_eq!(ties.len(), 1, "one declaration, got {ties:?}");
 
     let qualified = report.qualify_with_declared_ties("emonTx.sch", &ties);
-    assert_eq!(qualified, 1);
+    assert_eq!(qualified.qualified_count(), 1);
 
     // Still one short, still the same measurement. This is the reclassify-not-
     // delete contract: a user must be able to see that GND and AGND touch.
@@ -1699,26 +1675,16 @@ fn a_declared_tie_reclassifies_the_short_without_removing_it() {
 
     // What changed: it no longer gates, and it carries the declaration.
     assert_eq!(
-        report.undeclared_short_count(),
+        qualified.undeclared_shorts(&report).count(),
         0,
         "a declared tie is not a build failure"
     );
-    let tie = after
-        .declared_tie
-        .as_ref()
-        .expect("carries the declaration");
+    let tie = qualified.tie_for(after).expect("carries the declaration");
     assert_eq!(tie.declaration, "AGND7 wired to SUPPLY6 in net GND");
     assert_eq!(tie.source, "emonTx.sch");
     // And the run records which file it read, replacing the "supply it" hint.
-    let source = report
-        .declared_tie_source
-        .as_deref()
-        .expect("records source");
+    let source = qualified.source_summary();
     assert!(source.contains("emonTx.sch"), "{source}");
-    assert!(
-        report.tie_declaration_hint.is_none(),
-        "the schematic was supplied, so it is no longer a missing input"
-    );
 }
 
 #[test]
@@ -1726,26 +1692,23 @@ fn copper_the_schematic_does_not_declare_stays_a_serious_short() {
     // Side (c), the false-negative guard the reverted geometry narrowing failed.
     // The schematic IS supplied and parses; it simply does not declare this tie.
     // Supplying a schematic must never be a way to silence a short.
-    let mut report = drc("", "", CROSSING_GND_AGND);
+    let report = drc("", "", CROSSING_GND_AGND);
     let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_nothing())
         .expect("schematic parses");
     assert!(ties.is_empty(), "this schematic declares no tie: {ties:?}");
 
     let qualified = report.qualify_with_declared_ties("separate-grounds.sch", &ties);
-    assert_eq!(qualified, 0, "nothing to qualify");
+    assert_eq!(qualified.qualified_count(), 0, "nothing to qualify");
     assert_eq!(report.short_count(), 1);
     assert_eq!(
-        report.undeclared_short_count(),
+        qualified.undeclared_shorts(&report).count(),
         1,
         "the short still gates: the design does not claim this contact"
     );
-    assert!(report.shorts().all(|f| f.declared_tie.is_none()));
+    assert!(report.shorts().all(|f| qualified.tie_for(f).is_none()));
     // The source is still recorded, because "the schematic was read and declares
     // nothing here" is a stronger, different statement from never having looked.
-    let source = report
-        .declared_tie_source
-        .as_deref()
-        .expect("the schematic was read");
+    let source = qualified.source_summary();
     assert!(source.contains("0 declared net ties"), "{source}");
 }
 
@@ -1765,20 +1728,21 @@ fn a_declared_tie_qualifies_only_the_pair_it_names() {
 </signal>
 "#
     );
-    let mut report = drc("", "", &signals);
+    let report = drc("", "", &signals);
     assert_eq!(report.short_count(), 2);
     let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
         .expect("schematic parses");
-    assert_eq!(report.qualify_with_declared_ties("emonTx.sch", &ties), 1);
+    let qualified = report.qualify_with_declared_ties("emonTx.sch", &ties);
+    assert_eq!(qualified.qualified_count(), 1);
 
     assert_eq!(report.short_count(), 2, "both contacts still reported");
     assert_eq!(
-        report.undeclared_short_count(),
+        qualified.undeclared_shorts(&report).count(),
         1,
         "the undeclared +5V/VBAT contact still gates"
     );
-    let gating: Vec<_> = report
-        .undeclared_shorts()
+    let gating: Vec<_> = qualified
+        .undeclared_shorts(&report)
         .map(|f| {
             let mut n = [f.net_a_name.as_str(), f.net_b_name.as_str()];
             n.sort_unstable();
@@ -1800,13 +1764,13 @@ fn a_declared_tie_does_not_excuse_a_clearance_violation() {
   <wire x1="0" y1="0.6" x2="10" y2="0.6" width="0.5" layer="1"/>
 </signal>
 "#;
-    let mut report = drc("", "", signals);
+    let report = drc("", "", signals);
     assert_eq!(report.short_count(), 0, "they do not touch");
     let before = report.clearance_violations().count();
     assert!(before > 0, "but they are inside the 0.1524 mm rule");
     let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
         .expect("schematic parses");
-    report.qualify_with_declared_ties("emonTx.sch", &ties);
+    let qualified = report.qualify_with_declared_ties("emonTx.sch", &ties);
     assert_eq!(
         report.clearance_violations().count(),
         before,
@@ -1815,7 +1779,45 @@ fn a_declared_tie_does_not_excuse_a_clearance_violation() {
     assert!(
         report
             .clearance_violations()
-            .all(|f| f.declared_tie.is_none()),
+            .all(|f| qualified.tie_for(f).is_none()),
         "and none of them is marked declared"
+    );
+}
+
+#[test]
+fn one_multilayer_tie_does_not_excuse_a_spatially_distinct_bridge() {
+    let signals = r#"
+<signal name="GND">
+  <wire x1="0" y1="0" x2="20" y2="0" width="0.5" layer="1"/>
+  <wire x1="0" y1="0" x2="20" y2="0" width="0.5" layer="16"/>
+</signal>
+<signal name="AGND">
+  <wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="1"/>
+  <wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="16"/>
+  <wire x1="15" y1="-5" x2="15" y2="5" width="0.5" layer="1"/>
+</signal>"#;
+    let report = drc("", "", signals);
+    assert_eq!(
+        report.short_count(),
+        3,
+        "two layers at x=5 plus one bridge at x=15"
+    );
+
+    let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
+        .expect("schematic parses");
+    let qualified = report.qualify_with_declared_ties("board.sch", &ties);
+    assert_eq!(qualified.qualified_count(), 2);
+    assert_eq!(
+        qualified.undeclared_shorts(&report).count(),
+        1,
+        "the spatially distinct bridge must remain gate-grade"
+    );
+    let remaining = qualified
+        .undeclared_shorts(&report)
+        .next()
+        .expect("one bridge remains");
+    assert!(
+        (remaining.x - 15.0).abs() < 1e-6,
+        "wrong bridge remained: {remaining:?}"
     );
 }

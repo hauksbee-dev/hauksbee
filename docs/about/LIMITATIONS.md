@@ -413,24 +413,17 @@ names a package: a supply symbol is a schematic-only marker, not a part. Ordinar
 libraries mark a real component's power pins `sup`, so an any-`sup`-pin rule turned
 an SD socket and an XBEE module into blanket ground exemptions, 6 false
 declarations on `margay_logger` and 19 on emonTx V3.2 including `3.3V` to `GND`,
-each able to reclassify a genuine rail-to-ground short. Over the twelve Eagle
-board/schematic pairs available, the admitted tests declare on exactly the five
-emonTx revisions that drew the tie and nowhere else. A schematic that declares
-nothing qualifies nothing: V3.4.0 supplies its own and its contacts stay serious,
-the false-negative guard the reverted `isolate` narrowing failed. The two pour
-over-reports above are unaffected; they are a fill-reconstruction problem, not a
-declaration problem.
+each able to reclassify a genuine rail-to-ground short. The historical twelve-pair
+exploratory sweep is not a retained release artifact and is not claimed as one.
+The always-run contract is the tracked declared/undeclared pair under
+`crates/hauksbee-extract/tests/fixtures/eagle_ties/`, plus focused parser tests for
+multi-pin, packaged, URN-collision and structural-scope false positives.
 
-Two residuals stay open, both recorded rather than claimed away, and both leaving
-the copper contact and the schematic's path on every surface so a report can be
-audited. There is **no board/schematic identity check**, so `--schematic` pointed
-at a different revision of the same design reclassifies contacts that revision
-never declared (auto-discovery cannot reach this; it needs the flag and the wrong
-file). And **a declaration is not located**: a supply symbol says two nets meet,
-not where, so a second accidental bridge on the same pair elsewhere is qualified
-too. The report states how many contacts one declaration covered, and the
-remediation text asks the reader to check the join is where the schematic puts it.
-See [`../checks/SHORTS.md`](../checks/SHORTS.md) for both.
+An explicit companion must share the board basename and exactly match the board's
+physical reference/value set. One declaration qualifies only one unambiguous
+same-location contact cluster (all copper layers at that point); a spatially
+distinct bridge on the same pair remains serious. Ambiguous equal-sized contact
+clusters fail closed. See [`../checks/SHORTS.md`](../checks/SHORTS.md).
 
 Scoped to Eagle. A `.kicad_pcb` declares its ties in the layout the DRC already
 has (`net_tie_pad_groups`, `(attr net_tie)`) and a `.kicad_sch` has no construct

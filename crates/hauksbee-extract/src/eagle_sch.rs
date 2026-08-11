@@ -53,6 +53,14 @@ pub struct DeclaredNetTie {
     pub tied_to: Vec<String>,
 }
 
+/// Physical schematic part identity used to prove a `.brd`/`.sch` pair belongs
+/// to the same design before any declaration can lower severity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SchematicPartIdentity {
+    pub reference: String,
+    pub value: String,
+}
+
 impl DeclaredNetTie {
     /// True when this declaration covers a copper contact between these two
     /// nets, in either order. Net names are compared exactly: Eagle net names
@@ -91,8 +99,7 @@ impl DeclaredNetTie {
 /// is checked near the top, where it genuinely is. The scan is one linear pass
 /// and cheap next to parsing the file.
 pub fn looks_like_eagle_schematic(text: &str) -> bool {
-    let head: String = text.chars().take(1024).collect();
-    head.contains("<eagle") && text.contains("<schematic")
+    parse(text).is_ok()
 }
 
 /// Every deliberate net tie the schematic declares, in file order.
@@ -130,6 +137,13 @@ pub fn declared_net_ties(text: &str) -> Result<Vec<DeclaredNetTie>, ExtractError
         }
     }
     Ok(out)
+}
+
+pub fn schematic_part_identities(text: &str) -> Result<Vec<SchematicPartIdentity>, ExtractError> {
+    let mut parts = parse(text)?.physical_parts;
+    parts.sort();
+    parts.dedup();
+    Ok(parts)
 }
 
 /// One `<segment>` of one `<net>`: which net it belongs to and which of its
@@ -178,11 +192,20 @@ struct DevicesetScan {
     any_device_has_package: bool,
 }
 
+/// Eagle library identity. Embedded libraries can share their display name;
+/// the URN is the stable identity carried by both `<library>` and `<part>`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LibraryId {
+    name: String,
+    urn: Option<String>,
+}
+
 struct Parsed {
     /// Part name -> the net name its supply symbol imposes. Only supply parts
     /// appear here, so a lookup miss means "an ordinary component".
     part_supply: HashMap<String, String>,
     segments: Vec<Segment>,
+    physical_parts: Vec<SchematicPartIdentity>,
 }
 
 /// A single streaming pass, in the order Eagle writes the file: `<libraries>`
@@ -194,29 +217,95 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
 
     // (library, symbol) -> the supply net name, for symbols that pass BOTH tests
     // in `SymbolPins` below.
-    let mut supply_symbols: HashMap<(String, String), String> = HashMap::new();
+    let mut supply_symbols: HashMap<(LibraryId, String), String> = HashMap::new();
     // (library, deviceset) -> the supply net name, resolved at `</deviceset>`.
-    let mut supply_devicesets: HashMap<(String, String), String> = HashMap::new();
+    let mut supply_devicesets: HashMap<(LibraryId, String), String> = HashMap::new();
+    let mut libraries_by_name: HashMap<String, Vec<LibraryId>> = HashMap::new();
     let mut part_supply: HashMap<String, String> = HashMap::new();
     let mut segments: Vec<Segment> = Vec::new();
+    let mut physical_parts = Vec::new();
 
-    let mut cur_library = String::new();
+    let mut cur_library: Option<LibraryId> = None;
     let mut cur_symbol: Option<String> = None;
     let mut cur_symbol_pins = SymbolPins::default();
     let mut cur_deviceset: Option<DevicesetScan> = None;
     let mut cur_net: Option<String> = None;
     let mut cur_segment: Option<Segment> = None;
+    let mut saw_document_element = false;
     let mut saw_eagle_root = false;
+    let mut in_eagle = false;
+    let mut in_schematic = false;
+    let mut saw_schematic = false;
+    let mut closed_schematic = false;
+    let mut invalid_structure = false;
+    let mut element_path: Vec<Vec<u8>> = Vec::new();
 
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(event @ (Event::Start(_) | Event::Empty(_))) => {
+                let (e, is_empty) = match &event {
+                    Event::Start(e) => (e, false),
+                    Event::Empty(e) => (e, true),
+                    _ => unreachable!(),
+                };
                 let a = attrs(&e);
+                let name = e.name().as_ref().to_vec();
+                if element_path.is_empty() {
+                    if saw_document_element {
+                        invalid_structure = true;
+                    } else {
+                        saw_document_element = true;
+                        saw_eagle_root = name == b"eagle";
+                    }
+                }
+                if name == b"eagle" && element_path.is_empty() && saw_eagle_root {
+                    in_eagle = !is_empty;
+                    if !is_empty {
+                        element_path.push(name);
+                    }
+                    buf.clear();
+                    continue;
+                }
+                if name == b"schematic" {
+                    let is_real_schematic = in_eagle
+                        && element_path.len() == 2
+                        && element_path[0].as_slice() == b"eagle"
+                        && element_path[1].as_slice() == b"drawing";
+                    if is_real_schematic && !saw_schematic {
+                        saw_schematic = true;
+                        in_schematic = !is_empty;
+                        closed_schematic = is_empty;
+                    } else {
+                        invalid_structure = true;
+                    }
+                    if !is_empty {
+                        element_path.push(name);
+                    }
+                    buf.clear();
+                    continue;
+                }
+                if !in_schematic {
+                    if !is_empty {
+                        element_path.push(name);
+                    }
+                    buf.clear();
+                    continue;
+                }
+                if !is_empty {
+                    element_path.push(name);
+                }
                 match e.name().as_ref() {
-                    b"eagle" => saw_eagle_root = true,
                     b"library" => {
-                        cur_library = a.get("name").cloned().unwrap_or_default();
+                        let library = LibraryId {
+                            name: a.get("name").cloned().unwrap_or_default(),
+                            urn: a.get("urn").cloned(),
+                        };
+                        let identities = libraries_by_name.entry(library.name.clone()).or_default();
+                        if !identities.contains(&library) {
+                            identities.push(library.clone());
+                        }
+                        cur_library = Some(library);
                     }
                     b"symbol" => {
                         cur_symbol = a.get("name").cloned();
@@ -268,10 +357,29 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                         else {
                             continue;
                         };
-                        if let Some(supply) =
-                            supply_devicesets.get(&(library.clone(), deviceset.clone()))
-                        {
+                        let library_id = a.get("library_urn").map_or_else(
+                            || {
+                                let candidates = libraries_by_name.get(library)?;
+                                (candidates.len() == 1).then(|| candidates[0].clone())
+                            },
+                            |urn| {
+                                Some(LibraryId {
+                                    name: library.clone(),
+                                    urn: Some(urn.clone()),
+                                })
+                            },
+                        );
+                        if let Some(supply) = library_id.and_then(|library_id| {
+                            supply_devicesets
+                                .get(&(library_id, deviceset.clone()))
+                                .cloned()
+                        }) {
                             part_supply.insert(name.clone(), supply.clone());
+                        } else {
+                            physical_parts.push(SchematicPartIdentity {
+                                reference: name.clone(),
+                                value: a.get("value").cloned().unwrap_or_default(),
+                            });
                         }
                     }
                     b"net" => cur_net = a.get("name").cloned(),
@@ -293,39 +401,75 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                     _ => {}
                 }
             }
-            Ok(Event::End(e)) => match e.name().as_ref() {
-                b"symbol" => {
-                    if let (Some(symbol), Some(net)) =
-                        (cur_symbol.take(), cur_symbol_pins.supply_net())
+            Ok(Event::End(e)) => {
+                if e.name().as_ref() == b"schematic" {
+                    if in_schematic
+                        && element_path.len() == 3
+                        && element_path[0].as_slice() == b"eagle"
+                        && element_path[1].as_slice() == b"drawing"
+                        && element_path[2].as_slice() == b"schematic"
                     {
-                        supply_symbols.insert((cur_library.clone(), symbol), net.to_string());
+                        in_schematic = false;
+                        closed_schematic = true;
+                    } else {
+                        invalid_structure = true;
                     }
-                    cur_symbol_pins = SymbolPins::default();
+                    element_path.pop();
+                    buf.clear();
+                    continue;
                 }
-                b"deviceset" => {
-                    if let Some(deviceset) = cur_deviceset.take() {
-                        // Exactly one gate, no packaged device, and that gate's
-                        // symbol passed the pin test. All three, or nothing.
-                        if !deviceset.any_device_has_package && deviceset.gate_symbols.len() == 1 {
-                            let key = (cur_library.clone(), deviceset.gate_symbols[0].clone());
-                            if let Some(supply) = supply_symbols.get(&key) {
-                                supply_devicesets
-                                    .insert((cur_library.clone(), deviceset.name), supply.clone());
+                if e.name().as_ref() == b"eagle" {
+                    in_eagle = false;
+                    element_path.pop();
+                    buf.clear();
+                    continue;
+                }
+                if !in_schematic {
+                    element_path.pop();
+                    buf.clear();
+                    continue;
+                }
+                match e.name().as_ref() {
+                    b"symbol" => {
+                        if let (Some(library), Some(symbol), Some(net)) = (
+                            cur_library.clone(),
+                            cur_symbol.take(),
+                            cur_symbol_pins.supply_net(),
+                        ) {
+                            supply_symbols.insert((library, symbol), net.to_string());
+                        }
+                        cur_symbol_pins = SymbolPins::default();
+                    }
+                    b"deviceset" => {
+                        if let Some(deviceset) = cur_deviceset.take() {
+                            // Exactly one gate, no packaged device, and that gate's
+                            // symbol passed the pin test. All three, or nothing.
+                            if !deviceset.any_device_has_package
+                                && deviceset.gate_symbols.len() == 1
+                            {
+                                if let Some(library) = cur_library.clone() {
+                                    let key = (library.clone(), deviceset.gate_symbols[0].clone());
+                                    if let Some(supply) = supply_symbols.get(&key) {
+                                        supply_devicesets
+                                            .insert((library, deviceset.name), supply.clone());
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                b"library" => cur_library.clear(),
-                b"net" => cur_net = None,
-                b"segment" => {
-                    if let Some(segment) = cur_segment.take() {
-                        if !segment.supply_parts.is_empty() {
-                            segments.push(segment);
+                    b"library" => cur_library = None,
+                    b"net" => cur_net = None,
+                    b"segment" => {
+                        if let Some(segment) = cur_segment.take() {
+                            if !segment.supply_parts.is_empty() {
+                                segments.push(segment);
+                            }
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
-            },
+                element_path.pop();
+            }
             Ok(Event::Eof) => break,
             Err(e) => {
                 return Err(ExtractError::Xml(format!(
@@ -337,7 +481,14 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
         buf.clear();
     }
 
-    if !saw_eagle_root {
+    if !saw_eagle_root
+        || !saw_schematic
+        || in_eagle
+        || in_schematic
+        || !closed_schematic
+        || invalid_structure
+        || !element_path.is_empty()
+    {
         return Err(ExtractError::WrongRoot {
             expected: "eagle schematic",
             found: None,
@@ -346,6 +497,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
     Ok(Parsed {
         part_supply,
         segments,
+        physical_parts,
     })
 }
 
@@ -701,6 +853,71 @@ mod tests {
         assert!(
             format!("{err}").contains("eagle schematic"),
             "unhelpful error: {err}"
+        );
+    }
+
+    #[test]
+    fn a_schematic_substring_is_not_a_schematic_element() {
+        let comment = r#"<?xml version="1.0"?><eagle><drawing><board><!-- <schematic> --></board></drawing></eagle>"#;
+        assert!(!looks_like_eagle_schematic(comment));
+        assert!(declared_net_ties(comment).is_err());
+
+        let lookalike =
+            r#"<?xml version="1.0"?><eagle><drawing><schematic_backup/></drawing></eagle>"#;
+        assert!(!looks_like_eagle_schematic(lookalike));
+        assert!(declared_net_ties(lookalike).is_err());
+    }
+
+    #[test]
+    fn a_schematic_element_outside_the_eagle_drawing_path_is_refused() {
+        let nested = r#"<?xml version="1.0"?>
+<eagle><compatibility><schematic><libraries/><parts/><sheets/></schematic></compatibility></eagle>"#;
+        assert!(!looks_like_eagle_schematic(nested));
+        assert!(declared_net_ties(nested).is_err());
+    }
+
+    #[test]
+    fn only_nodes_inside_the_real_schematic_are_read() {
+        let decoy = r#"<?xml version="1.0"?>
+<eagle><drawing>
+  <board>
+    <libraries><library name="decoy"><symbols><symbol name="GND"><pin name="GND" direction="sup"/></symbol></symbols><devicesets><deviceset name="GND"><gates><gate name="G" symbol="GND"/></gates></deviceset></devicesets></library></libraries>
+    <parts><part name="P1" library="decoy" deviceset="GND"/></parts>
+    <net name="VBUS"><segment><pinref part="P1"/></segment></net>
+  </board>
+  <schematic><libraries/><parts/><sheets/></schematic>
+</drawing></eagle>"#;
+        assert!(looks_like_eagle_schematic(decoy));
+        assert!(
+            declared_net_ties(decoy)
+                .expect("the real schematic parses")
+                .is_empty(),
+            "board-side decoy nodes are outside the schematic and cannot declare a tie"
+        );
+    }
+
+    #[test]
+    fn a_part_uses_library_urn_when_same_named_libraries_collide() {
+        let text = r#"<?xml version="1.0"?>
+<eagle><drawing><schematic>
+<libraries>
+  <library name="shared" urn="urn:adsk.eagle:library:1">
+    <symbols><symbol name="MARK"><pin name="GND" direction="sup"/></symbol></symbols>
+    <devicesets><deviceset name="MARK"><gates><gate name="G" symbol="MARK"/></gates></deviceset></devicesets>
+  </library>
+  <library name="shared" urn="urn:adsk.eagle:library:2">
+    <symbols><symbol name="MARK"><pin name="1"/><pin name="2"/></symbol></symbols>
+    <devicesets><deviceset name="MARK"><gates><gate name="G" symbol="MARK"/></gates><devices><device name="" package="R0603"/></devices></deviceset></devicesets>
+  </library>
+</libraries>
+<parts><part name="R1" library="shared" library_urn="urn:adsk.eagle:library:2" deviceset="MARK" device=""/></parts>
+<sheets><sheet><nets><net name="VBUS"><segment><pinref part="R1" gate="G" pin="1"/></segment></net></nets></sheet></sheets>
+</schematic></drawing></eagle>"#;
+        assert!(
+            declared_net_ties(text)
+                .expect("managed-library schematic parses")
+                .is_empty(),
+            "the ordinary packaged part in library URN 2 must not inherit URN 1's supply symbol"
         );
     }
 }

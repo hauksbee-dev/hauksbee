@@ -384,15 +384,6 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
         }
         hauksbee_mcu::validate_firmware_path(cfg.firmware.as_deref().expect("just set"))?;
     }
-    if let Some(path) = &cfg.emit_manifest {
-        let manifest = capture_manifest(&cfg, firmware_source.as_deref())?;
-        manifest.write_new(path)?;
-        eprintln!(
-            "wrote immutable run manifest {} to {}",
-            manifest.manifest_id,
-            path.display()
-        );
-    }
     // Advisory: if this board sits among sibling .kicad_pcb files (a multi-board
     // product), say so, a clean verdict on one file is misleading if the user
     // meant the whole thing. Routed through `Notes` so it stays on stderr and is
@@ -681,8 +672,12 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
         .take(512)
         .collect::<String>()
         .contains("<eagle");
-    let schematic_ties =
-        crate::schematic_ties::resolve(&cfg.board, cfg.schematic.as_deref(), board_is_eagle)?;
+    let schematic_ties = crate::schematic_ties::resolve(
+        &cfg.board,
+        &board,
+        cfg.schematic.as_deref(),
+        board_is_eagle,
+    )?;
     if let Some(ties) = &schematic_ties {
         if !quiet && !cfg.json {
             let how = if ties.auto_discovered {
@@ -696,6 +691,15 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
                 ties.ties.len()
             );
         }
+    }
+    if let Some(path) = &cfg.emit_manifest {
+        let manifest = capture_manifest(&cfg, firmware_source.as_deref(), schematic_ties.as_ref())?;
+        manifest.write_new(path)?;
+        eprintln!(
+            "wrote immutable run manifest {} to {}",
+            manifest.manifest_id,
+            path.display()
+        );
     }
 
     // --junit/--sarif: evaluate the selected surface with the same waiver and
@@ -1927,7 +1931,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
     // block ran WITH the shorts bridged and said so. Skipped when
     // `--apply-shorts` already bridged and disclosed them above.
     if !cfg.apply_shorts {
-        let drc_report = if is_altium {
+        let mut drc_report = if is_altium {
             ExtractedBoard::altium_drc(&raw).unwrap_or_default()
         } else {
             ExtractedBoard::drc_with_clearance_rules(
@@ -1936,6 +1940,12 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
             )
             .unwrap_or_default()
         };
+        if let Some(ties) = &schematic_ties {
+            let qualification = ties.qualify(&drc_report);
+            drc_report
+                .findings
+                .retain(|finding| qualification.tie_for(finding).is_none());
+        }
         engine.apply_and_disclose_drc_shorts(&drc_report);
     }
 
@@ -1964,9 +1974,13 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
         Some(fw) => {
             let fw_name = crate::commands::common::file_name(fw);
             match std::fs::read(fw) {
-                Ok(bytes) => {
-                    crate::analyze_with_firmware_json(&file_name, report_bytes, &fw_name, &bytes)
-                }
+                Ok(bytes) => crate::frontdoor::analyze_with_firmware_json_with_ties(
+                    &file_name,
+                    report_bytes,
+                    &fw_name,
+                    &bytes,
+                    schematic_ties.as_ref(),
+                ),
                 // Firmware was already path-validated above; a read error here is
                 // unexpected, so fall back to the board-only report rather than fail.
                 Err(_) => crate::frontdoor::analyze_json_with_ties(
@@ -2011,6 +2025,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
 fn capture_manifest(
     cfg: &RunConfig,
     firmware_source: Option<&std::path::Path>,
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<crate::run_manifest::RunManifest> {
     use std::collections::BTreeMap;
 
@@ -2040,19 +2055,12 @@ fn capture_manifest(
     // that omitted it would not replay the run it describes. This also keeps the
     // manifest agreeing with the evidence inventory, which hashes the same file.
     //
-    // Resolved here rather than passed in, because the manifest is captured
-    // before the analysis path resolves its own copy. The lookup is a filesystem
-    // read of the board's head plus one sibling stat, and it must agree with the
-    // analysis path's answer, so it goes through the same function.
-    if cfg.example.is_none() {
-        let board_is_eagle = std::fs::read(&cfg.board)
-            .map(|raw| String::from_utf8_lossy(&raw[..raw.len().min(512)]).contains("<eagle"))
-            .unwrap_or(false);
-        if let Ok(Some(ties)) =
-            crate::schematic_ties::resolve(&cfg.board, cfg.schematic.as_deref(), board_is_eagle)
-        {
-            inputs.push(ManifestInput::new("schematic", &ties.path));
-        }
+    if let Some(ties) = schematic_ties {
+        inputs.push(ManifestInput::retained_file(
+            "schematic",
+            &ties.path,
+            ties.raw.clone(),
+        ));
     }
     if let Some(path) = firmware_source {
         inputs.push(ManifestInput::new("firmware_source", path));

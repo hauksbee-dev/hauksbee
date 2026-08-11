@@ -130,7 +130,6 @@ fn drc_short_evidence_is_geometry_causal_and_cites_the_layout_artifact() {
             loc_mm: [1.0, 2.0],
             gap_mm: 0.0,
             severity: "serious".into(),
-            declared_tie: None,
             plain: "3V3 shorts GND".into(),
             fix: "separate copper".into(),
         }],
@@ -138,8 +137,6 @@ fn drc_short_evidence_is_geometry_causal_and_cites_the_layout_artifact() {
         at_limit: vec![],
         version_warning: None,
         suppression_note: None,
-        tie_declaration_hint: None,
-        declared_tie_source: None,
     };
 
     let maps = evidence.maps_for_drc(&drc).unwrap();
@@ -153,6 +150,85 @@ fn drc_short_evidence_is_geometry_causal_and_cites_the_layout_artifact() {
     assert_eq!(maps[0].artifacts().len(), 1);
     assert_eq!(evidence.inventory().len(), 1);
     assert_eq!(evidence.inventory()[0].sha256().len(), 64);
+}
+
+#[test]
+fn schematic_provenance_is_causal_only_to_the_declared_contact() {
+    let board = board();
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    let evidence =
+        BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666))
+            .unwrap()
+            .with_input_artifact(
+                "fixture.brd",
+                b"<eagle><board/></eagle>",
+                hauksbee_engine::board_input::InputKind::Text,
+            )
+            .unwrap()
+            .with_schematic_artifact(
+                "fixture.sch",
+                b"<eagle><schematic/></eagle>",
+                "one declared tie qualified one contact",
+            )
+            .unwrap();
+    let tie_board = include_str!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
+    let tie_schematic =
+        include_str!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch");
+    let tie_report = ExtractedBoard::drc(tie_board).unwrap();
+    let tie_declarations = hauksbee_extract::declared_net_ties(tie_schematic).unwrap();
+    let qualification = tie_report.qualify_with_declared_ties("fixture.sch", &tie_declarations);
+    let short = |plain: &str, net_a: &str, net_b: &str, loc_mm: [f64; 2]| DrcShort {
+        net_a: net_a.into(),
+        net_b: net_b.into(),
+        layer: "F.Cu".into(),
+        gap_mm: 0.0,
+        loc_mm,
+        severity: if net_a == "GND" { "note" } else { "serious" }.into(),
+        plain: plain.into(),
+        fix: String::new(),
+    };
+    let drc = DrcStructured {
+        clearance_rule_mm: 0.2,
+        primitive_count: 4,
+        shorts: vec![
+            short("GND and AGND are joined", "GND", "AGND", [5.0, 0.0]),
+            short("VBUS shorts GND", "VBUS", "GND", [1.0, 2.0]),
+        ],
+        violations: Vec::new(),
+        at_limit: Vec::new(),
+        version_warning: None,
+        suppression_note: None,
+    };
+
+    let maps = evidence
+        .maps_for_drc_with_ties(&drc, Some(&qualification))
+        .unwrap();
+    assert_eq!(
+        maps[0].artifacts().len(),
+        2,
+        "declared contact cites board + schematic"
+    );
+    assert_eq!(
+        maps[1].artifacts().len(),
+        1,
+        "ordinary short cites only the board"
+    );
+    let simulation = evidence
+        .simulation_map("VBUS numeric result", &["VBUS".into()], &[], None)
+        .unwrap();
+    assert_eq!(
+        simulation.artifacts().len(),
+        1,
+        "simulation did not consume the schematic"
+    );
+    let ci = evidence
+        .ci_assertion_map("VBUS asserted", &["VBUS".into()], &[], None, None)
+        .unwrap();
+    assert_eq!(
+        ci.artifacts().len(),
+        1,
+        "unrelated CI assertion did not consume the schematic"
+    );
 }
 
 #[test]

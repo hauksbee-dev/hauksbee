@@ -72,10 +72,14 @@ pub mod trace_current;
 
 pub use drc::{
     clearance_rules_from_kicad_pro, drc_from_text, eagle_drc_from_text, is_touching, run_drc,
-    run_drc_with_clearance_rules, ClearanceRules, DeclaredTie, DrcFinding, DrcReport, Item,
-    ItemKind, NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM, SHORT_TOUCH_EPS_MM,
+    run_drc_with_clearance_rules, ClearanceRules, DeclaredTie, DrcFinding, DrcReport,
+    DrcTieQualification, Item, ItemKind, NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM,
+    SHORT_TOUCH_EPS_MM,
 };
-pub use eagle_sch::{declared_net_ties, looks_like_eagle_schematic, DeclaredNetTie};
+pub use eagle_sch::{
+    declared_net_ties, looks_like_eagle_schematic, schematic_part_identities, DeclaredNetTie,
+    SchematicPartIdentity,
+};
 pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
 pub use si::{
     cl_board_pf, cl_series, i2c_rise_time_ns, render_si, routed_length_mm, SiCheck, SiFinding,

@@ -54,14 +54,16 @@ pub fn emit(
     // The companion schematic's declarations, applied before anything reads the
     // findings. Reclassifies, never deletes: a covered contact keeps its layer,
     // location and measured gap and gains the declaration that qualifies it.
-    let schematic_contribution = schematic_ties.map(|ties| ties.apply(&mut drc));
+    let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
     // The schematic contributed to the verdict, so it enters the inventory with
     // its own hash and what it did. A reader who sees a contact reported as a
     // declared tie must be able to find the file that declared it.
-    let evidence = match (schematic_ties, &schematic_contribution) {
-        (Some(ties), Some(contribution)) => {
-            evidence.with_schematic_artifact(&ties.path, &ties.raw, contribution.clone())?
-        }
+    let evidence = match (schematic_ties, &qualification) {
+        (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
+            &ties.path,
+            &ties.raw,
+            ties.contribution(qualification),
+        )?,
         _ => evidence,
     };
     let lint = crate::checks::engine_lint(board, lib);
@@ -80,11 +82,16 @@ pub fn emit(
     let mut waivers = load_waivers(board_path);
     let mut lint = lint;
     let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
-    let drc_structured = DrcStructured::from_report(&drc);
+    let drc_structured = DrcStructured::from_report_with_ties(
+        &drc,
+        qualification.as_ref(),
+        text.contains("<eagle") && schematic_ties.is_none(),
+    );
     let mut actual_findings = lint_findings_json(&lint);
     actual_findings.extend(si_findings_json(&si));
     actual_findings.extend(usbc.as_ref().and_then(usbc_finding_json));
-    let mut evidence_maps = evidence.maps_for_drc(&drc_structured)?;
+    let mut evidence_maps =
+        evidence.maps_for_drc_with_ties(&drc_structured, qualification.as_ref())?;
     evidence_maps.extend(evidence.maps_for_findings(&actual_findings)?);
     for (check, assertion) in [
         ("drc", "DRC input coverage"),
@@ -117,7 +124,7 @@ pub fn emit(
     // unvalidated board format (KiCad 10+) yields possibly-phantom shorts and
     // does not gate; the caveat is printed instead.
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-    let drc_gates = drc_gate_fails(&drc);
+    let drc_gates = drc_gate_fails(&drc, qualification.as_ref());
     let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     match mode {
         OutputMode::Json => {
@@ -234,7 +241,10 @@ pub fn emit(
     }
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
-        super::strict_gate_exit(mode, &gate_items(drc_gates, &drc, &lint, &si, &usbc));
+        super::strict_gate_exit(
+            mode,
+            &gate_items(drc_gates, &drc, qualification.as_ref(), &lint, &si, &usbc),
+        );
     }
     // Exit 3 on the SAME rule the JSON verdict uses (run-level undermined
     // evidence or unbound verdict-critical parts), not on any undermined map:
@@ -334,12 +344,13 @@ fn verdict_line(
 fn gate_items(
     drc_gates: bool,
     drc: &hauksbee_extract::DrcReport,
+    qualification: Option<&hauksbee_extract::DrcTieQualification>,
     lint: &hauksbee_extract::NetLintReport,
     si: &hauksbee_extract::SiReport,
     usbc: &Option<crate::checks::usb_c::UsbcReport>,
 ) -> Vec<String> {
     let mut items = if drc_gates {
-        super::drc_gate_items(drc)
+        super::drc_gate_items(drc, qualification)
     } else {
         Vec::new()
     };
@@ -381,9 +392,7 @@ pub fn gather_findings(
     // location and measured gap and gains the declaration that qualifies it.
     // This surface produces CI findings only and builds no evidence registry, so
     // there is no inventory row to add here; the report surfaces above own that.
-    if let Some(ties) = schematic_ties {
-        ties.apply(&mut drc);
-    }
+    let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
     let mut lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };
     let mut si = crate::checks::engine_si(board, lib, geo_text);
@@ -395,7 +404,8 @@ pub fn gather_findings(
     let mut waivers = load_waivers(board_path);
     let _ = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
 
-    let mut findings: Vec<crate::result::JsonFinding> = drc_short_findings(&drc);
+    let mut findings: Vec<crate::result::JsonFinding> =
+        drc_short_findings(&drc, qualification.as_ref());
     findings.extend(lint_findings_json(&lint));
     findings.extend(si_findings_json(&si));
     findings.extend(usbc.as_ref().and_then(usbc_finding_json));
@@ -481,17 +491,19 @@ pub(crate) fn apply_static_waivers(
 /// made in both places.
 pub(crate) fn drc_short_findings(
     drc: &hauksbee_extract::DrcReport,
+    qualification: Option<&hauksbee_extract::DrcTieQualification>,
 ) -> Vec<crate::result::JsonFinding> {
     let phantom = drc.version_warning.is_some();
     drc.shorts()
         .map(|f| {
+            let declared_tie = qualification.and_then(|ties| ties.tie_for(f));
             // A contact a companion schematic declares deliberate is a note here too.
             // These findings become the JUnit/SARIF artifacts a CI job reads, and
             // those must agree with the human, `--json` and TUI surfaces: emitting a
             // `<failure>` for a declared star ground that `--strict` deliberately does
             // not gate on would fail the build through the artifact instead, which is
             // the same wrong answer by a different route.
-            let severity = match (&f.declared_tie, phantom) {
+            let severity = match (declared_tie, phantom) {
                 (Some(_), _) => "note",
                 (None, true) => "warning",
                 (None, false) => "serious",
@@ -506,8 +518,8 @@ pub(crate) fn drc_short_findings(
                 refs: Vec::new(),
                 // Not actionable when the design asks for it: there is nothing for
                 // the reader to go and change.
-                actionable: f.declared_tie.is_none(),
-                message: match &f.declared_tie {
+                actionable: declared_tie.is_none(),
+                message: match declared_tie {
                     Some(tie) => format!(
                     "declared net tie: {} and {} are joined in copper on {}, and the schematic \
                      declares it ({})",
@@ -518,7 +530,7 @@ pub(crate) fn drc_short_findings(
                         f.net_a_name, f.net_b_name, f.layer
                     ),
                 },
-                plain: match &f.declared_tie {
+                plain: match declared_tie {
                     Some(tie) => format!(
                         "two different nets ({} and {}) are touching on layer {}, which the \
                      schematic declares on purpose ({})",
@@ -538,8 +550,13 @@ pub(crate) fn drc_short_findings(
 /// The copper gate: a real (non-phantom) short fails it. Derived from
 /// [`drc_short_findings`], so the exit code and the CI artifact count the same
 /// shorts. Shared with `--drc`, which gates on copper alone.
-pub(crate) fn drc_gate_fails(drc: &hauksbee_extract::DrcReport) -> bool {
-    drc_short_findings(drc).iter().any(|f| f.gates())
+pub(crate) fn drc_gate_fails(
+    drc: &hauksbee_extract::DrcReport,
+    qualification: Option<&hauksbee_extract::DrcTieQualification>,
+) -> bool {
+    drc_short_findings(drc, qualification)
+        .iter()
+        .any(|f| f.gates())
 }
 
 /// What a static pass cannot see, said at the end of one.
@@ -739,14 +756,16 @@ pub fn emit_combined_json(
     // The companion schematic's declarations, applied before anything reads the
     // findings. Reclassifies, never deletes: a covered contact keeps its layer,
     // location and measured gap and gains the declaration that qualifies it.
-    let schematic_contribution = schematic_ties.map(|ties| ties.apply(&mut drc));
+    let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
     // The schematic contributed to the verdict, so it enters the inventory with
     // its own hash and what it did. A reader who sees a contact reported as a
     // declared tie must be able to find the file that declared it.
-    let evidence = match (schematic_ties, &schematic_contribution) {
-        (Some(ties), Some(contribution)) => {
-            evidence.with_schematic_artifact(&ties.path, &ties.raw, contribution.clone())?
-        }
+    let evidence = match (schematic_ties, &qualification) {
+        (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
+            &ties.path,
+            &ties.raw,
+            ties.contribution(qualification),
+        )?,
         _ => evidence,
     };
     let mut lint = crate::checks::engine_lint(board, lib);
@@ -761,7 +780,11 @@ pub fn emit_combined_json(
     // written from the waived-down suite reading `failures="0"` beside it.
     let mut waivers = load_waivers(board_path);
     let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
-    let drc_structured = DrcStructured::from_report(&drc);
+    let drc_structured = DrcStructured::from_report_with_ties(
+        &drc,
+        qualification.as_ref(),
+        text.contains("<eagle") && schematic_ties.is_none(),
+    );
     let usbc = crate::usb_c_report(board);
     let mut findings = lint_findings_json(&lint);
     findings.extend(si_findings_json(&si));
@@ -769,7 +792,7 @@ pub fn emit_combined_json(
     // machine command must not be blind to a Serious CC fault that the explicit
     // `--check --json` surfaces.
     findings.extend(usbc.as_ref().and_then(usbc_finding_json));
-    let mut maps = evidence.maps_for_drc(&drc_structured)?;
+    let mut maps = evidence.maps_for_drc_with_ties(&drc_structured, qualification.as_ref())?;
     maps.extend(evidence.maps_for_findings(&findings)?);
     for (check, assertion) in [
         ("drc", "DRC input coverage"),
@@ -787,7 +810,7 @@ pub fn emit_combined_json(
     // critical parts must carry the same qualification.
     let blockers = crate::result::unmodelled_critical_refs(&combined_summary);
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-    let drc_gates = drc_gate_fails(&drc);
+    let drc_gates = drc_gate_fails(&drc, qualification.as_ref());
     let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     let mut jr = JsonReport::new(&bound.name, combined_summary)
         .with_bind_verdict_gate()
@@ -815,7 +838,7 @@ pub fn emit_combined_json(
     if strict && would_gate {
         super::strict_gate_exit(
             OutputMode::Json,
-            &gate_items(drc_gates, &drc, &lint, &si, &usbc),
+            &gate_items(drc_gates, &drc, qualification.as_ref(), &lint, &si, &usbc),
         );
     }
     let strict_invalid = crate::result::run_level_undermined(evidence.maps(), |a| {
