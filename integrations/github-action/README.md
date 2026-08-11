@@ -7,7 +7,18 @@ before anything reaches a bench.
 
 ## Usage
 
-In your hardware repo, add `.github/workflows/hauksbee-ci.yml`. The minimal job:
+The Action and its release assets live in a private repository. Create a secret
+named `HAUKSBEE_READ_TOKEN` containing either a fine-grained personal access token
+or a GitHub App installation token authorised for
+`hauksbee-dev/hauksbee` with **Contents: read**. If `use-image` is enabled, the
+credential also needs **Packages: read**. Do not put the credential in a URL,
+workflow file, Action input default, log statement, or checked-in configuration.
+
+The consumer repository's automatic `github.token` is scoped to that consumer;
+it cannot authenticate a checkout or release download from a different private
+repository. In your hardware repo, add `.github/workflows/hauksbee-ci.yml` and
+check out the pinned Action code with the authorised credential before invoking
+it as a local Action:
 
 ```yaml
 permissions:
@@ -16,16 +27,26 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: hauksbee-dev/hauksbee/integrations/github-action@v0.1.0
+  - name: Fetch the private hauksbee Action
+    uses: actions/checkout@v4
     with:
+      repository: hauksbee-dev/hauksbee
+      ref: v0.1.0
+      path: .hauksbee-action
+      token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
+  - uses: ./.hauksbee-action/integrations/github-action
+    with:
+      hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
       spec: ci/power-up.toml          # your checked-in hauksbee-ci spec
       junit: hauksbee-ci-results.xml   # JUnit XML written here (optional)
 ```
 
-Pin the action to a released tag (`@v0.1.0`), not `@main`: a tag names the
-exact action code your pipeline runs, where `@main` silently moves under you.
-Stricter still is pinning the full commit SHA
-(`...github-action@<full-sha> # v0.1.0`), which no tag move can redirect.
+Pin the private checkout's `ref` to a released tag, not `main`: a tag names the
+exact Action code your pipeline runs. Stricter still is a full commit SHA,
+which no tag move can redirect. Repositories owned by the same GitHub
+organisation may alternatively use the direct `owner/repo/path@ref` form after
+an administrator enables private Action sharing, but the explicit checkout
+above is the portable cross-repository credential contract.
 
 See [`example-workflow.yml`](./example-workflow.yml) for a full workflow,
 including a `matrix` that runs several specs in parallel and a commented-out
@@ -39,8 +60,9 @@ file (a `<testsuite>` per spec) and exits with the worst severity across the
 set (3 invalid > 2 spec error > 1 assertion failed > 0 green):
 
 ```yaml
-- uses: hauksbee-dev/hauksbee/integrations/github-action@v0.1.0
+- uses: ./.hauksbee-action/integrations/github-action
   with:
+    hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
     specs: ci/*.toml
 ```
 
@@ -51,8 +73,9 @@ set (3 invalid > 2 spec error > 1 assertion failed > 0 green):
 SI, the USB-C check, gated strictly, with inline annotations:
 
 ```yaml
-- uses: hauksbee-dev/hauksbee/integrations/github-action@v0.1.0
+- uses: ./.hauksbee-action/integrations/github-action
   with:
+    hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
     mode: check
     board: hardware/board.kicad_pcb
 ```
@@ -76,6 +99,7 @@ list of what was found, rather than guessing.
 | `publish-report`  | no       | `true`                   | Publish the JUnit XML to the Checks tab. Set `false` on fork PRs (see below). |
 | `hauksbee-ref`     | no       | `main`                   | git ref of hauksbee to build hauksbee-ci from (fallback build).               |
 | `hauksbee-repo`    | no       | `hauksbee-dev/hauksbee`       | owner/name of the hauksbee repo (release download + fallback build).         |
+| `hauksbee-token`   | yes      | -                        | Fine-grained PAT or GitHub App installation token authorised for the private repository with Contents: read; add Packages: read for `use-image`. |
 | `hauksbee-version` | no       | (empty)                  | Release version to download a prebuilt binary from; empty auto-detects.     |
 | `prefer-prebuilt` | no       | `true`                   | Download a prebuilt release binary when available, else build from source.  |
 | `use-image`       | no       | `false`                  | Run from the published Docker image instead of a binary; skips the download and build paths entirely. |
@@ -90,19 +114,24 @@ list of what was found, rather than guessing.
 
 ## Fork PRs and the Checks tab
 
-Publishing the JUnit report needs `checks: write`, and on a `pull_request`
-run triggered from a FORK the token is read-only no matter what the
-`permissions:` block asks for. The publish step then fails (or is skipped),
-even though the hardware check itself ran fine.
+GitHub does not pass `HAUKSBEE_READ_TOKEN` to an untrusted fork PR. That is the
+correct boundary: do not expose a credential that can read private Hauksbee
+source or assets to fork-controlled workflow code. The private Action therefore
+fails closed on fork PRs. Run it on trusted branches, or have a maintainer apply
+the change to a trusted branch after review; do not switch to
+`pull_request_target` and execute fork content with the secret.
 
-The standard fix is the two-workflow pattern. The `pull_request` workflow
-runs the check with `publish-report: false` and uploads the XML as an
-artifact:
+For trusted PRs, publishing the JUnit report also needs `checks: write`. If a
+workflow intentionally lacks that permission, the hardware check can still run
+with `publish-report: false` and a separate trusted workflow can publish XML.
+
+The two-workflow reporting pattern is:
 
 ```yaml
 # hauksbee-ci.yml (pull_request; runs with the fork's read-only token)
-- uses: hauksbee-dev/hauksbee/integrations/github-action@v0.1.0
+- uses: ./.hauksbee-action/integrations/github-action
   with:
+    hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
     spec: ci/power-up.toml
     publish-report: false
 - uses: actions/upload-artifact@v4

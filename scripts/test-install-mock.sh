@@ -114,6 +114,7 @@ done
 echo "==> Running the README curl|bash install against the mock"
 export HAUKSBEE_API_BASE="http://127.0.0.1:${PORT}/repos/${REPO}"
 export HAUKSBEE_RELEASES_BASE="http://127.0.0.1:${PORT}/${REPO}/releases/download"
+export HAUKSBEE_GITHUB_TOKEN="mock-private-token"
 curl -fsSL "http://127.0.0.1:${PORT}/raw/get-hauksbee.sh" | bash -s -- --prefix "$PREFIX"
 
 echo "==> Verifying the installed binaries run"

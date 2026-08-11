@@ -55,14 +55,22 @@ This is macOS-only today. We are evaluating Windows but do not promise it yet. T
 **One-line installer (terminal, macOS/Linux):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
+printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
+  | curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh \
+  | bash
 ```
 
 This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee`, `hauksbee-ci`, and `hauksbee-mcp` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. The installer itself needs only `curl` and CA certificates (on minimal Debian/Ubuntu: `apt-get install -y curl ca-certificates`).
+The token must be a fine-grained PAT or GitHub App installation token with
+Contents: read on the private release repository. The example reads it from the
+macOS keychain; use your platform's secret manager in the same role. Curl reads
+the authorization header from stdin so the token is not placed in its argv or
+printed. The installer uses the exported token for the private release assets.
 
 **macOS signing, stated plainly.** Every macOS release binary is signed with a Developer ID identity. `Hauksbee.app` is signed and notarised with the ticket stapled, and the release workflow refuses to publish an app zip that is not, so the app opens on a double-click with no Gatekeeper warning. The tarball binaries are signed too, and notarised from launch onward; a bare command-line binary cannot carry a stapled ticket, so Gatekeeper confirms the notarisation online on first run, and a tarball fetched through a browser opens cleanly. Only a pre-release or locally built unsigned bundle still needs the one-time fallback `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci ~/.local/bin/hauksbee-mcp`, while a copy installed by the curl line above never carries the quarantine flag at all.
 
-Two downloads exist, and each says so on the tin. The default one includes the AVR/ATmega backend, which statically links libsimavr, so that **binary** is GPL-3.0 while hauksbee's source stays Apache-2.0. If you redistribute or embed hauksbee, add `--permissive` (`curl ... | bash -s -- --permissive`) for the Apache-2.0 build, which drops AVR co-sim and links no GPL code at all.
+Two downloads exist, and each says so on the tin. The default one includes the AVR/ATmega backend, which statically links libsimavr, so that **binary** is GPL-3.0 while hauksbee's source stays Apache-2.0. If you redistribute or embed hauksbee, end the same authenticated pipeline with `bash -s -- --permissive` for the Apache-2.0 build, which drops AVR co-sim and links no GPL code at all.
 
 **Build from source:**
 

@@ -5,7 +5,7 @@
 // a second copy of a YAML file that pins an action tag is exactly the copy that
 // keeps the tag nobody published.
 
-import { ACTION_REF, RELEASE_TAG } from './version'
+import { ACTION_REPOSITORY, PRIVATE_TOKEN_SECRET, RELEASE_TAG } from './version'
 
 /** The spec file's stem for a board file name: `watchy.kicad_pcb` -> `watchy`.
  *  Names the downloaded spec and the `spec:` path inside the workflow, so the
@@ -30,9 +30,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: hauksbee-ci
-        uses: ${ACTION_REF} # pinned to a release tag, never a branch
+      - name: Fetch the private hauksbee Action
+        uses: actions/checkout@v4
         with:
+          repository: ${ACTION_REPOSITORY}
+          ref: ${RELEASE_TAG}
+          path: .hauksbee-action
+          token: ${PRIVATE_TOKEN_SECRET}
+      - name: hauksbee-ci
+        uses: ./.hauksbee-action/integrations/github-action
+        with:
+          hauksbee-token: ${PRIVATE_TOKEN_SECRET}
           spec: ci/${specStem}.toml
           junit: hauksbee-ci-results.xml
 `

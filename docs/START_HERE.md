@@ -25,8 +25,17 @@ users take the installer line below.
 **From a terminal**, use either the one-line installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
+printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
+  | curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh \
+  | bash
 ```
+
+Use a fine-grained PAT or GitHub App installation token with Contents: read on
+the private release repository; substitute your platform's secret manager for
+the macOS keychain command when needed. The header travels through stdin, not
+curl's argv or output, and the installer uses the exported credential for both
+private release-asset downloads.
 
 or one command that builds and installs the binaries from a checkout, then
 points it at the bundled Watchy smartwatch board.

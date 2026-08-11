@@ -8,9 +8,11 @@
 # of the new download is verified.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+#   export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
+#   printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
+#     curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
 #   With flags through the pipe:
-#     curl -fsSL .../get-hauksbee.sh | bash -s -- --permissive
+#     printf ... | curl --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
 #   Or run locally:
 #     bash scripts/get-hauksbee.sh [--version v0.1.0] [--prefix ~/.local] [--permissive]
 #
@@ -30,9 +32,10 @@
 #   Either way, LICENSE-BINARY.txt inside the tarball spells out the terms.
 #
 # Environment:
-#   GITHUB_TOKEN    Optional. Set to avoid GitHub API rate limits (60 req/hr
-#                   unauthed vs 5000 authed). The CI token works:
-#                   export GITHUB_TOKEN="$GITHUB_TOKEN"
+#   HAUKSBEE_GITHUB_TOKEN  Required for the private release repository. Use a
+#                          fine-grained PAT or GitHub App installation token
+#                          with Contents: read on hauksbee-dev/hauksbee.
+#   GITHUB_TOKEN           Accepted as a CI-compatible fallback.
 set -euo pipefail
 
 REPO="hauksbee-dev/hauksbee"
@@ -41,6 +44,7 @@ REPO="hauksbee-dev/hauksbee"
 # install flow while the repo is still private). Defaults are public GitHub.
 API_BASE="${HAUKSBEE_API_BASE:-https://api.github.com/repos/${REPO}}"
 RELEASES_BASE="${HAUKSBEE_RELEASES_BASE:-https://github.com/${REPO}/releases/download}"
+PRIVATE_TOKEN="${HAUKSBEE_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
 
 VERSION=""
 PREFIX="${HOME}/.local"
@@ -62,9 +66,11 @@ re-run: an existing install is only overwritten once the checksum of the new
 download is verified.
 
 Usage:
-  curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+  export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
+  printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
+    curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
   With flags through the pipe:
-    curl -fsSL .../get-hauksbee.sh | bash -s -- --permissive
+    printf ... | curl --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
   Or run locally:
     bash scripts/get-hauksbee.sh [--version v0.1.0] [--prefix ~/.local] [--permissive]
 
@@ -84,8 +90,9 @@ Which build you get:
   Either way, LICENSE-BINARY.txt inside the tarball spells out the terms.
 
 Environment:
-  GITHUB_TOKEN    Optional. Set to avoid GitHub API rate limits (60 req/hr
-                  unauthed vs 5000 authed).
+  HAUKSBEE_GITHUB_TOKEN  Required. Fine-grained PAT or GitHub App installation
+                         token with Contents: read on the private repository.
+  GITHUB_TOKEN           Accepted as a CI-compatible fallback.
 USAGE
 }
 
@@ -124,6 +131,19 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [ -z "$PRIVATE_TOKEN" ]; then
+  echo "HAUKSBEE_GITHUB_TOKEN is required to download from the private ${REPO} release repository." >&2
+  echo "Use a fine-grained PAT or GitHub App installation token with Contents: read; do not put it in a URL." >&2
+  exit 1
+fi
+
+# Feed the authorization header through curl's config stdin. Keeping the token
+# out of curl's argv prevents it appearing in process listings or shell traces.
+curl_private() {
+  printf 'header = "Authorization: Bearer %s"\n' "$PRIVATE_TOKEN" \
+    | curl --config - "$@"
+}
 
 # ---------------------------------------------------------------------------
 # Detect OS and architecture -> asset name suffix
@@ -192,11 +212,7 @@ resolve_latest_tag() {
   local url="${API_BASE}/releases/latest"
   local response tag
 
-  if [ -n "${GITHUB_TOKEN:-}" ]; then
-    response="$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" "${url}" 2>/dev/null)" || return 1
-  else
-    response="$(curl -fsSL "${url}" 2>/dev/null)" || return 1
-  fi
+  response="$(curl_private -fsSL "${url}" 2>/dev/null)" || return 1
 
   # Extract the tag_name field. Use grep + sed rather than jq (may not be
   # installed); `|| true` keeps a no-match from aborting under pipefail, and
@@ -251,7 +267,7 @@ CHECKSUM_PATH="${TMPDIR_WORK}/${CHECKSUM_NAME}"
 # what to check, instead of dying with a bare non-zero under `set -e`.
 download_asset() {
   local url="$1" dest="$2" what="$3"
-  if ! curl -fsSL --retry 3 --retry-delay 2 -o "${dest}" "${url}"; then
+  if ! curl_private -fsSL --retry 3 --retry-delay 2 -o "${dest}" "${url}"; then
     echo "Failed to download ${what}:" >&2
     echo "  ${url}" >&2
     echo "Check your network connection, and that the release ${VERSION} exists" >&2
