@@ -316,8 +316,7 @@ pub struct WebCosimSection {
 struct WebCosimEvidence {
     faults: Vec<crate::stress::FaultEvent>,
     activity_nets: Vec<String>,
-    substitutions: Vec<crate::scheduler::McuSubstitution>,
-    substitution_assumptions: Vec<hauksbee_ir::evidence::Assumption>,
+    scoped_substitutions: Vec<crate::scheduler::ScopedMcuSubstitution>,
     error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
 }
 
@@ -890,7 +889,7 @@ pub fn analyze_with_firmware(
         if let Ok(mut evidence) = evidence_result {
             evidence = match evidence
                 .clone()
-                .with_assumptions(captured.substitution_assumptions.iter().cloned())
+                .with_scoped_substitutions(&captured.scoped_substitutions)
             {
                 Ok(evidence) => evidence,
                 Err(_) => evidence,
@@ -914,14 +913,15 @@ pub fn analyze_with_firmware(
                     }
                 }
                 let fault_maps_end = maps.len();
-                for substitution in &captured.substitutions {
+                for scoped in &captured.scoped_substitutions {
+                    let substitution = scoped.event();
                     if let Ok(map) = evidence.simulation_map(
                         format!(
                             "Firmware behaviour for {} executed on substitute core {}",
                             substitution.reference, substitution.modelled_core
                         ),
                         &[],
-                        std::slice::from_ref(&substitution.reference),
+                        &[scoped.subject().to_string()],
                         Some(budget.clone()),
                     ) {
                         maps.push(map);
@@ -1705,11 +1705,10 @@ fn run_web_cosim(
     let captured = WebCosimEvidence {
         faults,
         activity_nets: gpio_nets.iter().map(|net| net.name.clone()).collect(),
-        substitutions: sched.substitutions().to_vec(),
-        substitution_assumptions: sched.substitution_assumptions().to_vec(),
+        scoped_substitutions: sched.scoped_substitutions().to_vec(),
         error_budget: error_budget.clone(),
     };
-    let substituted = !captured.substitutions.is_empty();
+    let substituted = !captured.scoped_substitutions.is_empty();
     (
         WebCosimSection {
             ran: true,

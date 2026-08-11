@@ -540,6 +540,12 @@ pub enum Scope {
 pub struct Assumption {
     /// Stable id, `"{kind_slug}:{subject}"`.
     id: AssumptionId,
+    /// The producer's concise id before this claim entered a collision domain.
+    /// Internal merge metadata: it is deliberately absent from report JSON and
+    /// schemas, where `id` remains the one public identity.
+    #[serde(skip)]
+    #[schemars(skip)]
+    collision_base_id: AssumptionId,
     /// What kind of gap this is. Drives [`EvidenceStatus`].
     kind: AssumptionKind,
     /// Which pipeline stage raised it.
@@ -770,9 +776,17 @@ impl Assumption {
         ))
         .expect("a validated assumption identity is JSON-serializable");
         let digest = Sha256::digest(claim);
+        self.id = self.collision_base_id.clone();
         self.id.0.push('~');
         self.id.0.push_str(&hex_bytes(&digest));
         self
+    }
+
+    /// The concise producer id shared by every member of this claim's
+    /// collision domain. Kept so independently normalized registries can be
+    /// merged without treating a content suffix as a new base namespace.
+    pub fn collision_base_id(&self) -> &AssumptionId {
+        &self.collision_base_id
     }
 
     /// Raw constructor, private on purpose: every public constructor below goes
@@ -813,10 +827,12 @@ impl Assumption {
             &expires,
         ))
         .expect("a validated assumption identity is JSON-serializable");
+        let id = AssumptionId::disambiguated(kind, subject, &claim);
         let built = Self {
             // The sentences are composed FIRST because together they are what
             // disambiguates an id whose subject the producer could not name.
-            id: AssumptionId::disambiguated(kind, subject, &claim),
+            id: id.clone(),
+            collision_base_id: id,
             kind,
             source,
             scope,
@@ -1134,6 +1150,7 @@ impl Assumption {
         // the synthesized claim hash, such as their actionable replacement.
         if let Some(n) = ordinal {
             built.id = built.id.with_ordinal(n);
+            built.collision_base_id = built.id.clone();
         }
         debug_assert!(
             built.validate().is_ok(),
@@ -1600,6 +1617,7 @@ impl Assumption {
         );
         assumption.id =
             AssumptionId::disambiguated(AssumptionKind::Waived, &id_subject, &assumption.statement);
+        assumption.collision_base_id = assumption.id.clone();
         debug_assert!(assumption.validate().is_ok());
         Ok(assumption)
     }
@@ -2060,9 +2078,7 @@ impl ArtifactProvenance {
         self
     }
 
-    /// Replace a concise assumption id with that same claim's content-derived
-    /// collision id while preserving the artifact's other provenance.
-    pub fn rekey_colliding_assumption(
+    fn rekey_colliding_assumption(
         &mut self,
         from: &Assumption,
         to: &Assumption,
@@ -2935,6 +2951,28 @@ pub struct EvidenceRegistry {
     artifacts: Vec<ArtifactProvenance>,
 }
 
+/// A complete, validated replacement for every object participating in one
+/// assumption-id rekey. The private fields prevent callers from observing or
+/// serializing a registry/map/default-reference combination halfway through
+/// the transaction.
+#[derive(Debug)]
+pub struct EvidenceRekeyTransaction {
+    registry: EvidenceRegistry,
+    maps: Vec<EvidenceMap>,
+    external_assumption_references: Vec<AssumptionId>,
+}
+
+impl EvidenceRekeyTransaction {
+    /// Consume the transaction and return all validated replacement objects.
+    pub fn into_parts(self) -> (EvidenceRegistry, Vec<EvidenceMap>, Vec<AssumptionId>) {
+        (
+            self.registry,
+            self.maps,
+            self.external_assumption_references,
+        )
+    }
+}
+
 impl EvidenceRegistry {
     /// Validate and index a run's assumption registry.
     pub fn new(assumptions: Vec<Assumption>) -> Result<Self, EvidenceError> {
@@ -2978,6 +3016,78 @@ impl EvidenceRegistry {
 
     pub fn artifacts(&self) -> &[ArtifactProvenance] {
         &self.artifacts
+    }
+
+    /// Build one validated replacement for the registry, its owned artifacts,
+    /// every supplied evidence map, and any additional assumption references.
+    /// Inputs are borrowed immutably, so an error leaves every caller-owned
+    /// object untouched and no half-rekeyed serializable state is exposed.
+    pub fn rekey_collision_transaction(
+        &self,
+        maps: &[EvidenceMap],
+        external_assumption_references: &[AssumptionId],
+        from: &Assumption,
+        to: &Assumption,
+    ) -> Result<EvidenceRekeyTransaction, EvidenceError> {
+        if from.clone().disambiguate_colliding_id() != *to {
+            return Err(EvidenceError::InvalidAssumption {
+                message:
+                    "a registry assumption may only be re-keyed to the same claim's collision id"
+                        .to_string(),
+            });
+        }
+        if !self.assumptions.iter().any(|known| known == from) {
+            return Err(EvidenceError::MissingAssumption {
+                id: from.id().to_string(),
+            });
+        }
+
+        let assumptions = self
+            .assumptions
+            .iter()
+            .map(|known| {
+                if known == from {
+                    to.clone()
+                } else {
+                    known.clone()
+                }
+            })
+            .collect();
+        let mut registry = EvidenceRegistry::new(assumptions)?;
+        for mut artifact in self.artifacts.clone() {
+            artifact.rekey_colliding_assumption(from, to)?;
+            registry.add_artifact(artifact)?;
+        }
+
+        let mut rekeyed_maps = maps.to_vec();
+        for map in &mut rekeyed_maps {
+            map.rekey_colliding_assumption(from, to)?;
+            map.validate_references(&registry)?;
+        }
+
+        let external_assumption_references: Vec<_> = external_assumption_references
+            .iter()
+            .map(|id| {
+                if id == from.id() {
+                    to.id().clone()
+                } else {
+                    id.clone()
+                }
+            })
+            .collect();
+        let known: HashSet<&AssumptionId> =
+            registry.assumptions().iter().map(Assumption::id).collect();
+        for id in &external_assumption_references {
+            if !known.contains(id) {
+                return Err(EvidenceError::MissingAssumption { id: id.to_string() });
+            }
+        }
+
+        Ok(EvidenceRekeyTransaction {
+            registry,
+            maps: rekeyed_maps,
+            external_assumption_references,
+        })
     }
 }
 
@@ -3538,10 +3648,7 @@ impl EvidenceMap {
         self
     }
 
-    /// Replace a concise assumption id with that same claim's content-derived
-    /// collision id. The claim validation keeps derived status intact; every
-    /// documented-default parameter origin is updated with the map-level list.
-    pub fn rekey_colliding_assumption(
+    fn rekey_colliding_assumption(
         &mut self,
         from: &Assumption,
         to: &Assumption,
@@ -3562,6 +3669,41 @@ impl EvidenceMap {
                 if assumption == from.id() {
                     *assumption = to.id().clone();
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_references(&self, registry: &EvidenceRegistry) -> Result<(), EvidenceError> {
+        let known: HashSet<&AssumptionId> =
+            registry.assumptions().iter().map(Assumption::id).collect();
+        for id in &self.assumptions {
+            if !known.contains(id) {
+                return Err(EvidenceError::MissingAssumption { id: id.to_string() });
+            }
+        }
+        for artifact in &self.artifacts {
+            if artifact.0 >= registry.artifacts().len() {
+                return Err(EvidenceError::MissingArtifact {
+                    index: artifact.0,
+                    len: registry.artifacts().len(),
+                });
+            }
+        }
+        for parameter in &self.parameters {
+            match parameter.origin() {
+                ValueOrigin::Artifact { index, .. } if index.0 >= registry.artifacts().len() => {
+                    return Err(EvidenceError::MissingArtifact {
+                        index: index.0,
+                        len: registry.artifacts().len(),
+                    });
+                }
+                ValueOrigin::Default { assumption } if !known.contains(assumption) => {
+                    return Err(EvidenceError::MissingAssumption {
+                        id: assumption.to_string(),
+                    });
+                }
+                _ => {}
             }
         }
         Ok(())
