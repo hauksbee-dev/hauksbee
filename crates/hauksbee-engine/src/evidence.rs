@@ -1726,6 +1726,33 @@ mod duplicate_open_part_tests {
         assert_ne!(open[0].id(), open[1].id());
     }
 
+    /// The same collision must not return when the board gives neither row a
+    /// designator. In that case both claims start from the same synthesized
+    /// subject and differ only in the actionable replacement sentence.
+    #[test]
+    fn unnamed_rows_naming_different_unlocking_inputs_stay_separate_claims() {
+        let marker = Assumption::UNLOCKED_BY_MARKER;
+        let mut report = BindReport::default();
+        report.push(unresolved(
+            "",
+            "",
+            &format!("no model matched{marker}add a datasheet for ACME-1"),
+        ));
+        report.push(unresolved(
+            "",
+            "",
+            &format!("no model matched{marker}add a datasheet for ACME-2"),
+        ));
+
+        let open = open_part_claims(&report);
+
+        assert_eq!(open.len(), 2, "two unlocking inputs are two claims");
+        let fixes: Vec<&str> = open.iter().map(Assumption::replacement).collect();
+        assert!(fixes.iter().any(|fix| fix.contains("ACME-1")));
+        assert!(fixes.iter().any(|fix| fix.contains("ACME-2")));
+        assert_ne!(open[0].id(), open[1].id());
+    }
+
     /// Ids are cited in acknowledgment files and diffed across runs, so the same
     /// input must mint the same bytes every time. Counting and ordinals are both
     /// derived from bind-row order, never from a hash map's iteration order or a
