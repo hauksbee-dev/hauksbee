@@ -18,6 +18,37 @@ if ($actualSha -ne $ExpectedSha) {
     throw "required integration SHA mismatch: expected $ExpectedSha, checked out $actualSha"
 }
 
+# Re-hash the repository-pinned archives and probe the installed trees in this
+# same evidence process; a prior install step is not sufficient proof.
+& (Join-Path $PSScriptRoot "install-sims-windows.ps1") -Check
+if ($LASTEXITCODE -ne 0) { throw "checksum-pinned simulator preflight failed" }
+
+$renodePath = (Get-ChildItem -LiteralPath (Join-Path $HOME "renode-portable") -Filter Renode.exe -File -Recurse | Select-Object -First 1).FullName
+$xtensaPath = (Resolve-Path (Join-Path $HOME ".hauksbee-qemu-esp\qemu\bin\qemu-system-xtensa.exe")).Path
+$riscv32Path = (Resolve-Path (Join-Path $HOME ".hauksbee-qemu-esp\qemu\bin\qemu-system-riscv32.exe")).Path
+foreach ($path in @($renodePath, $xtensaPath, $riscv32Path)) {
+    if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "required pinned simulator executable is missing: $path"
+    }
+}
+$backends = [ordered]@{
+    HAUKSBEE_RENODE = [ordered]@{
+        path = $renodePath
+        artifact_sha256 = (Get-FileHash -LiteralPath $renodePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        archive_sha256 = "d09b7934cfd560cd06bde8f131ef78f521f10d423d5aac6096f2a583224aeb3e"
+    }
+    HAUKSBEE_QEMU_XTENSA = [ordered]@{
+        path = $xtensaPath
+        artifact_sha256 = (Get-FileHash -LiteralPath $xtensaPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        archive_sha256 = "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a"
+    }
+    HAUKSBEE_QEMU_RISCV32 = [ordered]@{
+        path = $riscv32Path
+        artifact_sha256 = (Get-FileHash -LiteralPath $riscv32Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        archive_sha256 = "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b"
+    }
+}
+
 $gates = @(
     @{
         Name = "renode-rp2040-adc"
@@ -36,7 +67,17 @@ $gates = @(
     }
 )
 
+$savedBackendEnv = @{}
+foreach ($name in @("HAUKSBEE_RENODE", "HAUKSBEE_QEMU_XTENSA", "HAUKSBEE_QEMU_RISCV32", "HAUKSBEE_QEMU_DIR")) {
+    $savedBackendEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+}
+$env:HAUKSBEE_RENODE = $renodePath
+$env:HAUKSBEE_QEMU_XTENSA = $xtensaPath
+$env:HAUKSBEE_QEMU_RISCV32 = $riscv32Path
+Remove-Item Env:HAUKSBEE_QEMU_DIR -ErrorAction SilentlyContinue
+
 $results = @()
+try {
 foreach ($gate in $gates) {
     $stdout = Join-Path ([IO.Path]::GetTempPath()) "required-$($gate.Name)-$PID.stdout"
     $stderr = Join-Path ([IO.Path]::GetTempPath()) "required-$($gate.Name)-$PID.stderr"
@@ -44,7 +85,8 @@ foreach ($gate in $gates) {
         $process = Start-Process -FilePath "cargo" -ArgumentList $gate.Args -NoNewWindow -PassThru `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         if (-not $process.WaitForExit(600000)) {
-            taskkill /T /F /PID $process.Id | Out-Null
+            Stop-Process -InputObject $process -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit()
             throw "$($gate.Name) exceeded 600 seconds"
         }
         $output = ((Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue) +
@@ -64,14 +106,29 @@ foreach ($gate in $gates) {
         }
     }
 }
+} finally {
+    foreach ($name in $savedBackendEnv.Keys) {
+        $value = $savedBackendEnv[$name]
+        if ($null -eq $value) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($name, $value, "Process")
+        }
+    }
+}
+
+foreach ($name in $backends.Keys) {
+    $current = (Get-FileHash -LiteralPath $backends[$name].path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($current -ne $backends[$name].artifact_sha256) {
+        throw "required backend changed while gates ran: $name"
+    }
+}
 
 $evidence = [ordered]@{
     schema_version = 1
     platform = "windows-x86_64"
     commit_sha = $actualSha
-    renode = (Get-ChildItem -LiteralPath (Join-Path $HOME "renode-portable") -Filter Renode.exe -File -Recurse | Select-Object -First 1).FullName
-    qemu_xtensa = (Resolve-Path (Join-Path $HOME ".hauksbee-qemu-esp\qemu\bin\qemu-system-xtensa.exe")).Path
-    qemu_riscv32 = (Resolve-Path (Join-Path $HOME ".hauksbee-qemu-esp\qemu\bin\qemu-system-riscv32.exe")).Path
+    backends = $backends
     gates = $results
 }
 $parent = Split-Path -Parent $EvidenceOut

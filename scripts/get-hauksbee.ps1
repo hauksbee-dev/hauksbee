@@ -151,6 +151,81 @@ $assetHeaders = @{
     "X-GitHub-Api-Version" = "2022-11-28"
 }
 
+function Invoke-TokenFreeVersionProbe([string]$Path) {
+    $savedHauksbee = [Environment]::GetEnvironmentVariable("HAUKSBEE_GITHUB_TOKEN", "Process")
+    $savedGithub = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", "Process")
+    try {
+        Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue
+        Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+        $output = & $Path --version 2>&1 | Out-String
+        return @{ ExitCode = $LASTEXITCODE; Output = $output }
+    } finally {
+        if ($null -eq $savedHauksbee) { Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:HAUKSBEE_GITHUB_TOKEN = $savedHauksbee }
+        if ($null -eq $savedGithub) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $savedGithub }
+    }
+}
+
+function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVersion) {
+    $probe = Invoke-TokenFreeVersionProbe $Path
+    $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
+    $escapedVersion = [regex]::Escape($ExpectedVersion)
+    if ($probe.ExitCode -ne 0 -or $probe.Output -notmatch "(?m)^$escapedName $escapedVersion(?:\s|$)") {
+        throw "staged $Name does not identify release version $ExpectedVersion`: $($probe.Output)"
+    }
+}
+
+function Recover-StaleBackup([string]$Target) {
+    $parent = Split-Path -Parent $Target
+    $leaf = Split-Path -Leaf $Target
+    $backups = @(Get-ChildItem -LiteralPath $parent -Filter "$leaf.install-backup-*" -Directory -ErrorAction SilentlyContinue)
+    if (Test-Path -LiteralPath $Target) {
+        foreach ($stale in $backups) {
+            Remove-Item -LiteralPath $stale.FullName -Recurse -Force
+        }
+        return
+    }
+    if ($backups.Count -gt 1) {
+        throw "multiple interrupted-install backups exist for $Target; refusing to guess which is authoritative"
+    }
+    if ($backups.Count -eq 1) {
+        Move-Item -LiteralPath $backups[0].FullName -Destination $Target
+        Write-Warning "Recovered the previous installation after an interrupted tree swap."
+    }
+}
+
+function Replace-Tree([string]$Staging, [string]$Target) {
+    $parent = Split-Path -Parent $Target
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $lockPath = "$Target.install.lock"
+    $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        Recover-StaleBackup $Target
+        $backup = "$Target.install-backup-$([guid]::NewGuid().ToString('N'))"
+        $movedOld = $false
+        try {
+            if (Test-Path -LiteralPath $Target) {
+                Move-Item -LiteralPath $Target -Destination $backup
+                $movedOld = $true
+            }
+            if ($env:HAUKSBEE_TEST_FAIL_INSTALL_SWAP) { throw "injected install swap failure" }
+            Move-Item -LiteralPath $Staging -Destination $Target
+        } catch {
+            if (Test-Path -LiteralPath $Target) {
+                Remove-Item -LiteralPath $Target -Recurse -Force
+            }
+            if ($movedOld -and (Test-Path -LiteralPath $backup)) {
+                Move-Item -LiteralPath $backup -Destination $Target
+            }
+            throw
+        }
+        if ($movedOld -and (Test-Path -LiteralPath $backup)) {
+            Remove-Item -LiteralPath $backup -Recurse -Force
+        }
+    } finally {
+        $lock.Dispose()
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Download to a temp directory; verify; then install
 # ---------------------------------------------------------------------------
@@ -224,8 +299,7 @@ try {
     # Install to <Prefix>\bin
     # -----------------------------------------------------------------------
     $installDir = Join-Path $Prefix "bin"
-    $installStaging = Join-Path $Prefix "bin.install-staging-$PID"
-    $installBackup = Join-Path $Prefix "bin.install-backup-$PID"
+    $installStaging = Join-Path $Prefix "bin.install-staging-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $Prefix -Force | Out-Null
     if (Test-Path -LiteralPath $installStaging) {
         Remove-Item -LiteralPath $installStaging -Recurse -Force
@@ -235,31 +309,9 @@ try {
         Copy-Item -LiteralPath (Join-Path $binDir $binary) -Destination (Join-Path $installStaging $binary)
     }
     foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
-        $probe = & (Join-Path $installStaging $binary) --version 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $probe -notmatch '(?i)hauksbee') {
-            throw "staged $binary failed its version probe: $probe"
-        }
+        Assert-BinaryVersion (Join-Path $installStaging $binary) $binary $VersionBare
     }
-
-    $hadInstall = Test-Path -LiteralPath $installDir
-    if ($hadInstall) { Move-Item -LiteralPath $installDir -Destination $installBackup }
-    try {
-        # Deterministic rollback fault used by the native installer contract.
-        # It can only make an install fail safely; it cannot weaken validation.
-        if ($env:HAUKSBEE_TEST_FAIL_INSTALL_SWAP) { throw "injected install swap failure" }
-        Move-Item -LiteralPath $installStaging -Destination $installDir
-    } catch {
-        if (Test-Path -LiteralPath $installDir) {
-            Remove-Item -LiteralPath $installDir -Recurse -Force
-        }
-        if ($hadInstall -and (Test-Path -LiteralPath $installBackup)) {
-            Move-Item -LiteralPath $installBackup -Destination $installDir
-        }
-        throw
-    }
-    if ($hadInstall -and (Test-Path -LiteralPath $installBackup)) {
-        Remove-Item -LiteralPath $installBackup -Recurse -Force
-    }
+    Replace-Tree $installStaging $installDir
 
     Write-Host ""
     Write-Host "Installed:"

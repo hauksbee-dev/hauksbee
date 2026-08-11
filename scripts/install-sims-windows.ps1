@@ -100,22 +100,53 @@ function Assert-SafeTar([string]$Archive) {
     }
 }
 
+function Recover-StaleBackup([string]$Target) {
+    $parent = Split-Path -Parent $Target
+    $leaf = Split-Path -Leaf $Target
+    $backups = @(Get-ChildItem -LiteralPath $parent -Filter "$leaf.install-backup-*" -Directory -ErrorAction SilentlyContinue)
+    if (Test-Path -LiteralPath $Target) {
+        foreach ($stale in $backups) {
+            Remove-Item -LiteralPath $stale.FullName -Recurse -Force
+        }
+        return
+    }
+    if ($backups.Count -gt 1) {
+        throw "multiple interrupted-install backups exist for $Target; refusing to guess which is authoritative"
+    }
+    if ($backups.Count -eq 1) {
+        Move-Item -LiteralPath $backups[0].FullName -Destination $Target
+        Write-Warning "Recovered the previous simulator tree after an interrupted swap."
+    }
+}
+
 function Replace-Tree([string]$Staging, [string]$Target) {
     $parent = Split-Path -Parent $Target
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    $backup = "$Target.install-backup-$PID"
-    $hadOld = Test-Path -LiteralPath $Target
-    if ($hadOld) { Move-Item -LiteralPath $Target -Destination $backup }
+    $lock = [IO.File]::Open("$Target.install.lock", [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     try {
-        Move-Item -LiteralPath $Staging -Destination $Target
-    } catch {
-        if ($hadOld -and -not (Test-Path -LiteralPath $Target)) {
-            Move-Item -LiteralPath $backup -Destination $Target
+        Recover-StaleBackup $Target
+        $backup = "$Target.install-backup-$([guid]::NewGuid().ToString('N'))"
+        $movedOld = $false
+        try {
+            if (Test-Path -LiteralPath $Target) {
+                Move-Item -LiteralPath $Target -Destination $backup
+                $movedOld = $true
+            }
+            Move-Item -LiteralPath $Staging -Destination $Target
+        } catch {
+            if (Test-Path -LiteralPath $Target) {
+                Remove-Item -LiteralPath $Target -Recurse -Force
+            }
+            if ($movedOld -and (Test-Path -LiteralPath $backup)) {
+                Move-Item -LiteralPath $backup -Destination $Target
+            }
+            throw
         }
-        throw
-    }
-    if ($hadOld -and (Test-Path -LiteralPath $backup)) {
-        Remove-Item -LiteralPath $backup -Recurse -Force
+        if ($movedOld -and (Test-Path -LiteralPath $backup)) {
+            Remove-Item -LiteralPath $backup -Recurse -Force
+        }
+    } finally {
+        $lock.Dispose()
     }
 }
 
@@ -138,7 +169,7 @@ if ($Check) {
         }
     }
     Write-Host "Requested pinned Windows simulator tree(s) are present and executable."
-    exit 0
+    return
 }
 
 $downloaded = @{}
@@ -151,7 +182,7 @@ try {
         Expand-Archive -LiteralPath $downloaded[$assets[0].Name] -DestinationPath $renodeWork
         $renodeExe = Get-ChildItem -LiteralPath $renodeWork -Filter Renode.exe -File -Recurse | Select-Object -First 1
         if (-not $renodeExe) { throw "Renode.exe missing from the pinned Renode archive" }
-        $renodeStage = "$renodeTarget.install-staging-$PID"
+        $renodeStage = "$renodeTarget.install-staging-$([guid]::NewGuid().ToString('N'))"
         if (Test-Path -LiteralPath $renodeStage) { Remove-Item -LiteralPath $renodeStage -Recurse -Force }
         New-Item -ItemType Directory -Path $renodeStage | Out-Null
         $top = @(Get-ChildItem -LiteralPath $renodeWork)
@@ -178,7 +209,7 @@ try {
                 throw "$binary is not the Espressif fork"
             }
         }
-        $qemuStage = "$qemuTarget.install-staging-$PID"
+        $qemuStage = "$qemuTarget.install-staging-$([guid]::NewGuid().ToString('N'))"
         if (Test-Path -LiteralPath $qemuStage) { Remove-Item -LiteralPath $qemuStage -Recurse -Force }
         Move-Item -LiteralPath $qemuWork -Destination $qemuStage
         Replace-Tree $qemuStage $qemuTarget

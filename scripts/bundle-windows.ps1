@@ -35,11 +35,21 @@ $outPath = if ([IO.Path]::IsPathRooted($Out)) {
 }
 $base = "hauksbee-$Version-windows-x86_64-permissive"
 $requiredBinaries = @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")
+function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVersion) {
+    $output = & $Path --version 2>&1 | Out-String
+    $exitCode = $LASTEXITCODE
+    $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
+    $escapedVersion = [regex]::Escape($ExpectedVersion)
+    if ($exitCode -ne 0 -or $output -notmatch "(?m)^$escapedName $escapedVersion(?:\s|$)") {
+        throw "$Name does not identify release version $ExpectedVersion`: $output"
+    }
+}
 foreach ($binary in $requiredBinaries) {
     $path = Join-Path $targetPath $binary
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required release binary is missing: $path"
     }
+    Assert-BinaryVersion $path $binary $Version
 }
 
 # Ask the binary that will be packaged. A filename is not evidence that the
