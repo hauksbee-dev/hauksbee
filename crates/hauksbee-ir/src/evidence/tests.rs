@@ -443,11 +443,10 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
         "two reasons are two gaps: {}",
         same_statement_a.id()
     );
-    // All four sentences are LENGTH-PREFIXED before being hashed, because any
-    // separator can be forged from inside them: the caller's own value and reason
-    // sit in those sentences, so a value carrying the tail of one and a reason
-    // carrying the head of another produce identical bytes under a delimiter. Both
-    // pairs below are two genuinely different claims that collided that way.
+    // The typed claim is canonically serialized before being hex-encoded, because
+    // any ad-hoc separator can be forged from inside the caller's own value and
+    // reason. The pairs below are genuinely different claims that collided under
+    // delimiter concatenation.
     let spliced_a = Assumption::open_part("", "10k) is treated as an open circuit. Foo", "Bar");
     let spliced_b = Assumption::open_part("", "10k", "Foo) is treated as an open circuit. Bar");
     assert_ne!(
@@ -651,6 +650,29 @@ fn unnameable_claims_with_different_remediation_have_distinct_public_ids() {
     assert_ne!(first.replacement(), second.replacement());
     assert_ne!(first.id(), second.id());
     EvidenceRegistry::new(vec![first, second]).expect("distinct claims coexist");
+}
+
+#[test]
+fn unnameable_claims_with_identical_prose_but_different_scope_have_distinct_ids() {
+    let build = |net: &str| {
+        Assumption::not_exercised(
+            AssumptionSource::Scheduler,
+            Subject::new("", "an unnamed ADC channel"),
+            Scope::Nets(NetScope::new([net], None).expect("net scope")),
+            "firmware never sampled it",
+            "sample the channel and re-run",
+        )
+    };
+    let first = build("ADC0");
+    let second = build("ADC1");
+
+    assert_eq!(first.statement(), second.statement());
+    assert_eq!(first.because(), second.because());
+    assert_eq!(first.consequence(), second.consequence());
+    assert_eq!(first.replacement(), second.replacement());
+    assert_ne!(first.scope(), second.scope());
+    assert_ne!(first.id(), second.id());
+    EvidenceRegistry::new(vec![first, second]).expect("typed claims coexist");
 }
 
 #[test]

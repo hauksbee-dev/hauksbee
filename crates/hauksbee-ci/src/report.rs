@@ -224,7 +224,7 @@ impl EnsembleCoverage {
 /// consumer that ignores unknown keys keeps working); a removal, a rename, or
 /// a changed meaning does. The published contract, including what counts as
 /// additive, is `docs/ci/JSON_OUTPUT.md`.
-pub const CI_REPORT_SCHEMA_VERSION: u32 = 1;
+pub const CI_REPORT_SCHEMA_VERSION: u32 = 2;
 
 /// One line of `hauksbee-ci run --json`: either a run report or a spec/board
 /// error. The two are told apart by `ok`, which is `true` on a report and

@@ -35,6 +35,7 @@ use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
 struct ModelFact {
+    reference: String,
     model_id: String,
     confidence: MatchConfidence,
     source: hauksbee_ir::evidence::ModelSource,
@@ -42,6 +43,7 @@ struct ModelFact {
 
 #[derive(Debug, Clone)]
 struct DefaultFact {
+    reference: String,
     parameter: String,
     value: String,
     assumption: hauksbee_ir::evidence::AssumptionId,
@@ -69,6 +71,7 @@ pub struct BoardEvidence {
     registry: EvidenceRegistry,
     index: CausalPathIndex,
     refs_by_net: BTreeMap<String, Vec<String>>,
+    display_ref_by_subject: BTreeMap<String, String>,
     model_by_ref: BTreeMap<String, ModelFact>,
     today: RunDate,
     assumptions: Vec<Assumption>,
@@ -136,6 +139,81 @@ fn uncovered_windows(
     Ok(out)
 }
 
+const OCCURRENCE_PREFIX: &str = "@hkb-occurrence:";
+
+/// Give board components and bind rows the same injective causal identity.
+/// Ordinary unique designators remain readable. Blank, repeated, or reserved-
+/// prefix designators use the exact source bytes plus a 1-based occurrence, so
+/// a reused `Via` on one net cannot taint or steal provenance from another.
+fn component_occurrence_subjects(
+    board: &ExtractedBoard,
+    report: &BindReport,
+) -> (Vec<String>, Vec<String>) {
+    fn counts<'a>(references: impl IntoIterator<Item = &'a str>) -> BTreeMap<String, usize> {
+        let mut out = BTreeMap::new();
+        for reference in references {
+            *out.entry(reference.trim().to_string()).or_default() += 1;
+        }
+        out
+    }
+
+    let board_counts = counts(
+        board
+            .components
+            .iter()
+            .map(|component| component.reference.as_str()),
+    );
+    let row_counts = counts(report.rows.iter().map(|row| row.reference.as_str()));
+    let mut maximums = board_counts;
+    for (reference, count) in row_counts {
+        maximums
+            .entry(reference)
+            .and_modify(|known| *known = (*known).max(count))
+            .or_insert(count);
+    }
+
+    let assign = |references: Vec<&str>| {
+        let mut seen = BTreeMap::<String, usize>::new();
+        references
+            .into_iter()
+            .map(|reference| {
+                let reference = reference.trim();
+                let ordinal = seen.entry(reference.to_string()).or_default();
+                *ordinal += 1;
+                let needs_occurrence = reference.is_empty()
+                    || maximums.get(reference).copied().unwrap_or_default() > 1
+                    || reference.starts_with(OCCURRENCE_PREFIX);
+                if !needs_occurrence {
+                    return reference.to_string();
+                }
+                let encoded = reference
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| format!("{byte:02X}"))
+                    .collect::<String>();
+                format!("{OCCURRENCE_PREFIX}{encoded}:{ordinal}")
+            })
+            .collect()
+    };
+
+    (
+        assign(
+            board
+                .components
+                .iter()
+                .map(|component| component.reference.as_str())
+                .collect(),
+        ),
+        assign(
+            report
+                .rows
+                .iter()
+                .map(|row| row.reference.as_str())
+                .collect(),
+        ),
+    )
+}
+
 /// The open-part assumptions for one bind report: one per DISTINCT claim, not
 /// one per unresolved row.
 ///
@@ -158,7 +236,7 @@ fn uncovered_windows(
 /// copy of the id crate's normalisation rules, so the two cannot drift. Ordering
 /// is bind-row order, which follows `board.components`, so the ids are identical
 /// on every run of the same input.
-fn open_part_assumptions(report: &BindReport) -> Vec<Assumption> {
+fn open_part_assumptions(report: &BindReport, row_subjects: &[String]) -> Vec<Assumption> {
     // The claim a row makes, keyed by EVERY sentence a reader would see plus the id.
     // Two rows merge only when a reader could not tell the resulting entries apart.
     //
@@ -171,8 +249,8 @@ fn open_part_assumptions(report: &BindReport) -> Vec<Assumption> {
     // have acted on for the second part.
     type Claim = (AssumptionId, String, String, String, String);
     let mut order: Vec<Claim> = Vec::new();
-    let mut groups: BTreeMap<Claim, (usize, String, String, String)> = BTreeMap::new();
-    for row in &report.rows {
+    let mut groups: BTreeMap<Claim, (usize, String, String, String, Vec<String>)> = BTreeMap::new();
+    for (row_index, row) in report.rows.iter().enumerate() {
         let BindOutcome::Unresolved { reason } = &row.outcome else {
             continue;
         };
@@ -185,12 +263,23 @@ fn open_part_assumptions(report: &BindReport) -> Vec<Assumption> {
             probe.replacement().to_string(),
         );
         match groups.get_mut(&key) {
-            Some((count, _, _, _)) => *count += 1,
+            Some((count, _, _, _, subjects)) => {
+                *count += 1;
+                if let Some(subject) = row_subjects.get(row_index) {
+                    subjects.push(subject.clone());
+                }
+            }
             None => {
                 order.push(key.clone());
                 groups.insert(
                     key,
-                    (1, row.reference.clone(), row.value.clone(), reason.clone()),
+                    (
+                        1,
+                        row.reference.clone(),
+                        row.value.clone(),
+                        reason.clone(),
+                        row_subjects.get(row_index).cloned().into_iter().collect(),
+                    ),
                 );
             }
         }
@@ -204,7 +293,7 @@ fn open_part_assumptions(report: &BindReport) -> Vec<Assumption> {
     let mut ordinals: BTreeMap<&AssumptionId, usize> = BTreeMap::new();
     let mut out = Vec::with_capacity(order.len());
     for key in &order {
-        let (count, reference, value, reason) = &groups[key];
+        let (count, reference, value, reason, subjects) = &groups[key];
         let ordinal = if claims_per_id[&key.0] > 1 {
             let next = ordinals.entry(&key.0).or_default();
             *next += 1;
@@ -212,8 +301,8 @@ fn open_part_assumptions(report: &BindReport) -> Vec<Assumption> {
         } else {
             None
         };
-        out.push(Assumption::open_part_group(
-            reference, value, reason, *count, ordinal,
+        out.push(Assumption::open_part_group_for_components(
+            reference, value, reason, *count, ordinal, subjects,
         ));
     }
     out
@@ -229,15 +318,19 @@ impl BoardEvidence {
         reader_notes: &[String],
         today: RunDate,
     ) -> Result<Self, EvidenceError> {
+        let (component_subjects, row_subjects) = component_occurrence_subjects(board, report);
         let mut assumptions = Vec::new();
-        assumptions.extend(open_part_assumptions(report));
+        assumptions.extend(open_part_assumptions(report, &row_subjects));
         // A part bound to a generic estimated-fallback model is running on
         // invented ratings. Recorded here rather than only in the CI report's
         // coverage_warnings, so it reaches every surface that renders the evidence
         // map (`--plain`, `--json`, the web front door) and not just `hauksbee ci`.
         // The TUI does not build a BoardEvidence, so it takes the same warnings
         // directly through `AppState::new`'s coverage notes.
-        for row in report.non_ignored() {
+        for (row_index, row) in report.rows.iter().enumerate() {
+            if row.outcome.is_ignored() {
+                continue;
+            }
             if row
                 .source
                 .as_ref()
@@ -252,7 +345,11 @@ impl BoardEvidence {
             ) {
                 continue;
             }
-            let key = format!("model/{}", row.reference);
+            let component_subject = row_subjects
+                .get(row_index)
+                .map(String::as_str)
+                .unwrap_or_else(|| row.reference.trim());
+            let key = format!("model/{component_subject}");
             let subject_text = format!("{} ({})", row.reference, row.value);
             assumptions.push(Assumption::reduced_fidelity(
                 AssumptionSource::Binder,
@@ -274,7 +371,7 @@ impl BoardEvidence {
         // `--report`, and `--plain`, `--json` and the web front door said nothing at
         // all about a part the tool had only half modelled. Every row, not
         // `non_ignored()`, for exactly that reason.
-        for row in &report.rows {
+        for (row_index, row) in report.rows.iter().enumerate() {
             let Some(warning) = row.warning.as_deref() else {
                 continue;
             };
@@ -287,7 +384,12 @@ impl BoardEvidence {
             let gap = rest
                 .strip_prefix(&format!("{} ({}): ", row.reference, row.value))
                 .unwrap_or(rest);
-            assumptions.push(Assumption::partial_model(
+            let component_subject = row_subjects
+                .get(row_index)
+                .map(String::as_str)
+                .unwrap_or_else(|| row.reference.trim());
+            assumptions.push(Assumption::partial_model_for_component(
+                component_subject,
                 &row.reference,
                 &row.value,
                 gap,
@@ -314,17 +416,32 @@ impl BoardEvidence {
         }
 
         let mut defaults_by_ref: BTreeMap<String, Vec<DefaultFact>> = BTreeMap::new();
-        for row in &report.rows {
+        for (row_index, row) in report.rows.iter().enumerate() {
+            let component_subject = row_subjects
+                .get(row_index)
+                .map(String::as_str)
+                .unwrap_or_else(|| row.reference.trim());
             for guess in &row.guesses {
                 let (pin, role) = guessed_pin_role(guess);
-                assumptions.push(Assumption::inferred_pin_role(&row.reference, &pin, &role));
+                assumptions.push(Assumption::inferred_pin_role_for_component(
+                    component_subject,
+                    &row.reference,
+                    &pin,
+                    &role,
+                ));
             }
             if let Some((parameter, value)) = documented_default(row.warning.as_deref()) {
-                let assumption = Assumption::default_parameter(&row.reference, &parameter, &value);
+                let assumption = Assumption::default_parameter_for_component(
+                    component_subject,
+                    &row.reference,
+                    &parameter,
+                    &value,
+                );
                 defaults_by_ref
-                    .entry(row.reference.clone())
+                    .entry(component_subject.to_string())
                     .or_default()
                     .push(DefaultFact {
+                        reference: row.reference.clone(),
                         parameter,
                         value,
                         assumption: assumption.id().clone(),
@@ -344,18 +461,17 @@ impl BoardEvidence {
             .values()
             .map(|name| ((*name).to_string(), BTreeSet::new()))
             .collect();
-        for component in &board.components {
-            let reference = if component.reference.trim().is_empty() {
-                AssumptionId::UNNAMED_SUBJECT
-            } else {
-                component.reference.as_str()
-            };
+        for (component_index, component) in board.components.iter().enumerate() {
+            let component_subject = component_subjects
+                .get(component_index)
+                .map(String::as_str)
+                .unwrap_or(AssumptionId::UNNAMED_SUBJECT);
             for pin in &component.pins {
                 if let Some(name) = pin.net.and_then(|id| net_names.get(&id)).copied() {
                     incidence
                         .entry(name.to_string())
                         .or_default()
-                        .insert(reference.to_string());
+                        .insert(component_subject.to_string());
                 }
             }
         }
@@ -372,7 +488,8 @@ impl BoardEvidence {
         let rows: BTreeMap<&str, _> = report
             .rows
             .iter()
-            .map(|row| (row.reference.as_str(), row))
+            .zip(&row_subjects)
+            .map(|(row, subject)| (subject.as_str(), row))
             .collect();
         let mut maps = Vec::with_capacity(owned.len());
         for (net, refs) in &owned {
@@ -401,13 +518,13 @@ impl BoardEvidence {
                             .clone()
                             .unwrap_or_else(|| unspecified_source(model_id));
                         models.push(ModelOnPath::new(
-                            reference,
+                            &row.reference,
                             model_id,
                             source.clone(),
                             confidence,
                         )?);
                         parameters.push(ParameterProvenance::new(
-                            format!("{reference}.model"),
+                            format!("{}.model", row.reference),
                             model_id,
                             ValueOrigin::Model {
                                 model_id: model_id.to_string(),
@@ -420,7 +537,7 @@ impl BoardEvidence {
                 if let Some(defaults) = defaults_by_ref.get(reference) {
                     for default in defaults {
                         parameters.push(ParameterProvenance::new(
-                            format!("{reference}.{}", default.parameter),
+                            format!("{}.{}", default.reference, default.parameter),
                             &default.value,
                             ValueOrigin::Default {
                                 assumption: default.assumption.clone(),
@@ -435,12 +552,13 @@ impl BoardEvidence {
         }
 
         let model_by_ref = rows
-            .values()
-            .filter_map(|row| {
+            .iter()
+            .filter_map(|(component_subject, row)| {
                 let model_id = row.model_id.as_ref()?;
                 Some((
-                    row.reference.clone(),
+                    (*component_subject).to_string(),
                     ModelFact {
+                        reference: row.reference.clone(),
                         model_id: model_id.clone(),
                         confidence: confidence(row.confidence),
                         source: row
@@ -451,11 +569,17 @@ impl BoardEvidence {
                 ))
             })
             .collect();
+        let display_ref_by_subject = component_subjects
+            .iter()
+            .zip(&board.components)
+            .map(|(subject, component)| (subject.clone(), component.reference.clone()))
+            .collect();
         let refs_by_net = owned.iter().cloned().collect();
         Ok(Self {
             registry: registry.clone(),
             index,
             refs_by_net,
+            display_ref_by_subject,
             model_by_ref,
             today,
             assumptions: registry.assumptions().to_vec(),
@@ -641,6 +765,13 @@ impl BoardEvidence {
             .any(|map| map.status() != EvidenceStatus::Clean)
     }
 
+    fn subject_matches_reference(&self, subject: &str, reference: &str) -> bool {
+        self.display_ref_by_subject
+            .get(subject)
+            .map_or(subject, String::as_str)
+            == reference
+    }
+
     /// A real report-coverage assertion for an otherwise finding-free static
     /// analysis. This is not a synthetic pass result: it states exactly which
     /// extracted nets the front door inspected and therefore carries any
@@ -693,7 +824,11 @@ impl BoardEvidence {
             let mut nets: BTreeSet<String> = finding.nets.iter().cloned().collect();
             if nets.is_empty() {
                 for (net, references) in &self.refs_by_net {
-                    if finding.refs.iter().any(|r| references.contains(r)) {
+                    if finding.refs.iter().any(|reference| {
+                        references
+                            .iter()
+                            .any(|subject| self.subject_matches_reference(subject, reference))
+                    }) {
                         nets.insert(net.clone());
                     }
                 }
@@ -837,7 +972,10 @@ impl BoardEvidence {
     ) -> Result<EvidenceMap, EvidenceError> {
         let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
         for (net, refs) in &self.refs_by_net {
-            if references.iter().any(|reference| refs.contains(reference)) {
+            if references.iter().any(|reference| {
+                refs.iter()
+                    .any(|subject| self.subject_matches_reference(subject, reference))
+            }) {
                 scoped_nets.insert(net.clone());
             }
         }
@@ -872,7 +1010,10 @@ impl BoardEvidence {
         let assertion = assertion.into();
         let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
         for (net, refs) in &self.refs_by_net {
-            if references.iter().any(|reference| refs.contains(reference)) {
+            if references.iter().any(|reference| {
+                refs.iter()
+                    .any(|subject| self.subject_matches_reference(subject, reference))
+            }) {
                 scoped_nets.insert(net.clone());
             }
         }
@@ -1022,7 +1163,7 @@ impl BoardEvidence {
                 if let Some(defaults) = self.defaults_by_ref.get(reference) {
                     for default in defaults {
                         parameters.push(ParameterProvenance::new(
-                            format!("{reference}.{}", default.parameter),
+                            format!("{}.{}", default.reference, default.parameter),
                             &default.value,
                             ValueOrigin::Default {
                                 assumption: default.assumption.clone(),
@@ -1033,13 +1174,13 @@ impl BoardEvidence {
                 continue;
             };
             models.push(ModelOnPath::new(
-                reference,
+                &fact.reference,
                 &fact.model_id,
                 fact.source.clone(),
                 fact.confidence,
             )?);
             parameters.push(ParameterProvenance::new(
-                format!("{reference}.model"),
+                format!("{}.model", fact.reference),
                 &fact.model_id,
                 ValueOrigin::Model {
                     model_id: fact.model_id.clone(),
@@ -1050,7 +1191,7 @@ impl BoardEvidence {
             if let Some(defaults) = self.defaults_by_ref.get(reference) {
                 for default in defaults {
                     parameters.push(ParameterProvenance::new(
-                        format!("{reference}.{}", default.parameter),
+                        format!("{}.{}", default.reference, default.parameter),
                         &default.value,
                         ValueOrigin::Default {
                             assumption: default.assumption.clone(),
@@ -1807,6 +1948,123 @@ mod duplicate_open_part_tests {
 
         assert!(map.is_undermined(), "anonymous open part was off-path");
         assert_eq!(map.assumptions().len(), 1);
+    }
+
+    #[test]
+    fn duplicate_designators_do_not_saturate_nets_or_steal_model_provenance() {
+        let component = |net| hauksbee_extract::Component {
+            reference: "Via".to_string(),
+            value: "mystery".to_string(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: "F.Cu".to_string(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: vec![hauksbee_extract::Pin {
+                number: "1".to_string(),
+                net: Some(net),
+                function: String::new(),
+                kind: String::new(),
+                position: None,
+            }],
+        };
+        let board = ExtractedBoard {
+            name: "duplicate-designator-incidence".to_string(),
+            nets: vec![
+                hauksbee_extract::Net {
+                    id: 1,
+                    name: "A_OPEN".to_string(),
+                },
+                hauksbee_extract::Net {
+                    id: 2,
+                    name: "B_MODELLED".to_string(),
+                },
+            ],
+            components: vec![component(1), component(2)],
+        };
+        let mut report = BindReport::default();
+        report.push(unresolved("Via", "mystery", "no model matched"));
+        report.push(BindRow {
+            reference: "Via".to_string(),
+            value: "mystery".to_string(),
+            model_id: Some("via_model_b".to_string()),
+            confidence: Confidence::Exact,
+            source: None,
+            outcome: BindOutcome::Analog {
+                device: "resistor".to_string(),
+            },
+            warning: None,
+            guesses: Vec::new(),
+        });
+
+        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
+            .expect("duplicate designators build");
+        let maps = evidence.maps();
+
+        assert_eq!(maps.len(), 2);
+        assert_eq!(maps[0].assertion(), "Binding completeness for net A_OPEN");
+        assert_eq!(maps[0].status(), EvidenceStatus::Undermined);
+        assert!(
+            maps[0].models().is_empty(),
+            "the later row leaked backwards"
+        );
+        assert_eq!(
+            maps[1].assertion(),
+            "Binding completeness for net B_MODELLED"
+        );
+        assert_eq!(maps[1].status(), EvidenceStatus::Clean);
+        assert_eq!(maps[1].models().len(), 1);
+        assert_eq!(maps[1].models()[0].model_id(), "via_model_b");
+
+        let by_display_reference = evidence
+            .simulation_map("all Via occurrences", &[], &["Via".to_string()], None)
+            .expect("reader-facing references still resolve occurrence subjects");
+        assert_eq!(by_display_reference.status(), EvidenceStatus::Undermined);
+        assert_eq!(by_display_reference.models().len(), 1);
+    }
+
+    #[test]
+    fn every_row_derived_assumption_survives_reused_designators() {
+        let mut report = BindReport::default();
+        for _ in 0..2 {
+            report.push(BindRow {
+                reference: "Via".to_string(),
+                value: "PART".to_string(),
+                model_id: Some("fallback_active".to_string()),
+                confidence: Confidence::Guessed,
+                source: Some(unspecified_source("fallback_active")),
+                outcome: BindOutcome::Analog {
+                    device: "nmos".to_string(),
+                },
+                warning: Some(format!(
+                    "{}Via (PART): one channel is modelled",
+                    Assumption::PARTIAL_MODEL_MARKER
+                )),
+                guesses: vec!["pad 1 role 'drain' inferred by package shape".to_string()],
+            });
+        }
+
+        BoardEvidence::from_bound(&board(), &report, &[], RunDate::unknown())
+            .expect("fallback, partial-model and pin-role evidence must not collide");
+
+        let mut defaults = BindReport::default();
+        for _ in 0..2 {
+            defaults.push(BindRow {
+                reference: "Via".to_string(),
+                value: "VREG".to_string(),
+                model_id: Some("vreg".to_string()),
+                confidence: Confidence::Exact,
+                source: None,
+                outcome: BindOutcome::Behavioral {
+                    device: "vreg".to_string(),
+                },
+                warning: Some("vreg model has no `vout` param; assumed 5.0 V".to_string()),
+                guesses: Vec::new(),
+            });
+        }
+        BoardEvidence::from_bound(&board(), &defaults, &[], RunDate::unknown())
+            .expect("documented-default evidence must not collide");
     }
 
     /// Ids are cited in acknowledgment files and diffed across runs, so the same

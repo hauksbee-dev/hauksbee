@@ -115,6 +115,10 @@ fn assert_valid(v: &jsonschema::Validator, doc: &str, shape: &str) {
 
 #[test]
 fn schema_file_matches_report_types() {
+    assert_eq!(
+        CI_REPORT_SCHEMA_VERSION, 2,
+        "typed assumption identity is CI schema v2"
+    );
     let expected = generated_schema();
     let path = schema_path();
     if std::env::var_os("UPDATE_CI_REPORT_SCHEMA").is_some() {
