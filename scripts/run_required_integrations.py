@@ -11,6 +11,8 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -138,8 +140,8 @@ def _merge_capture(earlier: str | bytes | None, final: str | bytes | None) -> st
     return earlier_text + final_text
 
 
-def _process_table() -> list[tuple[int, int, int]]:
-    """Return a best-effort POSIX pid/ppid/pgid snapshot."""
+def _process_table() -> list[tuple[int, int, int, int]]:
+    """Return a POSIX pid/ppid/pgid/session snapshot or fail closed."""
 
     if os.name != "posix":
         return []
@@ -151,11 +153,9 @@ def _process_table() -> list[tuple[int, int, int]]:
             check=True,
         ).stdout
     except (OSError, subprocess.SubprocessError):
-        if sys.platform.startswith("linux"):
-            raise RuntimeError(
-                "cannot enumerate Linux descendants; refusing an uncontained integration run"
-            )
-        return []
+        raise RuntimeError(
+            "cannot enumerate POSIX descendants; refusing an uncontained integration run"
+        )
 
     rows = []
     for line in table.splitlines():
@@ -163,12 +163,23 @@ def _process_table() -> list[tuple[int, int, int]]:
             pid, parent, group = map(int, line.split())
         except ValueError:
             continue
-        rows.append((pid, parent, group))
+        try:
+            session = os.getsid(pid)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            # Other-user processes are never descendants of this runner. Keep
+            # them in the ancestry table but make them ineligible for session
+            # ownership rather than weakening cleanup for our own children.
+            session = -1
+        rows.append((pid, parent, group, session))
     return rows
 
 
 def _direct_children(parent_pid: int) -> set[int]:
-    candidates = {pid for pid, parent, _ in _process_table() if parent == parent_pid}
+    candidates = {
+        pid for pid, parent, _, _ in _process_table() if parent == parent_pid
+    }
     live = set()
     for pid in candidates:
         try:
@@ -198,23 +209,32 @@ def _owned_processes(
 ) -> tuple[set[int], set[int]]:
     """Snapshot groups/PIDs rooted at cargo or newly adopted by this runner."""
 
-    groups: set[int] = {root_pid}
+    groups: set[int] = set()
     pids: set[int] = {root_pid}
     rows = _process_table()
 
     children: dict[int, list[tuple[int, int]]] = {}
-    for pid, parent, group in rows:
+    for pid, parent, group, _ in rows:
         children.setdefault(parent, []).append((pid, group))
 
     adopted = {
         pid
-        for pid, parent, _ in rows
+        for pid, parent, _, _ in rows
         if parent == os.getpid()
         and pid not in baseline_runner_children
         and pid != root_pid
     }
-    group_by_pid = {pid: group for pid, _, group in rows}
-    pending = [root_pid, *adopted]
+    session_members = {pid for pid, _, _, session in rows if session == root_pid}
+    group_by_pid = {pid: group for pid, _, group, _ in rows}
+    if root_pid not in group_by_pid:
+        try:
+            os.kill(root_pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            # start_new_session=True makes the command PID its initial PGID.
+            groups.add(root_pid)
+    pending = [root_pid, *adopted, *session_members]
     seen: set[int] = set()
     while pending:
         parent = pending.pop()
@@ -277,10 +297,43 @@ def _reap_owned_children(pids: set[int], *, wait: bool = False) -> None:
             pass
 
 
+def _wait_for_process_groups(
+    groups: set[int], pids: set[int], timeout_seconds: float
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        _reap_owned_children(pids)
+        if not _live_process_groups(groups):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _audit_completed_command(
+    process: subprocess.Popen[str], baseline_runner_children: set[int]
+) -> tuple[bool, bool]:
+    """Terminate any group a completed command left behind and prove it exited."""
+
+    groups, pids = _owned_processes(process.pid, baseline_runner_children)
+    live = _live_process_groups(groups)
+    if not live:
+        _reap_owned_children(pids)
+        return True, False
+
+    _signal_process_groups(live, process.pid, signal.SIGTERM)
+    if _wait_for_process_groups(live, pids, 1.0):
+        return True, False
+
+    live = _live_process_groups(live)
+    _signal_process_groups(live, process.pid, signal.SIGKILL)
+    return _wait_for_process_groups(live, pids, 2.0), True
+
+
 def _stop_process_group(
     process: subprocess.Popen[str], baseline_runner_children: set[int]
-) -> tuple[str, bool]:
-    """Stop cargo and emulator groups; return output and whether KILL was needed."""
+) -> tuple[str, bool, bool]:
+    """Stop cargo/emulator groups; return output, KILL use, and cleanup proof."""
 
     groups, pids = _owned_processes(process.pid, baseline_runner_children)
     _signal_process_groups(groups, process.pid, signal.SIGTERM)
@@ -294,13 +347,13 @@ def _stop_process_group(
         )
         groups.update(later_groups)
         pids.update(later_pids)
-        live_descendants = _live_process_groups(groups - {process.pid})
+        live_descendants = _live_process_groups(groups)
         if live_descendants:
             _signal_process_groups(live_descendants, process.pid, signal.SIGKILL)
-            _reap_owned_children(pids, wait=True)
-            return _text(output), True
+            clean = _wait_for_process_groups(live_descendants, pids, 2.0)
+            return _text(output), True, clean
         _reap_owned_children(pids)
-        return _text(output), False
+        return _text(output), False, True
     except subprocess.TimeoutExpired as error:
         # Retain the first snapshot: cargo commonly exits on TERM while Renode
         # or QEMU keeps a separately-created process group alive and becomes
@@ -312,8 +365,9 @@ def _stop_process_group(
         pids.update(later_pids)
         _signal_process_groups(groups, process.pid, signal.SIGKILL)
         output, _ = process.communicate()
-        _reap_owned_children(pids, wait=True)
-        return _merge_capture(error.output, output), True
+        remaining = _live_process_groups(groups)
+        clean = _wait_for_process_groups(remaining, pids, 2.0)
+        return _merge_capture(error.output, output), True, clean
 
 
 def run_command(
@@ -342,14 +396,33 @@ def run_command(
     )
     try:
         output, _ = process.communicate(timeout=timeout_seconds)
+        clean, killed = _audit_completed_command(process, baseline_runner_children)
+        if killed:
+            output += (
+                "\nREQUIRED INTEGRATION CLEANUP: a completed command left a "
+                "descendant process group; it was terminated with SIGKILL\n"
+            )
+        if not clean:
+            output += (
+                "\nREQUIRED INTEGRATION CLEANUP FAILED: descendant process "
+                "groups remain after SIGKILL\n"
+            )
+            return subprocess.CompletedProcess(command, 125, output)
         return subprocess.CompletedProcess(command, process.returncode, output)
     except subprocess.TimeoutExpired:
-        output, killed = _stop_process_group(process, baseline_runner_children)
+        output, killed, clean = _stop_process_group(
+            process, baseline_runner_children
+        )
         termination = "SIGTERM then SIGKILL" if killed else "SIGTERM"
         output += (
             f"\nREQUIRED INTEGRATION TIMEOUT: exceeded {timeout_seconds}s; "
             f"cargo and its emulator process group were terminated with {termination}\n"
         )
+        if not clean:
+            output += (
+                "REQUIRED INTEGRATION CLEANUP FAILED: descendant process groups "
+                "remain after timeout cleanup\n"
+            )
         return subprocess.CompletedProcess(command, 124, output)
     except KeyboardInterrupt:
         _stop_process_group(process, baseline_runner_children)
@@ -374,7 +447,9 @@ REQUIRED_BACKEND_KEYS = (
 )
 
 
-def _verified_backend_paths(output: str) -> tuple[dict[str, str], list[str]]:
+def _verified_backend_paths(
+    output: str, required_root: Path | None = None
+) -> tuple[dict[str, str], list[str]]:
     """Parse exact executable paths emitted by the pinned simulator preflight."""
 
     paths: dict[str, str] = {}
@@ -391,9 +466,28 @@ def _verified_backend_paths(output: str) -> tuple[dict[str, str], list[str]]:
         if key in paths:
             problems.append(f"duplicate required backend path record for {key}")
             continue
-        if not Path(value).is_absolute():
+        candidate = Path(value)
+        if not candidate.is_absolute():
             problems.append(f"required backend path for {key} is not absolute: {value}")
             continue
+        if required_root is not None:
+            try:
+                verified_root = required_root.resolve(strict=True)
+                resolved = candidate.resolve(strict=True)
+                resolved.relative_to(verified_root)
+            except (OSError, ValueError) as error:
+                problems.append(
+                    f"required backend path for {key} is outside the runner-owned "
+                    f"root or unavailable: {value}: {error}"
+                )
+                continue
+            if not resolved.is_file() or not os.access(resolved, os.X_OK):
+                problems.append(
+                    f"required backend path for {key} is not an executable regular file: "
+                    f"{resolved}"
+                )
+                continue
+            value = str(resolved)
         paths[key] = value
     missing = sorted(set(REQUIRED_BACKEND_KEYS) - paths.keys())
     if missing:
@@ -443,6 +537,58 @@ def _write_evidence(path: Path, commit_sha: str) -> None:
     os.replace(temporary, path)
 
 
+def _run_required_gates(
+    args: argparse.Namespace, repo: Path, commit_sha: str, required_root: Path
+) -> int:
+    preflight = run_command(
+        (
+            str(repo / "scripts/install-sims.sh"),
+            "--require-pinned",
+            "--emit-required-paths",
+        ),
+        repo,
+        env_updates={"HAUKSBEE_REQUIRED_RUN_ROOT": str(required_root)},
+    )
+    sys.stdout.write(preflight.stdout)
+    if preflight.returncode != 0:
+        print(
+            "required integrations: simulator preflight failed; no release evidence was earned",
+            file=sys.stderr,
+        )
+        return 1
+    verified_backends, path_problems = _verified_backend_paths(
+        preflight.stdout, required_root
+    )
+    if path_problems:
+        for problem in path_problems:
+            print(f"required integrations: {problem}", file=sys.stderr)
+        return 1
+
+    failures: list[str] = []
+    for gate in GATES:
+        print(f"\n==> required integration: {gate.name}", flush=True)
+        result = run_command(
+            gate.command,
+            repo,
+            timeout_seconds=gate.timeout_seconds,
+            env_updates=verified_backends,
+        )
+        sys.stdout.write(result.stdout)
+        failures.extend(evaluate_result(gate, result.returncode, result.stdout))
+
+    if failures:
+        print("\nrequired integration evidence FAILED:", file=sys.stderr)
+        for failure in failures:
+            print(f"  - {failure}", file=sys.stderr)
+        return 1
+
+    print(f"\nrequired integration evidence: {len(GATES)}/{len(GATES)} gates passed")
+    if args.evidence_out is not None:
+        _write_evidence(args.evidence_out, commit_sha)
+        print(f"required integration evidence retained at {args.evidence_out}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-sha")
@@ -472,50 +618,13 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    preflight = run_command(
-        (
-            str(repo / "scripts/install-sims.sh"),
-            "--require-pinned",
-            "--emit-required-paths",
-        ),
-        repo,
-    )
-    sys.stdout.write(preflight.stdout)
-    if preflight.returncode != 0:
-        print(
-            "required integrations: simulator preflight failed; no release evidence was earned",
-            file=sys.stderr,
-        )
-        return 1
-    verified_backends, path_problems = _verified_backend_paths(preflight.stdout)
-    if path_problems:
-        for problem in path_problems:
-            print(f"required integrations: {problem}", file=sys.stderr)
-        return 1
-
-    failures: list[str] = []
-    for gate in GATES:
-        print(f"\n==> required integration: {gate.name}", flush=True)
-        result = run_command(
-            gate.command,
-            repo,
-            timeout_seconds=gate.timeout_seconds,
-            env_updates=verified_backends,
-        )
-        sys.stdout.write(result.stdout)
-        failures.extend(evaluate_result(gate, result.returncode, result.stdout))
-
-    if failures:
-        print("\nrequired integration evidence FAILED:", file=sys.stderr)
-        for failure in failures:
-            print(f"  - {failure}", file=sys.stderr)
-        return 1
-
-    print(f"\nrequired integration evidence: {len(GATES)}/{len(GATES)} gates passed")
-    if args.evidence_out is not None:
-        _write_evidence(args.evidence_out, commit_sha)
-        print(f"required integration evidence retained at {args.evidence_out}")
-    return 0
+    run_base = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
+    run_base.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="hauksbee-required-sims.", dir=run_base
+    ) as raw_required_root:
+        required_root = Path(raw_required_root).resolve(strict=True)
+        return _run_required_gates(args, repo, commit_sha, required_root)
 
 
 if __name__ == "__main__":
