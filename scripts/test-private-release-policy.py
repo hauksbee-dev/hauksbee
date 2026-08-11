@@ -16,6 +16,34 @@ LAUNCHER = ROOT / "scripts" / "make-public.sh"
 
 
 class PrivateReleasePolicyTests(unittest.TestCase):
+    def test_release_contract_never_requires_public_repository_or_issues(self) -> None:
+        forbidden_by_file = {
+            ROOT / ".github/workflows/release.yml": (
+                "public slug",
+                "public repo",
+            ),
+            ROOT / "docs/dev-plans/prelaunch-c-plan.md": ("public issue",),
+            ROOT / "docs/dev-plans/tasks.md": ("public issue",),
+        }
+
+        for path, forbidden_phrases in forbidden_by_file.items():
+            text = path.read_text().lower()
+            for phrase in forbidden_phrases:
+                with self.subTest(path=path.relative_to(ROOT), phrase=phrase):
+                    self.assertNotIn(
+                        phrase,
+                        text,
+                        f"{path.relative_to(ROOT)} contradicts the private-only release policy",
+                    )
+
+    def test_release_preflight_requires_private_visibility(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn(
+            'visibility="$(gh api repos/hauksbee-dev/hauksbee --jq .visibility)"',
+            workflow,
+        )
+        self.assertIn('if [ "$visibility" != "private" ]; then', workflow)
+
     def run_privacy_phase(
         self,
         *,

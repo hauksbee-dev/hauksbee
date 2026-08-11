@@ -548,12 +548,15 @@ jobs:
         with:
           path: hauksbee
 
-      # The bundles, installer and OCI labels all point at the public slug
-      # hauksbee-dev/hauksbee. Publishing a release whose baked-in pointers
-      # 404 would ship dead corresponding-source URLs (a GPL-3.0 section 6
-      # problem, not just a cosmetic one), so check the slug resolves first.
+      # The bundles, installer and OCI labels all point at the private release
+      # repository hauksbee-dev/hauksbee. This release is distributed only to
+      # recipients authorised to access that repository, so the baked-in
+      # corresponding-source URLs resolve for the same audience. A missing or
+      # non-private repository would violate that contract; a missing one would
+      # also ship dead URLs (a GPL-3.0 section 6 problem, not just a cosmetic
+      # one), so check both existence and visibility first.
       # Skips gracefully when no token is available (e.g. a local act run).
-      - name: Preflight the public slug
+      - name: Preflight the private release slug
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -563,11 +566,15 @@ jobs:
             echo "::warning::scripts/get-hauksbee.sh no longer references hauksbee-dev/hauksbee; update this preflight to the new slug."
           fi
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "No GH_TOKEN available; skipping the public-slug existence check."
+            echo "No GH_TOKEN available; skipping the private-release-slug existence check."
             exit 0
           fi
-          if ! gh api repos/hauksbee-dev/hauksbee --jq .full_name; then
-            echo "::error title=Public slug missing::gh api repos/hauksbee-dev/hauksbee failed. The release assets bake in URLs under that slug (installer, LICENSE-BINARY corresponding-source pointers, OCI labels); create/publish the public repo before releasing."
+          if ! visibility="$(gh api repos/hauksbee-dev/hauksbee --jq .visibility)"; then
+            echo "::error title=Private release slug missing::gh api repos/hauksbee-dev/hauksbee failed. The release assets bake in URLs under that slug (installer, LICENSE-BINARY corresponding-source pointers, OCI labels); create the private release repository before releasing."
+            exit 1
+          fi
+          if [ "$visibility" != "private" ]; then
+            echo "::error title=Release repository is not private::hauksbee-dev/hauksbee reports visibility '$visibility'. Refusing to publish release assets until the repository is private."
             exit 1
           fi
 
