@@ -733,8 +733,10 @@ impl DrcReport {
     /// A declaration can qualify only one physical contact location. Multiple
     /// layer findings at that location are one plated/copper connection and are
     /// qualified together. If the same net pair contacts at distinct locations,
-    /// only a unique largest same-location cluster can be the declared tie; an
-    /// equally plausible second contact is ambiguous and all remain gating.
+    /// the schematic's net-name declaration does not identify which location is
+    /// intentional, so every contact remains gating. Cluster size is not identity:
+    /// choosing the largest contact would turn an unrelated multilayer bridge into
+    /// authority to excuse it.
     ///
     /// Clearance findings are untouched: they are near-misses, not contacts, so
     /// there is nothing about them a tie could excuse.
@@ -767,18 +769,13 @@ impl DrcReport {
                     locations.entry(location).or_default().push(index);
                 }
             }
-            let Some(maximum) = locations.values().map(Vec::len).max() else {
-                continue;
-            };
-            let mut candidates = locations
-                .values()
-                .filter(|indices| indices.len() == maximum);
-            let Some(indices) = candidates.next() else {
-                continue;
-            };
-            if candidates.next().is_some() {
+            if locations.len() != 1 {
                 continue;
             }
+            let indices = locations
+                .values()
+                .next()
+                .expect("one location checked above");
             for &index in indices {
                 let finding = &self.findings[index];
                 qualification.qualified.push(QualifiedFinding {

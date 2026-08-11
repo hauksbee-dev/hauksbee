@@ -46,7 +46,7 @@ pub fn definitions() -> Value {
     json!([
         {
             "name": "analyze_board",
-            "description": "Full physics-grounded analysis of a PCB design file (KiCad .kicad_pcb/.kicad_sch, Eagle .brd, Altium .PcbDoc, IPC-D-356 .d356, gerber zip, or Board-as-Code .board). Returns the front-door report JSON: overall headline, serious/total finding counts, per-section findings (DRC, connectivity, signal integrity), bind coverage (which components resolved to models), nets, detected supplies, and honesty notes. With firmware_path (.elf/.hex, a PlatformIO project, or a zip of either) it also runs a short firmware co-sim and attaches a `cosim` section. HONESTY CONTRACT: if the firmware question cannot be answered (no MCU on the board, external-only backend, firmware failed to load, or the analog solve aborted) the result is {\"status\":\"invalid_for_analysis\",\"reason\":...,\"report\":...} with the static report riding along. Never treat a refusal as pass or fail; it means the run declined to vouch for itself. Coverage degradations arrive as data fields, not prose; surface them. The front-door report carries five: the substituted-MCU-core caveat, driver contentions, short pulses, drive conflicts, and the per-bus `spi_framing` tier. It carries neither dropped ADC channels nor unexercised buses, and neither watchdog reboots nor per-core timing coverage. Those four reach `hauksbee run --json` and the `run_checks` tool's `coverage_warnings`, so use `run_checks` when the board has an unmapped ADC channel, a bus slave on a controller-less platform, or firmware whose watchdog may bite.",
+            "description": "Full physics-grounded analysis of a PCB design file (KiCad .kicad_pcb/.kicad_sch, Eagle .brd, Altium .PcbDoc, IPC-D-356 .d356, gerber zip, or Board-as-Code .board). For an Eagle .brd, a same-named sibling .sch is resolved automatically; schematic_path may explicitly name the same design's Eagle .sch. Its declared net ties qualify only unambiguous physical contacts, matching the CLI. Returns the front-door report JSON: overall headline, serious/total finding counts, per-section findings (DRC, connectivity, signal integrity), bind coverage (which components resolved to models), nets, detected supplies, and honesty notes. With firmware_path (.elf/.hex, a PlatformIO project, or a zip of either) it also runs a short firmware co-sim and attaches a `cosim` section. HONESTY CONTRACT: if the firmware question cannot be answered (no MCU on the board, external-only backend, firmware failed to load, or the analog solve aborted) the result is {\"status\":\"invalid_for_analysis\",\"reason\":...,\"report\":...} with the static report riding along. Never treat a refusal as pass or fail; it means the run declined to vouch for itself. Coverage degradations arrive as data fields, not prose; surface them. The front-door report carries five: the substituted-MCU-core caveat, driver contentions, short pulses, drive conflicts, and the per-bus `spi_framing` tier. It carries neither dropped ADC channels nor unexercised buses, and neither watchdog reboots nor per-core timing coverage. Those four reach `hauksbee run --json` and the `run_checks` tool's `coverage_warnings`, so use `run_checks` when the board has an unmapped ADC channel, a bus slave on a controller-less platform, or firmware whose watchdog may bite.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -57,6 +57,10 @@ pub fn definitions() -> Value {
                     "firmware_path": {
                         "type": "string",
                         "description": "Optional path to compiled firmware (.elf/.hex), a PlatformIO project directory, or a zip containing either."
+                    },
+                    "schematic_path": {
+                        "type": "string",
+                        "description": "Optional companion Eagle .sch path. Its basename and physical reference/value identity must match the Eagle .brd. When omitted, a same-folder same-named sibling is discovered automatically."
                     }
                 },
                 "required": ["board_path"]
@@ -105,7 +109,7 @@ pub fn definitions() -> Value {
         },
         {
             "name": "run_script",
-            "description": "Code mode: run a JavaScript program server-side against the hauksbee API and return the composed result in ONE call, instead of many tool round-trips. The sandbox (embedded QuickJS) exposes exactly one capability, the global `hauksbee` object: analyzeBoard(path, firmwarePath?), runChecks(path, specToml, firmwarePath?), listCapabilities(), boardToCode(path). Each returns the same JSON object the corresponding tool returns. console.log(...) is captured into the response. The JS environment itself has no filesystem, no network, no imports and no other globals beyond the JS builtins. Note what that does NOT mean: `hauksbee.analyzeBoard(path)` reads any path on the machine and `hauksbee.runChecks(...)` can build a firmware project, which runs that project's build scripts. Treat those two as the capabilities they are, and do not pass a path or a spec that came from content you do not trust. The script runs as a function body: use `return` for its result, which must be JSON-serializable. HONESTY CONTRACT inside the sandbox: a refusal is THROWN as a structured error object with .status === \"invalid_for_analysis\" so a script cannot accidentally treat it as data; catch it if you want to handle it. Tool input errors are thrown as {error: message}. Response: {result, logs}; an uncaught throw comes back as an error with {thrown, logs}. Scripts are killed after 120 seconds.",
+            "description": "Code mode: run a JavaScript program server-side against the hauksbee API and return the composed result in ONE call, instead of many tool round-trips. The sandbox (embedded QuickJS) exposes exactly one capability, the global `hauksbee` object: analyzeBoard(path, firmwarePath?, schematicPath?), runChecks(path, specToml, firmwarePath?), listCapabilities(), boardToCode(path). Each returns the same JSON object the corresponding tool returns. console.log(...) is captured into the response. The JS environment itself has no filesystem, no network, no imports and no other globals beyond the JS builtins. Note what that does NOT mean: `hauksbee.analyzeBoard(path)` reads any path on the machine and `hauksbee.runChecks(...)` can build a firmware project, which runs that project's build scripts. Treat those two as the capabilities they are, and do not pass a path or a spec that came from content you do not trust. The script runs as a function body: use `return` for its result, which must be JSON-serializable. HONESTY CONTRACT inside the sandbox: a refusal is THROWN as a structured error object with .status === \"invalid_for_analysis\" so a script cannot accidentally treat it as data; catch it if you want to handle it. Tool input errors are thrown as {error: message}. Response: {result, logs}; an uncaught throw comes back as an error with {thrown, logs}. Scripts are killed after 120 seconds.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -185,6 +189,24 @@ fn analyze_board(args: &Value) -> ToolResult {
         Err(e) => return ToolResult::err(format!("could not read board file '{board_path}': {e}")),
     };
     let name = display_name(board_path);
+    let normalized = match hauksbee_engine::board_input::from_bytes(&name, &bytes) {
+        Ok(normalized) => normalized,
+        Err(error) => return ToolResult::err(format!("input error: {}", error.web_message())),
+    };
+    let board_is_eagle = String::from_utf8_lossy(&bytes)
+        .chars()
+        .take(512)
+        .collect::<String>()
+        .contains("<eagle");
+    let schematic = match hauksbee_engine::schematic_ties::resolve(
+        std::path::Path::new(board_path),
+        &normalized.board,
+        opt_str(args, "schematic_path").map(std::path::Path::new),
+        board_is_eagle,
+    ) {
+        Ok(schematic) => schematic,
+        Err(error) => return ToolResult::err(error.to_string()),
+    };
     let fw = opt_str(args, "firmware_path");
     let report_json = match fw {
         Some(fw_path) => {
@@ -196,14 +218,17 @@ fn analyze_board(args: &Value) -> ToolResult {
                     ))
                 }
             };
-            hauksbee_engine::analyze_with_firmware_json(
+            hauksbee_engine::frontdoor::analyze_with_firmware_json_with_ties(
                 &name,
                 &bytes,
                 &display_name(fw_path),
                 &fw_bytes,
+                schematic.as_ref(),
             )
         }
-        None => hauksbee_engine::analyze_json(&name, &bytes),
+        None => {
+            hauksbee_engine::frontdoor::analyze_json_with_ties(&name, &bytes, schematic.as_ref())
+        }
     };
     let report: Value = match serde_json::from_str(&report_json) {
         Ok(v) => v,

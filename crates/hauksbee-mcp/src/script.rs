@@ -67,8 +67,9 @@ const __call = (name, args) => {
     return r.result;
 };
 globalThis.hauksbee = {
-    analyzeBoard: (path, firmwarePath) =>
-        __call("analyze_board", { board_path: path, firmware_path: firmwarePath }),
+    analyzeBoard: (path, firmwarePath, schematicPath) =>
+        __call("analyze_board", { board_path: path, firmware_path: firmwarePath,
+                                   schematic_path: schematicPath }),
     runChecks: (path, specToml, firmwarePath) =>
         __call("run_checks", { board_path: path, spec_toml: specToml,
                                firmware_path: firmwarePath }),

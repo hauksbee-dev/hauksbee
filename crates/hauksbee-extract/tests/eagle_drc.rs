@@ -1785,7 +1785,7 @@ fn a_declared_tie_does_not_excuse_a_clearance_violation() {
 }
 
 #[test]
-fn one_multilayer_tie_does_not_excuse_a_spatially_distinct_bridge() {
+fn a_net_pair_with_multiple_spatial_contacts_is_not_qualified_without_location_identity() {
     let signals = r#"
 <signal name="GND">
   <wire x1="0" y1="0" x2="20" y2="0" width="0.5" layer="1"/>
@@ -1806,18 +1806,14 @@ fn one_multilayer_tie_does_not_excuse_a_spatially_distinct_bridge() {
     let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
         .expect("schematic parses");
     let qualified = report.qualify_with_declared_ties("board.sch", &ties);
-    assert_eq!(qualified.qualified_count(), 2);
+    assert_eq!(
+        qualified.qualified_count(),
+        0,
+        "the schematic declaration names only the net pair, not which physical cluster is the tie"
+    );
     assert_eq!(
         qualified.undeclared_shorts(&report).count(),
-        1,
-        "the spatially distinct bridge must remain gate-grade"
-    );
-    let remaining = qualified
-        .undeclared_shorts(&report)
-        .next()
-        .expect("one bridge remains");
-    assert!(
-        (remaining.x - 15.0).abs() < 1e-6,
-        "wrong bridge remained: {remaining:?}"
+        3,
+        "without location-bound identity every spatial cluster must remain gate-grade"
     );
 }

@@ -323,10 +323,12 @@ files are not provisioned; the always-run guard is the tracked undeclared pair i
 
 **Identity and physical scope fail closed.** An explicit companion must share the
 board basename and its physical reference/value set must exactly match the board.
-A declaration qualifies one unique same-location contact cluster, including its
-multiple copper layers. A spatially separate bridge remains gating; if two
-clusters are equally plausible, neither is downgraded. Eagle schematic sheet
-coordinates are deliberately not projected onto board coordinates.
+A declaration qualifies a same-location contact cluster, including its multiple
+copper layers, only when that net pair has no second spatial cluster. A schematic
+net-name declaration carries no board-location identity, so cluster size cannot
+choose between an intended tie and a bridge: when two locations exist, neither is
+downgraded. Eagle schematic sheet coordinates are deliberately not projected onto
+board coordinates.
 
 **Eagle only, and enforced.** A `.kicad_pcb` declares its ties in the layout the
 DRC already has and a `.kicad_sch` has no construct for a deliberate two-net join
@@ -340,10 +342,12 @@ reading an unqualified serious short believing their schematic had been read.
 Likewise a path that is not an Eagle `.sch` (a `.brd`, a KiCad legacy `.sch`, a
 pre-Eagle-6 binary drawing) is refused with the reason.
 
-The schematic enters the run's input inventory as
-`ArtifactRole::Schematic` / `ArtifactKind::EagleSchematic` with its SHA-256 and
-what it contributed, so a reclassified finding traces to the file that
-reclassified it; its connectivity is recorded as deliberately ignored. The DRC
+The schematic enters the run's input inventory with `ArtifactRole::Schematic`,
+the existing `ArtifactKind::EagleBoard` Eagle-XML family token, its `.sch` path,
+SHA-256 and contribution. Reusing the existing kind keeps the planned first
+release's closed public enum source-compatible; role and path distinguish the
+schematic from the layout without a new enum case. Its connectivity is recorded
+as deliberately ignored. The DRC
 evidence map for a reclassified short cites both artifacts, because its assertion
 text quotes the declaration.
 
