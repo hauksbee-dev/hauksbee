@@ -573,15 +573,18 @@ added back. The voids are not decoration. They are the only thing that makes
 the film anything other than a solid sheet of copper.
 
 Reading the darks and discarding the clears therefore produced a board-sized
-slab on every signal layer, and the union-find had nothing to separate: an
-Altium four-layer STM32 CAN devboard (ARDEP mainboard rev 1.1, 1924 flashes,
-574 plated hits) reconstructed to **exactly one net**, and the corpus
-Inkplate 6 to 18. Cutting the voids gives 284 and 181.
+slab on every signal layer. The failure was originally isolated from an Altium
+STM32 CAN board and the Inkplate 6 export, but those external designs are
+discovery inputs rather than retained native-partition oracles in this
+repository. The committed claim is therefore bounded to the distilled
+negative-plane fixtures and their exact copper probes; no unavailable external
+board's final net count is presented as release evidence.
 
-A void becomes an extra contour on the pour it sits inside, which is what
-`Shape::MultiPolygon` already means: even-odd containment reads the void's
-interior as empty and the copper around it as copper. Even-odd does most of
-the work by itself: a thermal relief drawn as separate straight-segment voids
+A void becomes a signed contour on the pour it sits inside. Dark contours add
+coverage, clear contours subtract it, and a point is copper only while the
+total is positive. This is deliberately not XOR parity: two partially
+overlapping clear images both erase their overlap lens instead of painting it
+back to copper. A thermal relief drawn as separate straight-segment voids
 leaves the spokes standing, so the pad stays on the pour exactly as
 fabricated, and an annular void's inner rim leaves its copper island standing, and that island is
 then moved out of the pour's primitive into its own, because connectivity
@@ -597,13 +600,11 @@ Clear *flashes* (the classic negative-plane antipad) and clear *draws* are
 banked the same way, and a `%SR%` cell carries its voids into every repeat,
 even a cell that is nothing but voids.
 
-This is not a general polygon boolean, so it is imprecise, and the shape of
-that imprecision is the whole safety argument. Appending a contour flips the
-even-odd parity inside it, so wherever a void lands on copper the film really
-kept, the parity flips from empty to **copper**, not the other way. A void
-placed imperfectly therefore leaves a phantom speck of pour, which reads as
-over-connection: the same direction as the bug this fixes, recoverable, and
-never a fabricated break in a conductor that is really whole.
+This is not a general polygon boolean. Signed coverage makes accepted clear
+images a saturating set difference, while the admission gates keep every
+geometric approximation on the over-connected side. A void placed imperfectly
+is refused or under-cuts the removal, leaving a phantom speck of pour rather
+than fabricating a break in a conductor that is really whole.
 
 What that argument rests on is the void's own **geometry** never being larger
 than the void the film cleared, so **only exactly-reproduced geometry may
@@ -658,17 +659,16 @@ polarity mid-way is painted, never dropped.
 
 The remaining limits all leave copper standing: the refusals above, a void
 straddling a pour's edge, a void laid over a track or a pad rather than over a
-pour, a void spanning a hole the pour was drawn with, the intersection of two
-voids that only partially overlap, an island ringed by several separate voids
-rather than by one void's own hole contour, a concave pour severed by a
+pour, a void spanning a hole the pour was drawn with, an island ringed by
+several separate voids rather than by one void's own hole contour, a concave pour severed by a
 void lying wholly inside it, which is what a plane deliberately split by a
 clear gap looks like, one clear statement spanning two pours (all-or-none is
 applied per pour and enclosure demands every piece sit inside that pour, so
 such a statement voids NEITHER and on a film that concatenates a plane's
 clearances across two pours the solid-slab reading returns whole), and an
-island whose copper a later dark REGION actually reaches, which stays a contour
-of the pour because connectivity never unions one region to another (the test
-is the region's copper against the island, not its bounding box: a frame
+island whose copper a later dark primitive actually reaches, which stays a
+contour of the pour because promotion could otherwise fabricate an open (the test
+is the primitive's copper against the island, not its bounding box: a frame
 hugging the board edge has a board-sized box and reaches no island).
 
 Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled

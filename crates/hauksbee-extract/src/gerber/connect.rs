@@ -355,18 +355,18 @@ pub fn reconstruct(
             // the whole pass. A `Polygon` has to be wrapped in a one-contour slice
             // to be gridded at all, so those alone are materialised, and they are the
             // small ones.
-            let mut owned: Vec<(usize, Vec<Vec<(f64, f64)>>)> = Vec::new();
-            let mut borrowed: Vec<(usize, &[Vec<(f64, f64)>])> = Vec::new();
+            let mut owned: Vec<(usize, Vec<Vec<(f64, f64)>>, Vec<i16>)> = Vec::new();
+            let mut borrowed: Vec<(usize, &[Vec<(f64, f64)>], &[i16])> = Vec::new();
             for &rgi in &regions {
                 match &prims[rgi].shape {
                     Shape::Polygon { pts, .. } => {
                         if pts.len() >= GRID_VERT_THRESHOLD {
-                            owned.push((rgi, vec![pts.clone()]));
+                            owned.push((rgi, vec![pts.clone()], vec![1]));
                         }
                     }
-                    Shape::MultiPolygon { contours } => {
+                    Shape::MultiPolygon { contours, weights } => {
                         if contours.iter().map(Vec::len).sum::<usize>() >= GRID_VERT_THRESHOLD {
-                            borrowed.push((rgi, contours.as_slice()));
+                            borrowed.push((rgi, contours.as_slice(), weights.as_slice()));
                         }
                     }
                     Shape::Capsule(_) => {}
@@ -388,9 +388,9 @@ pub fn reconstruct(
             };
             let region_grids: HashMap<usize, super::geo::PolyGrid> = owned
                 .iter()
-                .map(|(rgi, cs)| (*rgi, cs.as_slice()))
+                .map(|(rgi, cs, weights)| (*rgi, cs.as_slice(), weights.as_slice()))
                 .chain(borrowed.iter().copied())
-                .map(|(rgi, contours)| {
+                .map(|(rgi, contours, weights)| {
                     let verts: usize = contours.iter().map(Vec::len).sum();
                     // Resolution scales with vertex count, so detail buys cells,
                     // and the ceiling is 2048 rather than 512 because the cell
@@ -400,7 +400,7 @@ pub fn reconstruct(
                     // (0.2 mm a cell) is one cell: every pad landed in the
                     // boundary band and paid the exact poly distance over the
                     // pour's whole vertex count anyway. The grid is exact at any
-                    // resolution (scanline parity plus an exact test on a boundary
+                    // resolution (scanline coverage plus an exact test on a boundary
                     // cell), so this only moves work, never answers.
                     //
                     // Whole-extraction times for a 100 mm plane with 6084
@@ -413,7 +413,10 @@ pub fn reconstruct(
                     // affordable because the scanline buckets its edges by row (see
                     // `PolyGrid::new`); without that the build alone was 3.2 s.
                     let cells = (verts / 4).clamp(64, side_ceiling);
-                    (rgi, super::geo::PolyGrid::new(contours, cells))
+                    (
+                        rgi,
+                        super::geo::PolyGrid::new_weighted(contours, weights, cells),
+                    )
                 })
                 .collect();
             for &gi in members {
@@ -435,7 +438,7 @@ pub fn reconstruct(
                 // a few interior samples along the segment. A pour that floods
                 // onto a pad/spoke contains at least one of these points inside
                 // its filled outline; an antipad-isolated pad has none inside
-                // (the even-odd keyhole puts the pocket outside); a track merely
+                // (the signed-coverage keyhole puts the pocket outside); a track merely
                 // skirting the boundary also has none inside. Pure point-in-
                 // polygon (no poly-poly distance) keeps this near-linear in the
                 // pour's vertex count, so big copper pours stay cheap.
@@ -458,7 +461,7 @@ pub fn reconstruct(
                         // (a) Containment: a sample point inside the filled
                         // outline means the pour copper is *on* that primitive.
                         // Large pours use the grid; small ones test directly.
-                        // Either way containment is even-odd over every contour,
+                        // Either way containment uses the shape's signed coverage,
                         // so inside a pour's ring is in and inside a void is out.
                         let grid = region_grids.get(&rgi);
                         let inside = test_pts.iter().any(|&(px, py)| {
@@ -470,8 +473,10 @@ pub fn reconstruct(
                                 (None, Shape::Polygon { pts, .. }) => {
                                     super::geo::point_in_polygon(px, py, pts)
                                 }
-                                (None, Shape::MultiPolygon { contours }) => {
-                                    super::geo::point_in_contours(px, py, contours)
+                                (None, Shape::MultiPolygon { contours, weights }) => {
+                                    super::geo::point_in_weighted_contours(
+                                        px, py, contours, weights,
+                                    )
                                 }
                                 (None, Shape::Capsule(_)) => false,
                             }

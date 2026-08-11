@@ -27,10 +27,13 @@ pub enum Shape {
     /// the outline (corner radius of a roundrect carried as polygon + radius).
     Polygon { pts: Vec<(f64, f64)>, r: f64 },
     /// One connected piece of pour copper with holes: the first contour is the
-    /// outer boundary, the rest are holes cut out of it (RS-274X 4.10.4 lets a
-    /// single G36/G37 region carry several contours). Containment is even-odd,
-    /// a point is copper iff it lies inside an odd number of contours, so the
-    /// ring reads as copper and a hole's interior reads as empty. Disjoint
+    /// outer boundary, the rest carry signed coverage weights. Ordinary region
+    /// holes have weight -1. Clear images applied to a dark region also have
+    /// weight -1, while an island inside an annular clear has weight +1.
+    /// Containment is the positive-coverage rule: a point is copper iff the sum
+    /// of the weights of contours enclosing it is greater than zero. Unlike raw
+    /// even-odd parity, two overlapping clear images therefore remain a void in
+    /// their overlap instead of flipping that lens back to copper. Disjoint
     /// islands of one region are split into separate shapes upstream, so a
     /// `MultiPolygon` built by the region reader is a single electrically-connected
     /// piece. That is the INTENT of the shape, and the union-find relies on it: one
@@ -41,7 +44,10 @@ pub enum Shape {
     /// shape. Every one of those is over-connection, which is the direction that
     /// reader is built to fail in. No inflation radius: pours are drawn at their true
     /// outline.
-    MultiPolygon { contours: Vec<Vec<(f64, f64)>> },
+    MultiPolygon {
+        contours: Vec<Vec<(f64, f64)>>,
+        weights: Vec<i16>,
+    },
 }
 
 impl Shape {
@@ -70,11 +76,12 @@ impl Shape {
                 pts: pts.iter().map(|(x, y)| (x + dx, y + dy)).collect(),
                 r: *r,
             },
-            Shape::MultiPolygon { contours } => Shape::MultiPolygon {
+            Shape::MultiPolygon { contours, weights } => Shape::MultiPolygon {
                 contours: contours
                     .iter()
                     .map(|c| c.iter().map(|(x, y)| (x + dx, y + dy)).collect())
                     .collect(),
+                weights: weights.clone(),
             },
         }
     }
@@ -103,7 +110,7 @@ impl Shape {
                 }
                 [b[0] - r, b[1] - r, b[2] + r, b[3] + r]
             }
-            Shape::MultiPolygon { contours } => {
+            Shape::MultiPolygon { contours, .. } => {
                 let mut b = [
                     f64::INFINITY,
                     f64::INFINITY,
@@ -137,7 +144,7 @@ impl Shape {
             // The outer boundary's vertex average. For a ring this may fall in
             // a hole, but the centre is only a *representative* point for
             // pad/flash matching, and pours never anchor pads.
-            Shape::MultiPolygon { contours } => {
+            Shape::MultiPolygon { contours, .. } => {
                 let pts = contours.first().map(|c| c.as_slice()).unwrap_or(&[]);
                 let n = pts.len().max(1) as f64;
                 (
@@ -201,13 +208,33 @@ fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f64)) 
 }
 
 /// Even-odd containment over a set of closed contours: inside iff enclosed by
-/// an odd number of them. For a pour-with-holes (outer + holes) the ring reads
-/// inside and a hole's interior reads outside; this is the containment rule a
-/// [`Shape::MultiPolygon`] carries.
+/// an odd number of them. This remains useful for one self-contained aperture
+/// image (outer + holes); painted [`Shape::MultiPolygon`] values use signed
+/// coverage instead.
 pub fn point_in_contours(px: f64, py: f64, contours: &[Vec<(f64, f64)>]) -> bool {
     contours
         .iter()
         .fold(false, |inside, c| inside ^ point_in_polygon(px, py, c))
+}
+
+/// Signed containment for a painted region. Each contour contributes its
+/// weight when it encloses the point; strictly positive coverage is copper.
+/// The length mismatch is a construction defect, so fail closed as no copper
+/// instead of silently reverting to parity.
+pub fn point_in_weighted_contours(
+    px: f64,
+    py: f64,
+    contours: &[Vec<(f64, f64)>],
+    weights: &[i16],
+) -> bool {
+    contours.len() == weights.len()
+        && contours
+            .iter()
+            .zip(weights)
+            .filter(|(contour, _)| point_in_polygon(px, py, contour))
+            .map(|(_, weight)| i32::from(*weight))
+            .sum::<i32>()
+            > 0
 }
 
 pub fn point_in_polygon(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
@@ -253,6 +280,196 @@ fn poly_poly_edge_dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
     best
 }
 
+fn closest_point_on_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    if len2 == 0.0 {
+        return a;
+    }
+    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0);
+    (a.0 + t * dx, a.1 + t * dy)
+}
+
+/// Closest points on `a` and `b`, with the first witness always lying on `a`.
+fn closest_segment_points(
+    a1: (f64, f64),
+    a2: (f64, f64),
+    b1: (f64, f64),
+    b2: (f64, f64),
+) -> ((f64, f64), (f64, f64), f64) {
+    if segments_intersect(a1, a2, b1, b2) {
+        let r = (a2.0 - a1.0, a2.1 - a1.1);
+        let s = (b2.0 - b1.0, b2.1 - b1.1);
+        let denom = r.0 * s.1 - r.1 * s.0;
+        if denom.abs() > 1e-15 {
+            let q = (b1.0 - a1.0, b1.1 - a1.1);
+            let t = (q.0 * s.1 - q.1 * s.0) / denom;
+            let p = (a1.0 + t * r.0, a1.1 + t * r.1);
+            return (p, p, 0.0);
+        }
+        for p in [a1, a2] {
+            if on_seg(b1, p, b2) {
+                return (p, p, 0.0);
+            }
+        }
+        for p in [b1, b2] {
+            if on_seg(a1, p, a2) {
+                return (p, p, 0.0);
+            }
+        }
+    }
+
+    let mut candidates = [
+        (a1, closest_point_on_segment(a1, b1, b2)),
+        (a2, closest_point_on_segment(a2, b1, b2)),
+        (closest_point_on_segment(b1, a1, a2), b1),
+        (closest_point_on_segment(b2, a1, a2), b2),
+    ];
+    candidates.sort_by(|(pa, pb), (qa, qb)| {
+        (pa.0 - pb.0)
+            .hypot(pa.1 - pb.1)
+            .partial_cmp(&(qa.0 - qb.0).hypot(qa.1 - qb.1))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let (pa, pb) = candidates[0];
+    (pa, pb, (pa.0 - pb.0).hypot(pa.1 - pb.1))
+}
+
+/// Is there painted copper arbitrarily close to this stored contour point?
+/// A clear contour can be buried inside another clear image, in which case it
+/// is bookkeeping rather than a physical copper edge.
+fn weighted_copper_near(p: (f64, f64), contours: &[Vec<(f64, f64)>], weights: &[i16]) -> bool {
+    const E: f64 = 1e-7;
+    [
+        (E, 0.0),
+        (-E, 0.0),
+        (0.0, E),
+        (0.0, -E),
+        (E, E),
+        (E, -E),
+        (-E, E),
+        (-E, -E),
+    ]
+    .into_iter()
+    .any(|(dx, dy)| point_in_weighted_contours(p.0 + dx, p.1 + dy, contours, weights))
+}
+
+fn contour_edges(contour: &[(f64, f64)]) -> impl Iterator<Item = ((f64, f64), (f64, f64))> + '_ {
+    let n = contour.len();
+    (0..n).filter_map(move |i| (n >= 2).then_some((contour[(i + n - 1) % n], contour[i])))
+}
+
+fn point_reaches_polygon(p: (f64, f64), polygon: &[(f64, f64)], radius: f64) -> bool {
+    point_in_polygon(p.0, p.1, polygon)
+        || contour_edges(polygon)
+            .any(|(a, b)| point_seg_dist2(p.0, p.1, a.0, a.1, b.0, b.1) <= radius * radius)
+}
+
+fn nearest_exposed_gap(
+    mut candidates: Vec<(f64, (f64, f64))>,
+    contours: &[Vec<(f64, f64)>],
+    weights: &[i16],
+) -> f64 {
+    candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    candidates
+        .into_iter()
+        .find_map(|(gap, point)| weighted_copper_near(point, contours, weights).then_some(gap))
+        .unwrap_or(f64::INFINITY)
+}
+
+fn capsule_weighted_gap(c: &Capsule, contours: &[Vec<(f64, f64)>], weights: &[i16]) -> f64 {
+    if [
+        (c.ax, c.ay),
+        (c.bx, c.by),
+        ((c.ax + c.bx) * 0.5, (c.ay + c.by) * 0.5),
+    ]
+    .into_iter()
+    .any(|p| point_in_weighted_contours(p.0, p.1, contours, weights))
+    {
+        return -c.r.max(0.0) - 1e-6;
+    }
+    let candidates = contours
+        .iter()
+        .flat_map(|contour| contour_edges(contour))
+        .map(|(a, b)| {
+            let (q, _, distance) = closest_segment_points(a, b, (c.ax, c.ay), (c.bx, c.by));
+            (distance - c.r, q)
+        })
+        .collect();
+    nearest_exposed_gap(candidates, contours, weights)
+}
+
+fn polygon_weighted_gap(
+    polygon: &[(f64, f64)],
+    radius: f64,
+    contours: &[Vec<(f64, f64)>],
+    weights: &[i16],
+) -> f64 {
+    let contained = polygon
+        .iter()
+        .any(|&(x, y)| point_in_weighted_contours(x, y, contours, weights));
+    if contained {
+        return -radius.max(0.0) - 1e-6;
+    }
+    let mut candidates = Vec::new();
+    for contour in contours {
+        if let Some(&(x, y)) = contour
+            .iter()
+            .find(|&&(x, y)| point_reaches_polygon((x, y), polygon, radius))
+        {
+            candidates.push((-1e-6, (x, y)));
+        }
+        for (a, b) in contour_edges(contour) {
+            let mut nearest = (f64::INFINITY, a);
+            for (pa, pb) in contour_edges(polygon) {
+                let (q, _, distance) = closest_segment_points(a, b, pa, pb);
+                if distance < nearest.0 {
+                    nearest = (distance, q);
+                }
+            }
+            candidates.push((nearest.0 - radius, nearest.1));
+        }
+    }
+    nearest_exposed_gap(candidates, contours, weights)
+}
+
+fn weighted_regions_gap(
+    ca: &[Vec<(f64, f64)>],
+    wa: &[i16],
+    cb: &[Vec<(f64, f64)>],
+    wb: &[i16],
+) -> f64 {
+    for contour in ca {
+        for &p in contour {
+            if point_in_weighted_contours(p.0, p.1, cb, wb) && weighted_copper_near(p, ca, wa) {
+                return -1e-6;
+            }
+        }
+        for (a, b) in contour_edges(contour) {
+            for other in cb {
+                for (c, d) in contour_edges(other) {
+                    let (q, r, distance) = closest_segment_points(a, b, c, d);
+                    if distance == 0.0
+                        && weighted_copper_near(q, ca, wa)
+                        && weighted_copper_near(r, cb, wb)
+                    {
+                        return 0.0;
+                    }
+                }
+            }
+        }
+    }
+    if cb
+        .iter()
+        .flatten()
+        .any(|&p| point_in_weighted_contours(p.0, p.1, ca, wa) && weighted_copper_near(p, cb, wb))
+    {
+        -1e-6
+    } else {
+        f64::INFINITY
+    }
+}
+
 /// Signed copper-edge gap between two shapes. `<= 0` means the copper overlaps
 /// (they are the same conductor); positive is the clear gap. Mirrors
 /// `drc::shape_gap` but returns only the scalar (callers here don't need the
@@ -288,65 +505,28 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
                 edge
             }
         }
-        // The multi-contour arms mirror the polygon arms above: the copper edge
-        // is the nearest of ALL contour boundaries (a hole's rim is copper edge
-        // just like the outer rim), and containment is even-odd (a capsule
-        // endpoint sitting in a hole is NOT contained; the hole is empty).
-        (Shape::Capsule(c), Shape::MultiPolygon { contours })
-        | (Shape::MultiPolygon { contours }, Shape::Capsule(c)) => {
-            let best = contours
-                .iter()
-                .map(|pts| seg_contour_dist((c.ax, c.ay), (c.bx, c.by), pts))
-                .fold(f64::INFINITY, f64::min);
-            let contained =
-                point_in_contours(c.ax, c.ay, contours) || point_in_contours(c.bx, c.by, contours);
-            if contained {
-                -c.r.max(0.0) - 1e-6
-            } else {
-                best - c.r
-            }
+        // The multi-contour arms mirror the polygon arms above, but only an
+        // EXPOSED contour is a copper edge. A clear contour buried under another
+        // clear is bookkeeping, not copper. Containment uses signed coverage (a
+        // capsule endpoint sitting in a hole is NOT contained; the hole is empty).
+        (Shape::Capsule(c), Shape::MultiPolygon { contours, weights })
+        | (Shape::MultiPolygon { contours, weights }, Shape::Capsule(c)) => {
+            capsule_weighted_gap(c, contours, weights)
         }
-        (Shape::Polygon { pts, r }, Shape::MultiPolygon { contours })
-        | (Shape::MultiPolygon { contours }, Shape::Polygon { pts, r }) => {
-            let edge = contours
-                .iter()
-                .map(|c| poly_poly_edge_dist(pts, c))
-                .fold(f64::INFINITY, f64::min)
-                - r;
-            // Contained when a polygon vertex sits in the region's copper
-            // (even-odd), or any contour rim vertex sits inside the polygon
-            // (the polygon laps over that piece of boundary copper).
-            let contained = pts
-                .first()
-                .is_some_and(|&(x, y)| point_in_contours(x, y, contours))
-                || contours
-                    .iter()
-                    .any(|c| c.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pts)));
-            if contained {
-                edge.min(0.0) - 1e-6
-            } else {
-                edge
-            }
+        (Shape::Polygon { pts, r }, Shape::MultiPolygon { contours, weights })
+        | (Shape::MultiPolygon { contours, weights }, Shape::Polygon { pts, r }) => {
+            polygon_weighted_gap(pts, *r, contours, weights)
         }
-        (Shape::MultiPolygon { contours: ca }, Shape::MultiPolygon { contours: cb }) => {
-            let edge = ca
-                .iter()
-                .flat_map(|a| cb.iter().map(move |b| poly_poly_edge_dist(a, b)))
-                .fold(f64::INFINITY, f64::min);
-            let contained = ca
-                .first()
-                .and_then(|c| c.first())
-                .is_some_and(|&(x, y)| point_in_contours(x, y, cb))
-                || cb
-                    .first()
-                    .and_then(|c| c.first())
-                    .is_some_and(|&(x, y)| point_in_contours(x, y, ca));
-            if contained {
-                edge.min(0.0) - 1e-6
-            } else {
-                edge
-            }
-        }
+        (
+            Shape::MultiPolygon {
+                contours: ca,
+                weights: wa,
+            },
+            Shape::MultiPolygon {
+                contours: cb,
+                weights: wb,
+            },
+        ) => weighted_regions_gap(ca, wa, cb, wb),
     }
 }
 
@@ -372,15 +552,15 @@ fn seg_contour_dist(a: (f64, f64), b: (f64, f64), pts: &[(f64, f64)]) -> f64 {
 /// tens of thousands of vertices and is tested against every primitive, so the
 /// naive cost is quadratic. This rasterises the polygon's bounding box into a
 /// coarse grid once: each cell is tagged fully-inside, fully-outside, or
-/// boundary. A query is then an O(1) grid lookup, falling back to the exact
-/// even-odd test only for the few points that land in a boundary cell.
+/// boundary. A query is then an O(1) grid lookup, falling back to the selected
+/// exact containment rule only for points in a boundary cell.
 pub struct PolyGrid<'a> {
-    /// The contours the grid classifies. Even-odd across ALL of them, so one
-    /// grid describes a plain polygon (one contour) and a pour with hundreds of
-    /// voids cut out of it alike. A negative-drawn plane is exactly the second
-    /// shape, and it is board-sized: leaving multi-contour pours to the exact
-    /// test made every primitive on the layer pay the pour's whole vertex count.
+    /// The contours the grid classifies. `weights == None` selects even-odd;
+    /// otherwise the grid uses the same positive signed-coverage rule as a
+    /// painted [`Shape::MultiPolygon`]. A negative-drawn plane is board-sized;
+    /// leaving it to the exact test made every primitive pay its whole vertex count.
     contours: &'a [Vec<(f64, f64)>],
+    weights: Option<&'a [i16]>,
     minx: f64,
     miny: f64,
     inv_cell: f64,
@@ -395,6 +575,24 @@ impl<'a> PolyGrid<'a> {
     /// along the longer axis (more = finer = fewer exact fallbacks, more build
     /// cost).
     pub fn new(contours: &'a [Vec<(f64, f64)>], target_cells: usize) -> Self {
+        Self::build(contours, None, target_cells)
+    }
+
+    /// Build a grid for a signed painted region. A mismatched weight vector is
+    /// represented as entirely outside, matching [`point_in_weighted_contours`].
+    pub fn new_weighted(
+        contours: &'a [Vec<(f64, f64)>],
+        weights: &'a [i16],
+        target_cells: usize,
+    ) -> Self {
+        Self::build(contours, Some(weights), target_cells)
+    }
+
+    fn build(
+        contours: &'a [Vec<(f64, f64)>],
+        weights: Option<&'a [i16]>,
+        target_cells: usize,
+    ) -> Self {
         let mut minx = f64::INFINITY;
         let mut miny = f64::INFINITY;
         let mut maxx = f64::NEG_INFINITY;
@@ -412,7 +610,7 @@ impl<'a> PolyGrid<'a> {
         let ny = (((maxy - miny) * inv_cell).ceil() as usize + 1).max(1);
 
         // Mark cells any contour's boundary passes through as boundary (2): a
-        // query landing here falls back to the exact even-odd test.
+        // query landing here falls back to the selected exact containment rule.
         let mut cells = vec![0u8; nx * ny];
         for pts in contours {
             let n = pts.len();
@@ -425,14 +623,14 @@ impl<'a> PolyGrid<'a> {
                 j = i;
             }
         }
-        // Classify the non-boundary cells exactly, by *scanline parity* rather
-        // than by per-cell even-odd (which would be O(cells x vertices)). For each
+        // Classify the non-boundary cells exactly by a scanline sweep rather than
+        // per-cell polygon tests (which would be O(cells x vertices)). For each
         // grid row we intersect the edges crossing that row's centre line with it,
-        // sort the crossing x's, and fill the spans between consecutive crossings
-        // as inside. Crossings of ALL contours go into one sorted list, which is
-        // what makes the parity even-odd over the whole shape: a hole's two
-        // crossings close the span its outer opened. This is exact (no flood-fill
-        // leakage). Cells already marked boundary keep their exact-test flag.
+        // sort the crossing x's, and fill the inside spans. The unweighted path
+        // uses parity. The weighted path pairs each contour's crossings into
+        // intervals and sweeps signed enter/leave events, filling only positive
+        // coverage. This is exact (no flood-fill leakage). Boundary cells retain
+        // their exact-test flag.
         //
         // The edges are bucketed by the rows they span first. Walking every edge
         // for every row is O(rows x vertices), and rows scale with the vertex
@@ -448,10 +646,10 @@ impl<'a> PolyGrid<'a> {
             // rows scale with the vertex count, so a comb-shaped pour whose fingers
             // each span the board height (2048 fingers, 8192 vertices) took 396 MB
             // here. An edge is now stored once.
-            let mut edges: Vec<(f64, f64, f64, f64)> = Vec::new();
+            let mut edges: Vec<(f64, f64, f64, f64, usize)> = Vec::new();
             let mut expires: Vec<usize> = Vec::new();
             let mut starts: Vec<Vec<usize>> = vec![Vec::new(); ny];
-            for pts in contours {
+            for (contour_index, pts) in contours.iter().enumerate() {
                 let n = pts.len();
                 if n < 3 {
                     continue;
@@ -467,7 +665,7 @@ impl<'a> PolyGrid<'a> {
                     let r0 = row_of(lo).clamp(0, ny as isize - 1) as usize;
                     let r1 = row_of(hi).clamp(0, ny as isize - 1) as usize;
                     starts[r0].push(edges.len());
-                    edges.push((a.0, a.1, b.0, b.1));
+                    edges.push((a.0, a.1, b.0, b.1, contour_index));
                     expires.push(r1);
                 }
             }
@@ -481,17 +679,7 @@ impl<'a> PolyGrid<'a> {
                 }
                 let yc = miny + (gy as f64 + 0.5) / inv_cell;
                 xs.clear();
-                for &e in &active {
-                    let (ax, ay, bx, by) = edges[e];
-                    if (ay > yc) != (by > yc) {
-                        xs.push((bx - ax) * (yc - ay) / (by - ay) + ax);
-                    }
-                }
-                xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                // Inside the spans [xs[0],xs[1]], [xs[2],xs[3]], ...
-                let mut k = 0;
-                while k + 1 < xs.len() {
-                    let (x0, x1) = (xs[k], xs[k + 1]);
+                let mut fill_span = |x0: f64, x1: f64| {
                     let g0 = (((x0 - minx) * inv_cell).floor() as isize).max(0);
                     let g1 = (((x1 - minx) * inv_cell).ceil() as isize).min(nx as isize - 1);
                     for gx in g0..=g1 {
@@ -501,13 +689,78 @@ impl<'a> PolyGrid<'a> {
                             cells[idx] = 1;
                         }
                     }
-                    k += 2;
+                };
+                if let Some(weights) = weights.filter(|weights| weights.len() == contours.len()) {
+                    let mut crossings: Vec<(usize, f64)> = Vec::with_capacity(active.len());
+                    for &e in &active {
+                        let (ax, ay, bx, by, contour_index) = edges[e];
+                        if (ay > yc) != (by > yc) {
+                            crossings.push((contour_index, (bx - ax) * (yc - ay) / (by - ay) + ax));
+                        }
+                    }
+                    crossings.sort_by(|a, b| {
+                        a.0.cmp(&b.0).then_with(|| {
+                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                    });
+                    let mut events: Vec<(f64, i32)> = Vec::with_capacity(crossings.len());
+                    let mut k = 0;
+                    while k < crossings.len() {
+                        let contour_index = crossings[k].0;
+                        let mut end = k + 1;
+                        while end < crossings.len() && crossings[end].0 == contour_index {
+                            end += 1;
+                        }
+                        let mut pair = k;
+                        while pair + 1 < end {
+                            let weight = i32::from(weights[contour_index]);
+                            events.push((crossings[pair].1, weight));
+                            events.push((crossings[pair + 1].1, -weight));
+                            pair += 2;
+                        }
+                        k = end;
+                    }
+                    events
+                        .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                    let mut coverage = 0i32;
+                    let mut previous: Option<f64> = None;
+                    let mut event = 0;
+                    while event < events.len() {
+                        let x = events[event].0;
+                        if coverage > 0 {
+                            if let Some(x0) = previous {
+                                fill_span(x0, x);
+                            }
+                        }
+                        let mut delta = 0;
+                        while event < events.len() && events[event].0 == x {
+                            delta += events[event].1;
+                            event += 1;
+                        }
+                        coverage += delta;
+                        previous = Some(x);
+                    }
+                } else if weights.is_none() {
+                    for &e in &active {
+                        let (ax, ay, bx, by, _) = edges[e];
+                        if (ay > yc) != (by > yc) {
+                            xs.push((bx - ax) * (yc - ay) / (by - ay) + ax);
+                        }
+                    }
+                    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    // Inside the spans [xs[0],xs[1]], [xs[2],xs[3]], ...
+                    let mut k = 0;
+                    while k + 1 < xs.len() {
+                        fill_span(xs[k], xs[k + 1]);
+                        k += 2;
+                    }
                 }
             }
         }
 
         PolyGrid {
             contours,
+            weights,
             minx,
             miny,
             inv_cell,
@@ -624,7 +877,10 @@ impl<'a> PolyGrid<'a> {
         match self.cells[gy as usize * self.nx + gx as usize] {
             0 => false,
             1 => true,
-            _ => point_in_contours(px, py, self.contours),
+            _ => self.weights.map_or_else(
+                || point_in_contours(px, py, self.contours),
+                |weights| point_in_weighted_contours(px, py, self.contours, weights),
+            ),
         }
     }
 
@@ -720,6 +976,73 @@ mod tests {
             }
             assert_eq!(bad, 0, "grid disagreed with exact at {cells} cells");
         }
+    }
+
+    #[test]
+    fn weighted_grid_keeps_overlapping_clear_images_empty() {
+        let square = |cx: f64, cy: f64, half: f64| {
+            vec![
+                (cx - half, cy - half),
+                (cx + half, cy - half),
+                (cx + half, cy + half),
+                (cx - half, cy + half),
+            ]
+        };
+        let contours = vec![
+            square(5.0, 5.0, 5.0),
+            square(4.0, 5.0, 1.5),
+            square(6.0, 5.0, 1.5),
+        ];
+        let weights = vec![1, -1, -1];
+        let grid = PolyGrid::new_weighted(&contours, &weights, 64);
+        for i in 0..101 {
+            for j in 0..101 {
+                let x = i as f64 * 0.1;
+                let y = j as f64 * 0.1;
+                assert_eq!(
+                    grid.contains(x, y),
+                    point_in_weighted_contours(x, y, &contours, &weights),
+                    "weighted grid mismatch at ({x},{y})"
+                );
+            }
+        }
+        assert!(!grid.contains(5.0, 5.0), "the overlap lens stays clear");
+    }
+
+    #[test]
+    fn a_clear_contour_buried_by_another_clear_is_not_a_copper_edge() {
+        let square =
+            |x0: f64, y0: f64, x1: f64, y1: f64| vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+        let pour = Shape::MultiPolygon {
+            contours: vec![
+                square(0.0, 0.0, 10.0, 10.0),
+                square(4.0, 4.0, 6.0, 6.0),
+                square(5.0, 4.0, 7.0, 6.0),
+            ],
+            weights: vec![1, -1, -1],
+        };
+        let isolated = Shape::Capsule(Capsule {
+            ax: 5.9,
+            ay: 5.0,
+            bx: 5.9,
+            by: 5.0,
+            r: 0.15,
+        });
+        assert!(
+            shape_gap(&isolated, &pour) > 0.0,
+            "crossing x=6 only crosses a bookkeeping contour buried in the other void"
+        );
+        let touching_copper = Shape::Capsule(Capsule {
+            ax: 6.95,
+            ay: 5.0,
+            bx: 6.95,
+            by: 5.0,
+            r: 0.1,
+        });
+        assert!(
+            shape_gap(&touching_copper, &pour) < 0.0,
+            "the exposed x=7 void edge still connects to the surrounding pour"
+        );
     }
 
     #[test]
