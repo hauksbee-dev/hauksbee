@@ -171,6 +171,66 @@ verify_qemu_asset() {
     "Install it manually from https://github.com/espressif/qemu/releases/tag/${QEMU_VERSION}."
 }
 
+sha256_file() {
+  local file="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | cut -d" " -f1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | cut -d" " -f1
+  else
+    return 1
+  fi
+}
+
+receipt_field() {
+  local receipt="$1" field="$2"
+  awk -F= -v field="$field" '$1 == field { sub(/^[^=]*=/, ""); print; exit }' "$receipt"
+}
+
+# Retain the immutable executable digest produced by a checksum-verified asset
+# install. A cached binary is release evidence only while this receipt still
+# names an asset in the current repository manifest and its bytes still match.
+write_install_receipt() {
+  local bin="$1" backend="$2" version="$3" asset="$4" sums="$5"
+  local asset_sha artifact_sha receipt
+  asset_sha="$(awk -v n="$asset" '$2 == n { print $1; exit }' "$sums")"
+  [ -n "$asset_sha" ] || die "cannot retain install identity: $asset is absent from $sums"
+  artifact_sha="$(sha256_file "$bin")" \
+    || die "cannot hash installed artifact $bin"
+  receipt="${bin}.hkb-pinned"
+  {
+    printf 'format=1\n'
+    printf 'backend=%s\n' "$backend"
+    printf 'version=%s\n' "$version"
+    printf 'asset_name=%s\n' "$asset"
+    printf 'asset_sha256=%s\n' "$asset_sha"
+    printf 'artifact_sha256=%s\n' "$artifact_sha"
+  } >"$receipt"
+}
+
+verify_install_receipt() {
+  local bin="$1" backend="$2" version="$3" sums="$4"
+  local receipt="${bin}.hkb-pinned"
+  [ -f "$receipt" ] || return 1
+  [ "$(receipt_field "$receipt" format)" = 1 ] || return 1
+  [ "$(receipt_field "$receipt" backend)" = "$backend" ] || return 1
+  [ "$(receipt_field "$receipt" version)" = "$version" ] || return 1
+
+  local asset recorded_asset_sha receipt_asset_sha recorded_artifact_sha actual_artifact_sha
+  asset="$(receipt_field "$receipt" asset_name)"
+  receipt_asset_sha="$(receipt_field "$receipt" asset_sha256)"
+  recorded_asset_sha="$(awk -v n="$asset" '$2 == n { print $1; exit }' "$sums")"
+  [ -n "$recorded_asset_sha" ] && [ "$receipt_asset_sha" = "$recorded_asset_sha" ] \
+    || return 1
+  recorded_artifact_sha="$(receipt_field "$receipt" artifact_sha256)"
+  actual_artifact_sha="$(sha256_file "$bin" 2>/dev/null || true)"
+  if [ -z "$actual_artifact_sha" ] || [ "$recorded_artifact_sha" != "$actual_artifact_sha" ]; then
+    err "artifact digest mismatch for $bin; the verified install receipt no longer matches"
+    return 1
+  fi
+  return 0
+}
+
 # Resolve the Espressif QEMU release tag. PINNED, not resolved.
 #
 # This used to ask GitHub for `latest` at install time and interpolate the
@@ -245,7 +305,8 @@ find_avr_prefix() {
 find_renode_bin() {
   # 1. HAUKSBEE_RENODE env
   if [ -n "${HAUKSBEE_RENODE:-}" ]; then
-    if [ -x "$HAUKSBEE_RENODE" ]; then
+    if [ -x "$HAUKSBEE_RENODE" ] \
+        && { [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$HAUKSBEE_RENODE"; }; then
       printf '%s' "$HAUKSBEE_RENODE"
       return 0
     fi
@@ -254,23 +315,26 @@ find_renode_bin() {
 
   # 2. `renode` on PATH
   if command -v renode >/dev/null 2>&1; then
-    printf '%s' "$(command -v renode)"
-    return 0
+    local path_renode
+    path_renode="$(command -v renode)"
+    if [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$path_renode"; then
+      printf '%s' "$path_renode"
+      return 0
+    fi
   fi
 
   # 3. Conventional portable locations
-  if [ -x "$HOME/renode-portable/Renode.app/Contents/MacOS/renode" ]; then
-    printf '%s' "$HOME/renode-portable/Renode.app/Contents/MacOS/renode"
-    return 0
-  fi
-  if [ -x "$HOME/renode-portable/renode" ]; then
-    printf '%s' "$HOME/renode-portable/renode"
-    return 0
-  fi
-  if [ -x "$HOME/renode_portable/renode" ]; then
-    printf '%s' "$HOME/renode_portable/renode"
-    return 0
-  fi
+  local candidate
+  for candidate in \
+    "$HOME/renode-portable/Renode.app/Contents/MacOS/renode" \
+    "$HOME/renode-portable/renode" \
+    "$HOME/renode_portable/renode"; do
+    if [ -x "$candidate" ] \
+        && { [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$candidate"; }; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
 
   return 1
 }
@@ -287,7 +351,8 @@ find_qemu_bin() {
   local envval
   envval="${!envvar:-}"
   if [ -n "$envval" ]; then
-    if [ -x "$envval" ]; then
+    if [ -x "$envval" ] && is_esp_qemu_fork "$envval" \
+        && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$envval"; }; then
       printf '%s' "$envval"
       return 0
     fi
@@ -317,7 +382,8 @@ find_qemu_bin() {
   fi
 
   for c in "${candidates[@]}"; do
-    if [ -x "$c" ] && is_esp_qemu_fork "$c"; then
+    if [ -x "$c" ] && is_esp_qemu_fork "$c" \
+        && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$c"; }; then
       printf '%s' "$c"
       return 0
     fi
@@ -327,7 +393,8 @@ find_qemu_bin() {
   if command -v "$name" >/dev/null 2>&1; then
     local path_bin
     path_bin="$(command -v "$name")"
-    if is_esp_qemu_fork "$path_bin"; then
+    if is_esp_qemu_fork "$path_bin" \
+        && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$path_bin"; }; then
       printf '%s' "$path_bin"
       return 0
     fi
@@ -346,6 +413,8 @@ is_esp_qemu_fork() {
 
 renode_is_pinned() {
   local bin="$1" version
+  verify_install_receipt "$bin" "renode" "$RENODE_VERSION" "$RENODE_CHECKSUMS" \
+    || return 1
   version="$("$bin" --version 2>/dev/null | head -1 || true)"
   case "$version" in
     "Renode v${RENODE_VERSION}"|"Renode v${RENODE_VERSION}."*) return 0 ;;
@@ -355,6 +424,10 @@ renode_is_pinned() {
 
 qemu_is_pinned() {
   local bin="$1" version expected
+  local backend
+  backend="$(basename "$bin")"
+  verify_install_receipt "$bin" "$backend" "$QEMU_VERSION" "$QEMU_CHECKSUMS" \
+    || return 1
   version="$("$bin" --version 2>/dev/null | head -1 || true)"
   expected="$(qemu_tag_to_dir_ver "$QEMU_VERSION")"
   case "$version" in
@@ -405,7 +478,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
   if [ "$DO_RENODE" -eq 1 ]; then
     log "Renode (STM32 / nRF52 / RP2040 / RISC-V backend)"
     info "  pinned release: $RENODE_VERSION  (installs come from this, hash-checked)"
-    rnode_bin="$(find_renode_bin 2>/dev/null || true)"
+    rnode_bin="$(find_renode_bin || true)"
     if [ -n "$rnode_bin" ]; then
       ok "FOUND  $rnode_bin"
       ver="$("$rnode_bin" --version 2>/dev/null | head -1 || echo "(version unknown)")"
@@ -416,6 +489,9 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
       fi
     else
       err "NOT FOUND"
+      if [ "$REQUIRE_PINNED" -eq 1 ]; then
+        info "  Release evidence requires a verified install receipt and matching artifact digest; a self-reported version is insufficient."
+      fi
       info "  Discovery order:"
       info "    1. \$HAUKSBEE_RENODE env var (currently: ${HAUKSBEE_RENODE:-unset})"
       info "    2. \`renode\` on PATH"
@@ -433,7 +509,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
     for arch_info in "qemu-system-xtensa:HAUKSBEE_QEMU_XTENSA" "qemu-system-riscv32:HAUKSBEE_QEMU_RISCV32"; do
       name="${arch_info%%:*}"
       envvar="${arch_info##*:}"
-      qemu_bin="$(find_qemu_bin "$name" "$envvar" 2>/dev/null || true)"
+      qemu_bin="$(find_qemu_bin "$name" "$envvar" || true)"
       if [ -n "$qemu_bin" ]; then
         ok "FOUND  $qemu_bin"
         ver="$("$qemu_bin" --version 2>/dev/null | head -1 || echo "(version unknown)")"
@@ -451,6 +527,9 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
         fi
       else
         err "NOT FOUND  $name"
+        if [ "$REQUIRE_PINNED" -eq 1 ]; then
+          info "  Release evidence requires a verified install receipt and matching artifact digest; a self-reported version is insufficient."
+        fi
         info "  Discovery order:"
         info "    1. \$$envvar env var"
         info "    2. \$HAUKSBEE_QEMU_DIR/bin/$name"
@@ -571,6 +650,9 @@ install_renode() {
 
   log "Renode: verifying..."
   VER_OUT="$("$BIN" --version 2>/dev/null | head -1 || echo "(unknown)")"
+  write_install_receipt "$BIN" "renode" "$RENODE_VERSION" "$ASSET" "$RENODE_CHECKSUMS"
+  renode_is_pinned "$BIN" \
+    || die "Renode installed from the pinned asset but failed its retained artifact verification"
   ok "Renode installed: $BIN"
   info "  $VER_OUT"
 }
@@ -687,6 +769,8 @@ install_qemu() {
       warn "If it names a /opt/homebrew library: brew install the package, then re-run --check."
       continue
     fi
+    write_install_receipt \
+      "$installed_bin" "$bin_name" "$QEMU_VERSION" "$ASSET" "$QEMU_CHECKSUMS"
     if [ "$REQUIRE_PINNED" -eq 1 ] && ! qemu_is_pinned "$installed_bin"; then
       die "$bin_name installed from the pinned asset but reports the wrong version; expected $QEMU_VERSION"
     fi
