@@ -21,7 +21,7 @@
     {"path": "docker/Dockerfile.full", "classification": "release-artifact-metadata", "occurrences": 1, "required_fragments": ["org.opencontainers.image.source=\"https://github.com/hauksbee-dev/hauksbee\""]},
     {"path": "docker/Dockerfile.slim", "classification": "release-artifact-metadata", "occurrences": 2, "required_fragments": ["org.opencontainers.image.source=\"https://github.com/hauksbee-dev/hauksbee\""]},
     {"path": "docs/START_HERE.md", "classification": "shipped-documentation", "occurrences": 2},
-    {"path": "docs/ci/DOCKER.md", "classification": "shipped-documentation", "occurrences": 12},
+    {"path": "docs/ci/DOCKER.md", "classification": "shipped-documentation", "occurrences": 13},
     {"path": "docs/ci/RECIPES.md", "classification": "shipped-documentation", "occurrences": 5},
     {"path": "docs/dev-plans/launch-checklist.md", "classification": "release-plan", "occurrences": 1, "scopes": ["development"]},
     {"path": "docs/dev-plans/launch-gtm-strategy.md", "classification": "release-plan", "occurrences": 2, "scopes": ["development"]},
@@ -43,7 +43,7 @@
     {"path": "scripts/check-private-container-publication.sh", "classification": "private-container-publication-guard", "occurrences": 1, "required_fragments": ["orgs/hauksbee-dev/packages/container/hauksbee"]},
     {"path": "scripts/get-hauksbee.ps1", "classification": "private-installer", "occurrences": 3, "required_fragments": ["$Repo = \"hauksbee-dev/hauksbee\""]},
     {"path": "scripts/get-hauksbee.sh", "classification": "private-installer", "occurrences": 4, "required_fragments": ["REPO=\"hauksbee-dev/hauksbee\""]},
-    {"path": "scripts/make-public.sh", "classification": "private-release-launcher", "occurrences": 1},
+    {"path": "scripts/make-public.sh", "classification": "private-release-launcher", "occurrences": 1, "scopes": ["development"]},
     {"path": "scripts/test-install-mock.sh", "classification": "installer-regression", "occurrences": 1}
   ]
 }
