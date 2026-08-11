@@ -475,10 +475,22 @@ jobs:
   # This job checks out the tag's exact SHA, verifies checksum-backed installed
   # emulator artifacts, and retains the three named real firmware-through-
   # hardware passes. The publish job both needs this job and re-checks the SHA
-  # inside its evidence artifact before creating the GitHub Release.
+  # inside each platform's evidence artifact before creating the GitHub Release.
   required-integrations:
-    name: required firmware integrations at release SHA
-    runs-on: ubuntu-latest
+    name: required firmware integrations at release SHA (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+          - os: ubuntu-24.04-arm
+            label: linux-aarch64
+          - os: macos-latest
+            label: darwin-arm64
+          - os: macos-13
+            label: darwin-x86_64
+    runs-on: ${{ matrix.os }}
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout exact release commit
@@ -489,6 +501,16 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install macOS simulator runtime dependencies
+        if: runner.os == 'macOS'
+        run: brew install glib pixman libslirp libgcrypt
+
+      # Renode's pinned Intel DMG is the real 1.16.1 Mono build; unlike the
+      # Apple-Silicon portable-dotnet asset it deliberately uses system Mono.
+      - name: Install Mono for Intel Renode
+        if: matrix.label == 'darwin-x86_64'
+        run: brew install mono
 
       - name: Cache checksum-verified simulator archives
         uses: actions/cache@v4
@@ -504,13 +526,13 @@ jobs:
           cd hauksbee
           python3 scripts/run_required_integrations.py \
             --expected-sha "$GITHUB_SHA" \
-            --evidence-out required-integrations.json
+            --evidence-out "required-integrations-${{ matrix.label }}.json"
 
       - name: Upload required integration evidence
         uses: actions/upload-artifact@v4
         with:
-          name: required-integration-evidence
-          path: hauksbee/required-integrations.json
+          name: required-integration-evidence-${{ matrix.label }}
+          path: hauksbee/required-integrations-${{ matrix.label }}.json
           if-no-files-found: error
 
   release:
@@ -578,9 +600,12 @@ jobs:
         env:
           GITHUB_SHA: ${{ github.sha }}
         run: |
-          python3 hauksbee/scripts/run_required_integrations.py \
-            --verify-evidence artifacts/required-integration-evidence/required-integrations.json \
-            --expected-sha "$GITHUB_SHA"
+          set -euo pipefail
+          for label in linux-x86_64 linux-aarch64 darwin-arm64 darwin-x86_64; do
+            python3 hauksbee/scripts/run_required_integrations.py \
+              --verify-evidence "artifacts/required-integration-evidence-$label/required-integrations-$label.json" \
+              --expected-sha "$GITHUB_SHA"
+          done
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2

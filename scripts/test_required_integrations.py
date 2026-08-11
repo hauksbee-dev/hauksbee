@@ -6,12 +6,14 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 import unittest
+import zipfile
 from unittest import mock
 from pathlib import Path
 
@@ -130,6 +132,103 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         publish_at = release_job.index("softprops/action-gh-release")
         self.assertLess(verify_at, publish_at)
 
+    def test_release_required_integrations_cover_every_release_platform(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github"
+            / "workflows"
+            / "release.yml"
+        ).read_text()
+        integration_job = workflow.split("  required-integrations:", 1)[1].split(
+            "\n  release:", 1
+        )[0]
+
+        for label in (
+            "linux-x86_64",
+            "linux-aarch64",
+            "darwin-arm64",
+            "darwin-x86_64",
+        ):
+            with self.subTest(label=label):
+                self.assertIn(f"label: {label}", integration_job)
+        self.assertIn(
+            "required-integration-evidence-${{ matrix.label }}", integration_job
+        )
+
+        release_job = workflow.split("\n  release:", 1)[1]
+        self.assertIn(
+            "for label in linux-x86_64 linux-aarch64 darwin-arm64 darwin-x86_64",
+            release_job,
+        )
+        self.assertIn("required-integration-evidence-$label", release_job)
+
+    def test_every_selected_renode_release_asset_has_a_pinned_hash(self) -> None:
+        scripts = Path(__file__).resolve().parent
+        installer = (scripts / "install-sims.sh").read_text()
+        version = "1.16.1"
+        selected = {
+            platform: asset.replace("${RENODE_VERSION}", version)
+            for platform, asset in re.findall(
+                r"^\s+(darwin-arm64|darwin-x86_64|linux-arm64|linux-x86_64)\) "
+                r'asset="([^"]+)"',
+                installer,
+                re.MULTILINE,
+            )
+        }
+        pinned = {
+            line.split()[1]
+            for line in (scripts / "renode-checksums.txt").read_text().splitlines()
+            if line and not line.startswith("#")
+        }
+
+        self.assertEqual(
+            selected,
+            {
+                "darwin-arm64": "renode-1.16.1-dotnet.osx-arm64-portable.dmg",
+                "darwin-x86_64": "renode_1.16.1.dmg",
+                "linux-arm64": "renode-1.16.1.linux-arm64-portable-dotnet.tar.gz",
+                "linux-x86_64": "renode-1.16.1.linux-portable-dotnet.tar.gz",
+            },
+        )
+        self.assertEqual(set(selected.values()) - pinned, set())
+
+        recorded = {
+            line.split()[1]: line.split()[0]
+            for line in (scripts / "renode-checksums.txt").read_text().splitlines()
+            if line and not line.startswith("#")
+        }
+        self.assertEqual(
+            recorded.get("renode-1.16.1-dotnet.osx-arm64-portable.dmg"),
+            "99b8ae5897b8926ef179868d39a504fe5296555dc9c9b973718ddf3ab09175d9",
+        )
+        self.assertEqual(
+            recorded.get("renode_1.16.1.dmg"),
+            "7879b2851b446ff99e1d3910b499af278fbd76a3fa8fe5c0d379f30afa0c4ed1",
+        )
+
+    def test_required_macos_mount_is_owned_by_exit_and_signal_traps(self) -> None:
+        installer = (Path(__file__).resolve().parent / "install-sims.sh").read_text()
+        self.assertIn("cleanup_required_mount()", installer)
+        self.assertIn("trap handle_installer_exit EXIT", installer)
+        self.assertIn('REQUIRED_MOUNTPOINT="$mountpoint"', installer)
+        self.assertIn('REQUIRED_MOUNTPOINT="$MOUNTPOINT"', installer)
+        cleanup_at = installer.index("cleanup_required_mount()")
+        exit_trap_at = installer.index("trap handle_installer_exit EXIT")
+        attach_at = installer.index('REQUIRED_MOUNTPOINT="$mountpoint"')
+        hdiutil_at = installer.index('hdiutil attach "$VERIFIED_ASSET_PATH"')
+        ordinary_attach_at = installer.index('hdiutil attach "$TMPDIR/$ASSET"')
+        ordinary_owner_at = installer.index('REQUIRED_MOUNTPOINT="$MOUNTPOINT"')
+
+        self.assertLess(cleanup_at, exit_trap_at)
+        self.assertLess(attach_at, hdiutil_at)
+        self.assertLess(ordinary_owner_at, ordinary_attach_at)
+        self.assertIn("trap 'exit 130' INT", installer)
+        self.assertIn("trap 'exit 143' TERM", installer)
+        self.assertIn("trap 'exit 129' HUP", installer)
+        self.assertIn('hdiutil detach "$REQUIRED_MOUNTPOINT" -force', installer)
+        self.assertIn('cleanup_installer "$status"', installer)
+        self.assertIn('return "$cleanup_status"', installer)
+
     def test_runner_binds_every_gate_to_exact_preflight_backend_paths(self) -> None:
         verified = {
             "HAUKSBEE_RENODE": "/verified/renode",
@@ -145,6 +244,16 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         ) -> subprocess.CompletedProcess[str]:
             if command[0].endswith("install-sims.sh"):
                 self.assertIn("--emit-required-paths", command)
+                environment = kwargs.get("env_updates")
+                if isinstance(environment, dict):
+                    raw_root = environment.get("HAUKSBEE_REQUIRED_RUN_ROOT")
+                    if isinstance(raw_root, str):
+                        root = Path(raw_root)
+                        for key in tuple(verified):
+                            binary = root / key.lower()
+                            binary.write_text("verified backend\n")
+                            binary.chmod(0o755)
+                            verified[key] = str(binary.resolve())
                 output = "".join(
                     f"REQUIRED_BACKEND_PATH {key}={value}\n"
                     for key, value in verified.items()
@@ -173,6 +282,179 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             all(environment == verified for environment in gate_environments),
             gate_environments,
         )
+
+    def test_runner_rejects_backend_path_that_resolves_outside_its_owned_root(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            outside = self._fake_backend(tmp / "outside", "renode", "Renode v1.16.1")
+            escaped = tmp / "escaped-renode"
+            escaped.symlink_to(outside)
+
+            def fake_run(
+                command: tuple[str, ...],
+                _repo: Path,
+                **_kwargs: object,
+            ) -> subprocess.CompletedProcess[str]:
+                if command[0].endswith("install-sims.sh"):
+                    output = (
+                        f"REQUIRED_BACKEND_PATH HAUKSBEE_RENODE={escaped}\n"
+                        f"REQUIRED_BACKEND_PATH HAUKSBEE_QEMU_XTENSA={outside}\n"
+                        f"REQUIRED_BACKEND_PATH HAUKSBEE_QEMU_RISCV32={outside}\n"
+                    )
+                    return subprocess.CompletedProcess(command, 0, output)
+                gate = next(gate for gate in GATES if gate.command == command)
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"test {gate.expected_test} ... ok\n"
+                    "test result: ok. 1 passed; 0 failed\n",
+                )
+
+            with (
+                mock.patch.object(required_integrations, "run_command", fake_run),
+                mock.patch.object(
+                    required_integrations, "_git_sha", return_value="a" * 40
+                ),
+            ):
+                result = required_integrations.main(["--expected-sha", "a" * 40])
+
+        self.assertEqual(result, 1)
+
+    def test_runner_owns_and_removes_required_root_after_success(self) -> None:
+        required_roots: list[Path] = []
+
+        def fake_run(
+            command: tuple[str, ...],
+            _repo: Path,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            if command[0].endswith("install-sims.sh"):
+                environment = kwargs.get("env_updates")
+                self.assertIsInstance(environment, dict)
+                raw_root = environment.get("HAUKSBEE_REQUIRED_RUN_ROOT")
+                self.assertIsInstance(raw_root, str)
+                root = Path(raw_root)
+                required_roots.append(root)
+                paths = {}
+                for key in required_integrations.REQUIRED_BACKEND_KEYS:
+                    binary = root / key.lower()
+                    binary.write_text("verified backend\n")
+                    binary.chmod(0o755)
+                    paths[key] = binary
+                output = "".join(
+                    f"REQUIRED_BACKEND_PATH {key}={value}\n"
+                    for key, value in paths.items()
+                )
+                return subprocess.CompletedProcess(command, 0, output)
+            gate = next(gate for gate in GATES if gate.command == command)
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                f"test {gate.expected_test} ... ok\n"
+                "test result: ok. 1 passed; 0 failed\n",
+            )
+
+        with (
+            mock.patch.object(required_integrations, "run_command", fake_run),
+            mock.patch.object(required_integrations, "_git_sha", return_value="a" * 40),
+        ):
+            result = required_integrations.main(["--expected-sha", "a" * 40])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(required_roots), 1)
+        self.assertFalse(required_roots[0].exists())
+
+    def _run_provenance_helper(
+        self, *args: str
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parent / "simulator-provenance.py"),
+                *args,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_archive_validator_rejects_parent_traversal_member(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            archive = Path(raw_tmp) / "traversal.tar"
+            with tarfile.open(archive, "w") as stream:
+                member = tarfile.TarInfo("../outside")
+                member.size = 0
+                stream.addfile(member)
+            result = self._run_provenance_helper("archive", str(archive))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe archive", result.stderr)
+
+    def test_archive_validator_rejects_escaping_tar_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            archive = Path(raw_tmp) / "symlink.tar"
+            with tarfile.open(archive, "w") as stream:
+                member = tarfile.TarInfo("qemu/bin/qemu-system-xtensa")
+                member.type = tarfile.SYMTYPE
+                member.linkname = "/tmp/unverified-qemu"
+                stream.addfile(member)
+            result = self._run_provenance_helper("archive", str(archive))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe archive", result.stderr)
+
+    def test_archive_validator_accounts_for_stripped_parent_components(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            archive = Path(raw_tmp) / "strip-symlink.tar"
+            with tarfile.open(archive, "w") as stream:
+                member = tarfile.TarInfo("renode/link")
+                member.type = tarfile.SYMTYPE
+                member.linkname = "../outside"
+                stream.addfile(member)
+            result = self._run_provenance_helper(
+                "archive", "--strip-components", "1", str(archive)
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe archive", result.stderr)
+
+    def test_archive_validator_rejects_escaping_tar_hardlink(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            archive = Path(raw_tmp) / "hardlink.tar"
+            with tarfile.open(archive, "w") as stream:
+                member = tarfile.TarInfo("qemu/bin/qemu-system-xtensa")
+                member.type = tarfile.LNKTYPE
+                member.linkname = "../../outside"
+                stream.addfile(member)
+            result = self._run_provenance_helper("archive", str(archive))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe archive", result.stderr)
+
+    def test_archive_validator_rejects_escaping_zip_path_and_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            traversal = tmp / "traversal.zip"
+            with zipfile.ZipFile(traversal, "w") as stream:
+                stream.writestr("../outside", "bad")
+            traversal_result = self._run_provenance_helper(
+                "archive", str(traversal)
+            )
+
+            symlink = tmp / "symlink.zip"
+            with zipfile.ZipFile(symlink, "w") as stream:
+                member = zipfile.ZipInfo("qemu/bin/qemu-system-xtensa")
+                member.create_system = 3
+                member.external_attr = (stat.S_IFLNK | 0o777) << 16
+                stream.writestr(member, "/tmp/unverified-qemu")
+            symlink_result = self._run_provenance_helper("archive", str(symlink))
+
+        self.assertNotEqual(traversal_result.returncode, 0)
+        self.assertIn("unsafe archive", traversal_result.stderr)
+        self.assertNotEqual(symlink_result.returncode, 0)
+        self.assertIn("unsafe archive", symlink_result.stderr)
 
     def test_backend_path_records_fail_closed_on_missing_relative_or_duplicate_values(
         self,
@@ -444,6 +726,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             for name in (
                 "install-sims.sh",
                 "common.sh",
+                "simulator-provenance.py",
                 "required-simulator-versions.env",
                 "renode-checksums.txt",
             ):
@@ -478,6 +761,16 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
             self.assertNotEqual(first_paths["HAUKSBEE_QEMU_XTENSA"], str(stale))
             first_xtensa = Path(first_paths["HAUKSBEE_QEMU_XTENSA"])
+            required_root = first_xtensa.parents[3]
+            staged_archives = list((required_root / "archives").glob("*.tar.xz"))
+            self.assertEqual(len(staged_archives), 2)
+            self.assertTrue(
+                all(
+                    hashlib.sha256(path.read_bytes()).hexdigest()
+                    in sums.read_text()
+                    for path in staged_archives
+                )
+            )
             marker = first_xtensa.parent.parent / "share/payload.marker"
             self.assertEqual(marker.read_text(), "complete-xtensa\n")
             marker.write_text("stale-overlay\n")
@@ -509,6 +802,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         required = (
             "install-sims.sh",
             "common.sh",
+            "simulator-provenance.py",
             "required-simulator-versions.env",
             "renode-checksums.txt",
             "espressif-qemu-checksums.txt",
@@ -547,6 +841,97 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         self.assertEqual(result.returncode, 124)
         self.assertIn("REQUIRED INTEGRATION TIMEOUT", result.stdout)
         self.assertLess(time.monotonic() - started, 2.0)
+
+    def _assert_normal_exit_reaps_detached_child(self, returncode: int) -> None:
+        child_code = r"""
+import os, signal, time
+os.setpgrp()
+print(f'NORMAL_EXIT_CHILD_PID={os.getpid()}', flush=True)
+os.close(1)
+os.close(2)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(1)
+"""
+        parent_code = f"""
+import subprocess, sys, time
+subprocess.Popen([sys.executable, '-u', '-c', {child_code!r}])
+time.sleep(0.2)
+raise SystemExit({returncode})
+"""
+        result = run_command(
+            (sys.executable, "-u", "-c", parent_code),
+            Path.cwd(),
+            timeout_seconds=5,
+        )
+        child_match = re.search(r"NORMAL_EXIT_CHILD_PID=(\d+)", result.stdout)
+        self.assertIsNotNone(child_match, result.stdout)
+        child_pid = int(child_match.group(1))
+        try:
+            self.assertEqual(result.returncode, returncode)
+            for _ in range(50):
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.02)
+            else:
+                self.fail(
+                    f"detached child {child_pid} survived normal exit {returncode}"
+                )
+        finally:
+            try:
+                os.killpg(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
+    def test_zero_exit_reaps_detached_child(self) -> None:
+        self._assert_normal_exit_reaps_detached_child(0)
+
+    @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
+    def test_nonzero_exit_reaps_detached_child(self) -> None:
+        self._assert_normal_exit_reaps_detached_child(7)
+
+    @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
+    def test_zero_exit_reaps_child_left_in_command_group(self) -> None:
+        child_code = r"""
+import os, signal, time
+print(f'INHERITED_GROUP_CHILD_PID={os.getpid()}', flush=True)
+os.close(1)
+os.close(2)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(1)
+"""
+        parent_code = f"""
+import subprocess, sys, time
+subprocess.Popen([sys.executable, '-u', '-c', {child_code!r}])
+time.sleep(0.2)
+"""
+        result = run_command(
+            (sys.executable, "-u", "-c", parent_code),
+            Path.cwd(),
+            timeout_seconds=5,
+        )
+        child_match = re.search(r"INHERITED_GROUP_CHILD_PID=(\d+)", result.stdout)
+        self.assertIsNotNone(child_match, result.stdout)
+        child_pid = int(child_match.group(1))
+        try:
+            self.assertEqual(result.returncode, 0)
+            for _ in range(50):
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.02)
+            else:
+                self.fail(f"same-group child {child_pid} survived normal exit")
+        finally:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
     def test_timeout_kills_sigterm_resistant_descendant_and_keeps_output(self) -> None:

@@ -301,7 +301,7 @@ cp -R "$HAUKSBEE_ROOT/integrations" "$ROOTDIR/integrations"
 # (release mirroring, benchmarking, demo capture) that has no business in a
 # user tarball.
 mkdir -p "$ROOTDIR/scripts"
-for s in install.sh doctor.sh ci.sh install-sims.sh common.sh; do
+for s in install.sh doctor.sh ci.sh install-sims.sh common.sh simulator-provenance.py; do
   install -m 0755 "$HAUKSBEE_ROOT/scripts/$s" "$ROOTDIR/scripts/$s"
 done
 for s in required-simulator-versions.env renode-checksums.txt espressif-qemu-checksums.txt; do

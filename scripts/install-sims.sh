@@ -50,8 +50,8 @@
 # ~/.cache/hauksbee/simulator-archives) and uses RUNNER_TEMP for fresh trees.
 #
 # Idempotent: if a backend is already discoverable, the download is skipped.
-# Safe: writes only to ~/renode-portable and ~/.espressif/tools. Never uses
-# rm -rf on user paths.
+# Safe: ordinary installs write to ~/renode-portable and ~/.espressif/tools;
+# required runs use the cache plus a fresh runner-owned temporary root.
 set -euo pipefail
 # shellcheck source=scripts/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -67,6 +67,7 @@ PINNED_QEMU_CHECKSUMS="$SCRIPT_DIR/espressif-qemu-checksums.txt"
 RENODE_CHECKSUMS="${RENODE_CHECKSUMS:-$PINNED_RENODE_CHECKSUMS}"
 QEMU_CHECKSUMS="${QEMU_CHECKSUMS:-$PINNED_QEMU_CHECKSUMS}"
 VERSIONS_FILE="$SCRIPT_DIR/required-simulator-versions.env"
+PROVENANCE_HELPER="$SCRIPT_DIR/simulator-provenance.py"
 [ -f "$VERSIONS_FILE" ] || die "required simulator version manifest missing: $VERSIONS_FILE"
 # shellcheck source=scripts/required-simulator-versions.env
 source "$VERSIONS_FILE"
@@ -405,7 +406,37 @@ cleanup_tmpdir() {
     fi
   fi
 }
-trap cleanup_tmpdir EXIT
+REQUIRED_MOUNTPOINT=""
+cleanup_required_mount() {
+  if [ -n "${REQUIRED_MOUNTPOINT:-}" ]; then
+    if hdiutil detach "$REQUIRED_MOUNTPOINT" -quiet 2>/dev/null \
+      || hdiutil detach "$REQUIRED_MOUNTPOINT" -force -quiet 2>/dev/null; then
+      REQUIRED_MOUNTPOINT=""
+    else
+      warn "Could not detach mounted simulator image: $REQUIRED_MOUNTPOINT"
+      return 1
+    fi
+  fi
+}
+cleanup_installer() {
+  local original_status="${1:-$?}" cleanup_status=0
+  cleanup_required_mount || cleanup_status=$?
+  cleanup_tmpdir
+  if [ "$original_status" -ne 0 ]; then
+    return "$original_status"
+  fi
+  return "$cleanup_status"
+}
+handle_installer_exit() {
+  local status=$?
+  trap - EXIT
+  cleanup_installer "$status"
+  exit $?
+}
+trap handle_installer_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # Required integration evidence is rooted in the repository's checksum
 # manifests, never in an installed binary or a sidecar that a local process can
@@ -432,7 +463,7 @@ asset_matches_sha() {
 
 obtain_verified_asset() {
   local asset="$1" sums="$2" what="$3" version="$4" url="$5"
-  local want cache_dir cached partial rejected
+  local want cache_dir cached partial rejected archive_dir staged
   want="$(expected_asset_sha "$asset" "$sums")"
   [ -n "$want" ] || die "no recorded checksum for $asset (pinned version $version); refusing unverified $what"
   cache_dir="${HAUKSBEE_SIM_CACHE_DIR:-$HOME/.cache/hauksbee/simulator-archives}"
@@ -458,23 +489,41 @@ obtain_verified_asset() {
   fi
   # Reverify even cache hits immediately before extraction.
   verify_asset "$cached" "$asset" "$sums" "$what" "$version" "Restore the pinned archive."
-  VERIFIED_ASSET_PATH="$cached"
+  # Snapshot and reverify the exact bytes beneath the private runner-owned
+  # root. A concurrent cache replacement cannot change what validation and
+  # extraction subsequently consume.
+  archive_dir="$REQUIRED_RUN_ROOT/archives"
+  mkdir -p "$archive_dir"
+  partial="$(mktemp "$archive_dir/.${asset}.partial.XXXXXX")"
+  cp "$cached" "$partial" || die "could not snapshot verified $what asset"
+  verify_asset "$partial" "$asset" "$sums" "$what" "$version" "Restore the pinned archive."
+  chmod 0400 "$partial"
+  staged="$archive_dir/$asset"
+  mv "$partial" "$staged"
+  VERIFIED_ASSET_PATH="$staged"
 }
 
-validate_tar_members() {
-  local archive="$1"
-  tar tf "$archive" | awk '
-    /^\// { bad=1 }
-    { n=split($0, p, "/"); for (i=1; i<=n; i++) if (p[i] == "..") bad=1 }
-    END { exit bad ? 1 : 0 }
-  ' || die "archive contains an unsafe absolute or parent-traversal member: $archive"
+validate_archive_members() {
+  local archive="$1" strip_components="${2:-0}"
+  [ -f "$PROVENANCE_HELPER" ] \
+    || die "simulator provenance helper missing: $PROVENANCE_HELPER"
+  have python3 || die "python3 is required to validate pinned simulator archives"
+  python3 "$PROVENANCE_HELPER" archive --strip-components "$strip_components" "$archive" \
+    || die "archive contains an unsafe path or link: $archive"
+}
+
+canonical_required_backend() {
+  local candidate="$1" resolved
+  resolved="$(python3 "$PROVENANCE_HELPER" path "$REQUIRED_RUN_ROOT" "$candidate")" \
+    || die "required backend escapes or is not executable beneath $REQUIRED_RUN_ROOT: $candidate"
+  printf '%s' "$resolved"
 }
 
 prepare_required_renode() {
   local asset url mountpoint bin ver
   case "$PLATFORM-$ARCH_NORM" in
     darwin-arm64) asset="renode-${RENODE_VERSION}-dotnet.osx-arm64-portable.dmg" ;;
-    darwin-x86_64) asset="renode-${RENODE_VERSION}-dotnet.osx-x86_64-portable.dmg" ;;
+    darwin-x86_64) asset="renode_${RENODE_VERSION}.dmg" ;;
     linux-arm64) asset="renode-${RENODE_VERSION}.linux-arm64-portable-dotnet.tar.gz" ;;
     linux-x86_64) asset="renode-${RENODE_VERSION}.linux-portable-dotnet.tar.gz" ;;
   esac
@@ -483,22 +532,28 @@ prepare_required_renode() {
   if [ "$PLATFORM" = darwin ]; then
     mountpoint="$REQUIRED_RUN_ROOT/renode-mount"
     mkdir -p "$mountpoint" "$REQUIRED_RUN_ROOT/renode"
+    REQUIRED_MOUNTPOINT="$mountpoint"
     hdiutil attach "$VERIFIED_ASSET_PATH" -mountpoint "$mountpoint" -nobrowse -quiet \
       || die "hdiutil attach failed for verified Renode asset"
     ditto "$mountpoint/Renode.app" "$REQUIRED_RUN_ROOT/renode/Renode.app" \
-      || { hdiutil detach "$mountpoint" -quiet 2>/dev/null || true; die "ditto copy failed"; }
+      || die "ditto copy failed"
     hdiutil detach "$mountpoint" -quiet || die "could not detach verified Renode asset"
-    bin="$REQUIRED_RUN_ROOT/renode/Renode.app/Contents/MacOS/renode"
+    REQUIRED_MOUNTPOINT=""
+    if [ "$ARCH_NORM" = x86_64 ]; then
+      bin="$REQUIRED_RUN_ROOT/renode/Renode.app/Contents/MacOS/macos_run.command"
+    else
+      bin="$REQUIRED_RUN_ROOT/renode/Renode.app/Contents/MacOS/renode"
+    fi
   else
     mkdir -p "$REQUIRED_RUN_ROOT/renode"
-    validate_tar_members "$VERIFIED_ASSET_PATH"
+    validate_archive_members "$VERIFIED_ASSET_PATH" 1
     tar xzf "$VERIFIED_ASSET_PATH" -C "$REQUIRED_RUN_ROOT/renode" --strip-components=1 \
       || die "tar extraction failed for verified Renode asset"
     bin="$REQUIRED_RUN_ROOT/renode/renode"
   fi
-  [ -x "$bin" ] || die "verified Renode archive did not contain its required launcher"
+  bin="$(canonical_required_backend "$bin")"
   ver="$("$bin" --version 2>/dev/null | head -1 || true)"
-  case "$ver" in "Renode v${RENODE_VERSION}"|"Renode v${RENODE_VERSION}."*) ;; *) die "verified Renode payload reports the wrong version: $ver" ;; esac
+  case "$ver" in "Renode v${RENODE_VERSION}"|"Renode v${RENODE_VERSION}."*|"Renode, version ${RENODE_VERSION}"*) ;; *) die "verified Renode payload reports the wrong version: $ver" ;; esac
   REQUIRED_RENODE_PATH="$bin"
 }
 
@@ -520,11 +575,11 @@ prepare_required_qemu() {
     obtain_verified_asset "$asset" "$QEMU_CHECKSUMS" "Espressif QEMU" "$QEMU_VERSION" "$url"
     dest="$REQUIRED_RUN_ROOT/$tool"
     mkdir -p "$dest"
-    validate_tar_members "$VERIFIED_ASSET_PATH"
+    validate_archive_members "$VERIFIED_ASSET_PATH"
     tar xf "$VERIFIED_ASSET_PATH" -C "$dest" \
       || die "tar extraction failed for verified $asset"
     bin="$dest/qemu/bin/$bin"
-    [ -x "$bin" ] || die "verified $asset did not contain its required launcher"
+    bin="$(canonical_required_backend "$bin")"
     is_esp_qemu_fork "$bin" || die "verified $asset is not the Espressif QEMU fork"
     ver="$("$bin" --version 2>/dev/null | head -1 || true)"
     case "$ver" in *"(${expected})"*) ;; *) die "verified $asset reports the wrong version: $ver" ;; esac
@@ -537,9 +592,17 @@ prepare_required_qemu() {
 
 prepare_required_backends() {
   local run_base
-  run_base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-  mkdir -p "$run_base"
-  REQUIRED_RUN_ROOT="$(mktemp -d "$run_base/hauksbee-required-sims.XXXXXX")"
+  if [ -n "${HAUKSBEE_REQUIRED_RUN_ROOT:-}" ]; then
+    REQUIRED_RUN_ROOT="$HAUKSBEE_REQUIRED_RUN_ROOT"
+    case "$REQUIRED_RUN_ROOT" in /*) ;; *) die "HAUKSBEE_REQUIRED_RUN_ROOT must be absolute" ;; esac
+    [ -d "$REQUIRED_RUN_ROOT" ] || die "runner-owned required root does not exist: $REQUIRED_RUN_ROOT"
+    [ -z "$(find "$REQUIRED_RUN_ROOT" -mindepth 1 -maxdepth 1 -print -quit)" ] \
+      || die "runner-owned required root is not empty: $REQUIRED_RUN_ROOT"
+  else
+    run_base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+    mkdir -p "$run_base"
+    REQUIRED_RUN_ROOT="$(mktemp -d "$run_base/hauksbee-required-sims.XXXXXX")"
+  fi
   [ "$DO_RENODE" -eq 0 ] || prepare_required_renode
   [ "$DO_QEMU" -eq 0 ] || prepare_required_qemu
 }
@@ -665,7 +728,11 @@ install_renode() {
 
   case "$PLATFORM" in
     darwin)
-      ASSET="renode-${RENODE_VER}-dotnet.osx-${ARCH_NORM}-portable.dmg"
+      if [ "$ARCH_NORM" = x86_64 ]; then
+        ASSET="renode_${RENODE_VER}.dmg"
+      else
+        ASSET="renode-${RENODE_VER}-dotnet.osx-arm64-portable.dmg"
+      fi
       DOWNLOAD_URL="https://github.com/renode/renode/releases/download/v${RENODE_VER}/${ASSET}"
 
       log "Renode: downloading $ASSET..."
@@ -680,6 +747,7 @@ install_renode() {
       MOUNTPOINT="$TMPDIR/renode_mnt"
       mkdir -p "$MOUNTPOINT"
       log "Renode: mounting DMG..."
+      REQUIRED_MOUNTPOINT="$MOUNTPOINT"
       hdiutil attach "$TMPDIR/$ASSET" -mountpoint "$MOUNTPOINT" -nobrowse -quiet \
         || die "hdiutil attach failed. The DMG may be corrupt; try again."
 
@@ -689,13 +757,21 @@ install_renode() {
       ditto "$MOUNTPOINT/Renode.app" "$HOME/renode-portable/Renode.app" \
         || { hdiutil detach "$MOUNTPOINT" -quiet 2>/dev/null || true; die "ditto copy failed."; }
 
-      hdiutil detach "$MOUNTPOINT" -quiet \
-        || warn "Could not detach DMG; you can detach it manually."
+      if hdiutil detach "$MOUNTPOINT" -quiet; then
+        REQUIRED_MOUNTPOINT=""
+      else
+        warn "Could not detach DMG; retrying during installer cleanup."
+      fi
 
       log "Renode: removing quarantine flag (Gatekeeper)..."
       xattr -dr com.apple.quarantine "$HOME/renode-portable/Renode.app" 2>/dev/null || true
 
-      BIN="$HOME/renode-portable/Renode.app/Contents/MacOS/renode"
+      if [ "$ARCH_NORM" = x86_64 ]; then
+        BIN="$HOME/renode-portable/Renode.app/Contents/MacOS/macos_run.command"
+        ln -sf macos_run.command "$HOME/renode-portable/Renode.app/Contents/MacOS/renode"
+      else
+        BIN="$HOME/renode-portable/Renode.app/Contents/MacOS/renode"
+      fi
       [ -x "$BIN" ] || die "Renode binary not found at $BIN after install."
       ;;
 
@@ -729,7 +805,7 @@ install_renode() {
   log "Renode: verifying..."
   VER_OUT="$("$BIN" --version 2>/dev/null | head -1 || echo "(unknown)")"
   case "$VER_OUT" in
-    "Renode v${RENODE_VERSION}"|"Renode v${RENODE_VERSION}."*) ;;
+    "Renode v${RENODE_VERSION}"|"Renode v${RENODE_VERSION}."*|"Renode, version ${RENODE_VERSION}"*) ;;
     *) die "Renode installed from the pinned asset but reports the wrong version: $VER_OUT" ;;
   esac
   ok "Renode installed: $BIN"
