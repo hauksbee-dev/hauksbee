@@ -214,7 +214,7 @@ impl ResponderRegistry {
 /// chain; a direct MCU pin reads the latest observed GPIO edge; a node reads
 /// the scheduler's last settled analogue snapshot (appropriate for tied rails
 /// and non-firmware controls, which cannot change inside the current chunk).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParallelSignal {
     Mcu((char, u8)),
     Hc595 { chain: usize, chip: usize, bit: u8 },
@@ -256,7 +256,16 @@ pub(crate) struct ParallelMemoryResponder {
     watched: Vec<(char, u8)>,
     last_write_cycle: Option<u64>,
     edge_cycle: Option<u64>,
+    deferred_write: Option<DeferredParallelWrite>,
     runtime: Arc<Mutex<ParallelMemoryRuntime>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DeferredParallelWrite {
+    cycle: u64,
+    write_index: usize,
+    address: usize,
+    value: u64,
 }
 
 #[derive(Clone)]
@@ -334,6 +343,7 @@ impl ParallelMemoryResponder {
             watched,
             last_write_cycle: None,
             edge_cycle: None,
+            deferred_write: None,
             runtime,
         }
     }
@@ -407,25 +417,70 @@ impl InputResponder for ParallelMemoryResponder {
                 levels.decide(v, false)
             }
         };
+        let read_gates = &self.read_gates;
+        let read_active_now = read_gates
+            .iter()
+            .all(|&(source, active)| active.is_active(source_level(source)));
         let mut qualified = false;
-        for write in &mut self.writes {
+        let mut ambiguous_write = None;
+        for (write_index, write) in self.writes.iter_mut().enumerate() {
             let cur = source_level(write.signal);
             let fired = match write.edge {
                 Edge::Rising => cur && !write.prev,
                 Edge::Falling => !cur && write.prev,
             };
             write.prev = cur;
-            qualified |= fired
-                && write
+            let gates_active = write
+                .gates
+                .iter()
+                .all(|&(source, active)| active.is_active(source_level(source)));
+            qualified |= fired && gates_active;
+            if fired && !gates_active && read_active_now {
+                let inverse_gate_is_active = write.gates.iter().any(|&(source, write_level)| {
+                    !write_level.is_active(source_level(source))
+                        && read_gates.iter().any(|&(read_source, read_level)| {
+                            read_source == source
+                                && read_level != write_level
+                                && read_level.is_active(source_level(read_source))
+                        })
+                });
+                if inverse_gate_is_active {
+                    ambiguous_write = self.edge_cycle.map(|cycle| (cycle, write_index));
+                }
+            }
+        }
+
+        let mut write_sample = None;
+        if let Some(deferred) = self.deferred_write.take() {
+            if self.edge_cycle == Some(deferred.cycle) {
+                let now_qualified = self.writes[deferred.write_index]
                     .gates
                     .iter()
                     .all(|&(source, active)| active.is_active(source_level(source)));
+                if now_qualified {
+                    write_sample = Some((deferred.address, deferred.value, Some(deferred.cycle)));
+                } else {
+                    self.deferred_write = Some(deferred);
+                }
+            }
         }
         if qualified {
-            let address = self.address(volts);
-            let value = self.data_value(volts);
+            self.deferred_write = None;
+            write_sample.get_or_insert_with(|| {
+                (self.address(volts), self.data_value(volts), self.edge_cycle)
+            });
+        } else if let Some((cycle, write_index)) = ambiguous_write {
+            self.deferred_write.get_or_insert(DeferredParallelWrite {
+                cycle,
+                write_index,
+                address: self.address(volts),
+                value: self.data_value(volts),
+            });
+        }
+
+        if let Some((address, value, write_cycle)) = write_sample {
             let gap_exceeded = match (
-                self.edge_cycle,
+                write_cycle,
                 self.last_write_cycle,
                 self.port.byte_load_timeout_s,
             ) {
@@ -435,10 +490,10 @@ impl InputResponder for ParallelMemoryResponder {
                 }
                 _ => false,
             };
-            if self.edge_cycle.is_some() {
-                self.last_write_cycle = self.edge_cycle;
+            if write_cycle.is_some() {
+                self.last_write_cycle = write_cycle;
             }
-            let accepted = if let Some(cycle) = self.edge_cycle {
+            let accepted = if let Some(cycle) = write_cycle {
                 self.port.write_at(address, value, cycle, self.frequency_hz)
             } else {
                 self.port.write_after_gap(address, value, gap_exceeded)
@@ -452,15 +507,13 @@ impl InputResponder for ParallelMemoryResponder {
             }
         }
 
-        if qualified {
-            // A qualified write edge owns this bus transition. In particular,
-            // do not immediately reinterpret /WE rising as a read while /OE
-            // still has its pre-transition value: emulators may report the
-            // equal-cycle /WE-rise and /OE-disable edges in either order. Doing
-            // so starts the EEPROM's internal program cycle after the first
-            // byte of a fresh page and inhibits the remaining byte loads. A
-            // later genuine read-control edge evaluates the gates below and
-            // starts data polling normally.
+        if self
+            .deferred_write
+            .is_some_and(|deferred| self.edge_cycle == Some(deferred.cycle))
+        {
+            // A write edge whose only failing gate is the active inverse of a
+            // read gate is ambiguous until the rest of this cycle's GPIO edges
+            // arrive. Do not let that transient state close an EEPROM page.
             self.runtime
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -1520,8 +1573,16 @@ byte_load_timeout_s = 0.00015
 program_time_s = 0.010
 init = 0xff
 address = ["a0", "a1", "a2", "a3", "a4", "a5", "a6"]
-write = { pin = "we_n", edge = "rising" }
-write_gates = [{ pin = "ce_n", active = "low" }]
+write_cycles = [
+  { pin = "we_n", edge = "rising", gates = [
+    { pin = "ce_n", active = "low" },
+    { pin = "oe_n", active = "high" },
+  ] },
+  { pin = "ce_n", edge = "rising", gates = [
+    { pin = "we_n", active = "low" },
+    { pin = "oe_n", active = "high" },
+  ] },
+]
 read_gates = [
   { pin = "ce_n", active = "low" },
   { pin = "oe_n", active = "low" },
@@ -1553,11 +1614,24 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             1_000_000,
             Arc::new(Mutex::new(vec![])),
             address.iter().copied().map(ParallelSignal::Mcu).collect(),
-            vec![ParallelMemoryWrite::new(
-                ParallelSignal::Mcu(we),
-                Edge::Rising,
-                vec![(ParallelSignal::Mcu(ce), Level::Low)],
-            )],
+            vec![
+                ParallelMemoryWrite::new(
+                    ParallelSignal::Mcu(we),
+                    Edge::Rising,
+                    vec![
+                        (ParallelSignal::Mcu(ce), Level::Low),
+                        (ParallelSignal::Mcu(oe), Level::High),
+                    ],
+                ),
+                ParallelMemoryWrite::new(
+                    ParallelSignal::Mcu(ce),
+                    Edge::Rising,
+                    vec![
+                        (ParallelSignal::Mcu(we), Level::Low),
+                        (ParallelSignal::Mcu(oe), Level::High),
+                    ],
+                ),
+            ],
             vec![
                 (ParallelSignal::Mcu(ce), Level::Low),
                 (ParallelSignal::Mcu(oe), Level::Low),
@@ -1584,8 +1658,8 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         // The previous page's data poll left /OE asserted. At the next page's
         // first write, firmware disables /OE at the same simulated cycle as
         // /WE rises. An emulator can report those equal-cycle GPIO edges in
-        // either order; the transient intermediate state must not turn the
-        // just-loaded 0x40 byte into a one-byte program operation.
+        // either order; the transient intermediate state must neither lose the
+        // 0x40 write nor turn it into a one-byte program operation.
         responder.on_edge_at(ce, true, 900);
         responder.on_edge_at(we, true, 900);
         responder.on_edge_at(oe, false, 900);
@@ -1610,8 +1684,92 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         );
     }
 
-    // ── Bit-banged SPI ───────────────────────────────────────────────────────
+    // A write edge may also be the only edge that enables a generic memory's
+    // output. Keep that distinct from the AT28-specific equal-cycle ambiguity.
+    #[test]
+    fn qualified_write_can_enable_an_immediate_generic_memory_read() {
+        const SPEC: &str = r#"
+inputs = ["a0", "ce_n", "we_n"]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 8
+init = 0xff
+address = ["a0"]
+write = { pin = "we_n", edge = "rising" }
+write_gates = [{ pin = "ce_n", active = "low" }]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
+data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+"#;
+        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
+        let logic = crate::logic::LogicComponent::compile("generic-memory", &spec).unwrap();
+        let port = logic.memory_ports().pop().expect("one memory");
 
+        let address = ('B', 0);
+        let ce = ('D', 0);
+        let we = ('D', 1);
+        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
+        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
+        let mut responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            1_000_000,
+            Arc::new(Mutex::new(vec![])),
+            vec![ParallelSignal::Mcu(address)],
+            vec![ParallelMemoryWrite::new(
+                ParallelSignal::Mcu(we),
+                Edge::Rising,
+                vec![(ParallelSignal::Mcu(ce), Level::Low)],
+            )],
+            vec![
+                (ParallelSignal::Mcu(ce), Level::Low),
+                (ParallelSignal::Mcu(we), Level::High),
+            ],
+            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+            data.clone(),
+            Vec::new(),
+            Arc::clone(&runtime),
+        );
+
+        responder.on_edge_at(ce, false, 10);
+        responder.on_edge_at(address, true, 10);
+        for (bit, &pin) in data.iter().enumerate() {
+            responder.on_edge_at(pin, 0xa5 & (1 << bit) != 0, 10);
+        }
+        responder.on_edge_at(we, false, 20);
+        let drives = responder.on_edge_at(we, true, 21);
+
+        let got = drives.iter().enumerate().fold(0u8, |value, (bit, update)| {
+            value
+                | (u8::from(
+                    update
+                        .level
+                        .expect("write edge must drive the readable bus"),
+                ) << bit)
+        });
+        assert_eq!(got, 0xa5);
+        assert!(
+            runtime
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .read_enabled,
+            "the write edge is also the only read-enable transition"
+        );
+    }
+
+    // ── Bit-banged SPI ───────────────────────────────────────────────────────
     use crate::peripherals::register_map::RegisterMapSensor;
     use crate::peripherals::spi::SpiSlave;
 
