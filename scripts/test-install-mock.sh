@@ -7,14 +7,12 @@
 # What it does:
 #   1. Builds the real distributable bundle (scripts/bundle.sh) for THIS platform.
 #   2. Lays out a static tree mirroring GitHub's exact URL paths:
-#        <api>/releases/latest                         (tag_name JSON)
-#        <releases>/download/<tag>/<asset>.tar.gz      (the real bundle)
-#        <releases>/download/<tag>/<asset>.tar.gz.sha256
+#        <api>/releases/latest                         (tag + asset API URLs)
+#        <api>/releases/assets/<id>                    (bundle/checksum bytes)
 #        /raw/get-hauksbee.sh                          (for the curl|bash hop)
 #   3. Serves it with `python3 -m http.server`.
 #   4. Runs get-hauksbee.sh against the mock (via curl|bash, like the README) into
-#      a throwaway prefix, with HAUKSBEE_API_BASE / HAUKSBEE_RELEASES_BASE pointed
-#      at the mock.
+#      a throwaway prefix, with HAUKSBEE_API_BASE pointed at the mock.
 #   5. Verifies the freshly-installed binaries actually run.
 #   6. Negative test: serves a CORRUPTED tarball next to the genuine checksum
 #      and asserts the installer refuses it and installs nothing.
@@ -62,7 +60,8 @@ MOCK="$WORK/ghmock"
 SRV_PID=""
 cleanup() {
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true
-  rm -rf "$WORK"
+  find "$WORK" -depth -mindepth 1 -delete 2>/dev/null || true
+  rmdir "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -80,27 +79,33 @@ if [ "$SHAPE" = permissive ]; then
 fi
 
 echo "==> Laying out mock GitHub tree"
-mkdir -p "$MOCK/repos/${REPO}/releases" \
-         "$MOCK/${REPO}/releases/download/${TAG}" \
+mkdir -p "$MOCK/repos/${REPO}/releases/assets" \
          "$MOCK/raw"
-printf '{"tag_name":"%s","name":"hauksbee %s"}\n' "$TAG" "$TAG" \
+printf '{"tag_name":"%s","assets":[{"name":"%s.tar.gz","url":"http://127.0.0.1:%s/repos/%s/releases/assets/101"},{"name":"%s.tar.gz.sha256","url":"http://127.0.0.1:%s/repos/%s/releases/assets/102"}' \
+  "$TAG" "$ASSET" "$PORT" "$REPO" "$ASSET" "$PORT" "$REPO" \
   > "$MOCK/repos/${REPO}/releases/latest"
-cp "$TARBALL" "$TARBALL.sha256" "$MOCK/${REPO}/releases/download/${TAG}/"
+cp "$TARBALL" "$MOCK/repos/${REPO}/releases/assets/101"
+cp "$TARBALL.sha256" "$MOCK/repos/${REPO}/releases/assets/102"
 if [ "$SHAPE" = permissive ]; then
-  cp "$TARBALL_PERM" "$TARBALL_PERM.sha256" "$MOCK/${REPO}/releases/download/${TAG}/"
+  printf ',{"name":"%s-permissive.tar.gz","url":"http://127.0.0.1:%s/repos/%s/releases/assets/103"},{"name":"%s-permissive.tar.gz.sha256","url":"http://127.0.0.1:%s/repos/%s/releases/assets/104"}' \
+    "$ASSET" "$PORT" "$REPO" "$ASSET" "$PORT" "$REPO" \
+    >> "$MOCK/repos/${REPO}/releases/latest"
+  cp "$TARBALL_PERM" "$MOCK/repos/${REPO}/releases/assets/103"
+  cp "$TARBALL_PERM.sha256" "$MOCK/repos/${REPO}/releases/assets/104"
 fi
+printf ']}\n' >> "$MOCK/repos/${REPO}/releases/latest"
 cp "$HERE/get-hauksbee.sh" "$MOCK/raw/get-hauksbee.sh"
 
 # The negative-test tree: the SAME release, but the tarball is corrupted after
 # the genuine checksum was taken. Served under bad/ so the URL bases select it.
 echo "==> Laying out the corrupted mock tree (negative test)"
-mkdir -p "$MOCK/bad/repos/${REPO}/releases" \
-         "$MOCK/bad/${REPO}/releases/download/${TAG}"
-printf '{"tag_name":"%s","name":"hauksbee %s"}\n' "$TAG" "$TAG" \
+mkdir -p "$MOCK/bad/repos/${REPO}/releases/assets"
+printf '{"tag_name":"%s","assets":[{"name":"%s.tar.gz","url":"http://127.0.0.1:%s/bad/repos/%s/releases/assets/201"},{"name":"%s.tar.gz.sha256","url":"http://127.0.0.1:%s/bad/repos/%s/releases/assets/202"}]}\n' \
+  "$TAG" "$ASSET" "$PORT" "$REPO" "$ASSET" "$PORT" "$REPO" \
   > "$MOCK/bad/repos/${REPO}/releases/latest"
-cp "$TARBALL.sha256" "$MOCK/bad/${REPO}/releases/download/${TAG}/"
-cp "$TARBALL" "$MOCK/bad/${REPO}/releases/download/${TAG}/${ASSET}.tar.gz"
-printf 'corrupt' >> "$MOCK/bad/${REPO}/releases/download/${TAG}/${ASSET}.tar.gz"
+cp "$TARBALL.sha256" "$MOCK/bad/repos/${REPO}/releases/assets/202"
+cp "$TARBALL" "$MOCK/bad/repos/${REPO}/releases/assets/201"
+printf 'corrupt' >> "$MOCK/bad/repos/${REPO}/releases/assets/201"
 
 echo "==> Serving mock at http://127.0.0.1:${PORT}"
 ( cd "$MOCK" && exec python3 -m http.server "$PORT" >/dev/null 2>&1 ) &
@@ -113,7 +118,6 @@ done
 
 echo "==> Running the README curl|bash install against the mock"
 export HAUKSBEE_API_BASE="http://127.0.0.1:${PORT}/repos/${REPO}"
-export HAUKSBEE_RELEASES_BASE="http://127.0.0.1:${PORT}/${REPO}/releases/download"
 export HAUKSBEE_GITHUB_TOKEN="mock-private-token"
 curl -fsSL "http://127.0.0.1:${PORT}/raw/get-hauksbee.sh" | bash -s -- --prefix "$PREFIX"
 
@@ -143,7 +147,6 @@ fi
 echo "==> Negative test: corrupted tarball must be refused, nothing installed"
 PREFIX_BAD="$WORK/prefix-bad"
 if HAUKSBEE_API_BASE="http://127.0.0.1:${PORT}/bad/repos/${REPO}" \
-   HAUKSBEE_RELEASES_BASE="http://127.0.0.1:${PORT}/bad/${REPO}/releases/download" \
    bash "$HERE/get-hauksbee.sh" --prefix "$PREFIX_BAD" >/dev/null 2>&1; then
   echo "FAIL: the installer accepted a tarball whose sha256 does not match" >&2
   exit 1

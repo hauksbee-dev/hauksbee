@@ -8,9 +8,9 @@
 # of the new download is verified.
 #
 # Usage:
-#   export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
-#   printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
-#     curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+#   ( export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
+#     printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
+#       curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash )
 #   With flags through the pipe:
 #     printf ... | curl --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
 #   Or run locally:
@@ -39,11 +39,9 @@
 set -euo pipefail
 
 REPO="hauksbee-dev/hauksbee"
-# Base URLs are overridable so the installer can target a GitHub Enterprise host,
-# a self-hosted mirror, or a local mock (used to test the whole download/verify/
-# install flow while the repo is still private). Defaults are public GitHub.
+# The API base is overridable so the installer can target a GitHub Enterprise
+# host or the local contract server used by the regression test.
 API_BASE="${HAUKSBEE_API_BASE:-https://api.github.com/repos/${REPO}}"
-RELEASES_BASE="${HAUKSBEE_RELEASES_BASE:-https://github.com/${REPO}/releases/download}"
 PRIVATE_TOKEN="${HAUKSBEE_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
 
 VERSION=""
@@ -66,9 +64,9 @@ re-run: an existing install is only overwritten once the checksum of the new
 download is verified.
 
 Usage:
-  export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
-  printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
-    curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+  ( export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
+    printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
+      curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash )
   With flags through the pipe:
     printf ... | curl --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
   Or run locally:
@@ -93,6 +91,9 @@ Environment:
   HAUKSBEE_GITHUB_TOKEN  Required. Fine-grained PAT or GitHub App installation
                          token with Contents: read on the private repository.
   GITHUB_TOKEN           Accepted as a CI-compatible fallback.
+
+Dependencies:
+  curl, CA certificates, Python 3, tar, and sha256sum or shasum.
 USAGE
 }
 
@@ -135,6 +136,11 @@ done
 if [ -z "$PRIVATE_TOKEN" ]; then
   echo "HAUKSBEE_GITHUB_TOKEN is required to download from the private ${REPO} release repository." >&2
   echo "Use a fine-grained PAT or GitHub App installation token with Contents: read; do not put it in a URL." >&2
+  exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required to parse authenticated GitHub release metadata safely." >&2
   exit 1
 fi
 
@@ -202,34 +208,50 @@ esac
 echo "Detected platform: ${OS}/${ARCH} -> asset suffix: ${ASSET_SUFFIX}"
 
 # ---------------------------------------------------------------------------
-# Resolve the release tag (latest or pinned)
+# Resolve one release metadata document (latest or pinned). Asset bytes are
+# subsequently fetched only through the API URLs in this authenticated response.
 # ---------------------------------------------------------------------------
-# Prints the latest tag on stdout; returns non-zero on any failure. Every
-# command inside is guarded so a network error surfaces as this function's
-# return status rather than `set -e` killing the whole script before the
-# caller can print its guidance.
-resolve_latest_tag() {
-  local url="${API_BASE}/releases/latest"
-  local response tag
+fetch_release() {
+  curl_private -fsSL \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$1"
+}
 
-  response="$(curl_private -fsSL "${url}" 2>/dev/null)" || return 1
+release_tag() {
+  python3 -c 'import json,sys; value=json.load(sys.stdin).get("tag_name"); value or sys.exit(1); print(value)'
+}
 
-  # Extract the tag_name field. Use grep + sed rather than jq (may not be
-  # installed); `|| true` keeps a no-match from aborting under pipefail, and
-  # the emptiness check below is the real verdict.
-  tag="$(printf '%s' "${response}" | { grep '"tag_name"' || true; } | head -1 \
-    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
-  [ -n "${tag}" ] || return 1
-  printf '%s\n' "${tag}"
+release_asset_url() {
+  local name="$1"
+  python3 -c '
+import json, sys
+name = sys.argv[1]
+matches = [asset.get("url") for asset in json.load(sys.stdin).get("assets", []) if asset.get("name") == name]
+if len(matches) != 1 or not isinstance(matches[0], str):
+    sys.exit(1)
+print(matches[0])
+' "$name"
 }
 
 if [ -z "${VERSION}" ]; then
   echo "Fetching latest release tag..."
-  if ! VERSION="$(resolve_latest_tag)" || [ -z "${VERSION}" ]; then
+  if ! RELEASE_JSON="$(fetch_release "${API_BASE}/releases/latest")" \
+    || ! VERSION="$(printf '%s' "$RELEASE_JSON" | release_tag)"; then
     echo "Could not determine the latest release tag from the GitHub API." >&2
     echo "Check your network connection and https://www.githubstatus.com," >&2
     echo "or pass --version vX.Y.Z explicitly (releases are listed at" >&2
     echo "https://github.com/${REPO}/releases)." >&2
+    exit 1
+  fi
+else
+  if ! RELEASE_JSON="$(fetch_release "${API_BASE}/releases/tags/${VERSION}")"; then
+    echo "Could not read release ${VERSION} from the authenticated GitHub API." >&2
+    exit 1
+  fi
+  if ! RESOLVED_TAG="$(printf '%s' "$RELEASE_JSON" | release_tag)" \
+    || [ "$RESOLVED_TAG" != "$VERSION" ]; then
+    echo "The GitHub API response did not identify the requested release ${VERSION}." >&2
     exit 1
   fi
 fi
@@ -240,13 +262,25 @@ VERSION_BARE="${VERSION#v}"
 echo "Installing hauksbee ${VERSION} (${VERSION_BARE})"
 
 # ---------------------------------------------------------------------------
-# Construct asset URLs
+# Resolve exact asset API URLs from the authenticated release response.
 # ---------------------------------------------------------------------------
 ASSET_NAME="hauksbee-${VERSION_BARE}-${ASSET_SUFFIX}${SHAPE_SUFFIX}"
 TARBALL_NAME="${ASSET_NAME}.tar.gz"
 CHECKSUM_NAME="${TARBALL_NAME}.sha256"
-TARBALL_URL="${RELEASES_BASE}/${VERSION}/${TARBALL_NAME}"
-CHECKSUM_URL="${RELEASES_BASE}/${VERSION}/${CHECKSUM_NAME}"
+if ! TARBALL_URL="$(printf '%s' "$RELEASE_JSON" | release_asset_url "$TARBALL_NAME")" \
+  || ! CHECKSUM_URL="$(printf '%s' "$RELEASE_JSON" | release_asset_url "$CHECKSUM_NAME")"; then
+  echo "Release ${VERSION} does not contain exactly one ${TARBALL_NAME} and checksum asset." >&2
+  exit 1
+fi
+for api_url in "$TARBALL_URL" "$CHECKSUM_URL"; do
+  case "$api_url" in
+    "${API_BASE}/releases/assets/"*) ;;
+    *)
+      echo "Refusing release asset URL outside the configured GitHub API: ${api_url}" >&2
+      exit 1
+      ;;
+  esac
+done
 
 # ---------------------------------------------------------------------------
 # Download to a temp directory; verify; then install
@@ -267,7 +301,8 @@ CHECKSUM_PATH="${TMPDIR_WORK}/${CHECKSUM_NAME}"
 # what to check, instead of dying with a bare non-zero under `set -e`.
 download_asset() {
   local url="$1" dest="$2" what="$3"
-  if ! curl_private -fsSL --retry 3 --retry-delay 2 -o "${dest}" "${url}"; then
+  if ! curl_private -fsSL --retry 3 --retry-delay 2 \
+    -H 'Accept: application/octet-stream' -o "${dest}" "${url}"; then
     echo "Failed to download ${what}:" >&2
     echo "  ${url}" >&2
     echo "Check your network connection, and that the release ${VERSION} exists" >&2
