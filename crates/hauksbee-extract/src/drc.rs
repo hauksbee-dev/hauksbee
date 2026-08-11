@@ -601,6 +601,26 @@ impl DrcTieQualification {
     }
 }
 
+fn common_vertical_via(indices: &[usize], findings: &[DrcFinding]) -> bool {
+    let via_nets = |finding: &DrcFinding| {
+        let mut nets = Vec::new();
+        if finding.item_a.kind == ItemKind::Via {
+            nets.push(finding.item_a.net);
+        }
+        if finding.item_b.kind == ItemKind::Via {
+            nets.push(finding.item_b.net);
+        }
+        nets
+    };
+    let Some((&first, rest)) = indices.split_first() else {
+        return false;
+    };
+    via_nets(&findings[first]).into_iter().any(|net| {
+        rest.iter()
+            .all(|index| via_nets(&findings[*index]).contains(&net))
+    })
+}
+
 /// One short / clearance finding between two different nets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrcFinding {
@@ -730,9 +750,11 @@ impl DrcReport {
     /// two differently named nets share copper, which is a fact about the board
     /// the user is entitled to see whether or not it was intended.
     ///
-    /// A declaration can qualify only one physical contact location. Multiple
-    /// layer findings at that location are one plated/copper connection and are
-    /// qualified together. If the same net pair contacts at distinct locations,
+    /// A declaration can qualify only one physical contact location. Findings on
+    /// several layers are one location only when the findings themselves carry a
+    /// common through-layer copper primitive (currently an Eagle via); matching
+    /// planar coordinates alone do not prove plating. If the same net pair
+    /// contacts at distinct locations,
     /// the schematic's net-name declaration does not identify which location is
     /// intentional, so every contact remains gating. Cluster size is not identity:
     /// choosing the largest contact would turn an unrelated multilayer bridge into
@@ -753,7 +775,7 @@ impl DrcReport {
             qualified: Vec::new(),
         };
         for tie in ties {
-            let mut locations: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+            let mut locations: HashMap<(i64, i64, String), Vec<usize>> = HashMap::new();
             for (index, finding) in self.findings.iter().enumerate() {
                 if finding.kind == ViolationKind::Short
                     && qualification.tie_for(finding).is_none()
@@ -765,8 +787,28 @@ impl DrcReport {
                     let location = (
                         (finding.x * 1_000_000.0).round() as i64,
                         (finding.y * 1_000_000.0).round() as i64,
+                        finding.layer.clone(),
                     );
                     locations.entry(location).or_default().push(index);
+                }
+            }
+            // Eagle vias span the copper stack. If the same via is one of the
+            // colliding primitives on every aligned layer finding, those rows are
+            // several observations of one plated contact. Without that common
+            // connector, Top and Bottom at the same X/Y are separate contacts.
+            if locations.len() > 1 {
+                let mut xy = locations.keys().map(|(x, y, _)| (*x, *y));
+                let first_xy = xy.next();
+                let one_xy = first_xy.is_some() && xy.all(|candidate| Some(candidate) == first_xy);
+                let indices: Vec<usize> = locations.values().flatten().copied().collect();
+                if one_xy && common_vertical_via(&indices, &self.findings) {
+                    let first = locations
+                        .keys()
+                        .next()
+                        .expect("non-empty locations checked above");
+                    let key = (first.0, first.1, String::new());
+                    locations.clear();
+                    locations.insert(key, indices);
                 }
             }
             if locations.len() != 1 {

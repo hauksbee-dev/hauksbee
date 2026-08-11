@@ -114,6 +114,40 @@ pub fn deps_hooks() -> hauksbee_server::frontdoor::ToolHooks {
     }
 }
 
+/// The shipped browser analyzer, including optional Eagle schematic identity
+/// and net-tie evidence. A supplied but invalid companion is a report refusal,
+/// never a silent fallback to board-only analysis.
+pub fn schematic_analyzer() -> hauksbee_server::frontdoor::SchematicAnalyzer {
+    std::sync::Arc::new(|name, contents, firmware, schematic| {
+        let resolved = crate::board_input::from_bytes(name, contents).and_then(|norm| {
+            let board_is_eagle = norm
+                .layout_text
+                .as_deref()
+                .is_some_and(|text| text.contains("<eagle") && text.contains("<board"));
+            crate::schematic_ties::resolve_uploaded(name, &norm.board, schematic, board_is_eagle)
+                .map_err(|error| {
+                    crate::board_input::BoardInputError::Unsupported(error.to_string())
+                })
+        });
+        let ties = match resolved {
+            Ok(ties) => ties,
+            Err(error) => {
+                return serde_json::json!({ "ok": false, "error": error.web_message() }).to_string()
+            }
+        };
+        match firmware {
+            Some((fw_name, fw_bytes)) => crate::frontdoor::analyze_with_firmware_json_with_ties(
+                name,
+                contents,
+                fw_name,
+                fw_bytes,
+                ties.as_ref(),
+            ),
+            None => crate::frontdoor::analyze_json_with_ties(name, contents, ties.as_ref()),
+        }
+    })
+}
+
 /// The web live-launch callback: turn an uploaded board (and optional
 /// firmware) into a running [`HauksbeeEngine`] the server hub can install
 /// behind `/ws`. Shared by `hauksbee serve` and `run --serve` so an uploaded
@@ -125,13 +159,33 @@ pub fn deps_hooks() -> hauksbee_server::frontdoor::ToolHooks {
 /// downgrade. Engine-build failures (unloadable firmware, missing emulator)
 /// surface verbatim too; the frontend keeps the report up and shows them.
 pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
+    let launch = schematic_live_launcher();
+    std::sync::Arc::new(move |name, contents, firmware| launch(name, contents, firmware, None))
+}
+
+pub fn schematic_live_launcher() -> hauksbee_server::frontdoor::SchematicLiveLauncher {
     use hauksbee_server::frontdoor::LiveLaunch;
     use std::io::Write as _;
     use std::sync::Arc;
     Arc::new(
-        |name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| -> Result<LiveLaunch, String> {
+        |name: &str,
+         contents: &[u8],
+         fw: Option<(&str, &[u8])>,
+         schematic: Option<(&str, &[u8])>|
+         -> Result<LiveLaunch, String> {
             let norm =
                 crate::board_input::from_bytes(name, contents).map_err(|e| e.web_message())?;
+            let board_is_eagle = norm
+                .layout_text
+                .as_deref()
+                .is_some_and(|text| text.contains("<eagle") && text.contains("<board"));
+            let schematic_ties = crate::schematic_ties::resolve_uploaded(
+                name,
+                &norm.board,
+                schematic,
+                board_is_eagle,
+            )
+            .map_err(|error| error.to_string())?;
             // Geometric DRC on the same input the web co-sim runs it on (the
             // bytes twin for a binary board, the layout text otherwise; a
             // gerber archive has neither). Computed BEFORE `norm.board` is
@@ -148,6 +202,7 @@ pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
                 ExtractedBoard::drc(norm.layout_text.as_deref().unwrap_or_default())
                     .unwrap_or_default()
             };
+            let qualification = schematic_ties.as_ref().map(|ties| ties.qualify(&drc));
             let mut board = norm.board;
             // Same DNP default as bare `hauksbee run` (no --fit/--no-fit here).
             board
@@ -196,7 +251,7 @@ pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
             // Same bridge-or-refuse policy as the web co-sim (validated shorts
             // bridged, KiCad-10 `version_warning` shorts left alone), recorded
             // on the engine so the sim view can disclose it.
-            engine.apply_and_disclose_drc_shorts(&drc);
+            engine.apply_and_disclose_drc_shorts_with_qualification(&drc, qualification.as_ref());
             Ok(LiveLaunch {
                 engine: Box::new(engine),
                 board_name: name.to_string(),
@@ -239,14 +294,7 @@ pub fn serve(
         // The analysis API the React landing calls (the report and the live sim
         // are one app). Same callback `hauksbee serve` uses, so the two
         // commands converge on one server path with a preload difference only.
-        let analyze: hauksbee_server::frontdoor::FirmwareAnalyzer = Arc::new(
-            |name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| match fw {
-                Some((fw_name, fw_bytes)) => {
-                    crate::analyze_with_firmware_json(name, contents, fw_name, fw_bytes)
-                }
-                None => crate::analyze_json(name, contents),
-            },
-        );
+        let analyze = schematic_analyzer();
         // Same checks backend as `hauksbee serve`, so the web checks panel works
         // in the preloaded (`run --serve`) flow too.
         let check: hauksbee_server::frontdoor::CheckRunner =
@@ -290,14 +338,14 @@ pub fn serve(
             println!("      hauksbee run <board> --headless     # co-sim summary\n");
         }
         server
-            .serve_app_on(
+            .serve_app_on_with_schematic(
                 listener,
                 dir.as_deref(),
                 board_file,
                 analyze,
                 Some(check),
                 Some(deps_hooks()),
-                Some(live_launcher()),
+                Some(schematic_live_launcher()),
                 startup_json,
             )
             .await
@@ -365,6 +413,53 @@ pub fn dist_stale_message(dist_dir: &Path, source_paths: &[PathBuf]) -> Option<S
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn shipped_web_analyzer_applies_uploaded_eagle_schematic_evidence() {
+        let analyze = schematic_analyzer();
+        let board =
+            include_bytes!("../../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
+        let schematic =
+            include_bytes!("../../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch");
+        let report: serde_json::Value = serde_json::from_str(&analyze(
+            "declared.brd",
+            board,
+            None,
+            Some(("declared.sch", schematic)),
+        ))
+        .expect("production web analyzer returns JSON");
+        assert_eq!(report["ok"], true, "{report}");
+        assert_eq!(
+            report["serious"], 0,
+            "declared tie must not stay serious: {report}"
+        );
+        assert!(
+            report["inventory"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["role"] == "schematic")),
+            "causal uploaded schematic must appear in evidence inventory: {report}"
+        );
+    }
+
+    #[test]
+    fn shipped_live_launcher_does_not_disclose_declared_tie_as_a_short() {
+        let launch = schematic_live_launcher();
+        let board =
+            include_bytes!("../../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
+        let schematic =
+            include_bytes!("../../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch");
+        let live = launch(
+            "declared.brd",
+            board,
+            None,
+            Some(("declared.sch", schematic)),
+        )
+        .expect("declared Eagle tie launches");
+        assert!(
+            live.engine.board_info().shorts.is_none(),
+            "a fully qualified declared tie is not a live copper-short fault"
+        );
+    }
 
     /// The staleness advisory fires when a source file is newer than the built
     /// dist/index.html, and stays quiet when the build is up to date. This is

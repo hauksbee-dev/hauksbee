@@ -213,7 +213,12 @@ impl HauksbeeEngine {
         report: &hauksbee_extract::DrcReport,
         qualification: Option<&hauksbee_extract::DrcTieQualification>,
     ) {
-        let detected = report.short_count();
+        let detected = report
+            .shorts()
+            .filter(|finding| {
+                qualification.is_none_or(|qualified| qualified.tie_for(finding).is_none())
+            })
+            .count();
         if detected == 0 {
             self.shorts = None;
             return;

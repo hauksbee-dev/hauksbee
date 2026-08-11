@@ -742,7 +742,7 @@ fn run_inner(
     // until the final outcome commits them; co-sim appends its dynamic findings.
     let mut ci_findings: Option<Vec<crate::result::JsonFinding>> = None;
     if cfg.junit.is_some() || cfg.sarif.is_some() {
-        let mut findings = crate::reports::check::gather_findings(
+        let mut findings = crate::reports::check::gather_findings_with_schematic(
             &cfg.board,
             &board,
             &text,
@@ -855,7 +855,7 @@ fn run_inner(
     // report, so a person (or an AI) gets everything in a single command instead
     // of running one flag at a time. Honours --plain / --json / --strict.
     if surface == SelectedSurface::Check {
-        return crate::reports::check::emit(
+        return crate::reports::check::emit_with_schematic(
             &cfg.board,
             &board,
             &text,
@@ -884,7 +884,7 @@ fn run_inner(
 
     // --drc: run geometric short / clearance detection, print, exit.
     if surface == SelectedSurface::Drc {
-        return crate::reports::drc::emit(
+        return crate::reports::drc::emit_with_schematic(
             &cfg.board,
             &board,
             &text,
@@ -1031,7 +1031,7 @@ fn run_inner(
     // JSON emitters (thermal coverage, co-sim notes); they must fall THROUGH this
     // combined branch or those JSON paths become unreachable dead code.
     if surface == SelectedSurface::BareJson {
-        return crate::reports::check::emit_combined_json(
+        return crate::reports::check::emit_combined_json_with_schematic(
             &cfg.board,
             &board,
             &text,
@@ -1088,7 +1088,7 @@ fn run_inner(
                  for a report, --json for machine output, or --serve for the browser UI"
             );
         }
-        return crate::tui::run(
+        return crate::tui::run_with_schematic(
             &cfg.board,
             &text,
             cfg.models_dir.as_deref(),

@@ -31,6 +31,40 @@ pub fn emit(
     strict: bool,
     verbose: bool,
     inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
+    emit_with_schematic(
+        board_path,
+        board,
+        text,
+        raw,
+        input_kind,
+        altium_present,
+        lib,
+        reader_notes,
+        mode,
+        oracle,
+        strict,
+        verbose,
+        inputs,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn emit_with_schematic(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    altium_present: bool,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    oracle: bool,
+    strict: bool,
+    verbose: bool,
+    inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
     let mut report = if altium_present {
@@ -162,7 +196,7 @@ pub fn emit(
     if strict && would_gate {
         super::strict_gate_exit(
             mode,
-            &super::drc_gate_items(&report, qualification.as_ref()),
+            &super::drc_gate_items_with_ties(&report, qualification.as_ref()),
         );
     }
     // Copper is model-free: only an undermined DRC coverage claim (the input

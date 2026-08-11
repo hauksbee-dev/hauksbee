@@ -77,8 +77,8 @@ pub use drc::{
     SHORT_TOUCH_EPS_MM,
 };
 pub use eagle_sch::{
-    declared_net_ties, looks_like_eagle_schematic, schematic_part_identities, DeclaredNetTie,
-    SchematicPartIdentity,
+    declared_net_ties, looks_like_eagle_schematic, schematic_part_identities,
+    schematic_pin_net_identities, DeclaredNetTie, SchematicPartIdentity, SchematicPinNetIdentity,
 };
 pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
 pub use si::{
