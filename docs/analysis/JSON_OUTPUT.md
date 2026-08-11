@@ -11,13 +11,18 @@ did not run", not "it failed".
 
 ## `schema_version` and the generated schema
 
-Every document carries a top-level `schema_version` (integer, currently `1`).
+Every document carries a top-level `schema_version` (integer, currently `3`).
 It bumps only on a breaking change (a field removed or changed in meaning);
 additive fields never bump it. The machine-checkable contract is the JSON
 Schema generated from the Rust types at
 `crates/hauksbee-engine/schemas/hauksbee-run-report.schema.json`; a drift test
 keeps the file and the types identical (regenerate with
 `UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift`).
+
+Version 3 records the assumption-identity migration: anonymous assumption ids
+now cover their complete typed claim (source, causal scope, prose and expiry),
+and repeated component designators use occurrence-safe causal subjects. An
+acknowledgment or diff consumer must not interpret an older id under this rule.
 
 ## Numeric `error_budget`
 

@@ -102,7 +102,10 @@ fn emitted_document_carries_schema_version_and_rollup() {
     );
     let v: serde_json::Value = serde_json::from_str(&report.to_json()).expect("one JSON document");
     assert_eq!(v["schema_version"], RUN_REPORT_SCHEMA_VERSION);
-    assert_eq!(RUN_REPORT_SCHEMA_VERSION, 2, "launch contract is schema v2");
+    assert_eq!(
+        RUN_REPORT_SCHEMA_VERSION, 3,
+        "assumption identity is schema v3"
+    );
     for key in [
         "ok",
         "verdict",
