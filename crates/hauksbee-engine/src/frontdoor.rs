@@ -2981,10 +2981,11 @@ fn main {
         );
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let cosim = &v["cosim"];
-        if cosim["ran"] != serde_json::json!(true) {
-            eprintln!("skipping: boot_gate co-sim did not run in this build");
-            return;
-        }
+        assert_eq!(
+            cosim["ran"],
+            serde_json::json!(true),
+            "tracked AVR firmware must execute in this required parity test: {json:.400}"
+        );
         // The gate panel is present and names the driven-high gate.
         let gates = cosim.get("boot_gates").and_then(|g| g.as_array());
         assert!(

@@ -98,9 +98,9 @@ pub struct RunConfig {
     /// fitted values) between the design files and the real reworked board,
     /// applied to the bound board before the engine is built.
     pub asbuilt: Option<std::path::PathBuf>,
-    /// Write the full static suite as a JUnit XML report here (CI artifact).
+    /// Write this invocation's selected checks as JUnit XML (CI artifact).
     pub junit: Option<std::path::PathBuf>,
-    /// Write the full static suite as a SARIF 2.1.0 report here (CI artifact).
+    /// Write this invocation's selected checks as SARIF 2.1.0 (CI artifact).
     pub sarif: Option<std::path::PathBuf>,
     /// Canonical immutable reproduction manifest requested by the CLI.
     pub emit_manifest: Option<std::path::PathBuf>,
@@ -127,7 +127,207 @@ fn valid_digest(digest: &str) -> Option<String> {
         .then(|| digest.to_string())
 }
 
-pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
+fn ci_check_selected(cfg: &RunConfig, finding: &crate::result::JsonFinding) -> bool {
+    if cfg.check
+        || (cfg.json
+            && !cfg.report
+            && !cfg.drc
+            && !cfg.ampacity
+            && !cfg.lint
+            && !cfg.resources
+            && !cfg.usb_c
+            && !cfg.si
+            && cfg.ac.is_none()
+            && !cfg.thermal
+            && !cfg.headless)
+    {
+        return matches!(finding.check.as_str(), "drc" | "lint" | "si" | "usb_c");
+    }
+    if cfg.drc {
+        return finding.check == "drc";
+    }
+    if cfg.lint {
+        return finding.check == "lint";
+    }
+    if cfg.resources {
+        return finding.check == "lint" && finding.kind == "mcu_resource_conflict";
+    }
+    if cfg.usb_c {
+        return finding.check == "usb_c";
+    }
+    if cfg.si {
+        return finding.check == "si";
+    }
+    false
+}
+
+fn ci_surface_is_model_dependent(cfg: &RunConfig) -> bool {
+    cfg.check
+        || cfg.lint
+        || cfg.resources
+        || cfg.usb_c
+        || cfg.si
+        || cfg.headless
+        || (cfg.json
+            && !cfg.report
+            && !cfg.drc
+            && !cfg.ampacity
+            && cfg.ac.is_none()
+            && !cfg.thermal)
+}
+
+fn ci_selected_suites(cfg: &RunConfig) -> Vec<String> {
+    let checks: &[&str] = if cfg.check
+        || (cfg.json
+            && !cfg.report
+            && !cfg.drc
+            && !cfg.ampacity
+            && !cfg.lint
+            && !cfg.resources
+            && !cfg.usb_c
+            && !cfg.si
+            && cfg.ac.is_none()
+            && !cfg.thermal
+            && !cfg.headless)
+    {
+        &["drc", "lint", "si", "usb_c"]
+    } else if cfg.report {
+        &["bind"]
+    } else if cfg.drc {
+        &["drc"]
+    } else if cfg.ampacity {
+        &["ampacity"]
+    } else if cfg.lint || cfg.resources {
+        &["lint"]
+    } else if cfg.usb_c {
+        &["usb_c"]
+    } else if cfg.si {
+        &["si"]
+    } else if cfg.ac.is_some() {
+        &["ac"]
+    } else if cfg.thermal {
+        &["thermal"]
+    } else if cfg.headless {
+        &["cosim"]
+    } else if cfg.list_nets {
+        &["inventory"]
+    } else {
+        &["run"]
+    };
+    checks.iter().map(|check| (*check).to_string()).collect()
+}
+
+fn begin_ci_artifact_run(cfg: &RunConfig) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir()?;
+    let canonicalish = |path: &std::path::Path| {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        };
+        std::fs::canonicalize(&absolute).unwrap_or_else(|_| {
+            absolute
+                .parent()
+                .and_then(|parent| std::fs::canonicalize(parent).ok())
+                .and_then(|parent| absolute.file_name().map(|name| parent.join(name)))
+                .unwrap_or(absolute)
+        })
+    };
+    let protected = [
+        Some(cfg.board.as_path()),
+        cfg.bom.as_deref(),
+        cfg.placement.as_deref(),
+        cfg.firmware.as_deref(),
+        cfg.asbuilt.as_deref(),
+        cfg.emit_manifest.as_deref(),
+        cfg.ac_csv.as_deref(),
+        cfg.probe_csv.as_deref(),
+    ];
+    let aliased_input = |path: Option<&std::path::Path>| {
+        path.and_then(|output| {
+            protected
+                .iter()
+                .flatten()
+                .find(|input| canonicalish(input) == canonicalish(output))
+                .copied()
+        })
+    };
+    let junit_alias = aliased_input(cfg.junit.as_deref());
+    let sarif_alias = aliased_input(cfg.sarif.as_deref());
+    let same_output = cfg
+        .junit
+        .as_deref()
+        .zip(cfg.sarif.as_deref())
+        .is_some_and(|(junit, sarif)| canonicalish(junit) == canonicalish(sarif));
+    let mut errors = Vec::new();
+    for (flag, input) in [("--junit", junit_alias), ("--sarif", sarif_alias)] {
+        if let Some(input) = input {
+            errors.push(format!(
+                "{flag} output must not overwrite another run input/output '{}'; choose a different path",
+                input.display()
+            ));
+        }
+    }
+    if same_output {
+        errors.push("--junit and --sarif need different output paths".into());
+    }
+    if errors.is_empty() {
+        return crate::reports::ci_artifacts::begin_run(
+            &cfg.board,
+            cfg.junit.as_deref(),
+            cfg.sarif.as_deref(),
+            ci_selected_suites(cfg),
+        );
+    }
+
+    // Even when one requested path is unsafe, invalidate every other safe
+    // output before returning the validation error. Otherwise CI can archive a
+    // prior green file merely because its sibling flag aliased an input.
+    let safe_junit = (junit_alias.is_none())
+        .then_some(cfg.junit.as_deref())
+        .flatten();
+    let safe_sarif = (sarif_alias.is_none() && !same_output)
+        .then_some(cfg.sarif.as_deref())
+        .flatten();
+    let error = anyhow::anyhow!(errors.join("; "));
+    if safe_junit.is_some() || safe_sarif.is_some() {
+        crate::reports::ci_artifacts::begin_run(
+            &cfg.board,
+            safe_junit,
+            safe_sarif,
+            ci_selected_suites(cfg),
+        )?;
+        crate::reports::ci_artifacts::finish_error(&error, 1);
+    }
+    Err(error)
+}
+
+fn run_error_exit_code(error: &anyhow::Error) -> i32 {
+    if let Some(error) = error.downcast_ref::<hauksbee_extract::bom::BomError>() {
+        return error.exit_code();
+    }
+    if let Some(error) = error.downcast_ref::<hauksbee_extract::placement::PlacementError>() {
+        return error.exit_code();
+    }
+    if let Some(error) = error.downcast_ref::<crate::binder::IdentityRefusal>() {
+        return error.exit_code();
+    }
+    1
+}
+
+pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
+    begin_ci_artifact_run(&cfg)?;
+    let result = run_inner(cfg, quiet);
+    match &result {
+        Ok(()) => crate::reports::ci_artifacts::finish_success()?,
+        Err(error) => {
+            crate::reports::ci_artifacts::finish_error(error, run_error_exit_code(error));
+        }
+    }
+    result
+}
+
+fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // Bare `--plain` means "the prose report": imply --check rather than fall
     // through to the TUI/non-TTY hint. Without this, a piped `run <board>
     // --plain` printed a hint that itself listed --plain as the fix, a dead
@@ -348,13 +548,13 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 // states the invariant, and every other rollup honours it). This
                 // envelope read `ok:true` beside `verdict:"invalid"` and exit 3,
                 // so a consumer gating on `ok` treated a refusal as a clean run.
-                serde_json::json!({ "ok": false, "verdict": "invalid", "refusal": refusal })
+                serde_json::json!({ "ok": false, "verdict": "invalid", "refusal": refusal.clone() })
             );
         } else {
             eprintln!("error: {msg}");
             eprintln!("{}", refusal.render_text());
         }
-        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
     // --probe records live waveforms, which only exist during a co-sim; it is
     // meaningless for the static reports and the interactive server. Fail loudly
@@ -465,17 +665,15 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         prebound = Some(b);
     }
 
-    // --junit/--sarif: the full static suite (same checks and waiver
-    // discipline as --check) written as CI artifacts BEFORE the chosen report
-    // renders, so any selector, or none, can produce them alongside its
-    // normal output. The findings are kept: a headless co-sim REWRITES the
-    // artifacts afterwards with its stress faults appended, so the CI file a
-    // pipeline archives carries the whole run, not just the static half.
+    // --junit/--sarif: evaluate the selected surface with the same waiver and
+    // gate policy that surface renders. Findings remain in the transaction
+    // until the final outcome commits them; co-sim appends its dynamic findings.
     let mut ci_findings: Option<Vec<crate::result::JsonFinding>> = None;
     if cfg.junit.is_some() || cfg.sarif.is_some() {
         let mut findings = crate::reports::check::gather_findings(
             &cfg.board, &board, &text, &raw, is_altium, &lib,
         )?;
+        findings.retain(|finding| ci_check_selected(&cfg, finding));
         let bound = bind_board(&board, &lib);
         let evidence = crate::evidence::BoardEvidence::from_bound(
             &board,
@@ -496,6 +694,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             ("drc", "DRC input coverage"),
             ("si", "Signal-integrity input coverage"),
         ] {
+            if !(findings.iter().any(|finding| finding.check == check)
+                || (cfg.drc && check == "drc")
+                || (cfg.si && check == "si"))
+            {
+                continue;
+            }
             let coverage = evidence.check_coverage_map(check, assertion)?;
             if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
                 maps.push(coverage);
@@ -508,7 +712,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let blockers = crate::result::unmodelled_critical_refs(
             &crate::result::BindSummary::from_report(&bound.report),
         );
-        if !blockers.is_empty() {
+        let blockers = if cfg.usb_c {
+            crate::reports::usb_c::scoped_blockers(&board, &blockers)
+        } else {
+            blockers
+        };
+        if ci_surface_is_model_dependent(&cfg) && !blockers.is_empty() {
             findings.push(crate::result::JsonFinding {
                 check: "evidence".into(),
                 kind: "undermined".into(),
@@ -533,11 +742,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 fix: Some("supply device models or BOM identity for the named parts".into()),
             });
         }
-        crate::reports::ci_artifacts::github_evidence_annotations_with_gate(&maps, |m| {
-            !finding_messages.contains(m.assertion())
-        });
-        crate::reports::ci_artifacts::github_blocker_annotation(&blockers);
-        write_ci_artifacts(&cfg, &findings)?;
+        crate::reports::ci_artifacts::set_current_findings(findings.clone());
         ci_findings = Some(findings);
     }
 
@@ -866,13 +1071,16 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             );
             if cfg.json {
                 let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
-                jr.refusal = Some(refusal);
+                jr.refusal = Some(refusal.clone());
                 println!("{}", jr.to_json());
             } else {
                 eprintln!("error: {missing}");
                 eprintln!("{}", refusal.render_text());
             }
-            std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+            crate::reports::ci_artifacts::exit_with_refusal(
+                crate::result::EXIT_INVALID_FOR_ANALYSIS,
+                &refusal,
+            );
         }
         let backends: Vec<String> = bound.mcus.iter().map(|m| m.backend.clone()).collect();
         crate::commands::install::offer_esp_qemu_install(&backends)?;
@@ -1075,6 +1283,27 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // `<failure>` count and the SARIF error levels are built from, and the
         // exit code cannot grade the run differently from the archived file.
         let faults_gate = fault_findings.iter().any(|f| f.gating);
+        let mut run_findings = fault_findings.clone();
+        if cfg.strict_boot {
+            run_findings.extend(held_high_boot_nets.iter().map(|net| crate::result::JsonFinding {
+                check: "cosim".into(),
+                kind: "boot_control_net".into(),
+                severity: "warning".into(),
+                gating: true,
+                nets: vec![net.clone()],
+                location_mm: None,
+                layer: None,
+                refs: Vec::new(),
+                actionable: true,
+                message: format!(
+                    "--strict-boot: control net '{net}' is driven HIGH and held from power-up with no bias resistor"
+                ),
+                plain: format!(
+                    "--strict-boot: control net '{net}' can energise its load at reset"
+                ),
+                fix: Some("add a hardware bias that keeps the load off through reset, or confirm and document the polarity".into()),
+            }));
+        }
         let mut cosim_maps = Vec::new();
         for finding in &fault_findings {
             cosim_maps.push(board_evidence.simulation_map(
@@ -1111,10 +1340,9 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // Rewrite CI artifacts from the final co-sim evidence object before a
         // strict gate can exit. Invalid evidence is a failure in JUnit/SARIF and
         // a GitHub error annotation; qualified evidence remains visible.
-        let mut cosim_ci_findings: Option<Vec<crate::result::JsonFinding>> = None;
         if let Some(base) = &ci_findings {
             let mut all = base.clone();
-            all.extend(fault_findings.clone());
+            all.extend(run_findings.clone());
             // The same run-level split as the static pass: an undermined map
             // backing one of the findings already in the file is that
             // finding's badge, not a second gate-grade failure. Co-sim
@@ -1122,22 +1350,21 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // keep gating.
             let rewrite_messages: std::collections::HashSet<&str> = base
                 .iter()
-                .chain(fault_findings.iter())
+                .chain(run_findings.iter())
                 .map(|f| f.message.as_str())
                 .collect();
             all.extend(crate::reports::ci_artifacts::evidence_findings_with_gate(
                 run_evidence.maps(),
                 |m| !rewrite_messages.contains(m.assertion()),
             ));
-            write_ci_artifacts(&cfg, &all)?;
-            cosim_ci_findings = Some(all.clone());
+            crate::reports::ci_artifacts::set_current_findings(all.clone());
             crate::reports::ci_artifacts::github_evidence_annotations_with_gate(
                 run_evidence.maps(),
                 |m| !rewrite_messages.contains(m.assertion()),
             );
         } else {
             let fault_messages: std::collections::HashSet<&str> =
-                fault_findings.iter().map(|f| f.message.as_str()).collect();
+                run_findings.iter().map(|f| f.message.as_str()).collect();
             crate::reports::ci_artifacts::github_evidence_annotations_with_gate(
                 run_evidence.maps(),
                 |m| !fault_messages.contains(m.assertion()),
@@ -1318,8 +1545,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // --plain path renders them and --strict gates on them, but --json used
             // to omit them entirely, so a CI consumer parsing the JSON saw a clean
             // run over a board the co-sim flagged (a destroyed MOSFET, overcurrent…).
-            if !fault_findings.is_empty() {
-                jr.findings = Some(fault_findings.clone());
+            if !run_findings.is_empty() {
+                jr.findings = Some(run_findings.clone());
             }
             jr.cosim = cosim;
             jr.refusal = strict_refusal.clone();
@@ -1506,22 +1733,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                  firmware may not match this board)."
             );
             if cfg.strict && !analog_abort {
-                // The refusal rewrite must keep everything the complete
-                // co-sim artifact carried (fault findings, evidence entries),
-                // or a stalled run's refusal would erase a real power-on
-                // electrical fault from the test report.
-                if let (Some(findings), Some(refusal)) = (
-                    cosim_ci_findings.as_ref().or(ci_findings.as_ref()),
-                    &strict_refusal,
-                ) {
-                    write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
-                }
-                // The annotation surface too, independent of the artifact
-                // flags: a refusal that shows red in JUnit/SARIF and says
-                // nothing in the checks tab is the same split verdict the
-                // artifacts exist to prevent.
                 if let Some(refusal) = &strict_refusal {
-                    crate::reports::ci_artifacts::github_refusal_annotation(refusal);
+                    crate::reports::ci_artifacts::set_current_refusal(refusal.clone());
                 }
                 if !cfg.json {
                     if let Some(refusal) = &strict_refusal {
@@ -1537,7 +1750,10 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 // one, still exits 3 from between here and that gate: that
                 // exception is documented in docs/ci/CI.md.
                 if !faults_gate {
-                    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                    crate::reports::ci_artifacts::exit_with_refusal(
+                        EXIT_INVALID_FOR_ANALYSIS,
+                        strict_refusal.as_ref().expect("zero-activity refusal"),
+                    );
                 }
             }
         }
@@ -1550,7 +1766,11 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 eprintln!("WARNING: timing evidence invalid: {refusal}");
             }
             if cfg.strict {
-                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                let refusal = timing_refusal(&timing_refusals);
+                crate::reports::ci_artifacts::exit_with_refusal(
+                    EXIT_INVALID_FOR_ANALYSIS,
+                    &refusal,
+                );
             }
         }
 
@@ -1571,22 +1791,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 hauksbee_ir::docs_url("docs/about/LIMITATIONS.md"),
             );
             if let Some(code) = strict_analog_exit_code(cfg.strict && analog_abort) {
-                // The refusal rewrite must keep everything the complete
-                // co-sim artifact carried (fault findings, evidence entries),
-                // or a stalled run's refusal would erase a real power-on
-                // electrical fault from the test report.
-                if let (Some(findings), Some(refusal)) = (
-                    cosim_ci_findings.as_ref().or(ci_findings.as_ref()),
-                    &strict_refusal,
-                ) {
-                    write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
-                }
-                // The annotation surface too, independent of the artifact
-                // flags: a refusal that shows red in JUnit/SARIF and says
-                // nothing in the checks tab is the same split verdict the
-                // artifacts exist to prevent.
                 if let Some(refusal) = &strict_refusal {
-                    crate::reports::ci_artifacts::github_refusal_annotation(refusal);
+                    crate::reports::ci_artifacts::set_current_refusal(refusal.clone());
                 }
                 if !cfg.json {
                     if let Some(refusal) = &strict_refusal {
@@ -1600,7 +1806,10 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 // is still invalid-for-analysis. The document's `fail` verdict
                 // grades the faults as observed; this code says they could not
                 // be trusted, and refusing outranks that.
-                std::process::exit(code);
+                crate::reports::ci_artifacts::exit_with_refusal(
+                    code,
+                    strict_refusal.as_ref().expect("analog refusal"),
+                );
             }
         }
 
@@ -1624,14 +1833,19 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // default headless mode (neither --json nor --plain), where the advisory
         // text is not otherwise emitted.
         if cfg.strict_boot && has_boot_advisory {
+            let mut items = Vec::new();
             for net in held_high_boot_nets {
                 eprintln!(
                     "BOOT HAZARD (--strict-boot): control net '{net}' switches a transistor/relay \
                      and is driven HIGH and held from power-up with no bias resistor; the load is \
                      energised at reset."
                 );
+                items.push(format!("strict-boot {net}"));
             }
-            std::process::exit(2);
+            crate::reports::strict_gate_exit(
+                crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+                &items,
+            );
         }
         // Mirror of the co-sim JSON verdict: the bind contract (unbound
         // verdict-critical parts) and undermined run-level simulation maps
@@ -1643,7 +1857,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         );
         let strict_invalid = !strict_blockers.is_empty()
             || crate::result::run_level_undermined(run_evidence.maps(), |a| {
-                fault_findings.iter().any(|f| f.message == a)
+                run_findings.iter().any(|f| f.message == a)
             });
         if cfg.strict && strict_invalid {
             crate::reports::exit_invalid_for_analysis(&strict_blockers);
@@ -1990,6 +2204,15 @@ fn sibling_board_names(board_abs: &std::path::Path, dir: &std::path::Path) -> Ve
     found
 }
 
+fn timing_refusal(reasons: &[String]) -> Refusal {
+    Refusal::new(
+        "trustworthy timing evidence from this co-simulation",
+        format!("runtime timing evidence was refused: {}", reasons.join("; ")),
+        vec!["static board and copper findings remain available"],
+        "reduce the edge rate/transition count or use a backend that can replay the waveform exactly, then rerun",
+    )
+}
+
 #[cfg(test)]
 mod sibling_scope_tests {
     use super::sibling_board_names;
@@ -2021,69 +2244,21 @@ mod sibling_scope_tests {
     }
 }
 
-/// Write the `--junit` / `--sarif` CI artifacts from one findings list.
-/// Called once with the static suite before the chosen report renders, and
-/// again with the co-sim's stress faults appended after a headless run, so
-/// the archived artifact carries the whole run.
-fn write_ci_artifacts(
-    cfg: &RunConfig,
-    findings: &[crate::result::JsonFinding],
-) -> anyhow::Result<()> {
-    if let Some(p) = &cfg.junit {
-        std::fs::write(
-            p,
-            crate::reports::ci_artifacts::junit_xml(
-                &crate::commands::common::file_name(&cfg.board),
-                findings,
-            ),
-        )
-        .map_err(|e| anyhow::anyhow!("writing --junit '{}': {e}", p.display()))?;
-        eprintln!("wrote JUnit report to {}", p.display());
-    }
-    if let Some(p) = &cfg.sarif {
-        std::fs::write(
-            p,
-            crate::reports::ci_artifacts::sarif_json(&cfg.board, findings),
-        )
-        .map_err(|e| anyhow::anyhow!("writing --sarif '{}': {e}", p.display()))?;
-        eprintln!("wrote SARIF report to {}", p.display());
-    }
-    Ok(())
-}
+#[cfg(test)]
+mod terminal_refusal_tests {
+    use super::timing_refusal;
 
-/// Rewrite requested CI artifacts when the whole run refuses at exit 3. Static
-/// findings remain alongside the refusal; the artifact must not look all-green
-/// merely because the dynamic analysis stopped after it was first written.
-fn write_ci_artifacts_with_refusal(
-    cfg: &RunConfig,
-    findings: &[crate::result::JsonFinding],
-    refusal: &Refusal,
-) -> anyhow::Result<()> {
-    if let Some(p) = &cfg.junit {
-        std::fs::write(
-            p,
-            crate::reports::ci_artifacts::junit_xml_with_refusal(
-                &crate::commands::common::file_name(&cfg.board),
-                findings,
-                Some(refusal),
-            ),
-        )
-        .map_err(|e| anyhow::anyhow!("writing --junit '{}': {e}", p.display()))?;
-        eprintln!("wrote JUnit refusal report to {}", p.display());
+    #[test]
+    fn timing_refusal_preserves_every_backend_reason() {
+        let refusal = timing_refusal(&[
+            "GPIO4 exceeded the PWL transition budget".to_string(),
+            "GPIO5 exceeded the PWL transition budget".to_string(),
+        ]);
+        let rendered = refusal.render_text();
+        assert!(rendered.contains("GPIO4"), "{rendered}");
+        assert!(rendered.contains("GPIO5"), "{rendered}");
+        assert!(rendered.contains("timing evidence"), "{rendered}");
     }
-    if let Some(p) = &cfg.sarif {
-        std::fs::write(
-            p,
-            crate::reports::ci_artifacts::sarif_json_with_refusal(
-                &cfg.board,
-                findings,
-                Some(refusal),
-            ),
-        )
-        .map_err(|e| anyhow::anyhow!("writing --sarif '{}': {e}", p.display()))?;
-        eprintln!("wrote SARIF refusal report to {}", p.display());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -149,11 +149,16 @@ pub fn emit(
     if strict
         && (coverage_undermined || crate::result::run_level_undermined(evidence.maps(), |_| false))
     {
-        // Not `exit_invalid_for_analysis`: that helper annotates bind blockers,
-        // and this surface names none (the bind gate does not reach copper,
-        // whatever the board's own bind state is), so it would be a no-op
-        // wrapper here.
-        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        let refusal = crate::result::Refusal::new(
+            "a trustworthy copper-spacing result",
+            "DRC input coverage or run-level evidence is undermined",
+            vec!["the parsed board inventory remains available"],
+            "resolve the cited input/evidence assumption, then rerun --drc",
+        );
+        crate::reports::ci_artifacts::exit_with_refusal(
+            crate::result::EXIT_INVALID_FOR_ANALYSIS,
+            &refusal,
+        );
     }
     Ok(())
 }

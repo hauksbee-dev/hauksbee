@@ -60,7 +60,7 @@ pub fn emit(
                 .with_inputs(inputs)
                 .with_evidence(evidence);
             jr.ac = Some(AcJson {
-                validity: Validity::refused(refusal),
+                validity: Validity::refused(refusal.clone()),
                 nets: Vec::new(),
                 no_signal_path_nets: Vec::new(),
                 not_found_nets: nodes.clone(),
@@ -79,7 +79,7 @@ pub fn emit(
             eprintln!("{}", refusal.render_text());
             print!("{}", evidence.render_plain());
         }
-        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
 
     let solver_options = SolverOptions::default();
@@ -141,7 +141,7 @@ pub fn emit(
                 .with_inputs(inputs)
                 .with_evidence(evidence);
             jr.ac = Some(AcJson {
-                validity: Validity::refused(refusal),
+                validity: Validity::refused(refusal.clone()),
                 nets: Vec::new(),
                 no_signal_path_nets: Vec::new(),
                 // The requested nets are ALL missing here, surface them in the
@@ -169,7 +169,7 @@ pub fn emit(
             eprintln!("{}", refusal.render_text());
             print!("{}", evidence.render_plain());
         }
-        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
 
     let all_sentinel = !nonempty.is_empty() && nonempty.iter().all(|(_, b)| ac_is_all_sentinel(b));
@@ -209,7 +209,7 @@ pub fn emit(
             eprintln!("{}", refusal.render_text());
             print!("{}", evidence.render_plain());
         }
-        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
 
     // Loop-net validity guard (degeneracy), applied to BOTH --json and text
@@ -255,7 +255,7 @@ pub fn emit(
                 eprintln!("{}", refusal.render_text());
                 print!("{}", evidence.render_plain());
             }
-            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
         }
     }
 
