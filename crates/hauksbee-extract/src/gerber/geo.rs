@@ -36,14 +36,11 @@ pub enum Shape {
     /// their overlap instead of flipping that lens back to copper. Disjoint
     /// islands of one region are split into separate shapes upstream, so a
     /// `MultiPolygon` built by the region reader is a single electrically-connected
-    /// piece. That is the INTENT of the shape, and the union-find relies on it: one
-    /// shape is one conductor. A pour that `gerber::rs274x::apply_clears` has cut
-    /// can fall short of it, and says so in its own comments: an island ringed by
-    /// several separate voids, a void the enclosure test refused, and a concave pour
-    /// severed by a void lying wholly inside it all leave disconnected copper in one
-    /// shape. Every one of those is over-connection, which is the direction that
-    /// reader is built to fail in. No inflation radius: pours are drawn at their true
-    /// outline.
+    /// piece. Exact clear-polarity difference emits each disconnected exterior as a
+    /// separate shape, while the qualified dense-plane path removes each freed
+    /// annular island into its own primitive. The union-find therefore may rely on
+    /// one shape describing one connected filled area. No inflation radius: pours
+    /// are drawn at their true outline.
     MultiPolygon {
         contours: Vec<Vec<(f64, f64)>>,
         weights: Vec<i16>,

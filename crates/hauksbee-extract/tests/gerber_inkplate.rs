@@ -145,45 +145,41 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
     );
 }
 
-/// The net count this board reconstructs to.
+/// The net count this exact film set currently reconstructs to.
 ///
 /// This was a standing known gap: the Inkplate collapsed to 18 connected
-/// components where a board with 634 plated holes and 492 filled regions on the
-/// top layer alone has well over a hundred. The single `%LPC*%` pair was the
-/// whole story. Altium plots the plane negatively, one board-sized dark region
-/// followed by 478 clear regions and then, under `%LPD*%`, 13 more dark islands
-/// (the bottom film is 1, 132 and 3). Clear geometry was discarded rather than cut,
-/// so both copper films were solid sheets and every net was unioned into its plane. The mechanism is gated in isolation by
-/// `tests/gerber_negative_pour.rs`; this is the same fix measured on a real
-/// Altium board.
+/// components because its Altium films draw negative planes and the reader
+/// discarded their clear-polarity geometry. Applying those painter operations
+/// restores the intended plane-segmentation class. The exact hand-auditable
+/// mechanism tests live in `tests/gerber_negative_pour.rs`; this row deliberately
+/// makes no claim about the board's true final net count because the published
+/// manufacturing set provides no native netlist oracle.
 #[test]
-fn inkplate6_net_count_matches_the_board() {
+fn inkplate6_reconstruction_count_is_stable_not_an_oracle() {
     let Some(dir) = inkplate_dir() else {
         return;
     };
     let g = from_gerber_dir(&dir).expect("Inkplate gerbers must reverse-extract");
-    // Bounded on BOTH sides. A lower bound alone cannot see over-splitting, which is
-    // the forbidden direction: a reader that shattered the board into a net per pad
-    // would sail past `> 100`. The band is wide because the true count is unknown
-    // (the published set has no netlist to check against), but it is narrow enough
-    // that a systematic split or merge moves out of it. 181 is the measured value.
-    assert!(
-        (120..=260).contains(&g.stats.n_nets),
-        "nets reconstructed: {}, expected the measured 181 within a band that a \
-         systematic merge or split would leave",
-        g.stats.n_nets
+    // This is a deterministic regression pin, not a native-net correctness
+    // oracle: the published manufacturing set has no netlist or placement file.
+    // True Boolean painter replay plus exact finite-width contact currently yields
+    // 179 (the earlier signed/enclosure implementation yielded 181). Neither is a
+    // correctness measurement without the missing native netlist; this row only
+    // catches an unreviewed whole-film drift.
+    assert_eq!(
+        g.stats.n_nets, 179,
+        "the exact film-set regression pin moved"
     );
 }
 
 /// The SparkFun RP2040 Thing Plus panel, an Eagle export whose films draw copper as
 /// filled regions and ring every off-net pad with clearance.
 ///
-/// It is the second board the negative-pour cut moved, 2382 nets to 3438, and the
-/// only other one of 57 corpus gerber directories that changed at all. The direction
-/// is right (Eagle's clearance rings are exactly the voids that were being dropped),
-/// but the magnitude had nothing covering it, so it is pinned here: a band, because
-/// the true count is unknown, tight enough that a systematic change in either
-/// direction leaves it.
+/// It is the second board the negative-pour cut moved. Eagle's clearance rings
+/// are exactly the clear painter operations that were being dropped, but this
+/// published set has no drill and no placement map, so its total cannot serve as
+/// a native connectivity oracle. The exact output is retained only as a
+/// deterministic whole-board regression pin.
 ///
 /// This board also ships `RP2040_Thing_Plus-Panel.brd` beside its gerbers, and this
 /// crate reads Eagle binaries, so a pin-to-net partition comparison against the
@@ -192,7 +188,7 @@ fn inkplate6_net_count_matches_the_board() {
 /// no pick-and-place, so no pads bind and there is nothing to compare pad-wise), and
 /// that API does not exist yet. Left as the highest-value test to add in this area.
 #[test]
-fn sparkfun_rp2040_panel_reconstructs_to_a_stable_net_count() {
+fn sparkfun_rp2040_panel_count_is_stable_not_an_oracle() {
     let Some(dir) = hauksbee_testkit::corpus_board(
         env!("CARGO_MANIFEST_DIR"),
         "sparkfun_thingplus_rp2040/Hardware/Production",
@@ -205,10 +201,11 @@ fn sparkfun_rp2040_panel_reconstructs_to_a_stable_net_count() {
         g.stats.n_holes, 0,
         "no drill ships with it, so the two layers cannot stitch"
     );
-    assert!(
-        (3100..=3800).contains(&g.stats.n_nets),
-        "nets reconstructed: {}, expected the measured 3438 within a band that a \
-         systematic merge or split would leave",
-        g.stats.n_nets
+    // The earlier signed/enclosure implementation yielded 3,438. The exact
+    // painter/contact implementation yields 3,378; without drill, placement, or
+    // native partition data neither number is an accuracy claim.
+    assert_eq!(
+        g.stats.n_nets, 3378,
+        "the exact published-film regression pin moved"
     );
 }

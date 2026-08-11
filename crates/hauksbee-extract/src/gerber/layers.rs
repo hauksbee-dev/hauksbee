@@ -113,11 +113,20 @@ impl<'a> Name<'a> {
                     AFTER.iter().any(|t| {
                         tail.strip_prefix(*t).is_some_and(|rest| {
                             // `in`/`l` only count when a stack number follows, so
-                            // `culminate` and `clone` are not copper.
+                            // `culminate` and `clone` are not copper. The role itself
+                            // must end too: `CuTopography`, `CuTopcoat` and
+                            // `CuBottomless` are project words, not layer tokens.
                             if *t == "in" || *t == "l" {
-                                rest.starts_with(|c: char| c.is_ascii_digit())
+                                let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+                                digits > 0
+                                    && rest
+                                        .as_bytes()
+                                        .get(digits)
+                                        .is_none_or(|byte| !byte.is_ascii_alphabetic())
                             } else {
-                                true
+                                rest.as_bytes()
+                                    .first()
+                                    .is_none_or(|byte| !byte.is_ascii_alphabetic())
                             }
                         })
                     })
@@ -1123,6 +1132,20 @@ mod tests {
             role("RoyalBlue54L-NFC-Antenna-CuTop.gbr"),
             LayerRole::Copper { index: 0, .. }
         ));
+        for name in [
+            "board-CuTopography.gbr",
+            "board-CuTopcoat.gbr",
+            "board-CuBottomless.gbr",
+            "board-CuFrontier.gbr",
+            "board-CuMidpoint.gbr",
+            "board-CuInvention.gbr",
+            "board-CuLayer.gbr",
+        ] {
+            assert!(
+                !role(name).is_copper(),
+                "a word merely beginning with a copper role is not a copper token: {name}"
+            );
+        }
         // An EXPLICIT copper suffix outranks the non-copper word sweep, which returns
         // Ignored on a raw substring and so discarded the copper of any project whose
         // NAME carried one of its words. Mechanical keyboards are one of the largest

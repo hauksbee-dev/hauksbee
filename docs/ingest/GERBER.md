@@ -553,18 +553,13 @@ carry discrete widths and the check runs on them.
 
 ## Negative-drawn pours (LPC)
 
-> **A split plane still reads as one net.** On a negatively-drawn film the two
-> most common constructs are the antipad and the *deliberately split plane*: one
-> region of copper divided into two rails by a clear gap. Antipads are cut
-> correctly and their pads separate. A split is **not** detected: a 20 x 20 mm
-> plane cut edge to edge by a 0.5 mm clear stroke reconstructs as **one** net,
-> not two, and so does a gap that stops inside the pour. If your board splits a
-> plane that way, expect the reader to report the rails as a single net, and
-> expect every downstream check to inherit that. It errs toward reporting things
-> as connected, so it will not hide a break that exists; it will hide a
-> separation that exists. The mechanism, and why the narrow decomposition that
-> does work cannot see this case, is in
-> `gerber::rs274x::apply_clears`.
+> **Split planes are reconstructed from the painted image.** A clear gap across
+> a negative plane is unioned with the rest of its uninterrupted clear pass and
+> subtracted from the earlier copper. If that difference produces two filled
+> polygons, they become two region primitives and two conductors. The same rule
+> covers a gap that terminates inside a concave pour, an annular antipad, and a
+> clear operation over a track or pad. Only clear geometry refused by the
+> admission rules below remains conservatively over-connected.
 
 Altium plots a plane *negatively*: one `G36/G37` dark region covering the
 whole board, then `%LPC*%` and a few hundred clear regions, one per
@@ -580,31 +575,24 @@ repository. The committed claim is therefore bounded to the distilled
 negative-plane fixtures and their exact copper probes; no unavailable external
 board's final net count is presented as release evidence.
 
-A void becomes a signed contour on the pour it sits inside. Dark contours add
-coverage, clear contours subtract it, and a point is copper only while the
-total is positive. This is deliberately not XOR parity: two partially
-overlapping clear images both erase their overlap lens instead of painting it
-back to copper. A thermal relief drawn as separate straight-segment voids
-leaves the spokes standing, so the pad stays on the pour exactly as
-fabricated, and an annular void's inner rim leaves its copper island standing, and that island is
-then moved out of the pour's primitive into its own, because connectivity
-unions per primitive and an island left inside the pour's shape is shorted
-straight back to the plane. An island is freed only when no other void's
-bounds overlap it and it does not lie over a hole the pour was drawn with; one
-that either might have touched stays a contour of the pour, over-connected. A void is cut
-from every `Region` primitive whose own contours, as drawn, contain every
-vertex of the void, and which was painted **before** it, gerber being a
-painter's model. A void already covered whole by an earlier void is skipped,
-because that copper is gone and re-cutting it would flip it back to copper.
-Clear *flashes* (the classic negative-plane antipad) and clear *draws* are
-banked the same way, and a `%SR%` cell carries its voids into every repeat,
-even a cell that is nothing but voids.
+Admitted clear images are replayed as the Gerber painter operation they are.
+Every uninterrupted clear pass is unioned first, so two overlapping images
+erase their overlap instead of XOR-painting it back, and that union is
+subtracted from every track, flash and region painted before it. Copper painted
+after the pass is untouched. Each connected polygon in the Boolean remainder is
+emitted as a separate primitive. This handles clear-over-track and
+clear-over-pad operations, a gap severing a concave pour, partial intersection
+with a pour boundary, and an annular clear's isolated centre without guessing
+from cross-statement contour nesting. `%SR%` carries both dark and clear painter
+operations into every repeat.
 
-This is not a general polygon boolean. Signed coverage makes accepted clear
-images a saturating set difference, while the admission gates keep every
-geometric approximation on the over-connected side. A void placed imperfectly
-is refused or under-cuts the removal, leaving a phantom speck of pour rather
-than fabricating a break in a conductor that is really whole.
+One high-density topology has an equivalent bounded fast path: exactly one
+convex plane followed only by non-overlapping interior clear images. Signed
+coverage plus indexed island extraction is exact under those preconditions and
+does not clone a cut plane containing millions of contour points. The 10,000
+annular CI regression exercises this route; overlap, concavity, boundary
+crossing, interleaved copper, or any additional primitive takes the general
+Boolean path.
 
 What that argument rests on is the void's own **geometry** never being larger
 than the void the film cleared, so **only exactly-reproduced geometry may
@@ -629,12 +617,10 @@ island reads slightly wide rather than slightly short, and refused when the
 hole is so nearly as wide as its aperture that the circumscribed rim escapes
 the outer boundary.
 
-Nesting depth is NOT used to classify a cut pour's contours. That classifier
-needs contours that never cross, and voids across a whole film do cross: two
-overlapping antipads put one void's witness vertex inside the other, which
-reads as an outer boundary and promotes the void to a phantom polygon of
-copper. On a 12000-antipad plane whose columns overlap that promoted 11890
-voids and the board-sized sheet came back.
+Nesting depth is NOT used across clear images from a whole film. Those images
+can overlap and their contours can cross; the clear-pass union resolves that
+topology directly. The earlier depth reconstruction promoted 11,890 of 12,000
+overlapping antipads into phantom copper and restored the board-sized sheet.
 
 Where nesting depth IS valid is inside one `G36`/`G37` statement, whose
 contours do not cross, so a clear region is split into its connected pieces at
@@ -642,11 +628,10 @@ the moment it is banked, each piece's outer boundary first and its holes after.
 Containment there is judged from a constructed interior point, never a vertex:
 `point_in_polygon` is half-open, so a hole whose loop starts at a point it
 shares with its outer, which boolean-op CAM emits routinely, answered inside or
-outside by drawing orientation alone. And the pieces of one clear image are
-only meaningful together, so the whole image is decided as a unit, bounds,
-enclosure and redundancy alike, and cut all or none: cutting a ring's outer
-while dropping the piece that restores its island erases copper the film kept.
-That statement may legally carry several disjoint islands in any order, and
+outside by drawing orientation alone. The pieces of one clear statement enter
+the same Boolean pass together: cutting a ring's outer while dropping the piece
+that restores its island would erase copper the film kept. That statement may
+legally carry several disjoint islands in any order, and
 treating everything after the first contour as a hole is a guess about draw
 order: a second disjoint void in one statement was cancelled outright, and an
 annular void drawn hole-first had its cleared ring promoted to copper.
@@ -657,19 +642,11 @@ requiring both means an ambiguous film is painted rather than subtracted, so a
 wrong reading over-connects instead of fabricating a break. A region that flips
 polarity mid-way is painted, never dropped.
 
-The remaining limits all leave copper standing: the refusals above, a void
-straddling a pour's edge, a void laid over a track or a pad rather than over a
-pour, a void spanning a hole the pour was drawn with, an island ringed by
-several separate voids rather than by one void's own hole contour, a concave pour severed by a
-void lying wholly inside it, which is what a plane deliberately split by a
-clear gap looks like, one clear statement spanning two pours (all-or-none is
-applied per pour and enclosure demands every piece sit inside that pour, so
-such a statement voids NEITHER and on a film that concatenates a plane's
-clearances across two pours the solid-slab reading returns whole), and an
-island whose copper a later dark primitive actually reaches, which stays a
-contour of the pour because promotion could otherwise fabricate an open (the test
-is the primitive's copper against the island, not its bounding box: a frame
-hugging the board edge has a board-sized box and reaches no island).
+The remaining limits are the admission refusals above: a clear outline that is
+not conservative enough to subtract safely, negative image polarity, unapplied
+transforms, unsupported aperture blocks, and arc-bearing clear regions or
+strokes. Accepted straight-edged and standard-aperture clears no longer have
+track/pad, concavity, boundary-crossing, or multi-pour exceptions.
 
 Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
 pour with two ringed pads must reconstruct to three conductors, and its
@@ -694,9 +671,8 @@ touch sweep; R-tree-pruned region lookups). Pour containment over
 board-spanning plane layers (tens of thousands of vertices, tested against
 every primitive) is accelerated by `PolyGrid`: a scanline-rasterised
 inside/outside/boundary grid built once per large pour, making each query
-O(1) outside a thin boundary band. Multi-contour pours use it too, which a
-negative-drawn plane makes load-bearing: cutting its voids turns it into ONE
-board-sized shape carrying a contour per antipad. The grid also answers "is
+O(1) outside a thin boundary band. Multi-contour Boolean remainders and the
+qualified dense-plane fast path use it too. The grid also answers "is
 there any pour boundary inside this pad's bounds", which keeps the exact
 poly-distance penetration test off a hot path that a board-sized pour would
 otherwise reach for every pad on the layer. Its scanline classifier sweeps an
@@ -705,11 +681,11 @@ the edge spans, and its time is linear in the rows those edges sweep (two or
 three per edge of an antipad's outline). A layer's gridded pours share a cell
 budget rather than each taking the resolution ceiling.
 
-Whole-extraction times for a synthetic 100 mm plane with 6084 rectangular
-antipads and a pad in each: 3.97 s before those changes, 60-75 ms after. With
-the antipads drawn as annular clear flashes, the shape a real negative plane
-carries, 90-100 ms; with 62500 non-overlapping annular ones, each leaving an
-island to free, 1-2 s. Machine-dependent to within about a factor of two.
+The retained bounded stress regression replays 10,000 non-overlapping annular
+antipads in one convex plane and requires one plane plus all 10,000 isolated
+islands. The prior 62,500-antipad timing figures describe the earlier signed
+implementation and are not claimed for the new release candidate until that
+exact final-HEAD benchmark is rerun.
 
 Two-layer boards extract in tens to hundreds of milliseconds. The 6-layer
 reform motherboard (about 75k draws and four 35k-vertex plane pours)
@@ -787,10 +763,11 @@ is the all-pairs touch sweep on the densest signal layers.
   invents a net; guessing mechanical deletes one; there is no safe default,
   only a visible refusal.
 - **Clear polarity (LPC)** is cut, not skipped. See [Negative-drawn
-  pours](#negative-drawn-pours-lpc). What is not cut is a void that straddles
-  a pour's edge, or one laid over a track or a pad rather than over a pour:
-  those leave the copper standing, which errs toward over-connection rather
-  than erasing copper on a guess.
+  pours](#negative-drawn-pours-lpc). Admitted geometry is clipped at a pour edge
+  and cuts earlier tracks and pads too. Geometry that cannot be reproduced
+  conservatively enough for subtraction (such as an unapplied transform,
+  unsupported aperture block, or arc-bearing clear region/stroke) is refused and
+  leaves copper standing rather than fabricating an open.
 - **Inner-layer order: the `.gbrjob` manifest is read when the job ships
   one**, and it is authoritative: each copper film's `Copper,L<n>` entry
   places it in the stack, so an Allegro-style plane named without a stack
