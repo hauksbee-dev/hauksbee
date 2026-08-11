@@ -725,6 +725,8 @@ fn coverage_banner(state: &AppState) -> Vec<Line<'static>> {
     let notes = state.coverage_bound_count();
     let refusals = state.coverage_refusal_count();
     let fallbacks = state.coverage_fallback_count();
+    let events = state.coverage_event_count();
+    let faults = state.coverage_fault_count();
     let mut tiers = Vec::new();
     if holes > 0 {
         tiers.push(format!("{holes} hole(s)"));
@@ -738,9 +740,15 @@ fn coverage_banner(state: &AppState) -> Vec<Line<'static>> {
     if fallbacks > 0 {
         tiers.push(format!("{fallbacks} fallback qualification(s)"));
     }
+    if events > 0 {
+        tiers.push(format!("{events} event(s)"));
+    }
+    if faults > 0 {
+        tiers.push(format!("{faults} fault(s)"));
+    }
     let mut head = format!("COVERAGE: {}", tiers.join(" + "));
     head.push_str("  press [c]");
-    let style = if holes > 0 || refusals > 0 {
+    let style = if holes > 0 || refusals > 0 || faults > 0 {
         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
@@ -793,7 +801,8 @@ fn draw_coverage_overlay(f: &mut Frame, state: &AppState) {
         );
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
-        "What this run could not do. Counted at the latest chunk, so a caveat that \
+        "What this run disclosed. HOLE means missing coverage; EVENT and FAULT mean \
+         something was observed. Counted at the latest chunk, so a disclosure that \
          becomes true later appears later; the finished run's report is the record.",
         Style::default().fg(Color::Gray),
     )));
@@ -805,6 +814,8 @@ fn draw_coverage_overlay(f: &mut Frame, state: &AppState) {
             CoverageDisposition::TimingBound => ("BOUND", Color::Yellow),
             CoverageDisposition::StrictRefusal => ("INVALID", Color::Red),
             CoverageDisposition::FallbackQualification => ("QUALIFIED", Color::Yellow),
+            CoverageDisposition::ObservedEvent => ("EVENT", Color::Yellow),
+            CoverageDisposition::ElectricalFault => ("FAULT", Color::Red),
         };
         let tag_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
         lines.push(Line::from(vec![
@@ -1630,6 +1641,8 @@ mod tests {
                 crate::reports::coverage::CoverageDisposition::FallbackQualification => {
                     "[QUALIFIED]"
                 }
+                crate::reports::coverage::CoverageDisposition::ObservedEvent => "[EVENT]",
+                crate::reports::coverage::CoverageDisposition::ElectricalFault => "[FAULT]",
             };
             assert!(
                 open.contains(tier),
@@ -1689,6 +1702,34 @@ mod tests {
             mixed.contains("COVERAGE: 1 hole(s) + 1 bound(s)"),
             "the banner counts each kind:\n{mixed}"
         );
+    }
+
+    #[test]
+    fn observed_events_and_electrical_faults_are_not_rendered_as_coverage_holes() {
+        use crate::reports::coverage::CoverageClass;
+
+        for (class, expected_tier, expected_count) in [
+            (CoverageClass::WatchdogReboot, "[EVENT]", "1 event(s)"),
+            (CoverageClass::DriveConflict, "[EVENT]", "1 event(s)"),
+            (CoverageClass::DriverContention, "[FAULT]", "1 fault(s)"),
+        ] {
+            let mut st = scope_sample_state();
+            st.dismiss_banner();
+            st.set_coverage(inputs_for(class).caveats());
+            st.toggle_coverage();
+            let rendered = flat(&render_rows_with(&st, Some(&live_update()), 240, 40));
+            assert!(rendered.contains(expected_count), "{class:?}:\n{rendered}");
+            assert!(rendered.contains(expected_tier), "{class:?}:\n{rendered}");
+            assert!(!rendered.contains("[HOLE]"), "{class:?}:\n{rendered}");
+            assert!(
+                rendered.contains("What this run disclosed"),
+                "{class:?}:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("What this run could not do"),
+                "{class:?}:\n{rendered}"
+            );
+        }
     }
 
     #[test]
