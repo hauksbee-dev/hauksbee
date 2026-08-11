@@ -849,9 +849,10 @@ fn analyze_normalized(
 /// corrupt an ELF. The co-sim is skipped (with a friendly `cosim.ran = false`
 /// note instead of an error) when:
 ///   * the board has no bound MCU (nothing to run firmware on), or
-///   * the only MCU(s) use an external emulator backend (Renode/QEMU): those
+///   * any selected MCU uses an external emulator backend (Renode/QEMU): those
 ///     advance over a TCP control socket and can take 5-30s, well past a
-///     browser/Axum request budget, so the web path stays in-process only, or
+///     browser/Axum request budget, and running only the in-process subset would
+///     be false whole-board evidence, so the web path refuses the complete run, or
 ///   * the firmware fails to load (wrong architecture, corrupt file).
 ///
 /// The static [`WebReport`] is always returned intact; only `cosim` reflects
@@ -1377,23 +1378,26 @@ fn run_web_cosim(
     // note that names the working alternatives WITH the real file names (the
     // live sim runs these backends fine; only this synchronous quick report
     // cannot wait for them).
-    if bound
+    let external_mcus: Vec<_> = bound
         .mcus
         .iter()
-        .all(|m| m.backend.starts_with("renode:") || m.backend.starts_with("qemu:"))
-    {
-        let emulator = if bound.mcus.iter().any(|m| m.backend.starts_with("qemu:")) {
-            "Espressif QEMU"
-        } else {
-            "Renode"
-        };
+        .filter(|m| m.backend.starts_with("renode:") || m.backend.starts_with("qemu:"))
+        .collect();
+    if !external_mcus.is_empty() {
+        let selected = external_mcus
+            .iter()
+            .map(|m| format!("{} ({})", m.reference, m.backend))
+            .collect::<Vec<_>>()
+            .join(", ");
         let mut section = cosim_unavailable(format!(
-            "This board's MCU runs on an external emulator ({emulator}). This quick \
+            "This board selects at least one MCU that requires an external emulator: \
+             {selected}. The synchronous web run cannot execute only a subset of the \
+             selected cores and present it as whole-board firmware evidence. This quick \
              report simulates only a {SECONDS:.1} s window, and a chip like this one \
              spends several simulated seconds in its boot ROM before your code starts, \
              so the report would show a processor that has not booted yet. Running it \
              long enough is a job of tens of wall-clock seconds, which is why it is not \
-             done inside a page load. The co-sim itself works, two ways: open the live \
+             done inside a page load. The complete co-sim works, two ways: open the live \
              sim (\"Drive it live\") to boot this firmware here in the app, or run it \
              from a terminal, from the folder holding your files: {}",
             cli_cosim_command(board_file_name, fw_name)
@@ -2931,6 +2935,79 @@ fn main {
                 .iter()
                 .all(|finding| !finding.why.contains("TIMING INVALID")),
             "strict invalidity belongs only in timing_refusals + Refusal: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn synchronous_web_cosim_refuses_when_any_selected_mcu_needs_an_external_backend() {
+        use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+
+        let pin = |number: &str, net: i64, function: &str| Pin {
+            number: number.to_string(),
+            net: Some(net),
+            function: function.to_string(),
+            kind: String::new(),
+            position: None,
+        };
+        let component = |reference: &str, value: &str, lib_id: &str, pins: Vec<Pin>| Component {
+            reference: reference.to_string(),
+            value: value.to_string(),
+            lib_id: lib_id.to_string(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins,
+        };
+        let board = ExtractedBoard {
+            name: "mixed-backend-board".to_string(),
+            nets: vec![
+                Net {
+                    id: 1,
+                    name: "+5V".to_string(),
+                },
+                Net {
+                    id: 2,
+                    name: "GND".to_string(),
+                },
+            ],
+            components: vec![
+                component(
+                    "U1",
+                    "ATmega328P",
+                    "MCU_Microchip_ATmega:ATmega328P-AU",
+                    vec![pin("7", 1, "VCC"), pin("8", 2, "GND")],
+                ),
+                component(
+                    "U2",
+                    "STM32F411CEU6",
+                    "MCU_ST_STM32F4:STM32F411CEUx",
+                    vec![pin("24", 1, "VDD"), pin("23", 2, "VSS")],
+                ),
+            ],
+        };
+
+        let (section, evidence) = run_web_cosim(
+            &board,
+            "mixed.kicad_pcb",
+            "firmware.elf",
+            &[0u8; 4],
+            &hauksbee_extract::DrcReport::default(),
+        );
+        let reason = section
+            .findings
+            .first()
+            .map(|finding| finding.why.as_str())
+            .unwrap_or_default();
+        assert!(!section.ran, "mixed external/in-process runs must refuse");
+        assert!(
+            evidence.is_none(),
+            "a refused run produces no co-sim evidence"
+        );
+        assert!(
+            reason.contains("U2") && reason.contains("external emulator"),
+            "the refusal must name the selected external MCU, got: {reason}"
         );
     }
 

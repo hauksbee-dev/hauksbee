@@ -809,13 +809,15 @@ fn draw_coverage_overlay(f: &mut Frame, state: &AppState) {
     lines.push(Line::from(""));
     for c in caveats.iter().skip(state.coverage_scroll) {
         use crate::reports::coverage::CoverageDisposition;
-        let (tag, color) = match c.class.disposition() {
-            CoverageDisposition::Limitation => ("HOLE", Color::Red),
-            CoverageDisposition::TimingBound => ("BOUND", Color::Yellow),
-            CoverageDisposition::StrictRefusal => ("INVALID", Color::Red),
-            CoverageDisposition::FallbackQualification => ("QUALIFIED", Color::Yellow),
-            CoverageDisposition::ObservedEvent => ("EVENT", Color::Yellow),
-            CoverageDisposition::ElectricalFault => ("FAULT", Color::Red),
+        let (tag, color, action_label) = match c.class.disposition() {
+            CoverageDisposition::Limitation => ("HOLE", Color::Red, "close coverage gap: "),
+            CoverageDisposition::TimingBound => ("BOUND", Color::Yellow, "refine resolution: "),
+            CoverageDisposition::StrictRefusal => ("INVALID", Color::Red, "rerun after: "),
+            CoverageDisposition::FallbackQualification => {
+                ("QUALIFIED", Color::Yellow, "improve confidence: ")
+            }
+            CoverageDisposition::ObservedEvent => ("EVENT", Color::Yellow, "respond to event: "),
+            CoverageDisposition::ElectricalFault => ("FAULT", Color::Red, "fix fault: "),
         };
         let tag_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
         lines.push(Line::from(vec![
@@ -830,7 +832,7 @@ fn draw_coverage_overlay(f: &mut Frame, state: &AppState) {
         lines.push(Line::from(Span::raw(c.message.clone())));
         lines.push(Line::from(vec![
             Span::styled(
-                "unlocked by: ",
+                action_label,
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -1629,8 +1631,8 @@ mod tests {
                 "{class:?}: the footer does not advertise the key:\n{all}"
             );
 
-            // And the overlay carries the whole sentence plus the input that
-            // would unlock the abstention.
+            // And the overlay carries the whole sentence plus a next action
+            // whose label matches the disclosure's disposition.
             st.toggle_coverage();
             assert!(st.coverage_open, "{class:?}: `c` did not open the overlay");
             let open = flat(&render_rows_with(&st, Some(&live_update()), 240, 40));
@@ -1654,9 +1656,22 @@ mod tests {
                  ('{}'):\n{open}",
                 sentence_fragment(class)
             );
+            use crate::reports::coverage::CoverageDisposition as D;
+            let action_label = match class.disposition() {
+                D::Limitation => "close coverage gap:",
+                D::TimingBound => "refine resolution:",
+                D::StrictRefusal => "rerun after:",
+                D::FallbackQualification => "improve confidence:",
+                D::ObservedEvent => "respond to event:",
+                D::ElectricalFault => "fix fault:",
+            };
             assert!(
-                open.contains("unlocked by:"),
-                "{class:?}: the overlay does not name the unlocking input:\n{open}"
+                open.contains(action_label),
+                "{class:?}: the overlay action is not disposition-correct ({action_label}):\n{open}"
+            );
+            assert!(
+                !open.contains("unlocked by:"),
+                "{class:?}: observed facts and bounds are not universally unlockable:\n{open}"
             );
 
             // The silence control for this class: with its one signal removed and
