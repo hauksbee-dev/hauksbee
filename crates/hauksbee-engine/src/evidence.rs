@@ -708,7 +708,7 @@ impl BoardEvidence {
         // under the bare id.
         let mut incoming = Vec::new();
         for assumption in new_assumptions {
-            if !incoming.contains(&assumption) {
+            if !assumptions.contains(&assumption) && !incoming.contains(&assumption) {
                 incoming.push(assumption);
             }
         }
@@ -717,11 +717,26 @@ impl BoardEvidence {
             *counts.entry(assumption.id().clone()).or_insert(0usize) += 1;
         }
         for assumption in incoming {
-            let assumption = if counts[assumption.id()] > 1 {
+            let mut assumption = if counts[assumption.id()] > 1 {
                 assumption.disambiguate_colliding_id()
             } else {
                 assumption
             };
+            if let Some(known) = assumptions
+                .iter()
+                .find(|known| known.id() == assumption.id())
+            {
+                if known == &assumption {
+                    continue;
+                }
+                // Ensemble members are merged incrementally in production.
+                // The earlier claim may already be referenced by that member's
+                // completed maps, so re-keying it would break referential
+                // integrity. Keep its stable base id and give this later,
+                // unequal claim its content-derived collision id instead of
+                // aborting or discarding it.
+                assumption = assumption.disambiguate_colliding_id();
+            }
             match assumptions
                 .iter()
                 .find(|known| known.id() == assumption.id())
@@ -2193,6 +2208,20 @@ mod duplicate_open_part_tests {
             ids(&reversed),
             "ids must not depend on input order"
         );
+
+        let incremental = empty_evidence()
+            .with_assumptions([assumption("assertion-a")])
+            .expect("first member merges")
+            .with_assumptions([assumption("assertion-b")])
+            .expect("a later ensemble member must not abort on the shared base id");
+        assert_eq!(incremental.assumptions().len(), 2);
+
+        let repeated_and_new = empty_evidence()
+            .with_assumptions([assumption("assertion-a")])
+            .expect("first member merges")
+            .with_assumptions([assumption("assertion-a"), assumption("assertion-b")])
+            .expect("repeated facts stay idempotent while a sibling is added");
+        assert_eq!(repeated_and_new.assumptions().len(), 2);
     }
 
     #[test]
