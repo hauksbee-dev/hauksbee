@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
-import { fallbackWindowLine, timingCoverageLine } from '../lib/cosim-coverage'
+import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from '../lib/cosim-coverage'
 import { summarizeErrorBudget } from '../lib/error-budget'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { CheckIcon, WarningIcon } from './Icons'
@@ -542,6 +542,7 @@ export function BoardView({
         {r.cosim && (
           <CosimBlock
             cosim={r.cosim}
+            timingRefusals={uncoveredTimingRefusals(r.cosim.timing_refusals, r.refusal)}
             liveAvailable={liveMode !== 'none'}
             onDriveLive={onDriveLive}
             simMounted={simMounted}
@@ -720,8 +721,9 @@ function FindingCard({ finding: f, onLocate }: { finding: WebFinding; onLocate?:
   )
 }
 
-function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
+function CosimBlock({ cosim: c, timingRefusals, liveAvailable, onDriveLive, simMounted }: {
   cosim: WebCosimSection
+  timingRefusals: string[]
   liveAvailable: boolean
   onDriveLive: () => void
   simMounted: boolean
@@ -742,10 +744,10 @@ function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
               <div className="mt-1.5">{c.timing_coverage!.map(row => <div key={`${row.mcu_ref}:${row.backend}`}>{timingCoverageLine(row)}</div>)}</div>
             </details>
           )}
-          {(c.timing_refusals?.length ?? 0) > 0 && (
+          {timingRefusals.length > 0 && (
             <div className="rounded-lg px-4 py-2.5 mb-2" style={{ border: '1px solid var(--err-border)', borderLeft: '4px solid var(--err)', background: 'var(--err-bg)' }}>
               <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--err-strong)' }}>TIMING INVALID</span>
-              {c.timing_refusals!.map((line, i) => <div key={i} className="text-sm mt-1">{line}</div>)}
+              {timingRefusals.map((line, i) => <div key={i} className="text-sm mt-1">{line}</div>)}
             </div>
           )}
           {(c.fallback_windows?.length ?? 0) > 0 && (

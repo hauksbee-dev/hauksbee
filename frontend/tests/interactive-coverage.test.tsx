@@ -24,6 +24,12 @@ function realFrontdoorReport(): WebReport {
       fidelity_note: 'first-order and numerically dissipative', error_estimate_v: 0.012,
     }],
   }
+  report.refusal = {
+    claim: 'timing-sensitive firmware and electrical conclusions',
+    missing_prerequisite: 'PWL replay refused on net /CLK: transition budget exceeded',
+    valid_partial_conclusions: ['Static board analysis remains valid.'],
+    next_action: 'reduce transitions per solver chunk, then rerun',
+  }
   return report
 }
 
@@ -80,7 +86,7 @@ test('the browser renders every structured timing qualification from a frontdoor
 
   expect(html).toContain('Timing coverage')
   expect(html).toContain('pulses &gt;= 2.000 us guaranteed')
-  expect(html).toContain('TIMING INVALID')
+  expect(html).toContain('Analysis could not make this claim')
   expect(html).toContain('PWL replay refused on net /CLK')
   expect(html).toContain('Fallback-qualified windows')
   expect(html).toContain('0.012 V')
@@ -89,7 +95,8 @@ test('the browser renders every structured timing qualification from a frontdoor
   try {
     const page = await browser.newPage()
     await page.setContent(html)
-    expect(await page.getByText('TIMING INVALID').count()).toBe(1)
+    expect(await page.getByText('TIMING INVALID').count()).toBe(0)
+    expect(await page.getByText(/PWL replay refused on net \/CLK/).count()).toBe(1)
     expect(await page.getByText('Fallback-qualified windows').count()).toBe(1)
   } finally {
     await browser.close()

@@ -17,7 +17,7 @@ import type { WebReport, WebSection } from '../types/report'
 import { groupFindings } from './findings'
 import { summarizeEvidence } from './evidence'
 import { refusalLines } from './refusal-contract'
-import { fallbackWindowLine, timingCoverageLine } from './cosim-coverage'
+import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from './cosim-coverage'
 
 export interface ReportExportInput {
   report: WebReport
@@ -279,7 +279,9 @@ function cosimHtml(report: WebReport): string {
       <td>${g.driven ? 'driven' : 'idle'}</td>
     </tr>`).join('')
   const timingCoverage = (c.timing_coverage ?? []).map(row => `<div>${esc(timingCoverageLine(row))}</div>`).join('')
-  const timingRefusals = (c.timing_refusals ?? []).map(line => `<div>${esc(line)}</div>`).join('')
+  const timingRefusals = uncoveredTimingRefusals(c.timing_refusals, report.refusal)
+    .map(line => `<div>${esc(line)}</div>`)
+    .join('')
   const fallbackWindows = (c.fallback_windows ?? []).map(window => `<div>${esc(fallbackWindowLine(window))}</div>`).join('')
   return `<section>
     <h2>Firmware co-sim</h2>
