@@ -247,12 +247,25 @@ pub trait Mcu {
     ) {
     }
 
+    /// Whether [`Mcu::on_input_responder_batch`] reports one complete hardware
+    /// GPIO-port update per callback.
+    ///
+    /// The conservative default is false. Existing backends still receive the
+    /// source-compatible singleton adapter below, which is sufficient for
+    /// responders that consume one ordered edge at a time, but it cannot make
+    /// multi-pin memory gates atomic. Backends may return true only when they
+    /// override the batch hook and preserve that hardware update boundary.
+    fn input_responder_batches_atomic(&self) -> bool {
+        false
+    }
+
     /// Register a synchronous responder for one atomic GPIO-port update.
     ///
     /// Push backends should report all pins changed by one hardware port write
     /// together so a device can evaluate multi-pin control gates against the
-    /// externally observable final state. The default preserves compatibility
-    /// with backends that only support the single-edge callback.
+    /// externally observable final state. The default preserves source and
+    /// single-edge behavior for existing backends, but does not make them
+    /// atomic; see [`Mcu::input_responder_batches_atomic`].
     #[allow(clippy::type_complexity)]
     fn on_input_responder_batch(
         &mut self,

@@ -20,6 +20,8 @@ on_input_responder(cb)    SYNCHRONOUS responder: per cycle-stamped output edge,
                           returns input pins before the next instruction
 on_input_responder_batch(cb)  same contract, but all pins changed by one GPIO
                               port write arrive as one atomic cycle-stamped batch
+input_responder_batches_atomic()  true only when the backend preserves that
+                                  hardware port-write boundary (default false)
 uart_write(bytes)         inject UART RX bytes
 on_uart(cb)               callback per UART TX byte
 on_i2c(cb) / on_spi(cb)   intercept bus bytes, return the slave's reply
@@ -53,7 +55,8 @@ returns onto their ioport input IRQs *synchronously*, before the firmware's
 next instruction. All bits changed by one port-register write are delivered in
 one batch, so a multipin device evaluates the externally visible final levels,
 not a transient bit-order artifact. The legacy single-edge hook remains the
-compatibility fallback. The engine installs an edge-driven `Hc165Chain` here: on
+source-compatible fallback, but its singleton callbacks do not claim synchronous
+parallel-memory ownership. The engine installs an edge-driven `Hc165Chain` here: on
 the PL falling edge it latches the parallel inputs (the spike latches) into
 a QH-emit bit sequence, and on each SCLK rising edge it presents the next
 bit on MISO. This is the read-direction analogue of the edge-driven
