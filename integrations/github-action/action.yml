@@ -227,6 +227,7 @@ runs:
         ref: ${{ inputs.hauksbee-ref }}
         path: .hauksbee
         token: ${{ inputs.hauksbee-token }}
+        persist-credentials: false
 
     - name: Install Rust toolchain (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
@@ -316,11 +317,18 @@ runs:
     #    GITHUB_ACTIONS is passed through so the binary still emits inline
     #    annotations.
     - name: Authenticate to the private image registry
+      id: registry-auth
       if: ${{ inputs.use-image == 'true' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.hauksbee-token }}
-      run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      run: |
+        set -euo pipefail
+        config="$(mktemp -d "$RUNNER_TEMP/hauksbee-docker-auth.XXXXXX")"
+        chmod 700 "$config"
+        echo "docker-config=$config" >> "$GITHUB_OUTPUT"
+        printf '%s' "$GH_TOKEN" \
+          | docker --config "$config" login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
     - name: Run the hardware check (image)
       id: run-image
@@ -332,6 +340,7 @@ runs:
         SPECS: ${{ steps.resolve.outputs.specs }}
         JUNIT: ${{ inputs.junit }}
         IMAGE: ${{ inputs.image }}
+        DOCKER_CONFIG: ${{ steps.registry-auth.outputs.docker-config }}
       run: |
         set +e
         if [ "$MODE" = "check" ]; then
@@ -359,6 +368,19 @@ runs:
         fi
         echo "junit=$JUNIT" >> "$GITHUB_OUTPUT"
         exit $code
+
+    # Keep the private registry token out of the runner's persistent Docker
+    # config. Cleanup is best-effort and always runs, so it cannot replace the
+    # hardware check's primary exit status with a logout failure.
+    - name: Cleanup private registry credential
+      if: ${{ always() && inputs.use-image == 'true' && steps.registry-auth.outputs.docker-config != '' }}
+      shell: bash
+      env:
+        DOCKER_CONFIG: ${{ steps.registry-auth.outputs.docker-config }}
+      run: |
+        docker logout ghcr.io >/dev/null 2>&1 || true
+        find "$DOCKER_CONFIG" -type f -delete 2>/dev/null || true
+        rmdir "$DOCKER_CONFIG" 2>/dev/null || true
 
     # Always publish the JUnit results, even when the hardware check failed,
     # so the assertions show up in the PR's Checks tab. Opt out with

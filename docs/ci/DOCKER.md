@@ -128,6 +128,7 @@ source. Set `use-image: true`, and optionally pick the image:
     ref: v0.1.0
     path: .hauksbee-action
     token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
+    persist-credentials: false
 - uses: ./.hauksbee-action/integrations/github-action
   with:
     hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
@@ -151,6 +152,15 @@ back to `cargo build`.
 `docker/setup-qemu-action` + `docker/setup-buildx-action` +
 `docker/login-action` + `docker/build-push-action` chain and pushes multi-arch
 manifests to GHCR.
+
+The first publication is fail-closed too. GHCR has no package visibility to
+inspect until a package exists, so the workflow first pushes a zero-layer,
+non-runnable `privacy-bootstrap-<commit>` marker built `FROM scratch`. It
+contains no Hauksbee binaries or source. The workflow then queries GitHub's
+package API and refuses to build or push the slim/full images unless the new
+package reports `private`. Existing packages skip the marker but must pass the
+same check. A final visibility check runs unconditionally after the push; it
+cannot turn an earlier build/push failure into success.
 
 The build is **multi-stage from source**, not a repackaged release tarball:
 
