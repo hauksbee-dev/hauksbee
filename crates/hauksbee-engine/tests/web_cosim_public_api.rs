@@ -1,15 +1,14 @@
-//! Downstream compile fixture for the public web co-sim presentation type.
+//! Downstream compile fixtures for the public interactive presentation types.
 //!
-//! `WebCosimSection` is constructible outside `hauksbee-engine`; this fixture
-//! pins the complete first-release literal and the repository's planned 0.1.0
-//! release line together.
+//! These literals are copied from `main`, before interactive coverage parity
+//! was added. They must remain source-compatible: an additive JSON field does
+//! not justify breaking a Rust consumer at the planned first release.
 
 use hauksbee_engine::frontdoor::WebCosimSection;
-use hauksbee_engine::result::CosimFallbackWindow;
-use hauksbee_engine::scheduler::TimingCoverage;
+use hauksbee_engine::tui::cosim::CosimUpdate;
 
 #[test]
-fn version_0_1_public_literal_includes_the_interactive_coverage_fields() {
+fn unchanged_main_era_web_cosim_literal_still_compiles() {
     assert_eq!(
         env!("CARGO_PKG_VERSION"),
         "0.1.0",
@@ -25,22 +24,6 @@ fn version_0_1_public_literal_includes_the_interactive_coverage_fields() {
         analog_valid: true,
         failed_windows: Vec::new(),
         spi_framing: Vec::new(),
-        timing_coverage: vec![TimingCoverage {
-            mcu_ref: "U1".to_string(),
-            backend: "simavr:atmega328p".to_string(),
-            cycle_exact: true,
-            timestamp_precision_s: 62.5e-9,
-            minimum_guaranteed_pulse_s: 62.5e-9,
-            chunk_s: 1e-3,
-        }],
-        timing_refusals: vec!["transition budget exceeded".to_string()],
-        fallback_windows: vec![CosimFallbackWindow {
-            start_s: 0.001,
-            end_s: 0.002,
-            method: "backward-euler".to_string(),
-            fidelity_note: "first-order".to_string(),
-            error_estimate_v: Some(0.012),
-        }],
         boot_gates: Vec::new(),
         firmware_exercised: true,
         substituted: false,
@@ -48,7 +31,28 @@ fn version_0_1_public_literal_includes_the_interactive_coverage_fields() {
     };
 
     let json = serde_json::to_value(section).expect("public report type serializes");
-    assert_eq!(json["timing_coverage"][0]["mcu_ref"], "U1");
-    assert_eq!(json["timing_refusals"][0], "transition budget exceeded");
-    assert_eq!(json["fallback_windows"][0]["method"], "backward-euler");
+    assert_eq!(json["ran"], true);
+}
+
+#[test]
+fn unchanged_main_era_tui_update_literal_still_compiles() {
+    let update = CosimUpdate {
+        sim_ms: 1.0,
+        wall_s: 0.1,
+        chunk_ms: 0.5,
+        uart_lines: Vec::new(),
+        gpio_nets: Vec::new(),
+        uart_seen: false,
+        gpio_active: false,
+        gpio_driven: false,
+        substitution: None,
+        analog_valid: true,
+        heuristic_spi_buses: vec!["SPI1".to_string()],
+        failed_chunk_count: 0,
+        done: false,
+        error: None,
+        net_voltages: Default::default(),
+    };
+
+    assert_eq!(update.heuristic_spi_buses, ["SPI1"]);
 }

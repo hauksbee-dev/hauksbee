@@ -284,30 +284,6 @@ pub struct WebCosimSection {
     /// no SPI slaves, so the common JSON shape is unchanged for existing consumers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spi_framing: Vec<WebSpiFraming>,
-    /// Per-core timing coverage measured at the chunk actually run: the edge
-    /// timestamp uncertainty, the narrowest pulse guaranteed observable, and
-    /// whether the stamps are cycle-exact or poll-boundary. One row per live
-    /// MCU, straight from `Scheduler::timing_coverage`, the same source the CLI
-    /// `--json` `cosim.timing_coverage` field reads.
-    ///
-    /// A field rather than a finding, on purpose: it is a resolution STATEMENT
-    /// present on every run with a live core, not a hole, so a finding would
-    /// demote every healthy report's headline and stop being read. The web
-    /// surface used to read this accessor not at all, which is how a run whose
-    /// edge resolution is coarse read quiet here while `hauksbee run` printed
-    /// the resolution. Empty (and omitted) when no core was live, so the common
-    /// JSON shape is unchanged for existing consumers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub timing_coverage: Vec<crate::scheduler::TimingCoverage>,
-    /// Strict timing replays that were refused because the edge stream could
-    /// not be represented faithfully. A non-empty list invalidates strict
-    /// co-sim conclusions; it is not an ordinary limitation.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub timing_refusals: Vec<String>,
-    /// Windows solved only by a second-class fallback integrator. Each window
-    /// retains its method, fidelity qualification and measured error estimate.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fallback_windows: Vec<crate::result::CosimFallbackWindow>,
     /// Per-gate power-up state panel (what the firmware does to each
     /// transistor-gate control net at boot). Mirrors the CLI `--json`
     /// `boot_gates` / `--plain` gate panel so the web surface cannot give false
@@ -334,6 +310,21 @@ pub struct WebCosimSection {
     pub error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
 }
 
+/// Additive JSON-only data for the synchronous firmware report. Keeping this
+/// out of [`WebCosimSection`] preserves source compatibility for downstream
+/// Rust code that constructs the planned 0.1 public struct with a literal;
+/// [`analyze_with_firmware_json`] inserts these optional keys into the nested
+/// `cosim` object for HTTP/MCP/frontend consumers.
+#[derive(Debug, Clone, Default, Serialize)]
+struct WebCosimCoverage {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    timing_coverage: Vec<crate::scheduler::TimingCoverage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    timing_refusals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fallback_windows: Vec<crate::result::CosimFallbackWindow>,
+}
+
 /// Evidence inputs captured before the co-sim scheduler is dropped. Keeping
 /// these beside (but out of) the public presentation type prevents the web
 /// path from trying to infer causal scope back from rendered prose.
@@ -342,6 +333,7 @@ struct WebCosimEvidence {
     activity_nets: Vec<String>,
     scoped_substitutions: Vec<crate::scheduler::ScopedMcuSubstitution>,
     error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
+    coverage: WebCosimCoverage,
 }
 
 /// One row of the web boot-state panel: a transistor gate control net and what
@@ -863,6 +855,15 @@ pub fn analyze_with_firmware(
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> WebReport {
+    analyze_with_firmware_detailed(file_name, contents, fw_name, fw_bytes).0
+}
+
+fn analyze_with_firmware_detailed(
+    file_name: &str,
+    contents: &[u8],
+    fw_name: &str,
+    fw_bytes: &[u8],
+) -> (WebReport, WebCosimCoverage) {
     // Normalize ONCE; the static analysis and the co-sim share the same
     // extracted board. Re-reading the ORIGINAL bytes for co-sim with only the
     // text/binary sniffers fails with "could not re-read the board" on a
@@ -870,7 +871,12 @@ pub fn analyze_with_firmware(
     let norm = match crate::board_input::from_bytes(file_name, contents) {
         Ok(n) => n,
         // No board to co-sim against; return the normalization error as-is.
-        Err(e) => return unreadable(file_name, e.web_message()),
+        Err(e) => {
+            return (
+                unreadable(file_name, e.web_message()),
+                WebCosimCoverage::default(),
+            )
+        }
     };
     let (mut report, drc) = analyze_normalized(file_name, &norm);
 
@@ -882,9 +888,10 @@ pub fn analyze_with_firmware(
         Ok(r) => r,
         Err(msg) => {
             let cosim = cosim_unavailable(msg);
-            report.refusal = refusal_for_cosim(&cosim);
+            let coverage = WebCosimCoverage::default();
+            report.refusal = refusal_for_cosim(&cosim, &coverage);
             report.cosim = Some(cosim);
-            return report;
+            return (report, coverage);
         }
     };
     let (mut cosim, cosim_evidence) = run_web_cosim(
@@ -894,6 +901,10 @@ pub fn analyze_with_firmware(
         &resolved.bytes,
         &drc,
     );
+    let coverage = cosim_evidence
+        .as_ref()
+        .map(|captured| captured.coverage.clone())
+        .unwrap_or_default();
     // Whether the evidence pass below parked the headline on run-level
     // invalidity; the fault fold must not demote that to a warning headline
     // (serious beats invalid beats warning).
@@ -1039,20 +1050,20 @@ pub fn analyze_with_firmware(
     } else if report.total == 0 {
         // No fault escalation and the static board is clean, but a co-sim that
         // proved nothing must not leave a bare "Looks healthy" headline.
-        if let Some(demoted) = cosim_caveat_headline(&cosim, &report.headline) {
+        if let Some(demoted) = cosim_caveat_headline(&cosim, &coverage, &report.headline) {
             report.headline = demoted;
         }
     }
-    report.refusal = refusal_for_cosim(&cosim);
+    report.refusal = refusal_for_cosim(&cosim, &coverage);
     report.cosim = Some(cosim);
-    report
+    (report, coverage)
 }
 
 /// Translate a co-sim validity failure into the shared C5.3 refusal contract.
 /// A firmware run that merely carries a substitute/exercise caveat is not an
 /// exit-3-class refusal: only an unavailable run or invalid analog solve lands
 /// here, matching the MCP and strict CLI semantics.
-fn refusal_for_cosim(cosim: &WebCosimSection) -> Option<Refusal> {
+fn refusal_for_cosim(cosim: &WebCosimSection, coverage: &WebCosimCoverage) -> Option<Refusal> {
     if !cosim.ran {
         let finding = cosim.findings.first();
         let missing = finding
@@ -1100,7 +1111,7 @@ fn refusal_for_cosim(cosim: &WebCosimSection) -> Option<Refusal> {
         ));
     }
 
-    if let Some(diagnosis) = cosim.timing_refusals.first() {
+    if let Some(diagnosis) = coverage.timing_refusals.first() {
         return Some(Refusal::new(
             "timing-sensitive firmware and electrical conclusions",
             diagnosis.clone(),
@@ -1166,7 +1177,11 @@ fn fold_cosim_faults(
 /// Returns `None` (keep the existing headline) when no caveat applies: the gate
 /// on `ran` keeps a not-run co-sim (no firmware / external backend) from
 /// demoting, and only a bare "Looks healthy" line is ever overwritten.
-fn cosim_caveat_headline(cosim: &WebCosimSection, current_headline: &str) -> Option<String> {
+fn cosim_caveat_headline(
+    cosim: &WebCosimSection,
+    coverage: &WebCosimCoverage,
+    current_headline: &str,
+) -> Option<String> {
     // A note-level co-sim finding (a boot held-high advisory, the analog-validity
     // caveat) is an actionable heads-up, not a counted fault: like the static
     // sections' `heads_up`, it must demote a bare "Looks healthy" to the heads-up
@@ -1176,8 +1191,8 @@ fn cosim_caveat_headline(cosim: &WebCosimSection, current_headline: &str) -> Opt
         && (!cosim.firmware_exercised
             || cosim.substituted
             || !cosim.analog_valid
-            || !cosim.timing_refusals.is_empty()
-            || !cosim.fallback_windows.is_empty()
+            || !coverage.timing_refusals.is_empty()
+            || !coverage.fallback_windows.is_empty()
             || has_note);
     if caveat && current_headline == overall_headline(0, 0, false, false) {
         Some(overall_headline(0, 0, true, false))
@@ -1207,11 +1222,6 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
         analog_valid: true,
         failed_windows: Vec::new(),
         spi_framing: Vec::new(),
-        // No co-sim ran, so no core was live and there is no measured timing
-        // resolution to report. An empty row set, never a fabricated one.
-        timing_coverage: Vec::new(),
-        timing_refusals: Vec::new(),
-        fallback_windows: Vec::new(),
         boot_gates: Vec::new(),
         // ran == false: the headline demotion is gated on `ran`, so these remain
         // neutral defaults inside the co-sim section. The containing WebReport's
@@ -1840,6 +1850,11 @@ fn run_web_cosim(
         activity_nets: gpio_nets.iter().map(|net| net.name.clone()).collect(),
         scoped_substitutions: sched.scoped_substitutions().to_vec(),
         error_budget: error_budget.clone(),
+        coverage: WebCosimCoverage {
+            timing_coverage,
+            timing_refusals,
+            fallback_windows,
+        },
     };
     let substituted = !captured.scoped_substitutions.is_empty();
     (
@@ -1852,9 +1867,6 @@ fn run_web_cosim(
             analog_valid,
             failed_windows,
             spi_framing,
-            timing_coverage,
-            timing_refusals,
-            fallback_windows,
             boot_gates,
             firmware_exercised: firmware_ran,
             substituted,
@@ -1943,8 +1955,35 @@ pub fn analyze_with_firmware_json(
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> String {
-    let report = analyze_with_firmware(file_name, contents, fw_name, fw_bytes);
-    serde_json::to_string(&report).unwrap_or_else(|e| {
+    let (report, coverage) = analyze_with_firmware_detailed(file_name, contents, fw_name, fw_bytes);
+    let mut value = match serde_json::to_value(&report) {
+        Ok(value) => value,
+        Err(e) => return format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}"),
+    };
+    if let Some(cosim) = value
+        .get_mut("cosim")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if !coverage.timing_coverage.is_empty() {
+            cosim.insert(
+                "timing_coverage".to_string(),
+                serde_json::to_value(&coverage.timing_coverage).unwrap_or_default(),
+            );
+        }
+        if !coverage.timing_refusals.is_empty() {
+            cosim.insert(
+                "timing_refusals".to_string(),
+                serde_json::to_value(&coverage.timing_refusals).unwrap_or_default(),
+            );
+        }
+        if !coverage.fallback_windows.is_empty() {
+            cosim.insert(
+                "fallback_windows".to_string(),
+                serde_json::to_value(&coverage.fallback_windows).unwrap_or_default(),
+            );
+        }
+    }
+    serde_json::to_string(&value).unwrap_or_else(|e| {
         format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}")
     })
 }
@@ -2814,9 +2853,6 @@ fn main {
             analog_valid: true,
             failed_windows: Vec::new(),
             spi_framing: Vec::new(),
-            timing_coverage: Vec::new(),
-            timing_refusals: Vec::new(),
-            fallback_windows: Vec::new(),
             boot_gates: Vec::new(),
             firmware_exercised: true,
             substituted: false,
@@ -2836,7 +2872,7 @@ fn main {
 
         // A clean, exercised run keeps the healthy headline.
         assert_eq!(
-            cosim_caveat_headline(&clean_ran_section(), &healthy),
+            cosim_caveat_headline(&clean_ran_section(), &WebCosimCoverage::default(), &healthy),
             None,
             "a real firmware run must not be demoted"
         );
@@ -2850,7 +2886,7 @@ fn main {
             let mut s = clean_ran_section();
             mutate(&mut s);
             assert_eq!(
-                cosim_caveat_headline(&s, &healthy),
+                cosim_caveat_headline(&s, &WebCosimCoverage::default(), &healthy),
                 Some(demoted.clone()),
                 "a co-sim that proved nothing must demote Looks healthy"
             );
@@ -2862,7 +2898,7 @@ fn main {
         not_run.ran = false;
         not_run.firmware_exercised = false;
         assert_eq!(
-            cosim_caveat_headline(&not_run, &healthy),
+            cosim_caveat_headline(&not_run, &WebCosimCoverage::default(), &healthy),
             None,
             "a not-run co-sim is not a refusal and must not demote"
         );
@@ -2872,7 +2908,7 @@ fn main {
         let mut caveated = clean_ran_section();
         caveated.substituted = true;
         assert_eq!(
-            cosim_caveat_headline(&caveated, &demoted),
+            cosim_caveat_headline(&caveated, &WebCosimCoverage::default(), &demoted),
             None,
             "an already-heads-up headline is not rewritten"
         );
@@ -2887,27 +2923,35 @@ fn main {
             fidelity_note: "first-order and numerically dissipative".to_string(),
             error_estimate_v: Some(0.012),
         };
-        let mut fallback_only = clean_ran_section();
-        fallback_only.fallback_windows = vec![window.clone()];
+        let fallback_only = clean_ran_section();
+        let mut coverage = WebCosimCoverage {
+            fallback_windows: vec![window.clone()],
+            ..Default::default()
+        };
         assert!(
-            refusal_for_cosim(&fallback_only).is_none(),
+            refusal_for_cosim(&fallback_only, &coverage).is_none(),
             "a converged second-class span is qualified, not refused"
         );
         assert!(
-            cosim_caveat_headline(&fallback_only, &overall_headline(0, 0, false, false)).is_some(),
+            cosim_caveat_headline(
+                &fallback_only,
+                &coverage,
+                &overall_headline(0, 0, false, false)
+            )
+            .is_some(),
             "second-class evidence cannot leave a bare healthy headline"
         );
 
-        let mut section = fallback_only;
-        section.timing_refusals =
+        let section = fallback_only;
+        coverage.timing_refusals =
             vec!["PWL replay refused on net /CLK: transition budget exceeded".to_string()];
 
-        let json = serde_json::to_value(&section).unwrap();
-        assert_eq!(json["timing_refusals"][0], section.timing_refusals[0]);
+        let json = serde_json::to_value(&coverage).unwrap();
+        assert_eq!(json["timing_refusals"][0], coverage.timing_refusals[0]);
         assert_eq!(json["fallback_windows"][0]["method"], "backward-euler");
         assert_eq!(json["fallback_windows"][0]["error_estimate_v"], 0.012);
 
-        let refusal = refusal_for_cosim(&section).expect("timing collapse is invalid");
+        let refusal = refusal_for_cosim(&section, &coverage).expect("timing collapse is invalid");
         assert!(
             refusal.missing_prerequisite.contains("PWL replay refused"),
             "{refusal:?}"
@@ -3098,7 +3142,7 @@ fn main {
         // (2) It demotes the bare healthy headline to the heads-up verdict.
         let healthy = overall_headline(0, 0, false, false);
         assert_eq!(
-            cosim_caveat_headline(&sect, &healthy),
+            cosim_caveat_headline(&sect, &WebCosimCoverage::default(), &healthy),
             Some(overall_headline(0, 0, true, false)),
             "a boot held-high advisory must demote Looks healthy, not escalate serious"
         );
@@ -3135,7 +3179,7 @@ fn main {
         // (2) It demotes the bare healthy headline to the heads-up verdict.
         let healthy = overall_headline(0, 0, false, false);
         assert_eq!(
-            cosim_caveat_headline(&diverged, &healthy),
+            cosim_caveat_headline(&diverged, &WebCosimCoverage::default(), &healthy),
             Some(overall_headline(0, 0, true, false)),
             "a diverged analog solve must demote Looks healthy, not escalate serious"
         );
@@ -3165,9 +3209,6 @@ fn main {
                 reason: "DC Newton did not converge in 100 iters".to_string(),
             }],
             spi_framing: Vec::new(),
-            timing_coverage: Vec::new(),
-            timing_refusals: Vec::new(),
-            fallback_windows: Vec::new(),
             boot_gates: Vec::new(),
             firmware_exercised: true,
             substituted: false,
@@ -3182,7 +3223,8 @@ fn main {
             json.contains("\"failed_windows\""),
             "invalid run lists failed_windows: {json}"
         );
-        let refusal = refusal_for_cosim(&section).expect("invalid analog run refuses");
+        let refusal = refusal_for_cosim(&section, &WebCosimCoverage::default())
+            .expect("invalid analog run refuses");
         assert!(
             refusal
                 .missing_prerequisite
@@ -3212,9 +3254,6 @@ fn main {
             analog_valid: true,
             failed_windows: Vec::new(),
             spi_framing: Vec::new(),
-            timing_coverage: Vec::new(),
-            timing_refusals: Vec::new(),
-            fallback_windows: Vec::new(),
             boot_gates: vec![WebBootGate {
                 reference: "Q1".to_string(),
                 net: "GATE_CTRL".to_string(),
