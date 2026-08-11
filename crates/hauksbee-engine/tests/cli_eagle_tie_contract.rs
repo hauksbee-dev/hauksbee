@@ -1,5 +1,7 @@
 use std::process::Command;
 
+use sha2::{Digest, Sha256};
+
 fn run_pair(
     name: &str,
     board_bytes: &[u8],
@@ -43,6 +45,20 @@ fn declared_and_undeclared_pairs_have_matching_json_exit_and_junit_outcomes() {
         .unwrap()
         .iter()
         .all(|short| short["severity"] == "note"));
+    let schematic = include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch");
+    let expected_sha = Sha256::digest(schematic)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let input = json["inputs"]
+        .as_array()
+        .expect("top-level input inventory")
+        .iter()
+        .find(|input| input["kind"] == "schematic")
+        .expect("the exact contributing schematic is a top-level input");
+    assert_eq!(input["format"], "eagle_schematic");
+    assert_eq!(input["sha256"], expected_sha);
+    assert!(input["path"].as_str().unwrap().ends_with("declared.sch"));
     assert!(
         declared_junit.contains("failures=\"0\""),
         "{declared_junit}"

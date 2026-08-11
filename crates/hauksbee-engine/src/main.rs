@@ -1398,7 +1398,10 @@ fn main() -> anyhow::Result<()> {
         // The run orchestrator owns embedded-example lookup so it can open the
         // requested artifact transaction first. Its Result still flows through
         // the shared JSON/text error envelope below.
-        Command::Run(args) => hauksbee_engine::commands::run::run(run_config(args), quiet),
+        Command::Run(mut args) => {
+            let schematic = args.schematic.take();
+            hauksbee_engine::commands::run::run_with_schematic(run_config(args), quiet, schematic)
+        }
         Command::Reproduce(args) => hauksbee_engine::run_manifest::reproduce(&args.manifest),
         Command::ToCode(args) => {
             hauksbee_engine::commands::boardcode::to_code(&args.board, args.out.as_deref())
@@ -1592,7 +1595,6 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         bom: a.bom,
         bom_columns: a.bom_columns,
         placement: a.placement,
-        schematic: a.schematic,
         firmware: a.firmware,
         asbuilt: a.asbuilt,
         junit: a.junit,

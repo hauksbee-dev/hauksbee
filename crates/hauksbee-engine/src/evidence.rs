@@ -734,7 +734,11 @@ impl BoardEvidence {
         let path = path.as_ref();
         let artifact = ArtifactProvenance::new(
             path.to_string_lossy(),
-            ArtifactKind::EagleSchematic,
+            // Preserve the closed public ArtifactKind enum for the planned
+            // first release. ArtifactRole::Schematic and the `.sch` path make
+            // the role exact; EagleBoard remains the existing Eagle XML family
+            // token rather than adding a source-breaking enum variant.
+            ArtifactKind::EagleBoard,
             ArtifactRole::Schematic,
             hex_digest(&Sha256::digest(raw)),
             Vec::new(),
