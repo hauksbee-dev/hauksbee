@@ -75,12 +75,6 @@ jobs:
             echo "full_latest=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check private container publication before push
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash ctx/hauksbee/scripts/check-private-container-publication.sh before
-
       - name: Write .dockerignore for the context
         shell: bash
         run: |
@@ -116,6 +110,45 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A package does not exist until its first push. Probe the repository and
+      # any existing package first; when the package is absent or unreadable,
+      # push only a zero-layer, non-runnable marker. The strict check after it
+      # must observe private visibility before a Hauksbee image can be built.
+      - name: Probe private container publication
+        id: private-package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ctx/hauksbee/scripts/check-private-container-publication.sh probe
+
+      - name: Bootstrap private GHCR package
+        if: steps.private-package.outputs.bootstrap_required == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          context="$(mktemp -d)"
+          cleanup() {
+            find "$context" -type f -delete 2>/dev/null || true
+            rmdir "$context" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          printf '%s\n' \
+            'FROM scratch' \
+            'LABEL org.opencontainers.image.description="Private visibility bootstrap; contains no product content"' \
+            > "$context/Dockerfile"
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push \
+            --provenance=false \
+            --tag "${IMAGE}:privacy-bootstrap-${GITHUB_SHA}" \
+            "$context"
+
+      - name: Check private container publication before push
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ctx/hauksbee/scripts/check-private-container-publication.sh before
 
       # 1. Slim first: full builds FROM it. Tag :slim, :slim-<version>, and
       #    (on a tag push) :latest.
@@ -162,6 +195,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
 
       - name: Check private container publication after push
+        if: always()
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -228,6 +228,7 @@ pub fn github_workflow_yaml() -> String {
          \x20         ref: v{}\n\
          \x20         path: .hauksbee-action\n\
          \x20         token: {}\n\
+         \x20         persist-credentials: false\n\
          \x20     - uses: ./.hauksbee-action/integrations/github-action\n\
          \x20       with:\n\
          \x20         hauksbee-token: {}\n\
@@ -991,6 +992,7 @@ mod tests {
             yaml.contains("token: ${{ secrets.HAUKSBEE_READ_TOKEN }}"),
             "{yaml}"
         );
+        assert!(yaml.contains("persist-credentials: false"), "{yaml}");
         assert!(
             yaml.contains("uses: ./.hauksbee-action/integrations/github-action"),
             "{yaml}"

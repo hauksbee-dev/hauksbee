@@ -37,6 +37,7 @@ jobs:
           ref: ${RELEASE_TAG}
           path: .hauksbee-action
           token: ${PRIVATE_TOKEN_SECRET}
+          persist-credentials: false
       - name: hauksbee-ci
         uses: ./.hauksbee-action/integrations/github-action
         with:
