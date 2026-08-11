@@ -89,6 +89,22 @@ What is honestly missing:
 These are the genuine open limitations the code carries today, each with the
 reason it is open and what would close it.
 
+### Windows x86_64 has a narrower co-sim and host-serial shape
+
+The native Windows artifact is permissive-only: Renode and Espressif QEMU are
+compiled in, while AVR/libsimavr is not. `hauksbee doctor` reports the exact
+backend paths it found, and the installer names this before download. The
+unlocking path for AVR is a maintained MSYS2 libsimavr build plus the same
+native lifecycle and firmware-through-hardware gates used by the shipped
+backends; until then no Windows artifact claims AVR support.
+
+Windows also has no Unix pseudo-terminal endpoint. Host-facing UART traffic
+works over loopback TCP; a `pty` request refuses by name and points to
+`--serial-transport tcp`. Emulator children use a kernel Job Object, so this
+transport difference does not weaken process-tree cleanup. The browser front
+door, static analysis, CI verdicts, MCP, Renode/QEMU discovery, installation,
+and checksum-verified zip are native Windows surfaces.
+
 ### A co-sim chunk no fallback can solve holds stale voltages
 
 The co-sim advances the circuit in chunks. A chunk whose primary analog solve

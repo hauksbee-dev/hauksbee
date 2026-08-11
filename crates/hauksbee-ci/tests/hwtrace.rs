@@ -13,8 +13,10 @@
 //! in their trace.toml and bannered in every report line) and prove the
 //! pipeline, not the simulator.
 
+#[cfg(feature = "avr")]
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "avr")]
 use hauksbee_ci::{run, RunConfig};
 
 #[cfg(feature = "avr")]

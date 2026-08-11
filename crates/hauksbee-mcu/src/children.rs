@@ -12,8 +12,8 @@
 //! server orphaned the emulators; 23 accumulated `qemu-system-xtensa`
 //! processes were found on one dev machine. The fix has two independent
 //! layers: process-tree kills on `Drop` (group kill on unix, `taskkill /T` on
-//! Windows), and [`install_signal_reaper`] for the paths where `Drop` never
-//! runs.
+//! Windows), an owning kill-on-close Job Object on Windows, and
+//! [`install_signal_reaper`] for Unix paths where `Drop` never runs.
 //!
 //! The registry is a fixed-capacity, lock-free table of PIDs because the
 //! signal handler iterates it, and a signal handler must never take a lock the
@@ -21,6 +21,176 @@
 //! async-signal-safe: atomic loads, `kill(2)`, `signal(2)`, `raise(2)`.
 
 use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Owns the platform primitive that ties an emulator process tree to the
+/// hauksbee process. Unix uses the process group established before spawn, so
+/// there is no additional handle to retain. Windows needs a Job Object with
+/// `KILL_ON_JOB_CLOSE`: unlike a best-effort `taskkill` in `Drop`, the kernel
+/// closes this handle and terminates the whole tree even when hauksbee itself
+/// is killed and no destructor runs.
+pub(crate) struct ProcessTreeGuard {
+    #[cfg(windows)]
+    job: windows_sys::Win32::Foundation::HANDLE,
+}
+
+// Win32 kernel handles are process-wide and CloseHandle may be called from any
+// thread. The guard has unique ownership and exposes no operation besides Drop,
+// so moving it with the MCU backend is safe.
+#[cfg(windows)]
+unsafe impl Send for ProcessTreeGuard {}
+
+impl ProcessTreeGuard {
+    fn attach(child: &std::process::Child) -> std::io::Result<Self> {
+        #[cfg(windows)]
+        {
+            use std::ffi::c_void;
+            use std::mem::{size_of, zeroed};
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+            use windows_sys::Win32::System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            };
+
+            // SAFETY: every Win32 call is checked; `job` is either closed on
+            // the error path or exclusively owned by the returned guard.
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    &limits as *const _ as *const c_void,
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) == 0
+                {
+                    let error = std::io::Error::last_os_error();
+                    CloseHandle(job);
+                    return Err(error);
+                }
+                if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+                    let error = std::io::Error::last_os_error();
+                    CloseHandle(job);
+                    return Err(error);
+                }
+                Ok(Self { job })
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = child;
+            Ok(Self {})
+        }
+    }
+}
+
+/// Spawn a backend under structural process-tree ownership.
+///
+/// Windows starts the direct child suspended, assigns the still-unexecuted
+/// process to the kill-on-close Job Object, then resumes its primary thread.
+/// A backend therefore cannot create an escaping descendant between `spawn`
+/// and assignment. Unix callers establish their process group on `cmd` before
+/// entering here; the guard is then a zero-sized owner marker.
+pub(crate) fn spawn_owned(
+    cmd: &mut std::process::Command,
+) -> std::io::Result<(std::process::Child, ProcessTreeGuard)> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+
+        cmd.creation_flags(CREATE_SUSPENDED);
+        let mut child = cmd.spawn()?;
+        let guard = match ProcessTreeGuard::attach(&child) {
+            Ok(guard) => guard,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
+        if let Err(error) = resume_primary_thread(child.id()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        Ok((child, guard))
+    }
+    #[cfg(not(windows))]
+    {
+        let child = cmd.spawn()?;
+        let guard = ProcessTreeGuard::attach(&child)?;
+        Ok((child, guard))
+    }
+}
+
+#[cfg(windows)]
+fn resume_primary_thread(pid: u32) -> std::io::Result<()> {
+    use std::mem::{size_of, zeroed};
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    // SAFETY: the snapshot/thread handles are checked and closed on every path;
+    // THREADENTRY32 advertises its exact initialized size as required by Win32.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut entry: THREADENTRY32 = zeroed();
+        entry.dwSize = size_of::<THREADENTRY32>() as u32;
+        let mut found = Thread32First(snapshot, &mut entry) != 0;
+        while found && entry.th32OwnerProcessID != pid {
+            found = Thread32Next(snapshot, &mut entry) != 0;
+        }
+        let enumeration_error = if found {
+            None
+        } else {
+            Some(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no primary thread found for suspended process {pid}"),
+            ))
+        };
+        CloseHandle(snapshot);
+        if let Some(error) = enumeration_error {
+            return Err(error);
+        }
+        let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+        if thread.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let previous = ResumeThread(thread);
+        let error = if previous == u32::MAX {
+            Some(std::io::Error::last_os_error())
+        } else {
+            None
+        };
+        CloseHandle(thread);
+        if let Some(error) = error {
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ProcessTreeGuard {
+    fn drop(&mut self) {
+        // SAFETY: `job` is the live handle exclusively owned by this guard.
+        // KILL_ON_JOB_CLOSE makes this the fail-safe tree termination path.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.job);
+        }
+    }
+}
 
 /// Far above the server's live-session cap. If it ever fills, extra children
 /// are simply not signal-reaped (their `Drop` tree-kill still applies).
@@ -118,10 +288,10 @@ extern "C" fn reap_and_die(sig: libc::c_int) {
 /// disposition, so exit statuses and shell job control look exactly as
 /// before; the only difference is that no emulator survives the parent.
 ///
-/// On Windows this is a no-op: there are no POSIX signals to catch, `Drop`
-/// already tree-kills via `taskkill /T`, and making a hard `TerminateProcess`
-/// of the parent cascade needs a Job object, which is future native-Windows
-/// work (tracked in docs/about/release-and-licensing.md section 5).
+/// On Windows this is a no-op because there are no POSIX signals to catch.
+/// Every Renode/QEMU child instead owns a kill-on-close Job Object through
+/// [`ProcessTreeGuard`]; the kernel closes it and kills the tree even when a
+/// hard parent termination prevents `Drop` from running.
 pub fn install_signal_reaper() {
     #[cfg(unix)]
     unsafe {
@@ -176,5 +346,96 @@ mod tests {
         // SIGKILL is not blockable: wait() must report a signal death.
         let status = child.wait().expect("child reaped");
         assert!(!status.success(), "child was killed, not exited: {status}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_job_kills_child_when_guard_closes() {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "ping -n 30 127.0.0.1 > NUL"]);
+        let (mut child, guard) = spawn_owned(&mut command).expect("spawn in kill-on-close job");
+        drop(guard);
+        let status = child.wait().expect("job-owned child is waitable");
+        assert!(
+            !status.success(),
+            "closing the job must terminate the child"
+        );
+    }
+
+    #[cfg(windows)]
+    fn process_is_live(pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut code = 0;
+            let live = GetExitCodeProcess(handle, &mut code) != 0 && code == STILL_ACTIVE as u32;
+            CloseHandle(handle);
+            live
+        }
+    }
+
+    #[cfg(windows)]
+    fn wait_for_pid_file(path: &std::path::Path) -> u32 {
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Ok(pid) = text.trim().parse() {
+                    return pid;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("grandchild PID was not written to {}", path.display());
+    }
+
+    /// Helper invoked in a separate test process by the hard-parent regression.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "invoked as a subprocess by the Windows Job Object regression"]
+    fn windows_job_parent_helper() {
+        let marker = std::env::var("HAUKSBEE_WINDOWS_JOB_PID_FILE")
+            .expect("helper receives PID marker path");
+        let marker = marker.replace('\'', "''");
+        let script = format!(
+            "$p=Start-Process powershell -ArgumentList '-NoProfile','-Command','Start-Sleep 300' -PassThru; Set-Content -LiteralPath '{marker}' -Value $p.Id; Wait-Process -Id $p.Id"
+        );
+        let mut command = std::process::Command::new("powershell");
+        command.args(["-NoProfile", "-Command", &script]);
+        let (mut child, _guard) = spawn_owned(&mut command).expect("spawn helper-owned tree");
+        let _ = child.wait();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_hard_parent_death_kills_immediate_grandchild() {
+        let scratch = tempfile::tempdir().expect("scratch directory");
+        let marker = scratch.path().join("grandchild.pid");
+        let mut parent = std::process::Command::new(std::env::current_exe().expect("test exe"))
+            .args([
+                "--exact",
+                "children::tests::windows_job_parent_helper",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("HAUKSBEE_WINDOWS_JOB_PID_FILE", &marker)
+            .spawn()
+            .expect("spawn separate Job Object owner");
+        let grandchild = wait_for_pid_file(&marker);
+        assert!(process_is_live(grandchild), "grandchild starts live");
+
+        parent.kill().expect("hard-terminate the owning process");
+        parent.wait().expect("owning process is waitable");
+        for _ in 0..100 {
+            if !process_is_live(grandchild) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("grandchild {grandchild} survived hard parent termination");
     }
 }

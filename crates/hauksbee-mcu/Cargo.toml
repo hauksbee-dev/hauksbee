@@ -51,6 +51,18 @@ espflash = { version = "4.5.0", default-features = false, optional = true }
 # the QEMU process; NamedTempFile ties its lifetime to the backend struct.
 tempfile = { workspace = true, optional = true }
 
+[target.'cfg(windows)'.dependencies]
+# Native Job Objects make emulator ownership structural on Windows: closing
+# the last job handle kills the whole Renode/QEMU tree, including when the
+# hauksbee parent is terminated and Rust never gets to run Drop.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [build-dependencies]
 bindgen = "0.71"
 pkg-config = "0.3"

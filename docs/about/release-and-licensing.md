@@ -177,6 +177,7 @@ The installer and `scripts/bundle.sh` agree on this exact shape (do not drift):
 | tarball layout   | `<base>/bin/hauksbee`, `<base>/bin/hauksbee-ci` and `<base>/bin/hauksbee-mcp` (three binaries, mode 0755) |
 | licence file     | `<base>/LICENSE-BINARY.txt`, plus `<base>/LICENSE` and `<base>/NOTICE`. The default shape also carries `<base>/LICENSE-GPL-3.0.txt` |
 | macOS app        | `<base>-app.zip` + `<base>-app.zip.sha256` (darwin suffixes only, default shape only, contains `Hauksbee.app`, built by `app/macos/build-app.sh`, signed and notarized, see `app/macos/SIGNING.md`) |
+| Windows          | `hauksbee-<version>-windows-x86_64-permissive.zip` + `.zip.sha256`; contains the same three binaries with `.exe` suffixes and an Apache-2.0 `LICENSE-BINARY.txt` |
 
 The `-permissive` suffix is part of the base name, so it appears in the tarball
 name, the checksum name **and** the directory inside the tarball. Both
@@ -196,16 +197,18 @@ the licence of what it installed as the last line of its summary.
 
 `scripts/get-hauksbee.ps1` is the Windows counterpart, holding the same
 contract with a `windows-x86_64` suffix and `.zip` + `.zip.sha256` assets
-(`Get-FileHash` for verification, `bin\hauksbee.exe` + `bin\hauksbee-ci.exe`
-inside). It exists ahead of any published Windows asset so the contract cannot
-drift when that leg lands. Until then its download step honestly 404s, and
-Windows remains not a promised target (section 5).
+(`Get-FileHash` for verification and all three `.exe` binaries inside). Windows
+has one shape rather than two: the installer always selects `-permissive`, says
+that AVR is disabled before download, and the bundle refuses any binary whose
+`doctor` output does not say the same thing.
 
-The full asset list for a release of version `V`, 20 files:
+The full asset list for a release of version `V`, 24 files:
 
 - 4 targets x `hauksbee-V-<suffix>.tar.gz` + `.sha256`
 - 4 targets x `hauksbee-V-<suffix>-permissive.tar.gz` + `.sha256`
 - 2 darwin targets x `hauksbee-V-<suffix>-app.zip` + `.sha256`
+- 1 Windows target x `hauksbee-V-windows-x86_64-permissive.zip` + `.sha256`
+- 1 platform-neutral KiCad PCM zip + `.sha256`
 
 ### 3.1 macOS signing, stated plainly
 
@@ -241,33 +244,40 @@ tested, no-cross-compilation philosophy the release workflow has always stated:
 every artifact is produced on its own architecture, so nothing ships that no
 runner actually executed.
 
-## 5. Windows, evaluated, NOT promised
+## 5. Windows x86_64
 
-Windows is close but unproven on real hardware, so it is not a shipping target
-and the installer refuses to pretend otherwise. Measured baseline (updated
-2026-07-28, cross-compiled `x86_64-pc-windows-gnu` from macOS with mingw-w64,
-exercised under Wine 9.0):
+Windows is a native release target in one deliberately narrower shape. The
+`windows-latest` gate builds and tests `hauksbee`, `hauksbee-ci`, and the MCU
+process layer with MSVC, builds the embedded web app, launches the release-mode
+`hauksbee.exe`, drops a real Board-as-Code file through Chromium, and retains
+the screenshot/report/server logs. The release job repeats the native tests,
+packages all three executables, verifies the checksum and extracted contents,
+and runs `doctor` from the packaged binary before upload. Both jobs install
+repository-checksummed Renode and Espressif QEMU archives and reject a release
+unless the exact RP2040, Xtensa and RISC-V firmware-through-emulator tests pass
+without `SKIP:`. A local GNU
+cross-check is useful compiler coverage; it is not substituted for this native
+gate.
 
-- The permissive shape cross-compiles clean: zero errors, zero warnings, all
-  three binaries (`hauksbee.exe`, `hauksbee-ci.exe`, `hauksbee-mcp.exe`).
-- The CLI, `hauksbee-ci` (exit codes and `--junit`), `hauksbee-mcp` over
-  stdio, and the full `serve` web surface all pass under Wine, driven from a
-  real host browser. JSON output is LF-only and path-clean.
-- Simulator discovery knows the Windows-conventional Renode and Espressif
-  QEMU locations, unit-tested platform-neutrally in `crates/hauksbee-mcu`'s
-  `discovery_tests`.
+The platform differences are explicit:
 
-Still needing a native Windows runner, which Wine cannot prove: the test
-suite itself, real co-sim runs against the Windows Renode/QEMU builds, the
-`windows-msvc` target a real port should ship, a real
-`scripts/get-hauksbee.ps1` run (so far dry-run against a mock only), and the
-AVR shape (no MSYS2 simavr recipe exists, so a first Windows release would be
-permissive-only and would say so).
-
-Windows stays off the promised-targets list until a native port exists and a
-Windows CI runner keeps it green: the CI entry lands first, then the release
-matrix leg and installer suffix, and only then the README promise. A port PR
-is welcome; keep platform changes `cfg`-gated and log every divergence.
+- Windows ships only `--no-default-features --features renode,qemu`. AVR is
+  disabled because the repository has no supported native MSVC libsimavr
+  build. Building libsimavr under MSYS2 and proving it through the same native
+  tests is the unlocking path for an AVR-enabled Windows artifact.
+- Renode and Espressif QEMU discovery includes their conventional Windows
+  locations. The child is created suspended, assigned to a Win32 Job Object
+  with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and only then resumed; an early
+  descendant cannot escape between spawn and assignment. Native regressions
+  cover direct close and hard parent termination with an immediate grandchild.
+  Availability still comes from `hauksbee doctor`; a missing executable is
+  named, never substituted.
+- Host serial uses loopback TCP. Windows has no Unix pseudo-terminal in this
+  implementation, so requesting `pty` refuses and names
+  `--serial-transport tcp` as the working route.
+- There is no Windows desktop shell wrapper. The supported front door is
+  `hauksbee.exe serve --open` (or `--no-open` for automation), which opens the
+  same embedded browser UI the native drag-and-drop gate exercises.
 
 ## 6. The core stays open
 
