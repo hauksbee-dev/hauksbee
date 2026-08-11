@@ -383,10 +383,10 @@ pub struct Scheduler {
     /// asked for a more specific part than the emulator core models. Surfaced as
     /// a co-sim warning + JSON note; never gates an exit code on its own.
     substitutions: Vec<McuSubstitution>,
-    /// Causally scoped counterparts of `substitutions`. Kept private so the
-    /// public substitution event retains its source-compatible struct-literal
-    /// shape while evidence uses the exact board occurrence.
-    substitution_assumptions: Vec<Assumption>,
+    /// Causally scoped counterparts of `substitutions`. The event and exact
+    /// board occurrence stay paired so later evidence construction cannot zip
+    /// two independently ordered collections or fall back to display refs.
+    scoped_substitutions: Vec<ScopedMcuSubstitution>,
     /// Bus peripherals (I2C/SPI slave models) attached on a board whose live
     /// MCU backends model NO matching bus controller; the firmware's bus
     /// traffic can never reach them, so they sit at their power-on defaults for
@@ -596,6 +596,50 @@ pub struct McuSubstitution {
     pub requested_part: String,
     /// Human label of the core that was actually modelled (e.g. `"STM32F407"`).
     pub modelled_core: String,
+}
+
+/// A substitution event paired with the exact board occurrence it describes.
+///
+/// The fields stay private so callers cannot manufacture a mismatched event,
+/// subject, and assumption. [`McuSubstitution`] remains source-compatible for
+/// presentation code and legacy public struct literals.
+#[derive(Debug, Clone)]
+pub struct ScopedMcuSubstitution {
+    event: McuSubstitution,
+    subject: String,
+    assumption: Assumption,
+}
+
+impl ScopedMcuSubstitution {
+    pub(crate) fn new(event: McuSubstitution, subject: String) -> Self {
+        let assumption = Assumption::substitute_model_for_component(
+            AssumptionSource::Scheduler,
+            &subject,
+            &event.reference,
+            &event.requested_part,
+            &event.modelled_core,
+        );
+        Self {
+            event,
+            subject,
+            assumption,
+        }
+    }
+
+    /// The presentation event paired with this exact occurrence.
+    pub fn event(&self) -> &McuSubstitution {
+        &self.event
+    }
+
+    /// The opaque board-occurrence subject used for causal traversal.
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+
+    /// The substitution assumption constructed from the paired event/subject.
+    pub fn assumption(&self) -> &Assumption {
+        &self.assumption
+    }
 }
 
 /// A bus peripheral bound on a platform that models no matching bus controller
@@ -1038,7 +1082,7 @@ impl Scheduler {
 
         let mut live = Vec::new();
         let mut substitutions = Vec::new();
-        let mut substitution_assumptions = Vec::new();
+        let mut scoped_substitutions = Vec::new();
         for binding in mcus {
             let evidence_subject = mcu_subjects
                 .next()
@@ -1059,13 +1103,8 @@ impl Scheduler {
             // emulator models (e.g. STM32F411 -> the STM32F407 Discovery core).
             if let Some(sub) = detect_substitution(&binding) {
                 eprintln!("WARNING: {}", sub.message());
-                substitution_assumptions.push(Assumption::substitute_model_for_component(
-                    AssumptionSource::Scheduler,
-                    &evidence_subject,
-                    &sub.reference,
-                    &sub.requested_part,
-                    &sub.modelled_core,
-                ));
+                scoped_substitutions
+                    .push(ScopedMcuSubstitution::new(sub.clone(), evidence_subject));
                 substitutions.push(sub);
             }
             let core = instantiate_mcu(&binding, firmware)?;
@@ -1128,7 +1167,7 @@ impl Scheduler {
             spi_buses: Vec::new(),
             spi_controller_map: HashMap::new(),
             substitutions,
-            substitution_assumptions,
+            scoped_substitutions,
             unexercised_buses: Vec::new(),
             hc165_chains: Vec::new(),
             responder_registries: Vec::new(),
@@ -1626,11 +1665,9 @@ impl Scheduler {
         &self.substitutions
     }
 
-    /// Exact causal assumptions for the substitution events. Unlike the public
-    /// presentation records, these retain the board-occurrence identity minted
-    /// from component-origin bind rows.
-    pub fn substitution_assumptions(&self) -> &[Assumption] {
-        &self.substitution_assumptions
+    /// Substitution events paired with their exact board-occurrence evidence.
+    pub fn scoped_substitutions(&self) -> &[ScopedMcuSubstitution] {
+        &self.scoped_substitutions
     }
 
     /// Loud notes for every net whose voltage is decided by something other

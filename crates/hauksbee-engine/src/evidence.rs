@@ -741,77 +741,69 @@ impl BoardEvidence {
         mut self,
         new_assumptions: impl IntoIterator<Item = Assumption>,
     ) -> Result<Self, EvidenceError> {
-        let mut artifacts = self.registry.artifacts().to_vec();
         let mut assumptions = self.registry.assumptions().to_vec();
-        // Equal claims are idempotent. Unequal claims sharing a producer's
-        // concise base id are not: the CI runner legitimately emits one
-        // check-scoped claim per sibling assertion on a peripheral. Group the
-        // incoming batch before merging so every member receives a stable
-        // content-derived id; input order cannot decide which claim survives
-        // under the bare id.
-        let mut incoming = Vec::new();
+        let previous_assumptions = assumptions.clone();
+        let mut default_references: Vec<_> = self
+            .defaults_by_ref
+            .values()
+            .flatten()
+            .map(|default| default.assumption.clone())
+            .collect();
+        let mut collision_domains = self.colliding_assumption_bases.clone();
         for assumption in new_assumptions {
-            if !assumptions.contains(&assumption) && !incoming.contains(&assumption) {
-                incoming.push(assumption);
+            if assumption.id() != assumption.collision_base_id() {
+                collision_domains.insert(assumption.collision_base_id().clone());
             }
-        }
-        let mut counts = BTreeMap::new();
-        for assumption in &incoming {
-            *counts.entry(assumption.id().clone()).or_insert(0usize) += 1;
-        }
-        for assumption in incoming {
-            let base = assumption.id().clone();
-            let disambiguated = assumption.clone().disambiguate_colliding_id();
-            if assumptions.contains(&assumption) || assumptions.contains(&disambiguated) {
-                continue;
-            }
-            let collision = counts[&base] > 1
-                || self.colliding_assumption_bases.contains(&base)
-                || assumptions
-                    .iter()
-                    .any(|known| known.id() == &base && known != &assumption);
-            let mut assumption = assumption;
-            if collision {
-                // If the first member arrived alone it may already own the bare
-                // id and completed maps/artifacts may cite it. Convert that
-                // member and every reference in one transaction before adding
-                // the newcomer. Both singleton orders then converge on the
-                // same content-derived id set.
-                if let Some(position) = assumptions.iter().position(|known| known.id() == &base) {
-                    let previous = assumptions[position].clone();
-                    let replacement = previous.clone().disambiguate_colliding_id();
-                    let replacement_id = replacement.id().clone();
-                    for artifact in &mut artifacts {
-                        artifact.rekey_colliding_assumption(&previous, &replacement)?;
-                    }
-                    for map in &mut self.maps {
-                        map.rekey_colliding_assumption(&previous, &replacement)?;
-                    }
-                    for defaults in self.defaults_by_ref.values_mut() {
-                        for default in defaults {
-                            if default.assumption == base {
-                                default.assumption = replacement_id.clone();
-                            }
-                        }
-                    }
-                    assumptions[position] = replacement;
-                }
-                self.colliding_assumption_bases.insert(base);
-                assumption = disambiguated;
-            }
-            match assumptions
+            let canonical = assumption.clone().disambiguate_colliding_id();
+            if !assumptions
                 .iter()
-                .find(|known| known.id() == assumption.id())
+                .any(|known| known.clone().disambiguate_colliding_id() == canonical)
             {
-                Some(known) if known == &assumption => {}
-                Some(_) => {
-                    return Err(EvidenceError::DuplicateAssumption {
-                        id: assumption.id().to_string(),
-                    });
-                }
-                None => assumptions.push(assumption),
+                assumptions.push(assumption);
             }
         }
+        let mut counts = BTreeMap::<AssumptionId, usize>::new();
+        for assumption in &assumptions {
+            *counts
+                .entry(assumption.collision_base_id().clone())
+                .or_default() += 1;
+        }
+        for (base, count) in counts {
+            if count > 1 {
+                collision_domains.insert(base);
+            }
+        }
+        for previous in &previous_assumptions {
+            if collision_domains.contains(previous.collision_base_id())
+                && previous.id() == previous.collision_base_id()
+            {
+                let replacement = previous.clone().disambiguate_colliding_id();
+                let transaction = self.registry.rekey_collision_transaction(
+                    &self.maps,
+                    &default_references,
+                    previous,
+                    &replacement,
+                )?;
+                let (registry, maps, references) = transaction.into_parts();
+                self.registry = registry;
+                self.maps = maps;
+                default_references = references;
+            }
+        }
+        for (default, assumption) in self
+            .defaults_by_ref
+            .values_mut()
+            .flatten()
+            .zip(default_references)
+        {
+            default.assumption = assumption;
+        }
+        for assumption in &mut assumptions {
+            if collision_domains.contains(assumption.collision_base_id()) {
+                *assumption = assumption.clone().disambiguate_colliding_id();
+            }
+        }
+        self.colliding_assumption_bases = collision_domains;
         if !self.colliding_assumption_bases.is_empty() {
             // Collision members are content-addressed; sort the completed
             // registry by those stable ids so reversing incremental singleton
@@ -820,7 +812,7 @@ impl BoardEvidence {
             assumptions.sort_by(|left, right| left.id().cmp(right.id()));
         }
         let mut registry = EvidenceRegistry::new(assumptions)?;
-        for artifact in artifacts {
+        for artifact in self.registry.artifacts().iter().cloned() {
             registry.add_artifact(artifact)?;
         }
         self.assumptions = registry.assumptions().to_vec();
@@ -838,30 +830,49 @@ impl BoardEvidence {
         if substitutions.is_empty() {
             return Ok(self);
         }
-        let assumptions: Vec<_> = substitutions
-            .iter()
-            .flat_map(|sub| {
-                let mut subjects: Vec<_> = self
-                    .display_ref_by_subject
-                    .iter()
-                    .filter(|(_, display)| display.trim() == sub.reference.trim())
-                    .map(|(subject, _)| subject.clone())
-                    .collect();
-                if subjects.is_empty() {
-                    subjects.push(sub.reference.trim().to_string());
+        let mut assumptions = Vec::with_capacity(substitutions.len());
+        for sub in substitutions {
+            let mut subjects: Vec<_> = self
+                .display_ref_by_subject
+                .iter()
+                .filter(|(_, display)| display.trim() == sub.reference.trim())
+                .map(|(subject, _)| subject.clone())
+                .collect();
+            let subject = match subjects.len() {
+                0 => sub.reference.trim().to_string(),
+                1 => subjects.pop().expect("one substitution subject exists"),
+                count => {
+                    return Err(EvidenceError::InvalidAssumption {
+                        message: format!(
+                            "ambiguous MCU reference '{}': {count} board occurrences match; use the scheduler's exact-subject substitution evidence instead",
+                            sub.reference.trim()
+                        ),
+                    });
                 }
-                subjects.into_iter().map(|subject| {
-                    Assumption::substitute_model_for_component(
-                        AssumptionSource::Scheduler,
-                        &subject,
-                        &sub.reference,
-                        &sub.requested_part,
-                        &sub.modelled_core,
-                    )
-                })
-            })
-            .collect();
+            };
+            assumptions.push(Assumption::substitute_model_for_component(
+                AssumptionSource::Scheduler,
+                &subject,
+                &sub.reference,
+                &sub.requested_part,
+                &sub.modelled_core,
+            ));
+        }
         self.with_assumptions(assumptions)
+    }
+
+    /// Add scheduler-owned substitutions without discarding their exact board
+    /// occurrence. Unlike [`Self::with_substitutions`], this path never has to
+    /// recover causal identity from a potentially duplicated display ref.
+    pub fn with_scoped_substitutions(
+        self,
+        substitutions: &[crate::scheduler::ScopedMcuSubstitution],
+    ) -> Result<Self, EvidenceError> {
+        self.with_assumptions(
+            substitutions
+                .iter()
+                .map(|substitution| substitution.assumption().clone()),
+        )
     }
 
     pub fn inventory(&self) -> &[ArtifactProvenance] {
@@ -892,10 +903,12 @@ impl BoardEvidence {
     }
 
     fn subject_matches_reference(&self, subject: &str, reference: &str) -> bool {
-        self.display_ref_by_subject
-            .get(subject)
-            .map_or(subject, String::as_str)
-            == reference
+        subject == reference
+            || self
+                .display_ref_by_subject
+                .get(subject)
+                .map_or(subject, String::as_str)
+                == reference
     }
 
     /// A real report-coverage assertion for an otherwise finding-free static
@@ -2398,6 +2411,59 @@ mod duplicate_open_part_tests {
     }
 
     #[test]
+    fn independently_normalized_collision_domains_merge_identically_in_either_order() {
+        let empty_evidence = || {
+            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
+                .expect("empty evidence builds")
+        };
+        let claim = |kind: &str| {
+            Assumption::not_exercised(
+                AssumptionSource::Scheduler,
+                Subject::new("i2c/sensor", "I2C peripheral sensor"),
+                Scope::Check {
+                    check: "ci".into(),
+                    kind: Some(kind.to_string()),
+                },
+                "the MCU platform models no matching controller",
+                "add the controller to the SoC descriptor, then re-run",
+            )
+        };
+        let pair = empty_evidence()
+            .with_assumptions([claim("assertion-a"), claim("assertion-b")])
+            .expect("pair normalizes its collision domain");
+        let singleton = empty_evidence()
+            .with_assumptions([claim("assertion-c")])
+            .expect("singleton keeps its concise id");
+
+        let merge = |mut target: BoardEvidence, source: &BoardEvidence| {
+            for assumption in source.assumptions().iter().cloned() {
+                target = target
+                    .with_assumptions([assumption])
+                    .expect("independently normalized evidence merges");
+            }
+            target
+        };
+        let pair_then_singleton = merge(pair.clone(), &singleton);
+        let singleton_then_pair = merge(singleton, &pair);
+        let inventory = |evidence: &BoardEvidence| {
+            evidence
+                .assumptions()
+                .iter()
+                .map(|assumption| (assumption.id().clone(), assumption.statement().to_string()))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            inventory(&pair_then_singleton),
+            inventory(&singleton_then_pair)
+        );
+        assert!(pair_then_singleton
+            .assumptions()
+            .iter()
+            .all(|assumption| assumption.id().as_str().contains('~')));
+    }
+
+    #[test]
     fn incremental_collision_rekeys_completed_map_references_atomically() {
         let board = ExtractedBoard {
             name: "collision-map-integrity".to_string(),
@@ -2523,20 +2589,28 @@ mod duplicate_open_part_tests {
             },
         ];
 
-        let evidence =
-            evidence
-                .with_assumptions(substitutions.iter().zip(subjects).map(
-                    |(substitution, subject)| {
-                        Assumption::substitute_model_for_component(
-                            AssumptionSource::Scheduler,
-                            &subject,
-                            &substitution.reference,
-                            &substitution.requested_part,
-                            &substitution.modelled_core,
-                        )
-                    },
-                ))
-                .expect("both exact scheduler substitutions survive");
+        let legacy_error = evidence
+            .clone()
+            .with_substitutions(&substitutions[..1])
+            .expect_err("a display-only substitution must refuse duplicate MCU matches");
+        assert!(
+            legacy_error
+                .to_string()
+                .contains("ambiguous MCU reference 'U1'"),
+            "unexpected ambiguity error: {legacy_error}"
+        );
+
+        let scoped_substitutions: Vec<_> = substitutions
+            .iter()
+            .cloned()
+            .zip(subjects.iter().cloned())
+            .map(|(substitution, subject)| {
+                crate::scheduler::ScopedMcuSubstitution::new(substitution, subject)
+            })
+            .collect();
+        let evidence = evidence
+            .with_scoped_substitutions(&scoped_substitutions)
+            .expect("both exact scheduler substitutions survive");
         let substitutions: Vec<_> = evidence
             .assumptions()
             .iter()
@@ -2557,6 +2631,18 @@ mod duplicate_open_part_tests {
                 1,
                 "each net receives only its own substitution"
             );
+        }
+
+        for (net, subject) in ["MCU_A", "MCU_B"].into_iter().zip(subjects) {
+            let map = evidence
+                .simulation_map(
+                    format!("exact substitution scope for {net}"),
+                    &[],
+                    std::slice::from_ref(&subject),
+                    None,
+                )
+                .expect("an exact occurrence subject resolves to its own net");
+            assert_eq!(map.assumptions().len(), 1);
         }
     }
 
