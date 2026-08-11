@@ -116,6 +116,9 @@ jobs:
       # edits are detected, archives stay inside their declared source, and a
       # browser artifact cannot be attached to a different reservation.
       - run: python3 -m unittest qc.tests.test_unseen_boards
+      # A zero-exit integration test that printed SKIP is not release evidence.
+      # Keep the runner's evidence parser under the ordinary offline CI tier.
+      - run: python3 scripts/test_required_integrations.py
       # A repository with no release run is allowed on an ordinary PR. If the
       # canonical ledger exists, however, every reservation must terminate and
       # every retained artifact must still match its recorded digest.
