@@ -4,6 +4,7 @@ use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 use hauksbee_ir::evidence::{AssumptionKind, EvidenceStatus, RunDate};
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{Integration, SolverOptions};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -168,7 +169,6 @@ fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
             .unwrap()
             .with_substitutions(&[hauksbee_engine::scheduler::McuSubstitution {
                 reference: "R1".into(),
-                evidence_subject: "R1".into(),
                 backend: "renode:fixture".into(),
                 requested_part: "real-part".into(),
                 modelled_core: "stand-in-core".into(),
@@ -219,6 +219,29 @@ fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
         .assumptions()
         .iter()
         .any(|a| a.kind() == hauksbee_ir::evidence::AssumptionKind::SubstituteModel));
+}
+
+#[test]
+fn downstream_mcu_evidence_struct_literals_keep_the_legacy_field_contract() {
+    let _binding = hauksbee_engine::binder::McuBinding {
+        reference: "U1".into(),
+        backend: "renode:stm32f4".into(),
+        requested_part: "STM32F411RET6".into(),
+        external_clock_present: false,
+        pad_roles: HashMap::new(),
+        role_nets: HashMap::new(),
+        gpio_drivers: HashMap::new(),
+        adc_nets: HashMap::new(),
+        adc_pin: HashMap::new(),
+        module: false,
+        max_supply_v: None,
+    };
+    let _substitution = hauksbee_engine::scheduler::McuSubstitution {
+        reference: "U1".into(),
+        backend: "renode:stm32f4".into(),
+        requested_part: "STM32F411RET6".into(),
+        modelled_core: "STM32F407".into(),
+    };
 }
 
 #[test]

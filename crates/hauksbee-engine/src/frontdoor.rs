@@ -317,6 +317,7 @@ struct WebCosimEvidence {
     faults: Vec<crate::stress::FaultEvent>,
     activity_nets: Vec<String>,
     substitutions: Vec<crate::scheduler::McuSubstitution>,
+    substitution_assumptions: Vec<hauksbee_ir::evidence::Assumption>,
     error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
 }
 
@@ -887,7 +888,10 @@ pub fn analyze_with_firmware(
         .and_then(|evidence| evidence.with_input_artifact(file_name, &norm.raw, norm.kind))
         .and_then(|evidence| evidence.with_firmware_artifact(&resolved.name, &resolved.bytes));
         if let Ok(mut evidence) = evidence_result {
-            evidence = match evidence.clone().with_substitutions(&captured.substitutions) {
+            evidence = match evidence
+                .clone()
+                .with_assumptions(captured.substitution_assumptions.iter().cloned())
+            {
                 Ok(evidence) => evidence,
                 Err(_) => evidence,
             };
@@ -1702,6 +1706,7 @@ fn run_web_cosim(
         faults,
         activity_nets: gpio_nets.iter().map(|net| net.name.clone()).collect(),
         substitutions: sched.substitutions().to_vec(),
+        substitution_assumptions: sched.substitution_assumptions().to_vec(),
         error_budget: error_budget.clone(),
     };
     let substituted = !captured.substitutions.is_empty();
