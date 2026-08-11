@@ -1411,7 +1411,7 @@ fn a_named_abstention_puts_its_unlocking_input_in_the_what_to_do() {
 }
 
 #[test]
-fn rekeying_an_assumption_updates_artifact_map_and_default_parameter_references() {
+fn registry_owned_rekey_is_atomic_and_updates_every_reference() {
     let assumption = Assumption::default_parameter("U1", "vout", "3.3 V");
     let old = assumption.id().clone();
     let replacement = assumption.clone().disambiguate_colliding_id();
@@ -1448,29 +1448,63 @@ fn rekeying_an_assumption_updates_artifact_map_and_default_parameter_references(
         )
         .unwrap();
     map = map.with_artifacts(&registry, [artifact_id]).unwrap();
-    let mut artifact = registry.artifacts()[0].clone();
-
     let unrelated =
         Assumption::default_parameter("U1", "vout", "5.0 V").disambiguate_colliding_id();
-    assert!(artifact
-        .clone()
-        .rekey_colliding_assumption(&assumption, &unrelated)
+    assert!(registry
+        .rekey_collision_transaction(
+            std::slice::from_ref(&map),
+            std::slice::from_ref(&old),
+            &assumption,
+            &unrelated,
+        )
         .is_err());
-    artifact
-        .rekey_colliding_assumption(&assumption, &replacement)
-        .unwrap();
-    map.rekey_colliding_assumption(&assumption, &replacement)
-        .unwrap();
+    assert_eq!(registry.assumptions()[0].id(), &old);
+    assert_eq!(
+        registry.artifacts()[0].assumptions(),
+        std::slice::from_ref(&old)
+    );
+    assert_eq!(map.assumptions(), std::slice::from_ref(&old));
 
-    assert_eq!(artifact.assumptions(), std::slice::from_ref(&new));
+    let unknown = Assumption::open_part("U9", "unknown", "no model")
+        .id()
+        .clone();
+    assert!(registry
+        .rekey_collision_transaction(
+            std::slice::from_ref(&map),
+            std::slice::from_ref(&unknown),
+            &assumption,
+            &replacement,
+        )
+        .is_err());
+    assert_eq!(registry.assumptions()[0].id(), &old);
+    assert_eq!(map.assumptions(), std::slice::from_ref(&old));
+
+    let transaction = registry
+        .rekey_collision_transaction(
+            std::slice::from_ref(&map),
+            std::slice::from_ref(&old),
+            &assumption,
+            &replacement,
+        )
+        .unwrap();
+    // Creating the replacement never mutates the serializable inputs. Callers
+    // receive all validated replacements together from `into_parts`.
+    assert_eq!(registry.assumptions()[0].id(), &old);
+    assert_eq!(map.assumptions(), std::slice::from_ref(&old));
+
+    let (rekeyed, maps, external_references) = transaction.into_parts();
+    let map = &maps[0];
+    assert_eq!(
+        rekeyed.artifacts()[0].assumptions(),
+        std::slice::from_ref(&new)
+    );
     assert_eq!(map.assumptions(), std::slice::from_ref(&new));
     assert!(matches!(
         map.parameters()[0].origin(),
         ValueOrigin::Default { assumption } if assumption == &new
     ));
-    let mut rekeyed = EvidenceRegistry::new(vec![replacement]).unwrap();
-    rekeyed.add_artifact(artifact).unwrap();
-    let parameters = map.parameters().to_vec();
-    map.with_parameters(&rekeyed, parameters)
+    assert_eq!(external_references, vec![new]);
+    map.clone()
+        .with_parameters(&rekeyed, map.parameters().to_vec())
         .expect("every re-keyed reference resolves in the replacement registry");
 }

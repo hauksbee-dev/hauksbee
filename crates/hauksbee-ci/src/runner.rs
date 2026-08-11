@@ -1750,13 +1750,7 @@ fn run_one(
     )
     .and_then(|evidence| evidence.with_input_artifact(board_path, input_raw, input_kind))
     .and_then(|evidence| {
-        evidence.with_assumptions(
-            engine
-                .scheduler()
-                .substitution_assumptions()
-                .iter()
-                .cloned(),
-        )
+        evidence.with_scoped_substitutions(engine.scheduler().scoped_substitutions())
     })
     .and_then(|evidence| evidence.with_assumptions(production_assumptions))
     .map_err(|e| SpecError::Invalid(format!("building run evidence: {e}")))?;
