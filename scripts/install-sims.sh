@@ -28,6 +28,8 @@
 #   --check          Do NOT install anything. Report for each backend whether
 #                    hauksbee will discover it and at which path. Exit 0 if
 #                    all requested backends are discoverable, else 1.
+#   --require-pinned Release-evidence mode: only the versions in
+#                    required-simulator-versions.env count as installed.
 #   --help           Show this help.
 #
 # Install targets:
@@ -55,12 +57,17 @@ usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; $d'
 # verify_asset: at top level BASH_SOURCE unambiguously names this file.
 RENODE_CHECKSUMS="${RENODE_CHECKSUMS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/renode-checksums.txt}"
 QEMU_CHECKSUMS="${QEMU_CHECKSUMS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/espressif-qemu-checksums.txt}"
+VERSIONS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/required-simulator-versions.env"
+[ -f "$VERSIONS_FILE" ] || die "required simulator version manifest missing: $VERSIONS_FILE"
+# shellcheck source=scripts/required-simulator-versions.env
+source "$VERSIONS_FILE"
 
 # ── defaults ────────────────────────────────────────────────────────────────
 DO_RENODE=1
 DO_QEMU=1
 DO_AVR=0          # opt-in: simavr is GPL-3.0, so it is not installed by default
 CHECK_ONLY=0
+REQUIRE_PINNED=0
 PREFIX_OVERRIDE=""
 
 while [ $# -gt 0 ]; do
@@ -71,6 +78,7 @@ while [ $# -gt 0 ]; do
     --prefix)       PREFIX_OVERRIDE="${2:?--prefix needs a directory}"; shift 2 ;;
     --prefix=*)     PREFIX_OVERRIDE="${1#*=}"; shift ;;
     --check)        CHECK_ONLY=1; shift ;;
+    --require-pinned) REQUIRE_PINNED=1; shift ;;
     -h|--help)      usage; exit 0 ;;
     *) die "unknown argument '$1' (try --help)" ;;
   esac
@@ -100,16 +108,10 @@ case "$ARCH" in
 esac
 
 # ── pinned versions ──────────────────────────────────────────────────────────
-# Pinned Renode release. See resolve_renode_version and renode-checksums.txt.
-RENODE_VERSION="1.16.1"
-
-# Pinned espressif/qemu release tag. Same discipline as RENODE_VERSION: bumping
-# it means downloading the new assets, hashing them, and replacing the lines in
-# espressif-qemu-checksums.txt. Kept in step with FALLBACK_TAG in
-# crates/hauksbee-mcu/src/qemu/install.rs and ESP_QEMU_TAG in
-# docker/Dockerfile.full, which pin the same release.
-QEMU_VERSION="esp-develop-9.2.2-20260417"
-
+# Renode and Espressif QEMU come from required-simulator-versions.env above.
+# Bumping QEMU_VERSION also requires replacing the checksum manifest and keeping
+# it in step with FALLBACK_TAG in crates/hauksbee-mcu/src/qemu/install.rs and
+# ESP_QEMU_TAG in docker/Dockerfile.full.
 # Pinned simavr release tag (buserror/simavr). Bumping this is a deliberate,
 # reviewed change — see the licensing note in the header.
 SIMAVR_TAG="v1.8"
@@ -342,6 +344,25 @@ is_esp_qemu_fork() {
   "$bin" -machine help 2>/dev/null | grep -qi 'esp32'
 }
 
+renode_is_pinned() {
+  local bin="$1" version
+  version="$("$bin" --version 2>/dev/null | head -1 || true)"
+  case "$version" in
+    "Renode v${RENODE_VERSION}"|"Renode v${RENODE_VERSION}."*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+qemu_is_pinned() {
+  local bin="$1" version expected
+  version="$("$bin" --version 2>/dev/null | head -1 || true)"
+  expected="$(qemu_tag_to_dir_ver "$QEMU_VERSION")"
+  case "$version" in
+    *"(${expected})"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ── find ESP-IDF idf_tools.py ─────────────────────────────────────────────────
 find_idf_tools_py() {
   # Check canonical locations in order.
@@ -389,6 +410,10 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
       ok "FOUND  $rnode_bin"
       ver="$("$rnode_bin" --version 2>/dev/null | head -1 || echo "(version unknown)")"
       info "       $ver"
+      if [ "$REQUIRE_PINNED" -eq 1 ] && ! renode_is_pinned "$rnode_bin"; then
+        err "       VERSION MISMATCH: release evidence requires Renode $RENODE_VERSION"
+        all_ok=1
+      fi
     else
       err "NOT FOUND"
       info "  Discovery order:"
@@ -413,6 +438,10 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
         ok "FOUND  $qemu_bin"
         ver="$("$qemu_bin" --version 2>/dev/null | head -1 || echo "(version unknown)")"
         info "       $ver"
+        if [ "$REQUIRE_PINNED" -eq 1 ] && ! qemu_is_pinned "$qemu_bin"; then
+          err "       VERSION MISMATCH: release evidence requires Espressif QEMU $QEMU_VERSION"
+          all_ok=1
+        fi
         # Confirm it is the Espressif fork
         if is_esp_qemu_fork "$qemu_bin"; then
           ok "       Espressif fork confirmed (esp32 machine present)"
@@ -466,12 +495,12 @@ install_renode() {
   log "Renode: checking for existing install..."
 
   rnode_bin="$(find_renode_bin 2>/dev/null || true)"
-  if [ -n "$rnode_bin" ]; then
+  if [ -n "$rnode_bin" ] && { [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$rnode_bin"; }; then
     ok "Already discoverable at $rnode_bin — skipping download."
     return 0
   fi
 
-  log "Renode: resolving latest release..."
+  log "Renode: selecting pinned release..."
   RENODE_VER="$(resolve_renode_version)"
   info "  version: $RENODE_VER"
 
@@ -553,7 +582,9 @@ install_qemu() {
   xtensa_bin="$(find_qemu_bin "qemu-system-xtensa" "HAUKSBEE_QEMU_XTENSA" 2>/dev/null || true)"
   riscv_bin="$(find_qemu_bin "qemu-system-riscv32" "HAUKSBEE_QEMU_RISCV32" 2>/dev/null || true)"
 
-  if [ -n "$xtensa_bin" ] && [ -n "$riscv_bin" ]; then
+  if [ -n "$xtensa_bin" ] && [ -n "$riscv_bin" ] \
+      && { [ "$REQUIRE_PINNED" -eq 0 ] \
+        || { qemu_is_pinned "$xtensa_bin" && qemu_is_pinned "$riscv_bin"; }; }; then
     ok "Both already discoverable:"
     info "  qemu-system-xtensa:  $xtensa_bin"
     info "  qemu-system-riscv32: $riscv_bin"
@@ -563,7 +594,7 @@ install_qemu() {
 
   # ── try idf_tools.py path first ──────────────────────────────────────────
   IDF_TOOLS_PY="$(find_idf_tools_py 2>/dev/null || true)"
-  if [ -n "$IDF_TOOLS_PY" ]; then
+  if [ -n "$IDF_TOOLS_PY" ] && [ "$REQUIRE_PINNED" -eq 0 ]; then
     log "Espressif QEMU: ESP-IDF found at $(dirname "$(dirname "$IDF_TOOLS_PY")")"
     info "  Installing via idf_tools.py (preferred; lands in ~/.espressif/tools/)"
     python3 "$IDF_TOOLS_PY" install qemu-xtensa qemu-riscv32 \
@@ -603,7 +634,8 @@ install_qemu() {
 
     # Already installed?
     existing="$(find_qemu_bin "$bin_name" "HAUKSBEE_QEMU_$(echo "$qemu_arch" | tr '[:lower:]' '[:upper:]' | tr '-' '_')" 2>/dev/null || true)"
-    if [ -n "$existing" ]; then
+    if [ -n "$existing" ] \
+        && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$existing"; }; then
       ok "$bin_name already discoverable at $existing — skipping."
       continue
     fi
@@ -655,6 +687,9 @@ install_qemu() {
       warn "If it names a /opt/homebrew library: brew install the package, then re-run --check."
       continue
     fi
+    if [ "$REQUIRE_PINNED" -eq 1 ] && ! qemu_is_pinned "$installed_bin"; then
+      die "$bin_name installed from the pinned asset but reports the wrong version; expected $QEMU_VERSION"
+    fi
     ok "$bin_name installed: $installed_bin"
   done
 
@@ -663,6 +698,10 @@ install_qemu() {
   riscv_bin="$(find_qemu_bin  "qemu-system-riscv32" "HAUKSBEE_QEMU_RISCV32" 2>/dev/null || true)"
   [ -n "$xtensa_bin" ]  || die "qemu-system-xtensa not discoverable after install."
   [ -n "$riscv_bin" ]   || die "qemu-system-riscv32 not discoverable after install."
+  if [ "$REQUIRE_PINNED" -eq 1 ]; then
+    qemu_is_pinned "$xtensa_bin" || die "discovered qemu-system-xtensa is not pinned to $QEMU_VERSION"
+    qemu_is_pinned "$riscv_bin" || die "discovered qemu-system-riscv32 is not pinned to $QEMU_VERSION"
+  fi
 }
 
 # ── install AVR / simavr ──────────────────────────────────────────────────────
@@ -770,7 +809,7 @@ summary_ok=1
 
 if [ "$DO_RENODE" -eq 1 ]; then
   rnode_bin="$(find_renode_bin 2>/dev/null || true)"
-  if [ -n "$rnode_bin" ]; then
+  if [ -n "$rnode_bin" ] && { [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$rnode_bin"; }; then
     ok "Renode   $rnode_bin"
   else
     err "Renode   NOT FOUND (install step may have failed; see output above)"
@@ -781,13 +820,13 @@ fi
 if [ "$DO_QEMU" -eq 1 ]; then
   xtensa_bin="$(find_qemu_bin "qemu-system-xtensa"  "HAUKSBEE_QEMU_XTENSA"  2>/dev/null || true)"
   riscv_bin="$(find_qemu_bin  "qemu-system-riscv32" "HAUKSBEE_QEMU_RISCV32" 2>/dev/null || true)"
-  if [ -n "$xtensa_bin" ]; then
+  if [ -n "$xtensa_bin" ] && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$xtensa_bin"; }; then
     ok "QEMU (xtensa)   $xtensa_bin"
   else
     err "QEMU (xtensa)   NOT FOUND"
     summary_ok=0
   fi
-  if [ -n "$riscv_bin" ]; then
+  if [ -n "$riscv_bin" ] && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$riscv_bin"; }; then
     ok "QEMU (riscv32)  $riscv_bin"
   else
     err "QEMU (riscv32)  NOT FOUND"
