@@ -392,8 +392,8 @@ pub struct Scheduler {
     /// traffic can never reach them, so they sit at their power-on defaults for
     /// the whole run. Recorded at attach time (mirroring `substitutions`) and
     /// surfaced as a co-sim coverage warning on the four batch report surfaces
-    /// (default text, `--plain`, `--json`, hauksbee-ci) and on neither the TUI
-    /// nor the web front door; a CI
+    /// (default text, `--plain`, `--json`, hauksbee-ci) and the TUI. The
+    /// synchronous web report does not run the external backend that emits it; a CI
     /// `peripheral` assertion against one of these FAILS rather than passing on
     /// the slave's untouched default state (U3 finding 2).
     unexercised_buses: Vec<UnexercisedBus>,
@@ -696,9 +696,10 @@ pub struct AdcDrop {
 }
 
 impl AdcDrop {
-    /// The one-line warning the four batch surfaces emit for this channel (the
-    /// TUI and the web front door render no ADC drop); same shared-wording
-    /// discipline as [`UnexercisedBus::message`].
+    /// The one-line warning the four batch surfaces and TUI emit for this
+    /// channel. The synchronous web report does not run the external backend
+    /// that emits it; same shared-wording discipline as
+    /// [`UnexercisedBus::message`].
     pub fn message(&self) -> String {
         let parts = if self.parts.is_empty() {
             String::new()
@@ -722,8 +723,9 @@ impl AdcDrop {
 /// The one-line warning the four batch surfaces emit for an entry of
 /// [`Scheduler::watchdog_limitations`], so the default text summary, `--plain`,
 /// the `--json` notes and the CI report all name the same gap in the same words.
-/// Four call sites, and the interactive TUI is not one of them: its co-sim pane
-/// carries no watchdog statement (see `docs/cosim/MCU.md`).
+/// The batch call sites and interactive TUI all render this sentence. The
+/// synchronous web report does not run the external backends that emit it (see
+/// `docs/cosim/MCU.md`).
 ///
 /// `limitation` is the backend's own whole sentence and is passed through
 /// UNCHANGED. Two surfaces wording the same coverage hole differently is the
@@ -890,9 +892,9 @@ pub struct DriverContention {
 }
 
 impl DriverContention {
-    /// The one-line finding the default text summary, `--plain`, `--json` and
-    /// the web front door emit for this net (hauksbee-ci and the TUI render no
-    /// driver contention); same shared-wording discipline as
+    /// The one-line finding the default text summary, `--plain`, `--json`, TUI
+    /// and web front door emit for this net (hauksbee-ci does not); same
+    /// shared-wording discipline as
     /// [`UnexercisedBus::message`].
     pub fn message(&self) -> String {
         format!(

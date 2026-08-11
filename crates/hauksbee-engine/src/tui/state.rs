@@ -871,6 +871,20 @@ impl AppState {
         )
     }
 
+    pub fn coverage_event_count(&self) -> usize {
+        crate::reports::coverage::disposition_count(
+            &self.coverage,
+            crate::reports::coverage::CoverageDisposition::ObservedEvent,
+        )
+    }
+
+    pub fn coverage_fault_count(&self) -> usize {
+        crate::reports::coverage::disposition_count(
+            &self.coverage,
+            crate::reports::coverage::CoverageDisposition::ElectricalFault,
+        )
+    }
+
     /// Toggle the coverage overlay. Available from any pane (the caveats are
     /// about the run, not about a selected row) and only when there is something
     /// to show, so `c` never opens an empty modal.

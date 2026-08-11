@@ -139,8 +139,8 @@ in-process AVR backend and bridged/contracted on the external emulators.
 | GPIO out (`on_pin_change`) | yes (per-edge IRQ) | yes (ODR poll over TCP) | yes (RAM-mailbox diff) |
 | GPIO in (`set_digital_in`) | yes | yes | yes (gdbstub `M` write) |
 | UART (`uart_write` / `on_uart`) | yes | yes | yes (serial socket) |
-| ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write), and only where a descriptor declares one: `renode:rp2040` inputs 0..3 do, and the STM32F103/F4/nRF52/FE310 descriptors do not, because those platforms model no ADC peripheral at all (verified live). An injection with no map is DROPPED and surfaced as a coverage warning on all six run-report surfaces (run text, `--plain`, `--json`, hauksbee-ci, the TUI pane, the web front door), never silently. Absence is per platform rather than a property of Renode: the STM32F0 family's stock platform does model an ADC with a `SetDefaultValue` hook, so a descriptor for one can map channels without vendoring anything. See "ADC / bus coverage by platform" | yes, RAM-mailbox count slots (firmware contract) |
-| I2C slave models (`on_i2c`) | yes (TWI decode) | yes on platforms whose descriptor names controllers (STM32F103/F4 `i2c1`, nRF52840 `twi0`/`twi1`); a slave bound on a controller-less platform is recorded as UNEXERCISED and surfaced on all six run-report surfaces, and a CI `peripheral` assertion against it FAILS | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
+| ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write), and only where a descriptor declares one: `renode:rp2040` inputs 0..3 do, and the STM32F103/F4/nRF52/FE310 descriptors do not, because those platforms model no ADC peripheral at all (verified live). An injection with no map is DROPPED and surfaced on every report surface that actually runs the external backend (run text, `--plain`, `--json`, hauksbee-ci, and the TUI pane), never silently. The synchronous web front door refuses external-emulator runs before these scheduler signals exist and points to live/CLI co-sim instead. Absence is per platform rather than a property of Renode: the STM32F0 family's stock platform does model an ADC with a `SetDefaultValue` hook, so a descriptor for one can map channels without vendoring anything. See "ADC / bus coverage by platform" | yes, RAM-mailbox count slots (firmware contract) |
+| I2C slave models (`on_i2c`) | yes (TWI decode) | yes on platforms whose descriptor names controllers (STM32F103/F4 `i2c1`, nRF52840 `twi0`/`twi1`); a slave bound on a controller-less platform is recorded as UNEXERCISED on every report surface that runs that backend, and a CI `peripheral` assertion against it FAILS | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
 | SPI slave models (`on_spi`) | yes | yes on platforms with named controllers (STM32F103 `spi1` via `extra_repl`, F4 `spi2`/`spi3`, nRF52840 `spi2`); controller-less platforms get the same UNEXERCISED recording/surfacing | yes, RAM-mailbox bus cells (firmware contract) |
 | Drive direction (`pins_configured_output`) | yes (DDR hooks) | yes on dir-mapped platforms: STM32F103 (CRL/CRH), STM32F4 (MODER), nRF52840 (DIR), polled alongside the ODR; RP2040/FE310 carry no verified dir map and stay direction-blind | no (mailbox carries levels only) |
 
@@ -171,8 +171,10 @@ injections as DROPPED and surfaces them on all four batch report surfaces: the
 run text, `--plain`, `--json` (`CosimJson.adc_dropped` + a coverage note), and
 all hauksbee-ci formats, naming the channel, MCU, and board net, so a batch run
 whose firmware never received its analog inputs can never read as healthy. The
-interactive TUI and the web front door carry it too, off the same
-`Scheduler::adc_dropped` signal through one shared enumeration.
+interactive TUI carries it too, off the same `Scheduler::adc_dropped` signal
+through one shared enumeration. The synchronous web front door does not run a
+Renode/QEMU-only board, so its report is unavailable rather than falsely green
+and names the live/CLI path that does carry this signal.
 Espressif QEMU exposes no host hook for its I2C RX FIFO, GPSPI transfers, or
 SAR ADC, so all three ride the RAM mailbox (`qemu/mod.rs::mailbox`, the same
 contract as the GPIO words): ADC counts land in fixed slots, and I2C/SPI
@@ -283,8 +285,10 @@ reaches all four batch report surfaces of an affected run (the same channel and
 discipline as the watchdog section below: default text, `--plain` heads-ups,
 `--json` `CosimJson.timing_limitations` plus `notes[]` coverage entries, and
 every hauksbee-ci format), plus `hauksbee models lint` before a run happens. The
-interactive TUI and the web front door carry it as well, from the same
-`Scheduler::timing_limitations` signal.
+interactive TUI carries it as well, from the same
+`Scheduler::timing_limitations` signal. The synchronous web report refuses
+external-emulator runs before a scheduler exists; its live/CLI alternatives
+carry the limitation.
 
 - **ESP32 virtual time is wall-paced.** icount breaks esp32 boot (measured, see
   `src/qemu/mod.rs`), so even with the cont→stop window measured, TCG pace
@@ -319,12 +323,13 @@ surfaced the same way, on all four batch report surfaces: `hauksbee run` default
 text, `--plain` heads-ups, `--json` (`CosimJson.watchdog_limitations` /
 `CosimJson.watchdog_resets` plus `notes[]` coverage entries), and every
 hauksbee-ci format as a `COVERAGE HOLE` warning. `hauksbee models lint` states
-it per descriptor before a run happens. The interactive TUI co-sim pane and the
-web front door carry both statements as well (see
+it per descriptor before a run happens. The interactive TUI co-sim pane carries
+both statements. The simavr web run can report a reboot, while the synchronous
+web report refuses the external backends that emit watchdog limitations (see
 [Which surface carries a coverage hole](#which-surface-carries-a-coverage-hole)).
 
-`Mcu::watchdog_limitation` returns the whole sentence, which every surface
-renders verbatim through one shared formatter
+`Mcu::watchdog_limitation` returns the whole sentence, which every surface that
+carries the signal renders verbatim through one shared formatter
 (`scheduler::watchdog_limitation_message`) so two of them cannot word the same
 gap differently. `Mcu::watchdog_resets` reports reboots that DID happen, because firmware
 behaviour observed after a reboot belongs to a rebooted core and an assertion
@@ -370,9 +375,10 @@ hole below on all four batch report surfaces: `hauksbee run` default text,
 `CosimJson.unexercised_buses` plus `notes[]` coverage entries), and every
 hauksbee-ci format (human, JUnit, GitHub annotations, as `COVERAGE HOLE`
 warnings). A CI `peripheral` assertion against an unexercised bus device
-**fails** instead of green-passing on the slave's power-on defaults. The two
-interactive surfaces carry them too, from the same signals; the per-surface
-matrix is the next subsection.
+**fails** instead of green-passing on the slave's power-on defaults. The TUI
+carries them too from the same signals. The synchronous web report does not run
+the external backend that can emit them; it returns an unavailable refusal and
+points to live/CLI co-sim. The per-surface matrix is the next subsection.
 
 #### Which surface carries a coverage hole
 
@@ -394,21 +400,23 @@ matrix below, because they do not read a finished run's caveats:
   Renode and QEMU backends, and carries none of the twelve disclosures below. Treat it
   as a scope, not a report.
 
-Twelve typed per-run co-sim disclosures share one completeness contract. Nine
-are limitations (holes), per-core timing coverage is a measured non-hole bound,
-`TIMING INVALID` is a strict refusal, and fallback windows are second-class
-qualifications. Counted from the emitting call sites rather than from intent. The `--plain`
+Twelve typed per-run co-sim disclosures share one completeness contract. Six
+are limitations (holes), watchdog reboot and drive override are observed
+events, driver contention is an electrical fault, per-core timing coverage is
+a measured non-hole bound, `TIMING INVALID` is a strict refusal, and fallback
+windows are second-class qualifications. Counted from the emitting call sites
+rather than from intent. The `--plain`
 column is yes throughout because `--plain` renders the default text co-sim
 summary AND its own heads-ups (`run_headless` is called with `quiet = cfg.json`,
 so only `--json` silences the text block):
 
 | Coverage caveat | default text | `--plain` | `--json` | hauksbee-ci | TUI | web front door |
 |---|---|---|---|---|---|---|
-| dropped ADC injections | yes | yes | yes | yes | yes | yes |
-| unexercised buses | yes | yes | yes | yes | yes | yes |
-| watchdog limitation | yes | yes | yes | yes | yes | yes |
+| dropped ADC injections | yes | yes | yes | yes | yes | not run (external backend) |
+| unexercised buses | yes | yes | yes | yes | yes | not run (external backend) |
+| watchdog limitation | yes | yes | yes | yes | yes | not run (external backend) |
 | watchdog reboots | yes | yes | yes | yes | yes | yes |
-| timing limitation | yes | yes | yes | yes | yes | yes |
+| timing limitation | yes | yes | yes | yes | yes | not run (external backend) |
 | per-core timing coverage | yes | yes | yes (field) | yes | yes | yes (field) |
 | strict timing replay refusal | yes | yes | yes (field) | yes (refuses timing claims) | yes | yes (field + refusal) |
 | fallback-qualified windows | yes | yes | yes (field) | yes (field/qualification) | yes | yes (field) |
@@ -417,10 +425,13 @@ so only `--json` silences the text block):
 | drive conflicts | no | yes | yes | no | yes | yes |
 | heuristic SPI framing | yes | yes | yes | assertion detail | yes | yes (field) |
 
-The TUI and web front door carry all twelve typed disclosures while preserving
-their four distinct dispositions; this is not a coverage score and must not be
-presented as an all-green 10/10-style claim. The default text, `--plain`,
-`--json`, and hauksbee-ci retain the command-specific projections in the table.
+The TUI carries all twelve typed disclosures and preserves six distinct
+dispositions. The synchronous web front door carries every disclosure its
+simavr-only run can emit and refuses an external-only run before the four
+external-specific scheduler signals exist. This is not a coverage score and
+must not be presented as an all-green 10/10-style claim. The default text,
+`--plain`, `--json`, and hauksbee-ci retain the command-specific projections in
+the table.
 
 "yes (field)" means the caveat arrives as a structured field with no caveat
 sentence attached, so a consumer has to read the field to learn about it.
@@ -442,7 +453,8 @@ three `no` cells above; they were never the surface that fell behind.
 class added to the enumeration appears there without a second edit. Screen space
 is handled by splitting count from wording: a persistent two-line banner directly
 under the pane's status lines gives separate limitation, timing-bound,
-strict-refusal and fallback-qualification counts plus the class names, and `c`
+strict-refusal, fallback-qualification, observed-event and electrical-fault
+counts plus the class names, and `c`
 opens an overlay carrying every disclosure's full sentence plus the
 input that would unlock it (scrolled with ↑/↓). The banner renders ABOVE the GPIO
 table and the UART tail, both of which grow during a run, because a caveat the
@@ -465,7 +477,7 @@ failures ride `timing_refusals` and populate the report's typed refusal; they
 must never be rendered as an ordinary warning or a pass. Fallback spans ride
 `fallback_windows`, retaining the method, fidelity note and optional measured
 error estimate so the browser and standalone HTML label them second-class.
-These optional fields preserve older report consumers. Of the remaining
+These optional fields preserve older JSON report consumers. Of the remaining
 eight, seven are note-level `WebFinding` cards (which do demote a bare "Looks
 healthy") and driver contention is a serious one, because two push-pull drivers
 fighting a net is a real electrical fault rather than a caveat about the run. Four
@@ -473,8 +485,9 @@ of the seven notes are structurally empty on this path, which co-sims AVR in
 process: `simavr` reports
 no watchdog limitation and no timing limitation, its ADC injection is exact, and
 it decodes TWI and SPI natively, so there is no dropped injection or unexercised
-bus to report. They are wired anyway rather than skipped, so a backend added to
-this path later cannot make them silent again. Watchdog reboots were the class
+bus to report. The synchronous report refuses Renode/QEMU-only boards before
+these signals exist; the projection is wired for a future backend addition but
+is not counted as current operational coverage. Watchdog reboots were the class
 this surface reached and did not report: `simavr`'s watchdog does bite and
 `Mcu::watchdog_resets` counts the reboots, so a run whose firmware was rebooted
 mid-window used to read quiet here. `interactive_coverage_parity.rs` proves both
@@ -1220,11 +1233,12 @@ on a RISC-V core, proving the backend stays ISA-agnostic.
   `set_analog_in` delivers counts only where a
   `RenodeConfig::adc_channels` recipe says how (a Monitor feed command for
   a modeled ADC, or a `WriteDoubleWord` into the result word the firmware
-  reads). hauksbee records an unmapped channel's drop and surfaces it on all SIX
-  run-report surfaces (run text, `--plain`, `--json` `CosimJson.adc_dropped` +
-  notes, the hauksbee-ci human/JUnit/GitHub reports, the interactive TUI's co-sim
-  pane, and the web front door), naming the channel, MCU, and net, never a
-  stderr-only whisper.
+  reads). hauksbee records an unmapped channel's drop and surfaces it on every
+  report path that runs the external backend (run text, `--plain`, `--json`
+  `CosimJson.adc_dropped` + notes, the hauksbee-ci human/JUnit/GitHub reports,
+  and the interactive TUI's co-sim pane), naming the channel, MCU, and net,
+  never a stderr-only whisper. The synchronous web report refuses this backend
+  before the signal exists and points to live/CLI co-sim.
   The STM32 demo couples through the GPIO/LED path, not the ADC, so it
   carries no map. The AVR backend's ADC injection is fully wired and exact.
 
