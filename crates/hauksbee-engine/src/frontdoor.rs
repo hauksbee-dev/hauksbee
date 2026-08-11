@@ -549,20 +549,26 @@ fn analyze_normalized_with_ties(
     // (`altium_drc`) for a binary board, the KiCad layout text otherwise. A
     // gerber archive has neither; its DRC section says so below instead of
     // reporting a vacuous "no problems".
-    let mut drc = if is_binary {
+    let drc = if is_binary {
         ExtractedBoard::altium_drc(&norm.raw).unwrap_or_default()
     } else if is_gerber {
         Default::default()
     } else {
         ExtractedBoard::drc(text_view.unwrap_or_default()).unwrap_or_default()
     };
-    if let Some(ties) = schematic_ties {
-        ties.apply(&mut drc);
-    }
+    let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
     // Render from the grouped structure (single source of truth shared with the
     // CLI text/plain/json surfaces): duplicates collapsed, and gap==rule labelled
     // "at minimum clearance (no margin)" rather than the wrong "below the rule".
-    let drc_plain = plain_drc_structured(&crate::result::DrcStructured::from_report(&drc));
+    let drc_structured = crate::result::DrcStructured::from_report_with_ties(
+        &drc,
+        qualification.as_ref(),
+        norm.layout_text
+            .as_deref()
+            .is_some_and(|text| text.contains("<eagle"))
+            && schematic_ties.is_none(),
+    );
+    let drc_plain = plain_drc_structured(&drc_structured);
 
     // Bind FIRST (also consumed below for the report panel and evidence): the
     // lint/SI section verdicts need the unmodelled-critical part list so the
@@ -653,7 +659,25 @@ fn analyze_normalized_with_ties(
             )
         }
     };
-    let drc_structured = crate::result::DrcStructured::from_report(&drc);
+    let evidence = match (schematic_ties, &qualification) {
+        (Some(ties), Some(qualification)) => match evidence.with_schematic_artifact(
+            &ties.path,
+            &ties.raw,
+            ties.contribution(qualification),
+        ) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                return (
+                    unreadable(
+                        file_name,
+                        format!("could not record schematic evidence: {error}"),
+                    ),
+                    drc,
+                )
+            }
+        },
+        _ => evidence,
+    };
     let mut actual_findings = crate::result::lint_findings_json(&lint);
     actual_findings.extend(crate::result::si_findings_json(&si));
     actual_findings.extend(
@@ -661,15 +685,16 @@ fn analyze_normalized_with_ties(
             .as_ref()
             .and_then(crate::result::usbc_finding_json),
     );
-    let mut actual_maps = match evidence.maps_for_drc(&drc_structured) {
-        Ok(maps) => maps,
-        Err(error) => {
-            return (
-                unreadable(file_name, format!("could not build DRC evidence: {error}")),
-                drc,
-            )
-        }
-    };
+    let mut actual_maps =
+        match evidence.maps_for_drc_with_ties(&drc_structured, qualification.as_ref()) {
+            Ok(maps) => maps,
+            Err(error) => {
+                return (
+                    unreadable(file_name, format!("could not build DRC evidence: {error}")),
+                    drc,
+                )
+            }
+        };
     match evidence.maps_for_findings(&actual_findings) {
         Ok(maps) => actual_maps.extend(maps),
         Err(error) => {
@@ -859,6 +884,16 @@ pub fn analyze_with_firmware(
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> WebReport {
+    analyze_with_firmware_with_ties(file_name, contents, fw_name, fw_bytes, None)
+}
+
+pub fn analyze_with_firmware_with_ties(
+    file_name: &str,
+    contents: &[u8],
+    fw_name: &str,
+    fw_bytes: &[u8],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> WebReport {
     // Normalize ONCE; the static analysis and the co-sim share the same
     // extracted board. Re-reading the ORIGINAL bytes for co-sim with only the
     // text/binary sniffers fails with "could not re-read the board" on a
@@ -868,7 +903,7 @@ pub fn analyze_with_firmware(
         // No board to co-sim against; return the normalization error as-is.
         Err(e) => return unreadable(file_name, e.web_message()),
     };
-    let (mut report, drc) = analyze_normalized(file_name, &norm);
+    let (mut report, drc) = analyze_normalized_with_ties(file_name, &norm, schematic_ties);
 
     // The firmware part may be a zip (a built tree, or a whole PlatformIO
     // project) rather than a bare image, resolve it first. A resolution
@@ -1842,7 +1877,18 @@ pub fn analyze_with_firmware_json(
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> String {
-    let report = analyze_with_firmware(file_name, contents, fw_name, fw_bytes);
+    analyze_with_firmware_json_with_ties(file_name, contents, fw_name, fw_bytes, None)
+}
+
+pub fn analyze_with_firmware_json_with_ties(
+    file_name: &str,
+    contents: &[u8],
+    fw_name: &str,
+    fw_bytes: &[u8],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> String {
+    let report =
+        analyze_with_firmware_with_ties(file_name, contents, fw_name, fw_bytes, schematic_ties);
     serde_json::to_string(&report).unwrap_or_else(|e| {
         format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}")
     })
@@ -2570,6 +2616,39 @@ fn main {
             "static conclusions remain useful: {refusal:?}"
         );
         assert!(!refusal.next_action.is_empty());
+    }
+
+    #[test]
+    fn firmware_serve_analysis_preserves_the_companion_tie() {
+        const BOARD: &[u8] =
+            include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
+        const SCHEMATIC: &[u8] =
+            include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch");
+        let ties = crate::schematic_ties::SchematicTies {
+            path: "declared.sch".into(),
+            raw: SCHEMATIC.to_vec(),
+            ties: hauksbee_extract::declared_net_ties(
+                std::str::from_utf8(SCHEMATIC).expect("text fixture"),
+            )
+            .expect("schematic parses"),
+            auto_discovered: true,
+        };
+
+        let board_only = analyze_json_with_ties("declared.brd", BOARD, Some(&ties));
+        let with_firmware = analyze_with_firmware_json_with_ties(
+            "declared.brd",
+            BOARD,
+            "fw.elf",
+            BOOT_GATE_FW,
+            Some(&ties),
+        );
+        for output in [&board_only, &with_firmware] {
+            assert!(
+                output.contains("schematic declares the tie"),
+                "companion intent must survive every serve path: {output:.500}"
+            );
+            assert!(!output.contains("GND shorts AGND"), "{output:.500}");
+        }
     }
 
     #[test]

@@ -11,9 +11,10 @@ did not run", not "it failed".
 
 ## `schema_version` and the generated schema
 
-Every document carries a top-level `schema_version` (integer, currently `3`).
-It bumps only on a breaking change (a field removed or changed in meaning);
-additive fields never bump it. The machine-checkable contract is the JSON
+Every document carries a top-level `schema_version` (integer, currently `4`).
+It bumps on a breaking change (a field removed or changed in meaning, or a
+closed enum gains a value an older schema would reject); additive optional fields
+do not bump it. The machine-checkable contract is the JSON
 Schema generated from the Rust types at
 `crates/hauksbee-engine/schemas/hauksbee-run-report.schema.json`; a drift test
 keeps the file and the types identical (regenerate with
@@ -23,6 +24,11 @@ Version 3 records the assumption-identity migration: anonymous assumption ids
 now cover their complete typed claim (source, causal scope, prose and expiry),
 and repeated component designators use occurrence-safe causal subjects. An
 acknowledgment or diff consumer must not interpret an older id under this rule.
+
+Version 4 adds `eagle_schematic` to the closed artifact-kind enum. Older v3
+documents remain valid inputs to v4-aware consumers; a document that records an
+Eagle schematic companion identifies itself as v4 so a v3 validator cannot be
+mistaken for accepting that new enum value.
 
 ## Numeric `error_budget`
 

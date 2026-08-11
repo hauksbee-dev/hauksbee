@@ -1063,12 +1063,37 @@ impl BoardEvidence {
         &self,
         drc: &crate::result::DrcStructured,
     ) -> Result<Vec<EvidenceMap>, EvidenceError> {
+        self.maps_for_drc_with_ties(drc, None)
+    }
+
+    pub fn maps_for_drc_with_ties(
+        &self,
+        drc: &crate::result::DrcStructured,
+        qualification: Option<&hauksbee_extract::DrcTieQualification>,
+    ) -> Result<Vec<EvidenceMap>, EvidenceError> {
         let mut maps = Vec::new();
         for short in &drc.shorts {
-            maps.push(self.geometry_map(
+            let mut map = self.geometry_map(
                 short.plain.clone(),
                 &[short.net_a.clone(), short.net_b.clone()],
-            )?);
+            )?;
+            if qualification.is_some_and(|ties| {
+                ties.tie_at(
+                    &short.net_a,
+                    &short.net_b,
+                    &short.layer,
+                    short.loc_mm[0],
+                    short.loc_mm[1],
+                )
+                .is_some()
+            }) {
+                if let Some(schematic) = self.schematic_artifact {
+                    let mut artifacts = map.artifacts().to_vec();
+                    artifacts.push(schematic);
+                    map = map.with_artifacts(&self.registry, artifacts)?;
+                }
+            }
+            maps.push(map);
         }
         for group in drc.violations.iter().chain(&drc.at_limit) {
             maps.push(self.geometry_map(
@@ -1132,13 +1157,7 @@ impl BoardEvidence {
         let traversal = index.traverse_assertion(&scope, check, &assertion, &self.registry)?;
         let mut map =
             EvidenceMap::from_traversal(assertion, traversal, &self.registry, self.today)?;
-        // The board, plus the companion schematic when one was read. A DRC short
-        // the schematic reclassified states the declaration in its own assertion
-        // text, so a map citing only the layout would source half that sentence to
-        // a file which does not contain it.
-        let artifacts = [self.board_artifact, self.schematic_artifact]
-            .into_iter()
-            .flatten();
+        let artifacts = self.board_artifact;
         map = map.with_artifacts(&self.registry, artifacts)?;
         Ok(map)
     }
@@ -1168,14 +1187,10 @@ impl BoardEvidence {
             });
         }
         let mut map = self.map_for_nets(assertion.into(), scoped_nets.into_iter().collect())?;
-        let artifacts = [
-            self.board_artifact,
-            self.firmware_artifact,
-            self.schematic_artifact,
-        ]
-        .into_iter()
-        .flatten()
-        .chain(self.supporting_artifacts.iter().copied());
+        let artifacts = [self.board_artifact, self.firmware_artifact]
+            .into_iter()
+            .flatten()
+            .chain(self.supporting_artifacts.iter().copied());
         map = map.with_artifacts(&self.registry, artifacts)?;
         if let Some(budget) = budget {
             map = map.with_error_budget(budget);
@@ -1214,14 +1229,10 @@ impl BoardEvidence {
             scoped_nets.into_iter().collect(),
             Some(("ci", assertion.as_str())),
         )?;
-        let artifacts = [
-            self.board_artifact,
-            self.firmware_artifact,
-            self.schematic_artifact,
-        ]
-        .into_iter()
-        .flatten()
-        .chain(self.supporting_artifacts.iter().copied());
+        let artifacts = [self.board_artifact, self.firmware_artifact]
+            .into_iter()
+            .flatten()
+            .chain(self.supporting_artifacts.iter().copied());
         map = map.with_artifacts(&self.registry, artifacts)?;
         if let Some(budget) = budget {
             map = map.with_error_budget(budget);

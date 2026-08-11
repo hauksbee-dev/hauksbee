@@ -39,6 +39,7 @@ const REPRODUCIBILITY_ENV: &[&str] = &[
 pub struct ManifestInput {
     role: String,
     path: PathBuf,
+    retained_bytes: Option<Vec<u8>>,
 }
 
 impl ManifestInput {
@@ -46,6 +47,22 @@ impl ManifestInput {
         Self {
             role: role.into(),
             path: path.into(),
+            retained_bytes: None,
+        }
+    }
+
+    /// Capture a file from bytes the caller already read and validated. This
+    /// prevents the manifest from hashing a different revision after analysis
+    /// resolution but before manifest construction.
+    pub fn retained_file(
+        role: impl Into<String>,
+        path: impl Into<PathBuf>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            role: role.into(),
+            path: path.into(),
+            retained_bytes: Some(bytes),
         }
     }
 }
@@ -566,8 +583,11 @@ fn hash_input(input: &ManifestInput) -> Result<HashedInput> {
     let resolved = fs::canonicalize(&input.path)
         .with_context(|| format!("resolving manifest input '{}'", input.path.display()))?;
     let (kind, value, size_bytes, file_count) = if metadata.is_file() {
-        let bytes = fs::read(&resolved)
-            .with_context(|| format!("hashing manifest input '{}'", input.path.display()))?;
+        let bytes = match &input.retained_bytes {
+            Some(bytes) => bytes.clone(),
+            None => fs::read(&resolved)
+                .with_context(|| format!("hashing manifest input '{}'", input.path.display()))?,
+        };
         ("file", hex_digest(&bytes), bytes.len() as u64, None)
     } else if metadata.is_dir() {
         let files = directory_files(&resolved)?;

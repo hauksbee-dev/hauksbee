@@ -21,8 +21,6 @@ fn empty_drc() -> DrcStructured {
         at_limit: Vec::new(),
         version_warning: None,
         suppression_note: None,
-        tie_declaration_hint: None,
-        declared_tie_source: None,
     }
 }
 

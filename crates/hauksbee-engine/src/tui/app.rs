@@ -77,7 +77,7 @@ pub fn build_state(
     let summary = BindSummary::from_report(&bound.report);
 
     // DRC reads copper geometry from the board text (same as --drc / frontdoor).
-    let mut drc = ExtractedBoard::drc(board_text).unwrap_or_default();
+    let drc = ExtractedBoard::drc(board_text).unwrap_or_default();
     // And the same companion schematic the report surfaces read, so the dashboard
     // cannot call a declared star ground a serious short while `--json` on the
     // same board calls it a note. This module's own doc promises that parity.
@@ -86,10 +86,13 @@ pub fn build_state(
         .take(512)
         .collect::<String>()
         .contains("<eagle");
-    if let Ok(Some(ties)) = crate::schematic_ties::resolve(board_path, schematic, board_is_eagle) {
-        ties.apply(&mut drc);
-    }
-    let drc_structured = DrcStructured::from_report(&drc);
+    let ties = crate::schematic_ties::resolve(board_path, &board, schematic, board_is_eagle)?;
+    let qualification = ties.as_ref().map(|ties| ties.qualify(&drc));
+    let drc_structured = DrcStructured::from_report_with_ties(
+        &drc,
+        qualification.as_ref(),
+        board_is_eagle && ties.is_none(),
+    );
 
     // SI = the signal-integrity static checks (with geometry text). lint = the
     // exact `--lint` bundle via the single `engine_lint` chokepoint (net lint +
