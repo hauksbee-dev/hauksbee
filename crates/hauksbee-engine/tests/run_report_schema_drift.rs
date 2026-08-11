@@ -103,8 +103,8 @@ fn emitted_document_carries_schema_version_and_rollup() {
     let v: serde_json::Value = serde_json::from_str(&report.to_json()).expect("one JSON document");
     assert_eq!(v["schema_version"], RUN_REPORT_SCHEMA_VERSION);
     assert_eq!(
-        RUN_REPORT_SCHEMA_VERSION, 4,
-        "the closed artifact-kind enum gained eagle_schematic in schema v4"
+        RUN_REPORT_SCHEMA_VERSION, 3,
+        "the companion schematic reuses the existing Eagle XML kind plus schematic role"
     );
     for key in [
         "ok",
@@ -135,20 +135,17 @@ fn schema_v2_keeps_the_additive_gating_field_optional_for_older_v2_documents() {
 }
 
 #[test]
-fn schema_v4_versions_the_closed_artifact_enum_without_rejecting_v3_numbers() {
+fn schema_v3_keeps_the_closed_artifact_enum_source_and_wire_compatible() {
     let schema: serde_json::Value =
         serde_json::from_str(&generated_schema()).expect("generated schema parses");
     let kinds = schema["definitions"]["ArtifactKind"]["enum"]
         .as_array()
         .expect("ArtifactKind is a closed string enum");
-    assert!(
-        kinds.iter().any(|kind| kind == "eagle_schematic"),
-        "v4 must publish the new closed-enum value"
-    );
+    assert!(!kinds.iter().any(|kind| kind == "eagle_schematic"));
     let version = &schema["properties"]["schema_version"];
     assert_eq!(version["type"], "integer");
     assert!(
         version.get("const").is_none(),
-        "a v4-aware schema must still accept the schema_version number carried by older documents"
+        "the schema continues to accept the version number carried by v3 documents"
     );
 }

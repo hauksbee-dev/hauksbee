@@ -103,7 +103,6 @@
         "ki_cad_schematic",
         "ki_cad_netlist",
         "eagle_board",
-        "eagle_schematic",
         "altium_pcb_doc",
         "gerber_archive",
         "odb_plus_plus",
@@ -2403,7 +2402,7 @@
       "type": "object"
     }
   },
-  "description": "The document `hauksbee run <board> --json` (and the per-report --json surfaces) emits. schema_version 4. GENERATED from `JsonReport` in crates/hauksbee-engine/src/result.rs plus the ok/verdict/serious_count/actionable_count rollup `to_json` prepends. Do not hand-edit; regenerate with: UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift",
+  "description": "The document `hauksbee run <board> --json` (and the per-report --json surfaces) emits. schema_version 3. GENERATED from `JsonReport` in crates/hauksbee-engine/src/result.rs plus the ok/verdict/serious_count/actionable_count rollup `to_json` prepends. Do not hand-edit; regenerate with: UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift",
   "properties": {
     "ac": {
       "anyOf": [

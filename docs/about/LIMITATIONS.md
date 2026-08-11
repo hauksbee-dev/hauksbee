@@ -420,10 +420,11 @@ The always-run contract is the tracked declared/undeclared pair under
 multi-pin, packaged, URN-collision and structural-scope false positives.
 
 An explicit companion must share the board basename and exactly match the board's
-physical reference/value set. One declaration qualifies only one unambiguous
-same-location contact cluster (all copper layers at that point); a spatially
-distinct bridge on the same pair remains serious. Ambiguous equal-sized contact
-clusters fail closed. See [`../checks/SHORTS.md`](../checks/SHORTS.md).
+physical reference/value set. One declaration qualifies a same-location contact
+cluster (all copper layers at that point) only when that net pair has no second
+spatial contact. The declaration carries no layout-location identity, so every
+cluster remains serious whenever multiple locations exist; relative cluster size
+is not treated as identity. See [`../checks/SHORTS.md`](../checks/SHORTS.md).
 
 Scoped to Eagle. A `.kicad_pcb` declares its ties in the layout the DRC already
 has (`net_tie_pad_groups`, `(attr net_tie)`) and a `.kicad_sch` has no construct

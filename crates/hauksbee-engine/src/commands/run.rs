@@ -24,9 +24,6 @@ pub struct RunConfig {
     pub bom: Option<std::path::PathBuf>,
     pub bom_columns: Vec<String>,
     pub placement: Option<std::path::PathBuf>,
-    /// Companion Eagle `.sch`, read for the net ties it declares. `None` still
-    /// finds a sibling beside the board; see `crate::schematic_ties::resolve`.
-    pub schematic: Option<std::path::PathBuf>,
     pub firmware: Option<std::path::PathBuf>,
     pub seconds: f64,
     pub headless: bool,
@@ -316,7 +313,18 @@ fn run_error_exit_code(error: &anyhow::Error) -> i32 {
     1
 }
 
-pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
+pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
+    run_with_schematic(cfg, quiet, None)
+}
+
+/// Run with an optional explicit Eagle companion schematic. Kept out of
+/// [`RunConfig`] so adding the CLI input does not break downstream struct
+/// literals of the established public configuration type.
+pub fn run_with_schematic(
+    mut cfg: RunConfig,
+    quiet: bool,
+    schematic: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
     // Bare --plain means the combined check surface. Normalize that convenience
     // before selecting or initializing artifacts, so every consumer sees the
     // same surface the execution branch will run.
@@ -347,7 +355,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.board = crate::commands::examples::board(name)?;
             crate::reports::ci_artifacts::set_current_board_path(&cfg.board);
         }
-        run_inner(cfg, quiet, surface)
+        run_inner(cfg, quiet, surface, schematic)
     })();
     match &result {
         Ok(()) => crate::reports::ci_artifacts::finish_success()?,
@@ -358,7 +366,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     result
 }
 
-fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyhow::Result<()> {
+fn run_inner(
+    mut cfg: RunConfig,
+    quiet: bool,
+    surface: SelectedSurface,
+    schematic: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
     let any_report_flag = cfg.report
         || cfg.drc
         || cfg.ampacity
@@ -660,7 +673,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
     }
 
     // The companion Eagle `.sch`, if the user named one or one sits beside the
-    // board. Resolved ONCE here, where both `cfg.schematic` and the board path
+    // board. Resolved ONCE here, where both the explicit option and board path
     // are in hand, and handed to every report surface: a copper contact the
     // schematic declares must read the same way under `--check`, `--drc`,
     // `--json` and the CI artifacts, or the same board is a declared tie on one
@@ -672,13 +685,30 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
         .take(512)
         .collect::<String>()
         .contains("<eagle");
-    let schematic_ties = crate::schematic_ties::resolve(
-        &cfg.board,
-        &board,
-        cfg.schematic.as_deref(),
-        board_is_eagle,
-    )?;
+    let schematic_ties =
+        crate::schematic_ties::resolve(&cfg.board, &board, schematic.as_deref(), board_is_eagle)?;
     if let Some(ties) = &schematic_ties {
+        use sha2::{Digest, Sha256};
+
+        let sha256 = Sha256::digest(&ties.raw)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        inputs.push(JsonInputEvidence {
+            path: ties.path.display().to_string(),
+            kind: "schematic".to_string(),
+            format: "eagle_schematic".to_string(),
+            sha256: Some(sha256),
+            contributed: vec![format!(
+                "{} declared net tie(s) supplied to copper-contact qualification",
+                ties.ties.len()
+            )],
+            ignored: vec![
+                "schematic connectivity is not rebound; the Eagle .brd remains the layout/netlist source"
+                    .to_string(),
+            ],
+            identity: Vec::new(),
+        });
         if !quiet && !cfg.json {
             let how = if ties.auto_discovered {
                 "found beside the board"
@@ -693,7 +723,12 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
         }
     }
     if let Some(path) = &cfg.emit_manifest {
-        let manifest = capture_manifest(&cfg, firmware_source.as_deref(), schematic_ties.as_ref())?;
+        let manifest = capture_manifest(
+            &cfg,
+            firmware_source.as_deref(),
+            schematic.as_deref(),
+            schematic_ties.as_ref(),
+        )?;
         manifest.write_new(path)?;
         eprintln!(
             "wrote immutable run manifest {} to {}",
@@ -1058,7 +1093,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
             &text,
             cfg.models_dir.as_deref(),
             cfg.firmware.clone(),
-            cfg.schematic.as_deref(),
+            schematic.as_deref(),
         );
     }
 
@@ -1147,7 +1182,8 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
                 crate::reports::kicad_pro_clearance_rules(&cfg.board, &board),
             )?
         };
-        let applied = engine.apply_drc_shorts(&report);
+        let qualification = schematic_ties.as_ref().map(|ties| ties.qualify(&report));
+        let applied = engine.apply_drc_shorts_with_qualification(&report, qualification.as_ref());
         eprintln!(
             "applied {applied} copper short(s) of {} detected ({} clearance violations)",
             report.short_count(),
@@ -1931,7 +1967,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
     // block ran WITH the shorts bridged and said so. Skipped when
     // `--apply-shorts` already bridged and disclosed them above.
     if !cfg.apply_shorts {
-        let mut drc_report = if is_altium {
+        let drc_report = if is_altium {
             ExtractedBoard::altium_drc(&raw).unwrap_or_default()
         } else {
             ExtractedBoard::drc_with_clearance_rules(
@@ -1940,13 +1976,11 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
             )
             .unwrap_or_default()
         };
-        if let Some(ties) = &schematic_ties {
-            let qualification = ties.qualify(&drc_report);
-            drc_report
-                .findings
-                .retain(|finding| qualification.tie_for(finding).is_none());
-        }
-        engine.apply_and_disclose_drc_shorts(&drc_report);
+        let qualification = schematic_ties
+            .as_ref()
+            .map(|ties| ties.qualify(&drc_report));
+        engine
+            .apply_and_disclose_drc_shorts_with_qualification(&drc_report, qualification.as_ref());
     }
 
     // Serve the loaded board's own file at the URL the frontend fetches it from
@@ -2025,6 +2059,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
 fn capture_manifest(
     cfg: &RunConfig,
     firmware_source: Option<&std::path::Path>,
+    explicit_schematic: Option<&std::path::Path>,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<crate::run_manifest::RunManifest> {
     use std::collections::BTreeMap;
@@ -2049,7 +2084,7 @@ fn capture_manifest(
             inputs.push(ManifestInput::new(role, path));
         }
     }
-    // The RESOLVED schematic, not just `cfg.schematic`: an auto-discovered
+    // The RESOLVED schematic, not just the explicit CLI option: an auto-discovered
     // sibling contributes exactly as much as a named one (it can move a short
     // from serious to a declared tie and flip the strict exit), so a manifest
     // that omitted it would not replay the run it describes. This also keeps the
@@ -2154,7 +2189,7 @@ fn capture_manifest(
         cfg.example.is_none().then(|| cfg.board.clone()),
         cfg.bom.clone(),
         cfg.placement.clone(),
-        cfg.schematic.clone(),
+        explicit_schematic.map(std::path::Path::to_path_buf),
         firmware_source.map(std::path::Path::to_path_buf),
         cfg.firmware.clone(),
         cfg.asbuilt.clone(),

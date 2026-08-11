@@ -88,10 +88,8 @@ impl Refusal {
 
 /// Version of the `run --json` document contract (`JsonReport` plus the
 /// `ok`/`verdict`/`serious_count`/`actionable_count` rollup `to_json`
-/// prepends). Bump on a breaking change only; additive fields keep it. Expanding
-/// a closed enum is a versioned change because an older JSON Schema rejects the
-/// new value even though older documents remain readable by the new schema.
-pub const RUN_REPORT_SCHEMA_VERSION: u32 = 4;
+/// prepends). Bump on a breaking change only; additive fields keep it.
+pub const RUN_REPORT_SCHEMA_VERSION: u32 = 3;
 
 /// Exit code a strict headless run (`--strict`) or hauksbee-ci must use when the
 /// analog co-sim tripped the consecutive-failed-chunk abort. Centralised so both

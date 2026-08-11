@@ -660,11 +660,9 @@ fn analyze_normalized_with_ties(
         }
     };
     let evidence = match (schematic_ties, &qualification) {
-        (Some(ties), Some(qualification)) => match evidence.with_schematic_artifact(
-            &ties.path,
-            &ties.raw,
-            ties.contribution(qualification),
-        ) {
+        (Some(ties), Some(qualification)) if qualification.qualified_count() > 0 => match evidence
+            .with_schematic_artifact(&ties.path, &ties.raw, ties.contribution(qualification))
+        {
             Ok(evidence) => evidence,
             Err(error) => {
                 return (
@@ -904,6 +902,7 @@ pub fn analyze_with_firmware_with_ties(
         Err(e) => return unreadable(file_name, e.web_message()),
     };
     let (mut report, drc) = analyze_normalized_with_ties(file_name, &norm, schematic_ties);
+    let tie_qualification = schematic_ties.map(|ties| ties.qualify(&drc));
 
     // The firmware part may be a zip (a built tree, or a whole PlatformIO
     // project) rather than a bare image, resolve it first. A resolution
@@ -924,6 +923,7 @@ pub fn analyze_with_firmware_with_ties(
         &resolved.name,
         &resolved.bytes,
         &drc,
+        tie_qualification.as_ref(),
     );
     // Whether the evidence pass below parked the headline on run-level
     // invalidity; the fault fold must not demote that to a warning headline
@@ -941,7 +941,12 @@ pub fn analyze_with_firmware_with_ties(
             hauksbee_ir::evidence::RunDate::from_system_clock(),
         )
         .and_then(|evidence| evidence.with_input_artifact(file_name, &norm.raw, norm.kind))
-        .and_then(|evidence| evidence.with_firmware_artifact(&resolved.name, &resolved.bytes));
+        .and_then(|evidence| evidence.with_firmware_artifact(&resolved.name, &resolved.bytes))
+        .and_then(|evidence| match (schematic_ties, &tie_qualification) {
+            (Some(ties), Some(qualification)) if qualification.qualified_count() > 0 => evidence
+                .with_schematic_artifact(&ties.path, &ties.raw, ties.contribution(qualification)),
+            _ => Ok(evidence),
+        });
         if let Ok(mut evidence) = evidence_result {
             evidence = match evidence
                 .clone()
@@ -1327,6 +1332,7 @@ fn run_web_cosim(
     fw_name: &str,
     fw_bytes: &[u8],
     drc: &hauksbee_extract::DrcReport,
+    tie_qualification: Option<&hauksbee_extract::DrcTieQualification>,
 ) -> (WebCosimSection, Option<WebCosimEvidence>) {
     use crate::plain::plain_faults;
     use crate::stress::{FaultEvent, FaultKind};
@@ -1448,7 +1454,7 @@ fn run_web_cosim(
     // a phantom short would corrupt an otherwise-honest co-sim (CI gates skip
     // them for the same reason).
     let shorts_applied = if drc.version_warning.is_none() {
-        engine.apply_drc_shorts(drc)
+        engine.apply_drc_shorts_with_qualification(drc, tie_qualification)
     } else {
         0
     };
@@ -1515,26 +1521,26 @@ fn run_web_cosim(
     // Say plainly that the shorted copper was simulated as shorted, so the
     // rails/GPIO table below cannot be read as "the shorted board is fine".
     if shorts_applied > 0 {
-        let short_word = if shorts_applied == 1 {
-            "short"
+        let connection_word = if shorts_applied == 1 {
+            "connection"
         } else {
-            "shorts"
+            "connections"
         };
         findings.insert(
             0,
             WebFinding {
                 level: "note".to_string(),
                 what: format!(
-                    "This co-sim ran WITH the board's {shorts_applied} copper {short_word} \
+                    "This co-sim ran WITH the board's {shorts_applied} physical copper {connection_word} \
                      bridged into the circuit."
                 ),
-                why: "The DRC section above found copper from separate nets touching. The \
-                      co-sim applies those bridges before simulating, so the rail and GPIO \
-                      voltages below reflect the board as it would actually be built, not \
-                      an idealised un-shorted version of it."
+                why: "The DRC section above distinguishes intended declared ties from serious \
+                      defects. The co-sim applies every validated physical connection before \
+                      simulating, so the rail and GPIO voltages reflect the board as built; only \
+                      undeclared contacts produce short faults."
                     .to_string(),
-                fix: "Fix the copper short(s) named in the DRC section, then re-analyze to \
-                      see the healthy-board behaviour."
+                fix: "Follow the DRC section: repair contacts marked serious, but do not remove \
+                      an intended connection merely because it is shown as a declared tie."
                     .to_string(),
                 x: None,
                 y: None,
@@ -1932,6 +1938,123 @@ fn top_gpio_nets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "avr")]
+    #[test]
+    fn web_cosim_bridges_a_declared_contact_without_reporting_a_short_fault() {
+        let board_text = r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+  (net 0 "")
+  (net 1 "+5V")
+  (net 2 "GND")
+  (net 3 "D13")
+  (footprint "Package_QFP:TQFP-32_7x7mm_P0.8mm" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U1" (at 0 0))
+    (property "Value" "ATmega328P" (at 0 0))
+    (pad "7" smd rect (at -3 0) (size 0.5 0.5) (layers "F.Cu") (net 1))
+    (pad "8" smd rect (at -3 1) (size 0.5 0.5) (layers "F.Cu") (net 2))
+    (pad "19" smd rect (at 3 0) (size 0.5 0.5) (layers "F.Cu") (net 3)))
+  (segment (start 100 100) (end 110 100) (width 0.5) (layer "F.Cu") (net 2))
+  (segment (start 105 95) (end 105 105) (width 0.5) (layer "F.Cu") (net 3))
+)"#;
+        let board = ExtractedBoard::from_kicad_pcb(board_text).expect("board parses");
+        let drc = ExtractedBoard::drc(board_text).expect("DRC runs");
+        assert_eq!(drc.short_count(), 1, "the fixture adds one GND/D13 contact");
+        let declarations = vec![hauksbee_extract::DeclaredNetTie {
+            net: "GND".into(),
+            tied_net: "D13".into(),
+            symbol: "GND1".into(),
+            tied_to: vec!["D13_TIE".into()],
+        }];
+        let qualification = drc.qualify_with_declared_ties("blinky.sch", &declarations);
+        assert_eq!(qualification.qualified_count(), 1);
+
+        let (cosim, captured) = run_web_cosim(
+            &board,
+            "blinky.kicad_pcb",
+            "nowdt.elf",
+            include_bytes!("../../../testdata/firmware/avr_watchdog/nowdt.elf"),
+            &drc,
+            Some(&qualification),
+        );
+        assert!(cosim.ran, "the tracked AVR firmware must execute");
+        assert!(
+            cosim.findings.iter().any(|finding| {
+                finding.level == "note" && finding.what.contains("physical copper connection")
+            }),
+            "web disclosure says the physical bridge was applied: {:?}",
+            cosim
+                .findings
+                .iter()
+                .map(|finding| (&finding.level, &finding.what))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !cosim.findings.iter().any(|finding| {
+                finding.level == "serious" && finding.what.to_ascii_lowercase().contains("short")
+            }),
+            "a declared tie must not render as a web short defect"
+        );
+        assert!(
+            captured
+                .expect("a successful run captures evidence")
+                .faults
+                .iter()
+                .all(|fault| fault.kind != crate::stress::FaultKind::Short),
+            "the qualified physical bridge must not enter the runtime fault stream"
+        );
+
+        let ties = crate::schematic_ties::SchematicTies {
+            path: "blinky.sch".into(),
+            raw: b"<eagle><drawing><schematic/></drawing></eagle>".to_vec(),
+            ties: declarations,
+            auto_discovered: false,
+        };
+        let report = analyze_with_firmware_with_ties(
+            "blinky.kicad_pcb",
+            board_text.as_bytes(),
+            "nowdt.elf",
+            include_bytes!("../../../testdata/firmware/avr_watchdog/nowdt.elf"),
+            Some(&ties),
+        );
+        let report_json = serde_json::to_value(&report).expect("web report serializes");
+        assert!(
+            report_json["inventory"]
+                .as_array()
+                .expect("successful firmware evidence inventory")
+                .iter()
+                .any(|artifact| artifact["role"] == "schematic"),
+            "successful firmware evidence must retain the causal schematic artifact"
+        );
+    }
+
+    #[test]
+    fn unused_schematic_declarations_do_not_enter_web_causal_provenance() {
+        const BOARD: &[u8] =
+            include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
+        let ties = crate::schematic_ties::SchematicTies {
+            path: "declared.sch".into(),
+            raw: b"<eagle><drawing><schematic/></drawing></eagle>".to_vec(),
+            ties: vec![hauksbee_extract::DeclaredNetTie {
+                net: "VCC".into(),
+                tied_net: "3V3".into(),
+                symbol: "VCC1".into(),
+                tied_to: vec!["3V3_1".into()],
+            }],
+            auto_discovered: false,
+        };
+        let report: serde_json::Value =
+            serde_json::from_str(&analyze_json_with_ties("declared.brd", BOARD, Some(&ties)))
+                .expect("web JSON");
+        assert!(
+            report["inventory"]
+                .as_array()
+                .expect("inventory")
+                .iter()
+                .all(|artifact| artifact["role"] != "schematic"),
+            "an unused declaration is an inspected input, not causal evidence for a finding"
+        );
+    }
 
     /// The web report is the surface a user actually reads, so the exchange
     /// readers' honesty has to be visible ON it, not merely computed.
