@@ -120,7 +120,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         )[0]
         self.assertIn("ref: ${{ github.sha }}", integration_job)
         self.assertIn("scripts/run_required_integrations.py", integration_job)
-        self.assertIn("--expected-sha \"$GITHUB_SHA\"", integration_job)
+        self.assertIn('--expected-sha "$GITHUB_SHA"', integration_job)
         self.assertIn("--evidence-out", integration_job)
 
         release_job = workflow.split("\n  release:", 1)[1]
@@ -292,9 +292,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
         with (
             mock.patch.object(required_integrations, "run_command", fake_run),
-            mock.patch.object(
-                required_integrations, "_git_sha", return_value="a" * 40
-            ),
+            mock.patch.object(required_integrations, "_git_sha", return_value="a" * 40),
         ):
             result = required_integrations.main(["--expected-sha", "a" * 40])
 
@@ -388,9 +386,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         self.assertEqual(len(required_roots), 1)
         self.assertFalse(required_roots[0].exists())
 
-    def _run_provenance_helper(
-        self, *args: str
-    ) -> subprocess.CompletedProcess[str]:
+    def _run_provenance_helper(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 sys.executable,
@@ -461,9 +457,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             traversal = tmp / "traversal.zip"
             with zipfile.ZipFile(traversal, "w") as stream:
                 stream.writestr("../outside", "bad")
-            traversal_result = self._run_provenance_helper(
-                "archive", str(traversal)
-            )
+            traversal_result = self._run_provenance_helper("archive", str(traversal))
 
             symlink = tmp / "symlink.zip"
             with zipfile.ZipFile(symlink, "w") as stream:
@@ -494,7 +488,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         self.assertTrue(any("duplicate" in problem for problem in problems))
         self.assertTrue(any("HAUKSBEE_QEMU_RISCV32" in problem for problem in problems))
 
-    def test_evidence_verifier_requires_the_release_sha_and_all_real_gates(self) -> None:
+    def test_evidence_verifier_requires_the_release_sha_and_all_real_gates(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             evidence = Path(raw_tmp) / "required-integrations.json"
             evidence.write_text(
@@ -549,17 +545,25 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             "HAUKSBEE_RENODE": {
                 "path": r"C:\Users\runneradmin\renode-portable\Renode.exe",
                 "artifact_sha256": "1" * 64,
-                "archive_sha256": "d09b7934cfd560cd06bde8f131ef78f521f10d423d5aac6096f2a583224aeb3e",
+                "archive_sha256s": [
+                    "d09b7934cfd560cd06bde8f131ef78f521f10d423d5aac6096f2a583224aeb3e"
+                ],
             },
             "HAUKSBEE_QEMU_XTENSA": {
                 "path": r"C:\Users\runneradmin\.hauksbee-qemu-esp\qemu\bin\qemu-system-xtensa.exe",
                 "artifact_sha256": "2" * 64,
-                "archive_sha256": "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a",
+                "archive_sha256s": [
+                    "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a",
+                    "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b",
+                ],
             },
             "HAUKSBEE_QEMU_RISCV32": {
                 "path": r"C:\Users\runneradmin\.hauksbee-qemu-esp\qemu\bin\qemu-system-riscv32.exe",
                 "artifact_sha256": "3" * 64,
-                "archive_sha256": "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b",
+                "archive_sha256s": [
+                    "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a",
+                    "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b",
+                ],
             },
         }
         base = {
@@ -576,7 +580,43 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 required_integrations._verify_evidence(
                     evidence, "a" * 40, expected_platform="windows-x86_64"
                 ),
+                [
+                    "Windows backend evidence for HAUKSBEE_RENODE has the wrong artifact SHA-256",
+                    "Windows backend evidence for HAUKSBEE_RENODE has the wrong install-tree SHA-256",
+                    "Windows backend evidence for HAUKSBEE_QEMU_XTENSA has the wrong artifact SHA-256",
+                    "Windows backend evidence for HAUKSBEE_QEMU_XTENSA has the wrong install-tree SHA-256",
+                    "Windows backend evidence for HAUKSBEE_QEMU_RISCV32 has the wrong artifact SHA-256",
+                    "Windows backend evidence for HAUKSBEE_QEMU_RISCV32 has the wrong install-tree SHA-256",
+                ],
+            )
+
+            backend_rows["HAUKSBEE_RENODE"].update(
+                artifact_sha256="895fddb36f65237af5a47928e49984cf1e1992e27e0d37546b3b8ea29ad57385",
+                install_tree_sha256="3b12f1dd7b613cd9b73994a985fcd77107f471c352c52b4f3f2ff1528d4e7e8d",
+            )
+            backend_rows["HAUKSBEE_QEMU_XTENSA"].update(
+                artifact_sha256="7716f734130a20193ab45a4c14581918822e5ae684eb5cf3073b9429bee29825",
+                install_tree_sha256="4f02f4495f50ddf3baed71de29192932bd09053f0a1df498b854e0f5be0d8171",
+            )
+            backend_rows["HAUKSBEE_QEMU_RISCV32"].update(
+                artifact_sha256="ec900387a3f7b54800d4690db575b86162769add55aa3b09056a943b29ec6644",
+                install_tree_sha256="4f02f4495f50ddf3baed71de29192932bd09053f0a1df498b854e0f5be0d8171",
+            )
+            evidence.write_text(json.dumps(base))
+            self.assertEqual(
+                required_integrations._verify_evidence(
+                    evidence, "a" * 40, expected_platform="windows-x86_64"
+                ),
                 [],
+            )
+
+            evidence.write_bytes(b"\xef\xbb\xbf" + json.dumps(base).encode())
+            self.assertEqual(
+                required_integrations._verify_evidence(
+                    evidence, "a" * 40, expected_platform="windows-x86_64"
+                ),
+                [],
+                "Windows PowerShell 5.1 writes UTF-8 JSON with a BOM",
             )
 
             for field, value in (
@@ -597,9 +637,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         machine_help = "printf 'esp32\\n'" if name.startswith("qemu-") else ":"
         path.write_text(
             "#!/usr/bin/env bash\n"
-            "if [ \"${1:-}\" = --version ]; then\n"
+            'if [ "${1:-}" = --version ]; then\n'
             f"  printf '%s\\n' '{version}'\n"
-            "elif [ \"${1:-}\" = -machine ]; then\n"
+            'elif [ "${1:-}" = -machine ]; then\n'
             f"  {machine_help}\n"
             "fi\n"
         )
@@ -659,7 +699,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             check=False,
         )
 
-    def test_required_check_rejects_self_reported_exact_installed_versions(self) -> None:
+    def test_required_check_rejects_self_reported_exact_installed_versions(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             renode = self._fake_backend(tmp, "renode", "Renode v1.16.1.16858")
@@ -683,7 +725,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             )
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("cannot authenticate an installed tree", result.stdout + result.stderr)
+        self.assertIn(
+            "cannot authenticate an installed tree", result.stdout + result.stderr
+        )
 
     def test_ordinary_check_remains_permissive_for_discovered_backend(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -743,7 +787,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_required_install_reverifies_cached_archives_and_extracts_fresh_trees(self) -> None:
+    def test_required_install_reverifies_cached_archives_and_extracts_fresh_trees(
+        self,
+    ) -> None:
         suffix_by_host = {
             ("darwin", "arm64"): "aarch64-apple-darwin",
             ("darwin", "x86_64"): "x86_64-apple-darwin",
@@ -769,12 +815,8 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 )
                 self.assertTrue(binary.is_file())
                 (payload / "share").mkdir()
-                (payload / "share" / "payload.marker").write_text(
-                    f"complete-{arch}\n"
-                )
-                asset = (
-                    f"qemu-{arch}-softmmu-{version}-{suffix}.tar.xz"
-                )
+                (payload / "share" / "payload.marker").write_text(f"complete-{arch}\n")
+                asset = f"qemu-{arch}-softmmu-{version}-{suffix}.tar.xz"
                 archive = assets / asset
                 with tarfile.open(archive, "w:xz") as stream:
                     stream.add(payload, arcname="qemu")
@@ -785,8 +827,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
             home = tmp / "home"
             stale = self._fake_backend(
-                home
-                / ".espressif/tools/qemu-xtensa/000-old/qemu/bin",
+                home / ".espressif/tools/qemu-xtensa/000-old/qemu/bin",
                 "qemu-system-xtensa",
                 "QEMU emulator version 9.2.2 (esp_develop_9.2.2_20240101)",
             )
@@ -802,9 +843,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 "renode-checksums.txt",
             ):
                 (isolated / name).write_bytes((source_scripts / name).read_bytes())
-            (isolated / "espressif-qemu-checksums.txt").write_bytes(
-                sums.read_bytes()
-            )
+            (isolated / "espressif-qemu-checksums.txt").write_bytes(sums.read_bytes())
             (isolated / "install-sims.sh").chmod(0o755)
             env.update(
                 {
@@ -837,17 +876,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             self.assertEqual(len(staged_archives), 2)
             self.assertTrue(
                 all(
-                    hashlib.sha256(path.read_bytes()).hexdigest()
-                    in sums.read_text()
+                    hashlib.sha256(path.read_bytes()).hexdigest() in sums.read_text()
                     for path in staged_archives
                 )
             )
             marker = first_xtensa.parent.parent / "share/payload.marker"
             self.assertEqual(marker.read_text(), "complete-xtensa\n")
             marker.write_text("stale-overlay\n")
-            cached_xtensa = next(
-                (tmp / "cache").glob("*-qemu-xtensa-softmmu-*.tar.xz")
-            )
+            cached_xtensa = next((tmp / "cache").glob("*-qemu-xtensa-softmmu-*.tar.xz"))
             cached_xtensa.write_bytes(b"corrupt cache entry")
 
             second = subprocess.run(
@@ -867,7 +903,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             )
             self.assertTrue(list((tmp / "cache").glob("*.rejected.*")))
 
-    def test_bundle_stages_every_file_needed_by_isolated_simulator_installer(self) -> None:
+    def test_bundle_stages_every_file_needed_by_isolated_simulator_installer(
+        self,
+    ) -> None:
         scripts_dir = Path(__file__).resolve().parent
         bundle = (scripts_dir / "bundle.sh").read_text()
         required = (
@@ -1164,9 +1202,7 @@ while True:
                         break
                     time.sleep(0.02)
                 else:
-                    self.fail(
-                        f"double-forked descendant {daemon_pid} survived cleanup"
-                    )
+                    self.fail(f"double-forked descendant {daemon_pid} survived cleanup")
             finally:
                 try:
                     os.killpg(daemon_pgid, signal.SIGKILL)

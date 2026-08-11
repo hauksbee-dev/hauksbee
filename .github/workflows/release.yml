@@ -537,11 +537,22 @@ jobs:
         shell: pwsh
         working-directory: hauksbee
         run: .\scripts\install-sims-windows.ps1
-      - name: Verify native Windows contracts
+      - name: Refuse modified installed simulator payloads
+        shell: powershell
         working-directory: hauksbee
-        run: |
-          python scripts/test-windows-port-contract.py
-          cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
+        run: .\scripts\test-windows-simulator-integrity.ps1
+      - name: Verify offline Windows contracts
+        shell: powershell
+        working-directory: hauksbee
+        run: python scripts/test-windows-port-contract.py
+      - name: Verify native Windows Job Object timeout
+        shell: powershell
+        working-directory: hauksbee
+        run: .\scripts\test-windows-process-tree.ps1
+      - name: Verify native engine, CI, and emulator lifecycle
+        shell: powershell
+        working-directory: hauksbee
+        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
       - name: Require and retain real Windows firmware integrations
         shell: pwsh
         working-directory: hauksbee

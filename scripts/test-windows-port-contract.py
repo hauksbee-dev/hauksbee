@@ -26,7 +26,9 @@ class WindowsPortContract(unittest.TestCase):
     def test_ci_runs_native_engine_ci_and_mcu_tests_with_warnings_denied(self) -> None:
         ci = read(".github/workflows/ci.yml")
         self.assertRegex(ci, r"runs-on:\s*windows-latest")
-        self.assertIn("cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu", ci)
+        self.assertIn(
+            "cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu", ci
+        )
         self.assertIn("--no-default-features --features renode,qemu", ci)
         self.assertIn("RUSTFLAGS: -D warnings", ci)
 
@@ -59,7 +61,9 @@ class WindowsPortContract(unittest.TestCase):
             "doctor may exit nonzero solely because an external backend is absent",
         )
 
-    def test_installer_installs_mcp_and_refuses_non_permissive_windows_shape(self) -> None:
+    def test_installer_installs_mcp_and_refuses_non_permissive_windows_shape(
+        self,
+    ) -> None:
         installer = read("scripts/get-hauksbee.ps1")
         self.assertIn("hauksbee-mcp.exe", installer)
         self.assertNotIn("there are no published Windows release assets yet", installer)
@@ -77,7 +81,9 @@ class WindowsPortContract(unittest.TestCase):
             self.assertIn(symbol, children)
         self.assertRegex(children, r"windows_job_kills_child_when_guard_closes")
 
-    def test_windows_emulators_are_pinned_and_named_firmware_flows_are_required(self) -> None:
+    def test_windows_emulators_are_pinned_and_named_firmware_flows_are_required(
+        self,
+    ) -> None:
         installer = read("scripts/install-sims-windows.ps1")
         for digest in (
             "d09b7934cfd560cd06bde8f131ef78f521f10d423d5aac6096f2a583224aeb3e",
@@ -113,7 +119,61 @@ class WindowsPortContract(unittest.TestCase):
         release = read(".github/workflows/release.yml")
         self.assertIn('--expected-platform "windows-x86_64"', release)
 
-    def test_windows_job_assignment_is_before_execution_and_covers_hard_parent_death(self) -> None:
+    def test_required_windows_gate_owns_the_complete_timeout_process_tree(self) -> None:
+        required = read("scripts/run-required-integrations-windows.ps1")
+        self.assertTrue(
+            (ROOT / "scripts/windows-owned-process.ps1").is_file(),
+            "the release-gate process runner must own a Windows Job Object",
+        )
+        helper = read("scripts/windows-owned-process.ps1")
+        native_test = read("scripts/test-windows-process-tree.ps1")
+
+        self.assertIn("Invoke-HauksbeeJobProcess", required)
+        for symbol in (
+            "CREATE_SUSPENDED",
+            "AssignProcessToJobObject",
+            "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
+            "TerminateJobObject",
+        ):
+            self.assertIn(symbol, helper)
+        self.assertIn("grandchild", native_test.lower())
+        for workflow in (".github/workflows/ci.yml", ".github/workflows/release.yml"):
+            self.assertIn("test-windows-process-tree.ps1", read(workflow))
+
+    def test_windows_backend_evidence_is_pinned_to_complete_install_payloads(
+        self,
+    ) -> None:
+        installer = read("scripts/install-sims-windows.ps1")
+        required = read("scripts/run-required-integrations-windows.ps1")
+        verifier = read("scripts/run_required_integrations.py")
+
+        self.assertIn("Assert-InstallTree", installer)
+        self.assertIn("install_tree_sha256", required)
+        self.assertGreaterEqual(
+            required.count("-Check -EvidenceOut"),
+            2,
+            "the full installed payload must be reverified after firmware gates run",
+        )
+        self.assertIn("artifact_sha256", verifier)
+        self.assertIn("install_tree_sha256", verifier)
+        for fingerprint in (
+            "895fddb36f65237af5a47928e49984cf1e1992e27e0d37546b3b8ea29ad57385",
+            "3b12f1dd7b613cd9b73994a985fcd77107f471c352c52b4f3f2ff1528d4e7e8d",
+            "7716f734130a20193ab45a4c14581918822e5ae684eb5cf3073b9429bee29825",
+            "ec900387a3f7b54800d4690db575b86162769add55aa3b09056a943b29ec6644",
+            "4f02f4495f50ddf3baed71de29192932bd09053f0a1df498b854e0f5be0d8171",
+        ):
+            self.assertIn(fingerprint, installer)
+            self.assertIn(fingerprint, verifier)
+        self.assertNotIn("expected_artifact_sha256", required)
+        self.assertIn(
+            "test-windows-simulator-integrity.ps1",
+            read(".github/workflows/release.yml"),
+        )
+
+    def test_windows_job_assignment_is_before_execution_and_covers_hard_parent_death(
+        self,
+    ) -> None:
         children = read("crates/hauksbee-mcu/src/children.rs")
         for symbol in (
             "CREATE_SUSPENDED",
@@ -135,7 +195,9 @@ class WindowsPortContract(unittest.TestCase):
         self.assertIn("TerminateJobObject", children)
         self.assertIn("windows_reaped_child_teardown_uses_owned_job", children)
 
-    def test_installer_is_exercised_and_replaces_all_binaries_transactionally(self) -> None:
+    def test_installer_is_exercised_and_replaces_all_binaries_transactionally(
+        self,
+    ) -> None:
         workflow = read(".github/workflows/release.yml")
         self.assertIn("test-windows-installer.ps1", workflow)
         test_script = read("scripts/test-windows-installer.ps1")
@@ -167,9 +229,20 @@ class WindowsPortContract(unittest.TestCase):
             script = read(path)
             self.assertIn("[guid]::NewGuid()", script)
             self.assertIn("Recover-StaleBackup", script)
-            self.assertRegex(script, r"try\s*\{[\s\S]*Move-Item[^\n]+\$[Tt]arget[^\n]+\$backup")
+            self.assertRegex(
+                script, r"try\s*\{[\s\S]*Move-Item[^\n]+\$[Tt]arget[^\n]+\$backup"
+            )
         fixture = read("scripts/test-windows-installer.ps1")
         self.assertIn("stale-interruption", fixture)
+
+    def test_failed_windows_transactions_remove_unconsumed_staging_trees(self) -> None:
+        installer = read("scripts/get-hauksbee.ps1")
+        simulators = read("scripts/install-sims-windows.ps1")
+        fixture = read("scripts/test-windows-installer.ps1")
+
+        self.assertIn("Remove-AbandonedStaging", installer)
+        self.assertIn("Remove-AbandonedStaging", simulators)
+        self.assertIn("install-staging-*", fixture)
 
     def test_downloaded_executable_probes_receive_no_private_tokens(self) -> None:
         installer = read("scripts/get-hauksbee.ps1")

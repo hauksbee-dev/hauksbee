@@ -93,9 +93,15 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: offline Windows release-contract tests
         run: python scripts/test-windows-port-contract.py
+      - name: native Windows Job Object timeout regression
+        shell: powershell
+        run: .\scripts\test-windows-process-tree.ps1
       - name: install checksum-pinned Windows simulator backends
         shell: pwsh
         run: .\scripts\install-sims-windows.ps1
+      - name: refuse modified installed simulator payloads
+        shell: powershell
+        run: .\scripts\test-windows-simulator-integrity.ps1
       - name: native engine, CI, and emulator-lifecycle tests
         run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
       - name: require three real firmware-through-emulator flows
