@@ -1033,13 +1033,11 @@ impl Assumption {
         // escaped subject: see [`AssumptionId::with_ordinal`] for why that ordering
         // is what makes it collision-free. It is a disambiguator, not a fact about
         // the part, so it touches no sentence: "Via#2 is treated as an open
-        // circuit" would be naming a designator the board does not have. A blank
-        // subject is excluded because it has no designator to qualify; its claim
-        // hash already separates it.
+        // circuit" would be naming a designator the board does not have. Blank
+        // subjects need it too when distinct claims differ only in a field outside
+        // the synthesized claim hash, such as their actionable replacement.
         if let Some(n) = ordinal {
-            if !subject.is_empty() {
-                built.id = built.id.with_ordinal(n);
-            }
+            built.id = built.id.with_ordinal(n);
         }
         debug_assert!(
             built.validate().is_ok(),
