@@ -182,6 +182,9 @@ try {
     if ((Get-Content -LiteralPath (Join-Path $oldBin "old-install.marker") -Raw) -ne "old-version") {
         throw "rollback did not restore the previous installation"
     }
+    if (Get-ChildItem -LiteralPath $rollbackPrefix -Filter "bin.install-staging-*" -Directory) {
+        throw "rollback left an unconsumed executable staging tree"
+    }
 
     # Simulate interruption after the old tree moved but before the new tree
     # arrived. A subsequent locked transaction must recover that sole stale
@@ -193,6 +196,9 @@ try {
     if ((Invoke-InstallerCase $stalePrefix $Zip $Checksum $true "pwsh.exe") -eq 0) { throw "stale-interruption rollback unexpectedly succeeded" }
     if ((Get-Content -LiteralPath (Join-Path $stalePrefix "bin\old-install.marker") -Raw) -ne "interrupted-old-version") {
         throw "stale-interruption backup was not recovered"
+    }
+    if (Get-ChildItem -LiteralPath $stalePrefix -Filter "bin.install-staging-*" -Directory) {
+        throw "stale-interruption rollback left an unconsumed staging tree"
     }
     Write-Host "Windows installer dual-runtime, token isolation, checksum, rollback, and interruption contracts passed."
 } finally {

@@ -12,6 +12,7 @@
 [CmdletBinding()]
 param(
     [string]$CacheDir = "",
+    [string]$EvidenceOut = "",
     [switch]$Check,
     [switch]$RenodeOnly,
     [switch]$QemuOnly
@@ -23,6 +24,11 @@ $ErrorActionPreference = "Stop"
 $RenodeVersion = "1.16.1"
 $QemuTag = "esp-develop-9.2.2-20260417"
 $QemuAssetVersion = "esp_develop_9.2.2_20260417"
+$RenodeArtifactSha256 = "895fddb36f65237af5a47928e49984cf1e1992e27e0d37546b3b8ea29ad57385"
+$RenodeInstallTreeSha256 = "3b12f1dd7b613cd9b73994a985fcd77107f471c352c52b4f3f2ff1528d4e7e8d"
+$QemuXtensaArtifactSha256 = "7716f734130a20193ab45a4c14581918822e5ae684eb5cf3073b9429bee29825"
+$QemuRiscv32ArtifactSha256 = "ec900387a3f7b54800d4690db575b86162769add55aa3b09056a943b29ec6644"
+$QemuInstallTreeSha256 = "4f02f4495f50ddf3baed71de29192932bd09053f0a1df498b854e0f5be0d8171"
 $assets = @(
     @{
         Name = "renode-$RenodeVersion.windows-portable-dotnet.zip"
@@ -61,6 +67,52 @@ function Assert-Hash([string]$Path, [string]$Expected) {
     $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $Expected) {
         throw "checksum mismatch for $Path`: expected $Expected, got $actual"
+    }
+}
+
+function Get-InstallTreeSha256([string]$Root) {
+    $rootPath = (Resolve-Path -LiteralPath $Root).Path.TrimEnd([char[]]"\/")
+    $rows = New-Object System.Collections.Generic.List[string]
+    foreach ($file in Get-ChildItem -LiteralPath $rootPath -File -Recurse) {
+        $relative = $file.FullName.Substring($rootPath.Length).TrimStart([char[]]"\/") -replace '\\', '/'
+        $digest = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $rows.Add("$digest  $relative`n")
+    }
+    $ordered = $rows.ToArray()
+    [Array]::Sort($ordered, [StringComparer]::Ordinal)
+    $bytes = [Text.Encoding]::UTF8.GetBytes([string]::Concat($ordered))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Assert-InstallTree([string]$Actual, [string]$Expected, [string]$Label) {
+    $actualDigest = Get-InstallTreeSha256 $Actual
+    $expectedDigest = Get-InstallTreeSha256 $Expected
+    if ($actualDigest -ne $expectedDigest) {
+        throw "$Label install tree does not match the freshly extracted pinned archive payload"
+    }
+    return @{ Actual = $actualDigest; Expected = $expectedDigest }
+}
+
+function Assert-RenodeVersion([string]$Path) {
+    $output = & $Path --version 2>&1 | Select-Object -First 1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $output.Trim() -notmatch "^(Renode v|Renode, version )$([regex]::Escape($RenodeVersion))(?:\.|\s|$)") {
+        throw "Renode payload reports the wrong version: $($output.Trim())"
+    }
+}
+
+function Assert-QemuVersion([string]$Path) {
+    $version = & $Path --version 2>&1 | Select-Object -First 1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $version -notmatch "\($([regex]::Escape($QemuAssetVersion))\)") {
+        throw "QEMU payload reports the wrong pinned version: $($version.Trim())"
+    }
+    $machines = & $Path -machine help 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $machines -notmatch '(?m)^esp32') {
+        throw "$(Split-Path -Leaf $Path) is not the Espressif fork"
     }
 }
 
@@ -150,26 +202,81 @@ function Replace-Tree([string]$Staging, [string]$Target) {
     }
 }
 
+function Remove-AbandonedStaging([string]$Path) {
+    if ($Path -and (Test-Path -LiteralPath $Path)) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+}
+
 if ($Check) {
     foreach ($asset in $selectedAssets) {
         Assert-Hash (Join-Path $CacheDir $asset.Name) $asset.Sha256
     }
-    if (-not $QemuOnly) {
-        $renode = Get-ChildItem -LiteralPath $renodeTarget -Filter Renode.exe -File -Recurse | Select-Object -First 1
-        if (-not $renode) { throw "pinned Renode is not installed" }
-        & $renode.FullName --version | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "pinned Renode failed its version probe" }
-    }
-    if (-not $RenodeOnly) {
-        foreach ($binary in @("qemu-system-xtensa.exe", "qemu-system-riscv32.exe")) {
-            $output = & (Join-Path $qemuTarget "qemu\bin\$binary") -machine help 2>&1 | Out-String
-            if ($LASTEXITCODE -ne 0 -or $output -notmatch '(?m)^esp32') {
-                throw "$binary is not the Espressif fork"
+    $verifyRoot = Join-Path ([IO.Path]::GetTempPath()) "simulator.verify-$([guid]::NewGuid().ToString('N'))"
+    $evidence = [ordered]@{ backends = [ordered]@{} }
+    try {
+        New-Item -ItemType Directory -Path $verifyRoot | Out-Null
+        if (-not $QemuOnly) {
+            $rawRenode = Join-Path $verifyRoot "renode-raw"
+            $expectedRenode = Join-Path $verifyRoot "renode"
+            Expand-Archive -LiteralPath (Join-Path $CacheDir $assets[0].Name) -DestinationPath $rawRenode
+            $top = @(Get-ChildItem -LiteralPath $rawRenode)
+            $source = if ($top.Count -eq 1 -and $top[0].PSIsContainer) { $top[0].FullName } else { $rawRenode }
+            New-Item -ItemType Directory -Path $expectedRenode | Out-Null
+            Get-ChildItem -LiteralPath $source | Copy-Item -Destination $expectedRenode -Recurse
+            $renode = Get-ChildItem -LiteralPath $renodeTarget -Filter Renode.exe -File -Recurse | Select-Object -First 1
+            $expectedExe = Get-ChildItem -LiteralPath $expectedRenode -Filter Renode.exe -File -Recurse | Select-Object -First 1
+            if (-not $renode -or -not $expectedExe) { throw "pinned Renode executable is missing" }
+            Assert-RenodeVersion $renode.FullName
+            $tree = Assert-InstallTree $renodeTarget $expectedRenode "Renode"
+            $artifactSha256 = (Get-FileHash -LiteralPath $renode.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($artifactSha256 -ne $RenodeArtifactSha256 -or $tree.Actual -ne $RenodeInstallTreeSha256) {
+                throw "Renode payload does not match the repository-pinned executable and install-tree fingerprints"
+            }
+            $evidence.backends["HAUKSBEE_RENODE"] = [ordered]@{
+                artifact_sha256 = $artifactSha256
+                install_tree_sha256 = $tree.Actual
             }
         }
+        if (-not $RenodeOnly) {
+            $expectedQemu = Join-Path $verifyRoot "qemu"
+            New-Item -ItemType Directory -Path $expectedQemu | Out-Null
+            foreach ($asset in $assets | Where-Object { $_.Kind -eq "qemu" }) {
+                $archive = Join-Path $CacheDir $asset.Name
+                Assert-SafeTar $archive
+                & tar -xf $archive -C $expectedQemu
+                if ($LASTEXITCODE -ne 0) { throw "could not extract $archive for verification" }
+            }
+            $tree = Assert-InstallTree $qemuTarget $expectedQemu "Espressif QEMU"
+            if ($tree.Actual -ne $QemuInstallTreeSha256) {
+                throw "Espressif QEMU payload does not match the repository-pinned install-tree fingerprint"
+            }
+            foreach ($contract in @(
+                @{ Key = "HAUKSBEE_QEMU_XTENSA"; File = "qemu-system-xtensa.exe"; Sha256 = $QemuXtensaArtifactSha256 },
+                @{ Key = "HAUKSBEE_QEMU_RISCV32"; File = "qemu-system-riscv32.exe"; Sha256 = $QemuRiscv32ArtifactSha256 }
+            )) {
+                $actualExe = Join-Path $qemuTarget "qemu\bin\$($contract.File)"
+                Assert-QemuVersion $actualExe
+                $artifactSha256 = (Get-FileHash -LiteralPath $actualExe -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($artifactSha256 -ne $contract.Sha256) {
+                    throw "$($contract.File) does not match the repository-pinned executable fingerprint"
+                }
+                $evidence.backends[$contract.Key] = [ordered]@{
+                    artifact_sha256 = $artifactSha256
+                    install_tree_sha256 = $tree.Actual
+                }
+            }
+        }
+        if ($EvidenceOut) {
+            $parent = Split-Path -Parent $EvidenceOut
+            if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            $evidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $EvidenceOut -Encoding utf8
+        }
+        Write-Host "Requested pinned Windows simulator tree(s) match fresh verified archive extraction."
+        return
+    } finally {
+        Remove-AbandonedStaging $verifyRoot
     }
-    Write-Host "Requested pinned Windows simulator tree(s) are present and executable."
-    return
 }
 
 $downloaded = @{}
@@ -177,6 +284,8 @@ foreach ($asset in $selectedAssets) { $downloaded[$asset.Name] = Get-PinnedAsset
 
 $renodeWork = Join-Path ([IO.Path]::GetTempPath()) "renode.install-staging-$([guid]::NewGuid().ToString('N'))"
 $qemuWork = Join-Path ([IO.Path]::GetTempPath()) "qemu.install-staging-$([guid]::NewGuid().ToString('N'))"
+$renodeStage = $null
+$qemuStage = $null
 try {
     if (-not $QemuOnly) {
         Expand-Archive -LiteralPath $downloaded[$assets[0].Name] -DestinationPath $renodeWork
@@ -190,8 +299,7 @@ try {
         Get-ChildItem -LiteralPath $source | Copy-Item -Destination $renodeStage -Recurse
         $stagedRenode = Get-ChildItem -LiteralPath $renodeStage -Filter Renode.exe -File -Recurse | Select-Object -First 1
         if (-not $stagedRenode) { throw "Renode.exe missing from the staged Renode tree" }
-        & $stagedRenode.FullName --version | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "pinned Renode failed its version probe" }
+        Assert-RenodeVersion $stagedRenode.FullName
         Replace-Tree $renodeStage $renodeTarget
     }
 
@@ -204,10 +312,7 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "could not extract $archive" }
         }
         foreach ($binary in @("qemu-system-xtensa.exe", "qemu-system-riscv32.exe")) {
-            $output = & (Join-Path $qemuWork "qemu\bin\$binary") -machine help 2>&1 | Out-String
-            if ($LASTEXITCODE -ne 0 -or $output -notmatch '(?m)^esp32') {
-                throw "$binary is not the Espressif fork"
-            }
+            Assert-QemuVersion (Join-Path $qemuWork "qemu\bin\$binary")
         }
         $qemuStage = "$qemuTarget.install-staging-$([guid]::NewGuid().ToString('N'))"
         if (Test-Path -LiteralPath $qemuStage) { Remove-Item -LiteralPath $qemuStage -Recurse -Force }
@@ -216,7 +321,7 @@ try {
     }
     Write-Host "Installed the requested checksum-pinned Windows simulator backend(s)."
 } finally {
-    foreach ($path in @($renodeWork, $qemuWork)) {
-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+    foreach ($path in @($renodeStage, $qemuStage, $renodeWork, $qemuWork)) {
+        Remove-AbandonedStaging $path
     }
 }
