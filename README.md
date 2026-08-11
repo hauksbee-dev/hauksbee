@@ -83,9 +83,18 @@ Building needs Rust via rustup (the pinned toolchain builds automatically), plus
 **Or run it in Docker** (no local toolchain needed: the slim image carries `hauksbee` + `hauksbee-ci`, the model db and AVR co-sim):
 
 ```bash
+export HAUKSBEE_GHCR_USER="<authorized GitHub user or x-access-token for an App token>"
+export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
+printf '%s' "$HAUKSBEE_GITHUB_TOKEN" \
+  | docker login ghcr.io --username "$HAUKSBEE_GHCR_USER" --password-stdin
 docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee run path/to/board.kicad_pcb --report
 ```
+
+The credential needs package-read access to the private GHCR package. For a
+user token, set `HAUKSBEE_GHCR_USER` to that user; for a GitHub App installation
+token, use `x-access-token`. Docker stores the result in its configured
+credential store; do not place the token in the repository or an argument.
 
 The slim and full images and more `docker run` examples are in [`docs/ci/DOCKER.md`](docs/ci/DOCKER.md).
 
