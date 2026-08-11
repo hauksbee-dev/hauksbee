@@ -98,6 +98,21 @@ class WindowsPortContract(unittest.TestCase):
             self.assertIn("install-sims-windows.ps1", text)
             self.assertIn("run-required-integrations-windows.ps1", text)
 
+    def test_required_windows_gates_bind_and_attest_exact_pinned_backends(self) -> None:
+        required = read("scripts/run-required-integrations-windows.ps1")
+        for name in (
+            "HAUKSBEE_RENODE",
+            "HAUKSBEE_QEMU_XTENSA",
+            "HAUKSBEE_QEMU_RISCV32",
+        ):
+            self.assertRegex(required, rf"\$env:{name}\s*=", name)
+        self.assertIn("artifact_sha256", required)
+        self.assertIn("archive_sha256", required)
+        self.assertIn("backends", required)
+
+        release = read(".github/workflows/release.yml")
+        self.assertIn('--expected-platform "windows-x86_64"', release)
+
     def test_windows_job_assignment_is_before_execution_and_covers_hard_parent_death(self) -> None:
         children = read("crates/hauksbee-mcu/src/children.rs")
         for symbol in (
@@ -114,6 +129,12 @@ class WindowsPortContract(unittest.TestCase):
         ):
             self.assertIn("spawn_owned", read(process))
 
+    def test_windows_teardown_never_targets_a_recycled_numeric_pid(self) -> None:
+        children = read("crates/hauksbee-mcu/src/children.rs")
+        self.assertNotIn('Command::new("taskkill")', children)
+        self.assertIn("TerminateJobObject", children)
+        self.assertIn("windows_reaped_child_teardown_uses_owned_job", children)
+
     def test_installer_is_exercised_and_replaces_all_binaries_transactionally(self) -> None:
         workflow = read(".github/workflows/release.yml")
         self.assertIn("test-windows-installer.ps1", workflow)
@@ -129,6 +150,40 @@ class WindowsPortContract(unittest.TestCase):
         self.assertIn("install-staging", installer)
         self.assertIn("install-backup", installer)
         self.assertIn("Move-Item", installer)
+
+    def test_windows_packaging_and_install_bind_tag_to_every_binary(self) -> None:
+        bundle = read("scripts/bundle-windows.ps1")
+        installer = read("scripts/get-hauksbee.ps1")
+        for binary in ("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe"):
+            self.assertIn(binary, bundle)
+            self.assertIn(binary, installer)
+        self.assertIn("Assert-BinaryVersion", bundle)
+        self.assertIn("Assert-BinaryVersion", installer)
+        self.assertRegex(bundle, r"Assert-BinaryVersion[^\n]+\$Version")
+        self.assertRegex(installer, r"Assert-BinaryVersion[^\n]+\$VersionBare")
+
+    def test_windows_tree_swaps_use_unique_recoverable_backups(self) -> None:
+        for path in ("scripts/get-hauksbee.ps1", "scripts/install-sims-windows.ps1"):
+            script = read(path)
+            self.assertIn("[guid]::NewGuid()", script)
+            self.assertIn("Recover-StaleBackup", script)
+            self.assertRegex(script, r"try\s*\{[\s\S]*Move-Item[^\n]+\$[Tt]arget[^\n]+\$backup")
+        fixture = read("scripts/test-windows-installer.ps1")
+        self.assertIn("stale-interruption", fixture)
+
+    def test_downloaded_executable_probes_receive_no_private_tokens(self) -> None:
+        installer = read("scripts/get-hauksbee.ps1")
+        self.assertIn("Invoke-TokenFreeVersionProbe", installer)
+        for token in ("HAUKSBEE_GITHUB_TOKEN", "GITHUB_TOKEN"):
+            self.assertRegex(installer, rf"Remove-Item Env:{token}")
+        fixture = read("scripts/test-windows-installer.ps1")
+        self.assertIn('env::var_os("HAUKSBEE_GITHUB_TOKEN")', fixture)
+        self.assertIn('env::var_os("GITHUB_TOKEN")', fixture)
+
+    def test_installer_contract_runs_under_both_windows_powershells(self) -> None:
+        fixture = read("scripts/test-windows-installer.ps1")
+        self.assertIn('"powershell.exe"', fixture)
+        self.assertIn('"pwsh.exe"', fixture)
 
     def test_build_jobs_do_not_retain_write_credentials(self) -> None:
         release = read(".github/workflows/release.yml")
