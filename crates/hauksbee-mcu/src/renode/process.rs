@@ -140,6 +140,7 @@ pub fn is_available() -> bool {
 /// A spawned, headless Renode instance with a Monitor TCP port.
 pub struct RenodeProcess {
     child: Child,
+    _tree_guard: crate::children::ProcessTreeGuard,
     pub monitor_port: u16,
 }
 
@@ -176,13 +177,13 @@ impl RenodeProcess {
             // leak this prevents.
             cmd.process_group(0);
         }
-        let child = cmd
-            .spawn()
-            .with_context(|| format!("spawning Renode from {}", bin.display()))?;
+        let (child, tree_guard) = crate::children::spawn_owned(&mut cmd)
+            .with_context(|| format!("spawning owned Renode from {}", bin.display()))?;
         crate::children::register(child.id());
 
         Ok(RenodeProcess {
             child,
+            _tree_guard: tree_guard,
             monitor_port,
         })
     }

@@ -311,18 +311,19 @@ Same as x86_64 above, but use the `linux-arm64-portable-dotnet.tar.gz` asset.
 
 **Windows**
 
-Download `renode-<ver>.windows-portable-dotnet.zip` and extract it into
-`%USERPROFILE%\renode-portable` (so `Renode.exe` sits directly inside), or
-use the `.msi` installer. Discovery checks, in order: `HAUKSBEE_RENODE`,
+Run `scripts\install-sims-windows.ps1 -RenodeOnly`. It downloads the pinned
+portable release, verifies the repository-recorded SHA-256, probes
+`Renode.exe`, and transactionally installs it under
+`%USERPROFILE%\renode-portable`. A manual alternative is to download the same
+`windows-portable-dotnet.zip` or use the `.msi` installer. Discovery checks,
+in order: `HAUKSBEE_RENODE`,
 `Renode.exe`/`renode.exe` on `PATH`, the `%USERPROFILE%\renode-portable` zip
 layout (`Renode.exe` at the top or under `bin\`), then the installer trees
 under `%ProgramFiles%\Renode` and `%LOCALAPPDATA%\Programs\Renode`. These
-lookups are unit-tested on every OS, and the portable-zip layout was verified
-resolving under Wine, but no firmware co-sim has run against a real Renode on
-native Windows yet. The installer script does not cover Windows (it is
-bash), so the unpack stays manual. If you want to close the native-Windows
-gap, `docs/about/release-and-licensing.md` section 5 has a ready-made prompt
-for pointing a coding agent at the port, and an invitation to PR the result.
+lookups are unit-tested on every OS. Both the ordinary Windows CI lane and the
+release job install that exact archive and require the named RP2040
+firmware-to-ADC flow; a missing backend, missing firmware, `SKIP:`, wrong SHA,
+or absent one-test pass record fails the job.
 
 ---
 
@@ -402,8 +403,11 @@ into `%USERPROFILE%\.hauksbee-qemu-esp\qemu\bin\` (so
 `qemu-system-xtensa.exe` and `qemu-system-riscv32.exe` sit there), or use the
 idf-tools tree under `%USERPROFILE%\.espressif\tools\`, `C:\Espressif\tools\`
 (the ESP-IDF Windows installer default), or wherever `IDF_TOOLS_PATH` points.
-`hauksbee install esp-qemu` refuses on Windows (it shells `curl`/`tar` and has
-never run on a native box), so the unpack stays manual. These discovery paths
-are unit-tested on every OS and exercised under Wine. An actual ESP32 co-sim
-on native Windows is still unproven; see
-`docs/about/release-and-licensing.md` section 5.
+`scripts\install-sims-windows.ps1 -QemuOnly` is the release-evidence route: it
+downloads both exact Windows archives, verifies repository-recorded SHA-256
+values, rejects unsafe archive paths, checks each binary's ESP32 machine list,
+and transactionally installs the shared tree. Native CI then requires one
+Xtensa firmware/I2C/GPIO flow and one RISC-V
+firmware/UART/current/GPIO-circuit flow. `hauksbee install esp-qemu --yes`
+remains the interactive convenience front door; the pinned script is what
+earns release evidence.
