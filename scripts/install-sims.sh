@@ -28,8 +28,12 @@
 #   --check          Do NOT install anything. Report for each backend whether
 #                    hauksbee will discover it and at which path. Exit 0 if
 #                    all requested backends are discoverable, else 1.
-#   --require-pinned Release-evidence mode: only the versions in
-#                    required-simulator-versions.env count as installed.
+#   --require-pinned Release-evidence mode: reverify the repository-pinned
+#                    archives, extract fresh non-overlaid trees, and refuse
+#                    ordinary installed binaries as provenance.
+#   --emit-required-paths
+#                    With --require-pinned, print the exact verified executable
+#                    paths for the release integration runner to bind.
 #   --help           Show this help.
 #
 # Install targets:
@@ -42,6 +46,8 @@
 #
 # Environment overrides (these are hauksbee's env overrides, not just this
 # script's): HAUKSBEE_RENODE, HAUKSBEE_QEMU_XTENSA, HAUKSBEE_QEMU_RISCV32.
+# Required mode caches only archives under HAUKSBEE_SIM_CACHE_DIR (default:
+# ~/.cache/hauksbee/simulator-archives) and uses RUNNER_TEMP for fresh trees.
 #
 # Idempotent: if a backend is already discoverable, the download is skipped.
 # Safe: writes only to ~/renode-portable and ~/.espressif/tools. Never uses
@@ -55,9 +61,12 @@ usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; $d'
 # Beside this script, so a release bundle that ships scripts/ carries the hashes
 # with the installer that needs them. Resolved here rather than inside
 # verify_asset: at top level BASH_SOURCE unambiguously names this file.
-RENODE_CHECKSUMS="${RENODE_CHECKSUMS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/renode-checksums.txt}"
-QEMU_CHECKSUMS="${QEMU_CHECKSUMS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/espressif-qemu-checksums.txt}"
-VERSIONS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/required-simulator-versions.env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PINNED_RENODE_CHECKSUMS="$SCRIPT_DIR/renode-checksums.txt"
+PINNED_QEMU_CHECKSUMS="$SCRIPT_DIR/espressif-qemu-checksums.txt"
+RENODE_CHECKSUMS="${RENODE_CHECKSUMS:-$PINNED_RENODE_CHECKSUMS}"
+QEMU_CHECKSUMS="${QEMU_CHECKSUMS:-$PINNED_QEMU_CHECKSUMS}"
+VERSIONS_FILE="$SCRIPT_DIR/required-simulator-versions.env"
 [ -f "$VERSIONS_FILE" ] || die "required simulator version manifest missing: $VERSIONS_FILE"
 # shellcheck source=scripts/required-simulator-versions.env
 source "$VERSIONS_FILE"
@@ -68,6 +77,7 @@ DO_QEMU=1
 DO_AVR=0          # opt-in: simavr is GPL-3.0, so it is not installed by default
 CHECK_ONLY=0
 REQUIRE_PINNED=0
+EMIT_REQUIRED_PATHS=0
 PREFIX_OVERRIDE=""
 
 while [ $# -gt 0 ]; do
@@ -79,10 +89,20 @@ while [ $# -gt 0 ]; do
     --prefix=*)     PREFIX_OVERRIDE="${1#*=}"; shift ;;
     --check)        CHECK_ONLY=1; shift ;;
     --require-pinned) REQUIRE_PINNED=1; shift ;;
+    --emit-required-paths) EMIT_REQUIRED_PATHS=1; shift ;;
     -h|--help)      usage; exit 0 ;;
     *) die "unknown argument '$1' (try --help)" ;;
   esac
 done
+
+if [ "$EMIT_REQUIRED_PATHS" -eq 1 ] && [ "$REQUIRE_PINNED" -ne 1 ]; then
+  die "--emit-required-paths requires --require-pinned"
+fi
+if [ "$REQUIRE_PINNED" -eq 1 ] \
+    && { [ "$RENODE_CHECKSUMS" != "$PINNED_RENODE_CHECKSUMS" ] \
+      || [ "$QEMU_CHECKSUMS" != "$PINNED_QEMU_CHECKSUMS" ]; }; then
+  die "--require-pinned only trusts checksum manifests shipped beside install-sims.sh"
+fi
 
 # ── platform detection ───────────────────────────────────────────────────────
 OS="$(uname -s)"
@@ -182,55 +202,6 @@ sha256_file() {
   fi
 }
 
-receipt_field() {
-  local receipt="$1" field="$2"
-  awk -F= -v field="$field" '$1 == field { sub(/^[^=]*=/, ""); print; exit }' "$receipt"
-}
-
-# Retain the immutable executable digest produced by a checksum-verified asset
-# install. A cached binary is release evidence only while this receipt still
-# names an asset in the current repository manifest and its bytes still match.
-write_install_receipt() {
-  local bin="$1" backend="$2" version="$3" asset="$4" sums="$5"
-  local asset_sha artifact_sha receipt
-  asset_sha="$(awk -v n="$asset" '$2 == n { print $1; exit }' "$sums")"
-  [ -n "$asset_sha" ] || die "cannot retain install identity: $asset is absent from $sums"
-  artifact_sha="$(sha256_file "$bin")" \
-    || die "cannot hash installed artifact $bin"
-  receipt="${bin}.hkb-pinned"
-  {
-    printf 'format=1\n'
-    printf 'backend=%s\n' "$backend"
-    printf 'version=%s\n' "$version"
-    printf 'asset_name=%s\n' "$asset"
-    printf 'asset_sha256=%s\n' "$asset_sha"
-    printf 'artifact_sha256=%s\n' "$artifact_sha"
-  } >"$receipt"
-}
-
-verify_install_receipt() {
-  local bin="$1" backend="$2" version="$3" sums="$4"
-  local receipt="${bin}.hkb-pinned"
-  [ -f "$receipt" ] || return 1
-  [ "$(receipt_field "$receipt" format)" = 1 ] || return 1
-  [ "$(receipt_field "$receipt" backend)" = "$backend" ] || return 1
-  [ "$(receipt_field "$receipt" version)" = "$version" ] || return 1
-
-  local asset recorded_asset_sha receipt_asset_sha recorded_artifact_sha actual_artifact_sha
-  asset="$(receipt_field "$receipt" asset_name)"
-  receipt_asset_sha="$(receipt_field "$receipt" asset_sha256)"
-  recorded_asset_sha="$(awk -v n="$asset" '$2 == n { print $1; exit }' "$sums")"
-  [ -n "$recorded_asset_sha" ] && [ "$receipt_asset_sha" = "$recorded_asset_sha" ] \
-    || return 1
-  recorded_artifact_sha="$(receipt_field "$receipt" artifact_sha256)"
-  actual_artifact_sha="$(sha256_file "$bin" 2>/dev/null || true)"
-  if [ -z "$actual_artifact_sha" ] || [ "$recorded_artifact_sha" != "$actual_artifact_sha" ]; then
-    err "artifact digest mismatch for $bin; the verified install receipt no longer matches"
-    return 1
-  fi
-  return 0
-}
-
 # Resolve the Espressif QEMU release tag. PINNED, not resolved.
 #
 # This used to ask GitHub for `latest` at install time and interpolate the
@@ -305,8 +276,7 @@ find_avr_prefix() {
 find_renode_bin() {
   # 1. HAUKSBEE_RENODE env
   if [ -n "${HAUKSBEE_RENODE:-}" ]; then
-    if [ -x "$HAUKSBEE_RENODE" ] \
-        && { [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$HAUKSBEE_RENODE"; }; then
+    if [ -x "$HAUKSBEE_RENODE" ]; then
       printf '%s' "$HAUKSBEE_RENODE"
       return 0
     fi
@@ -317,10 +287,8 @@ find_renode_bin() {
   if command -v renode >/dev/null 2>&1; then
     local path_renode
     path_renode="$(command -v renode)"
-    if [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$path_renode"; then
-      printf '%s' "$path_renode"
-      return 0
-    fi
+    printf '%s' "$path_renode"
+    return 0
   fi
 
   # 3. Conventional portable locations
@@ -329,8 +297,7 @@ find_renode_bin() {
     "$HOME/renode-portable/Renode.app/Contents/MacOS/renode" \
     "$HOME/renode-portable/renode" \
     "$HOME/renode_portable/renode"; do
-    if [ -x "$candidate" ] \
-        && { [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$candidate"; }; then
+    if [ -x "$candidate" ]; then
       printf '%s' "$candidate"
       return 0
     fi
@@ -351,8 +318,7 @@ find_qemu_bin() {
   local envval
   envval="${!envvar:-}"
   if [ -n "$envval" ]; then
-    if [ -x "$envval" ] && is_esp_qemu_fork "$envval" \
-        && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$envval"; }; then
+    if [ -x "$envval" ] && is_esp_qemu_fork "$envval"; then
       printf '%s' "$envval"
       return 0
     fi
@@ -382,8 +348,7 @@ find_qemu_bin() {
   fi
 
   for c in "${candidates[@]}"; do
-    if [ -x "$c" ] && is_esp_qemu_fork "$c" \
-        && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$c"; }; then
+    if [ -x "$c" ] && is_esp_qemu_fork "$c"; then
       printf '%s' "$c"
       return 0
     fi
@@ -393,8 +358,7 @@ find_qemu_bin() {
   if command -v "$name" >/dev/null 2>&1; then
     local path_bin
     path_bin="$(command -v "$name")"
-    if is_esp_qemu_fork "$path_bin" \
-        && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$path_bin"; }; then
+    if is_esp_qemu_fork "$path_bin"; then
       printf '%s' "$path_bin"
       return 0
     fi
@@ -409,31 +373,6 @@ is_esp_qemu_fork() {
   local bin="$1"
   [ -x "$bin" ] || return 1
   "$bin" -machine help 2>/dev/null | grep -qi 'esp32'
-}
-
-renode_is_pinned() {
-  local bin="$1" version
-  verify_install_receipt "$bin" "renode" "$RENODE_VERSION" "$RENODE_CHECKSUMS" \
-    || return 1
-  version="$("$bin" --version 2>/dev/null | head -1 || true)"
-  case "$version" in
-    "Renode v${RENODE_VERSION}"|"Renode v${RENODE_VERSION}."*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-qemu_is_pinned() {
-  local bin="$1" version expected
-  local backend
-  backend="$(basename "$bin")"
-  verify_install_receipt "$bin" "$backend" "$QEMU_VERSION" "$QEMU_CHECKSUMS" \
-    || return 1
-  version="$("$bin" --version 2>/dev/null | head -1 || true)"
-  expected="$(qemu_tag_to_dir_ver "$QEMU_VERSION")"
-  case "$version" in
-    *"(${expected})"*) return 0 ;;
-    *) return 1 ;;
-  esac
 }
 
 # ── find ESP-IDF idf_tools.py ─────────────────────────────────────────────────
@@ -468,30 +407,167 @@ cleanup_tmpdir() {
 }
 trap cleanup_tmpdir EXIT
 
+# Required integration evidence is rooted in the repository's checksum
+# manifests, never in an installed binary or a sidecar that a local process can
+# author.  Cache only the upstream archive, reverify it on every invocation,
+# and extract into a new empty tree.  The caller binds Cargo to the exact paths
+# emitted from that tree, so ordinary PATH discovery remains permissive without
+# being usable as release evidence.
+REQUIRED_RUN_ROOT=""
+VERIFIED_ASSET_PATH=""
+REQUIRED_RENODE_PATH=""
+REQUIRED_QEMU_XTENSA_PATH=""
+REQUIRED_QEMU_RISCV32_PATH=""
+
+expected_asset_sha() {
+  local name="$1" sums="$2"
+  awk -v n="$name" '$2 == n { print $1; exit }' "$sums"
+}
+
+asset_matches_sha() {
+  local file="$1" want="$2" got
+  got="$(sha256_file "$file" 2>/dev/null || true)"
+  [ -n "$got" ] && [ "$got" = "$want" ]
+}
+
+obtain_verified_asset() {
+  local asset="$1" sums="$2" what="$3" version="$4" url="$5"
+  local want cache_dir cached partial rejected
+  want="$(expected_asset_sha "$asset" "$sums")"
+  [ -n "$want" ] || die "no recorded checksum for $asset (pinned version $version); refusing unverified $what"
+  cache_dir="${HAUKSBEE_SIM_CACHE_DIR:-$HOME/.cache/hauksbee/simulator-archives}"
+  mkdir -p "$cache_dir"
+  cached="$cache_dir/${want}-${asset}"
+  if [ -f "$cached" ] && ! asset_matches_sha "$cached" "$want"; then
+    rejected="${cached}.rejected.$$"
+    mv "$cached" "$rejected"
+    warn "$what: moved corrupt cached archive to $rejected"
+  fi
+  if [ ! -f "$cached" ]; then
+    partial="$(mktemp "$cache_dir/.${asset}.partial.XXXXXX")"
+    if [ -n "${HAUKSBEE_SIM_ASSET_DIR:-}" ]; then
+      [ -f "$HAUKSBEE_SIM_ASSET_DIR/$asset" ] \
+        || die "pinned asset not found: $HAUKSBEE_SIM_ASSET_DIR/$asset"
+      cp "$HAUKSBEE_SIM_ASSET_DIR/$asset" "$partial"
+    else
+      curl --fail --location --progress-bar --output "$partial" "$url" \
+        || die "download failed for pinned asset: $url"
+    fi
+    verify_asset "$partial" "$asset" "$sums" "$what" "$version" "Restore the pinned archive."
+    mv "$partial" "$cached"
+  fi
+  # Reverify even cache hits immediately before extraction.
+  verify_asset "$cached" "$asset" "$sums" "$what" "$version" "Restore the pinned archive."
+  VERIFIED_ASSET_PATH="$cached"
+}
+
+validate_tar_members() {
+  local archive="$1"
+  tar tf "$archive" | awk '
+    /^\// { bad=1 }
+    { n=split($0, p, "/"); for (i=1; i<=n; i++) if (p[i] == "..") bad=1 }
+    END { exit bad ? 1 : 0 }
+  ' || die "archive contains an unsafe absolute or parent-traversal member: $archive"
+}
+
+prepare_required_renode() {
+  local asset url mountpoint bin ver
+  case "$PLATFORM-$ARCH_NORM" in
+    darwin-arm64) asset="renode-${RENODE_VERSION}-dotnet.osx-arm64-portable.dmg" ;;
+    darwin-x86_64) asset="renode-${RENODE_VERSION}-dotnet.osx-x86_64-portable.dmg" ;;
+    linux-arm64) asset="renode-${RENODE_VERSION}.linux-arm64-portable-dotnet.tar.gz" ;;
+    linux-x86_64) asset="renode-${RENODE_VERSION}.linux-portable-dotnet.tar.gz" ;;
+  esac
+  url="https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/${asset}"
+  obtain_verified_asset "$asset" "$RENODE_CHECKSUMS" "Renode" "$RENODE_VERSION" "$url"
+  if [ "$PLATFORM" = darwin ]; then
+    mountpoint="$REQUIRED_RUN_ROOT/renode-mount"
+    mkdir -p "$mountpoint" "$REQUIRED_RUN_ROOT/renode"
+    hdiutil attach "$VERIFIED_ASSET_PATH" -mountpoint "$mountpoint" -nobrowse -quiet \
+      || die "hdiutil attach failed for verified Renode asset"
+    ditto "$mountpoint/Renode.app" "$REQUIRED_RUN_ROOT/renode/Renode.app" \
+      || { hdiutil detach "$mountpoint" -quiet 2>/dev/null || true; die "ditto copy failed"; }
+    hdiutil detach "$mountpoint" -quiet || die "could not detach verified Renode asset"
+    bin="$REQUIRED_RUN_ROOT/renode/Renode.app/Contents/MacOS/renode"
+  else
+    mkdir -p "$REQUIRED_RUN_ROOT/renode"
+    validate_tar_members "$VERIFIED_ASSET_PATH"
+    tar xzf "$VERIFIED_ASSET_PATH" -C "$REQUIRED_RUN_ROOT/renode" --strip-components=1 \
+      || die "tar extraction failed for verified Renode asset"
+    bin="$REQUIRED_RUN_ROOT/renode/renode"
+  fi
+  [ -x "$bin" ] || die "verified Renode archive did not contain its required launcher"
+  ver="$("$bin" --version 2>/dev/null | head -1 || true)"
+  case "$ver" in "Renode v${RENODE_VERSION}"|"Renode v${RENODE_VERSION}."*) ;; *) die "verified Renode payload reports the wrong version: $ver" ;; esac
+  REQUIRED_RENODE_PATH="$bin"
+}
+
+prepare_required_qemu() {
+  local dir_ver suffix arch tool bin asset url dest ver expected
+  dir_ver="$(qemu_tag_to_dir_ver "$QEMU_VERSION")"
+  expected="$dir_ver"
+  case "$PLATFORM-$ARCH_NORM" in
+    darwin-arm64) suffix="aarch64-apple-darwin" ;;
+    darwin-x86_64) suffix="x86_64-apple-darwin" ;;
+    linux-arm64) suffix="aarch64-linux-gnu" ;;
+    linux-x86_64) suffix="x86_64-linux-gnu" ;;
+  esac
+  for arch in xtensa riscv32; do
+    tool="qemu-$arch"
+    bin="qemu-system-$arch"
+    asset="$(qemu_asset_name "$dir_ver" "$tool" "$suffix")"
+    url="https://github.com/espressif/qemu/releases/download/${QEMU_VERSION}/${asset}"
+    obtain_verified_asset "$asset" "$QEMU_CHECKSUMS" "Espressif QEMU" "$QEMU_VERSION" "$url"
+    dest="$REQUIRED_RUN_ROOT/$tool"
+    mkdir -p "$dest"
+    validate_tar_members "$VERIFIED_ASSET_PATH"
+    tar xf "$VERIFIED_ASSET_PATH" -C "$dest" \
+      || die "tar extraction failed for verified $asset"
+    bin="$dest/qemu/bin/$bin"
+    [ -x "$bin" ] || die "verified $asset did not contain its required launcher"
+    is_esp_qemu_fork "$bin" || die "verified $asset is not the Espressif QEMU fork"
+    ver="$("$bin" --version 2>/dev/null | head -1 || true)"
+    case "$ver" in *"(${expected})"*) ;; *) die "verified $asset reports the wrong version: $ver" ;; esac
+    case "$arch" in
+      xtensa) REQUIRED_QEMU_XTENSA_PATH="$bin" ;;
+      riscv32) REQUIRED_QEMU_RISCV32_PATH="$bin" ;;
+    esac
+  done
+}
+
+prepare_required_backends() {
+  local run_base
+  run_base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+  mkdir -p "$run_base"
+  REQUIRED_RUN_ROOT="$(mktemp -d "$run_base/hauksbee-required-sims.XXXXXX")"
+  [ "$DO_RENODE" -eq 0 ] || prepare_required_renode
+  [ "$DO_QEMU" -eq 0 ] || prepare_required_qemu
+}
+
 # ── CHECK mode ───────────────────────────────────────────────────────────────
 if [ "$CHECK_ONLY" -eq 1 ]; then
+  if [ "$REQUIRE_PINNED" -eq 1 ]; then
+    die "--check --require-pinned cannot authenticate an installed tree; run --require-pinned to reverify repository-pinned archives and prepare fresh backends"
+  fi
   log "hauksbee simulator discovery check"
   printf '\n'
 
   all_ok=0
+  REQUIRED_RENODE_PATH=""
+  REQUIRED_QEMU_XTENSA_PATH=""
+  REQUIRED_QEMU_RISCV32_PATH=""
 
   if [ "$DO_RENODE" -eq 1 ]; then
     log "Renode (STM32 / nRF52 / RP2040 / RISC-V backend)"
     info "  pinned release: $RENODE_VERSION  (installs come from this, hash-checked)"
     rnode_bin="$(find_renode_bin || true)"
     if [ -n "$rnode_bin" ]; then
+      REQUIRED_RENODE_PATH="$rnode_bin"
       ok "FOUND  $rnode_bin"
       ver="$("$rnode_bin" --version 2>/dev/null | head -1 || echo "(version unknown)")"
       info "       $ver"
-      if [ "$REQUIRE_PINNED" -eq 1 ] && ! renode_is_pinned "$rnode_bin"; then
-        err "       VERSION MISMATCH: release evidence requires Renode $RENODE_VERSION"
-        all_ok=1
-      fi
     else
       err "NOT FOUND"
-      if [ "$REQUIRE_PINNED" -eq 1 ]; then
-        info "  Release evidence requires a verified install receipt and matching artifact digest; a self-reported version is insufficient."
-      fi
       info "  Discovery order:"
       info "    1. \$HAUKSBEE_RENODE env var (currently: ${HAUKSBEE_RENODE:-unset})"
       info "    2. \`renode\` on PATH"
@@ -511,13 +587,13 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
       envvar="${arch_info##*:}"
       qemu_bin="$(find_qemu_bin "$name" "$envvar" || true)"
       if [ -n "$qemu_bin" ]; then
+        case "$name" in
+          qemu-system-xtensa) REQUIRED_QEMU_XTENSA_PATH="$qemu_bin" ;;
+          qemu-system-riscv32) REQUIRED_QEMU_RISCV32_PATH="$qemu_bin" ;;
+        esac
         ok "FOUND  $qemu_bin"
         ver="$("$qemu_bin" --version 2>/dev/null | head -1 || echo "(version unknown)")"
         info "       $ver"
-        if [ "$REQUIRE_PINNED" -eq 1 ] && ! qemu_is_pinned "$qemu_bin"; then
-          err "       VERSION MISMATCH: release evidence requires Espressif QEMU $QEMU_VERSION"
-          all_ok=1
-        fi
         # Confirm it is the Espressif fork
         if is_esp_qemu_fork "$qemu_bin"; then
           ok "       Espressif fork confirmed (esp32 machine present)"
@@ -527,9 +603,6 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
         fi
       else
         err "NOT FOUND  $name"
-        if [ "$REQUIRE_PINNED" -eq 1 ]; then
-          info "  Release evidence requires a verified install receipt and matching artifact digest; a self-reported version is insufficient."
-        fi
         info "  Discovery order:"
         info "    1. \$$envvar env var"
         info "    2. \$HAUKSBEE_QEMU_DIR/bin/$name"
@@ -561,6 +634,11 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 
   if [ "$all_ok" -eq 0 ]; then
     log "All requested backends found. hauksbee will discover them."
+    if [ "$EMIT_REQUIRED_PATHS" -eq 1 ]; then
+      printf 'REQUIRED_BACKEND_PATH HAUKSBEE_RENODE=%s\n' "$REQUIRED_RENODE_PATH"
+      printf 'REQUIRED_BACKEND_PATH HAUKSBEE_QEMU_XTENSA=%s\n' "$REQUIRED_QEMU_XTENSA_PATH"
+      printf 'REQUIRED_BACKEND_PATH HAUKSBEE_QEMU_RISCV32=%s\n' "$REQUIRED_QEMU_RISCV32_PATH"
+    fi
   else
     err "One or more backends not found. Run scripts/install-sims.sh to install."
   fi
@@ -574,7 +652,7 @@ install_renode() {
   log "Renode: checking for existing install..."
 
   rnode_bin="$(find_renode_bin 2>/dev/null || true)"
-  if [ -n "$rnode_bin" ] && { [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$rnode_bin"; }; then
+  if [ -n "$rnode_bin" ]; then
     ok "Already discoverable at $rnode_bin — skipping download."
     return 0
   fi
@@ -650,9 +728,10 @@ install_renode() {
 
   log "Renode: verifying..."
   VER_OUT="$("$BIN" --version 2>/dev/null | head -1 || echo "(unknown)")"
-  write_install_receipt "$BIN" "renode" "$RENODE_VERSION" "$ASSET" "$RENODE_CHECKSUMS"
-  renode_is_pinned "$BIN" \
-    || die "Renode installed from the pinned asset but failed its retained artifact verification"
+  case "$VER_OUT" in
+    "Renode v${RENODE_VERSION}"|"Renode v${RENODE_VERSION}."*) ;;
+    *) die "Renode installed from the pinned asset but reports the wrong version: $VER_OUT" ;;
+  esac
   ok "Renode installed: $BIN"
   info "  $VER_OUT"
 }
@@ -664,9 +743,7 @@ install_qemu() {
   xtensa_bin="$(find_qemu_bin "qemu-system-xtensa" "HAUKSBEE_QEMU_XTENSA" 2>/dev/null || true)"
   riscv_bin="$(find_qemu_bin "qemu-system-riscv32" "HAUKSBEE_QEMU_RISCV32" 2>/dev/null || true)"
 
-  if [ -n "$xtensa_bin" ] && [ -n "$riscv_bin" ] \
-      && { [ "$REQUIRE_PINNED" -eq 0 ] \
-        || { qemu_is_pinned "$xtensa_bin" && qemu_is_pinned "$riscv_bin"; }; }; then
+  if [ -n "$xtensa_bin" ] && [ -n "$riscv_bin" ]; then
     ok "Both already discoverable:"
     info "  qemu-system-xtensa:  $xtensa_bin"
     info "  qemu-system-riscv32: $riscv_bin"
@@ -716,8 +793,7 @@ install_qemu() {
 
     # Already installed?
     existing="$(find_qemu_bin "$bin_name" "HAUKSBEE_QEMU_$(echo "$qemu_arch" | tr '[:lower:]' '[:upper:]' | tr '-' '_')" 2>/dev/null || true)"
-    if [ -n "$existing" ] \
-        && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$existing"; }; then
+    if [ -n "$existing" ]; then
       ok "$bin_name already discoverable at $existing — skipping."
       continue
     fi
@@ -769,11 +845,6 @@ install_qemu() {
       warn "If it names a /opt/homebrew library: brew install the package, then re-run --check."
       continue
     fi
-    write_install_receipt \
-      "$installed_bin" "$bin_name" "$QEMU_VERSION" "$ASSET" "$QEMU_CHECKSUMS"
-    if [ "$REQUIRE_PINNED" -eq 1 ] && ! qemu_is_pinned "$installed_bin"; then
-      die "$bin_name installed from the pinned asset but reports the wrong version; expected $QEMU_VERSION"
-    fi
     ok "$bin_name installed: $installed_bin"
   done
 
@@ -782,10 +853,6 @@ install_qemu() {
   riscv_bin="$(find_qemu_bin  "qemu-system-riscv32" "HAUKSBEE_QEMU_RISCV32" 2>/dev/null || true)"
   [ -n "$xtensa_bin" ]  || die "qemu-system-xtensa not discoverable after install."
   [ -n "$riscv_bin" ]   || die "qemu-system-riscv32 not discoverable after install."
-  if [ "$REQUIRE_PINNED" -eq 1 ]; then
-    qemu_is_pinned "$xtensa_bin" || die "discovered qemu-system-xtensa is not pinned to $QEMU_VERSION"
-    qemu_is_pinned "$riscv_bin" || die "discovered qemu-system-riscv32 is not pinned to $QEMU_VERSION"
-  fi
 }
 
 # ── install AVR / simavr ──────────────────────────────────────────────────────
@@ -871,17 +938,19 @@ printf '\n'
 log "hauksbee simulator installer  (OS: $OS  arch: $ARCH_NORM)"
 printf '\n'
 
-if [ "$DO_RENODE" -eq 1 ]; then
+if [ "$REQUIRE_PINNED" -eq 1 ]; then
+  prepare_required_backends
+elif [ "$DO_RENODE" -eq 1 ]; then
   install_renode
   printf '\n'
 fi
 
-if [ "$DO_QEMU" -eq 1 ]; then
+if [ "$REQUIRE_PINNED" -eq 0 ] && [ "$DO_QEMU" -eq 1 ]; then
   install_qemu
   printf '\n'
 fi
 
-if [ "$DO_AVR" -eq 1 ]; then
+if [ "$REQUIRE_PINNED" -eq 0 ] && [ "$DO_AVR" -eq 1 ]; then
   install_avr
   printf '\n'
 fi
@@ -892,8 +961,8 @@ log "Summary"
 summary_ok=1
 
 if [ "$DO_RENODE" -eq 1 ]; then
-  rnode_bin="$(find_renode_bin 2>/dev/null || true)"
-  if [ -n "$rnode_bin" ] && { [ "$REQUIRE_PINNED" -eq 0 ] || renode_is_pinned "$rnode_bin"; }; then
+  if [ "$REQUIRE_PINNED" -eq 1 ]; then rnode_bin="$REQUIRED_RENODE_PATH"; else rnode_bin="$(find_renode_bin 2>/dev/null || true)"; fi
+  if [ -n "$rnode_bin" ]; then
     ok "Renode   $rnode_bin"
   else
     err "Renode   NOT FOUND (install step may have failed; see output above)"
@@ -902,15 +971,19 @@ if [ "$DO_RENODE" -eq 1 ]; then
 fi
 
 if [ "$DO_QEMU" -eq 1 ]; then
-  xtensa_bin="$(find_qemu_bin "qemu-system-xtensa"  "HAUKSBEE_QEMU_XTENSA"  2>/dev/null || true)"
-  riscv_bin="$(find_qemu_bin  "qemu-system-riscv32" "HAUKSBEE_QEMU_RISCV32" 2>/dev/null || true)"
-  if [ -n "$xtensa_bin" ] && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$xtensa_bin"; }; then
+  if [ "$REQUIRE_PINNED" -eq 1 ]; then
+    xtensa_bin="$REQUIRED_QEMU_XTENSA_PATH"; riscv_bin="$REQUIRED_QEMU_RISCV32_PATH"
+  else
+    xtensa_bin="$(find_qemu_bin "qemu-system-xtensa"  "HAUKSBEE_QEMU_XTENSA"  2>/dev/null || true)"
+    riscv_bin="$(find_qemu_bin  "qemu-system-riscv32" "HAUKSBEE_QEMU_RISCV32" 2>/dev/null || true)"
+  fi
+  if [ -n "$xtensa_bin" ]; then
     ok "QEMU (xtensa)   $xtensa_bin"
   else
     err "QEMU (xtensa)   NOT FOUND"
     summary_ok=0
   fi
-  if [ -n "$riscv_bin" ] && { [ "$REQUIRE_PINNED" -eq 0 ] || qemu_is_pinned "$riscv_bin"; }; then
+  if [ -n "$riscv_bin" ]; then
     ok "QEMU (riscv32)  $riscv_bin"
   else
     err "QEMU (riscv32)  NOT FOUND"
@@ -930,6 +1003,11 @@ fi
 
 printf '\n'
 if [ "$summary_ok" -eq 1 ]; then
+  if [ "$EMIT_REQUIRED_PATHS" -eq 1 ]; then
+    [ "$DO_RENODE" -eq 0 ] || printf 'REQUIRED_BACKEND_PATH HAUKSBEE_RENODE=%s\n' "$REQUIRED_RENODE_PATH"
+    [ "$DO_QEMU" -eq 0 ] || printf 'REQUIRED_BACKEND_PATH HAUKSBEE_QEMU_XTENSA=%s\n' "$REQUIRED_QEMU_XTENSA_PATH"
+    [ "$DO_QEMU" -eq 0 ] || printf 'REQUIRED_BACKEND_PATH HAUKSBEE_QEMU_RISCV32=%s\n' "$REQUIRED_QEMU_RISCV32_PATH"
+  fi
   log "Done. Verify with: scripts/install-sims.sh --check"
 else
   die "One or more backends did not install. See output above."

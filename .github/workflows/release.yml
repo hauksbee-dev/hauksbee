@@ -490,21 +490,11 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache checksum-verified simulator installs
+      - name: Cache checksum-verified simulator archives
         uses: actions/cache@v4
         with:
-          path: |
-            ~/renode-portable
-            ~/.espressif/tools/qemu-xtensa
-            ~/.espressif/tools/qemu-riscv32
+          path: ~/.cache/hauksbee/simulator-archives
           key: release-required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hauksbee/scripts/install-sims.sh', 'hauksbee/scripts/required-simulator-versions.env', 'hauksbee/scripts/renode-checksums.txt', 'hauksbee/scripts/espressif-qemu-checksums.txt') }}
-
-      - name: Install pinned required simulator backends
-        shell: bash
-        run: |
-          cd hauksbee
-          chmod +x scripts/install-sims.sh
-          scripts/install-sims.sh --require-pinned
 
       - name: Run and retain same-SHA required integration evidence
         shell: bash
