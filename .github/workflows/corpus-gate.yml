@@ -90,6 +90,26 @@ jobs:
             exit 1
           fi
 
+      # Ordinary developer tests keep heavyweight external simulators optional.
+      # This nightly evidence job does not: cache and install the pinned tools,
+      # then run three named firmware-through-hardware proofs. The runner rejects
+      # both a non-zero command and the old false-green shape (exit 0 plus SKIP),
+      # and requires the exact named test plus a one-test green summary.
+      - name: Cache required simulator backends
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/renode-portable
+            ~/.espressif/tools/qemu-xtensa
+            ~/.espressif/tools/qemu-riscv32
+          key: required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/renode-checksums.txt', 'scripts/espressif-qemu-checksums.txt') }}
+
+      - name: Install pinned required simulator backends
+        run: scripts/install-sims.sh
+
+      - name: Run release-required firmware integrations
+        run: python3 scripts/run_required_integrations.py
+
       # One test at a time, for the emulators only.
       #
       # The scratch-directory races that made this suite fail in a different
