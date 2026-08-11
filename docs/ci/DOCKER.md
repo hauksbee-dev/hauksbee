@@ -106,8 +106,15 @@ published image instead of downloading a release binary or compiling from
 source. Set `use-image: true`, and optionally pick the image:
 
 ```yaml
-- uses: hauksbee-dev/hauksbee/integrations/github-action@v0.1.0
+- uses: actions/checkout@v4
   with:
+    repository: hauksbee-dev/hauksbee
+    ref: v0.1.0
+    path: .hauksbee-action
+    token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
+- uses: ./.hauksbee-action/integrations/github-action
+  with:
+    hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
     spec: ci/watchy.toml
     use-image: true
     # default is ghcr.io/hauksbee-dev/hauksbee:slim; use :full for ESP32 / STM32

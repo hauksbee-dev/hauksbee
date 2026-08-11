@@ -38,13 +38,17 @@
   Install the GPL-free build instead of the default one.
 
 .EXAMPLE
-  irm https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
+  $env:HAUKSBEE_GITHUB_TOKEN = Get-Secret hauksbee-read -AsPlainText
+  $headers = @{ Authorization = "Bearer $env:HAUKSBEE_GITHUB_TOKEN" }
+  irm -Headers $headers https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
 
 .EXAMPLE
   .\get-hauksbee.ps1 -Version v0.1.0 -Permissive
 
 .NOTES
-  Set $env:GITHUB_TOKEN to avoid GitHub API rate limits (60 req/hr unauthed).
+  Set $env:HAUKSBEE_GITHUB_TOKEN to a fine-grained personal access token or a
+  GitHub App installation token with Contents: read on the private repository.
+  $env:GITHUB_TOKEN is accepted as a CI-compatible fallback.
 #>
 [CmdletBinding()]
 param(
@@ -62,6 +66,12 @@ $Repo = "hauksbee-dev/hauksbee"
 # the download/verify/install flow.
 $ApiBase = if ($env:HAUKSBEE_API_BASE) { $env:HAUKSBEE_API_BASE } else { "https://api.github.com/repos/$Repo" }
 $ReleasesBase = if ($env:HAUKSBEE_RELEASES_BASE) { $env:HAUKSBEE_RELEASES_BASE } else { "https://github.com/$Repo/releases/download" }
+$privateToken = if ($env:HAUKSBEE_GITHUB_TOKEN) { $env:HAUKSBEE_GITHUB_TOKEN } else { $env:GITHUB_TOKEN }
+if (-not $privateToken) {
+    Write-Error ("HAUKSBEE_GITHUB_TOKEN is required to download from the private $Repo release repository. " +
+        "Use a fine-grained PAT or GitHub App installation token with Contents: read; do not put it in a URL.")
+    exit 1
+}
 
 if (-not $Prefix) {
     $Prefix = Join-Path $env:LOCALAPPDATA "hauksbee"
@@ -85,10 +95,7 @@ Write-Host "Detected platform: Windows/$arch -> asset suffix: $AssetSuffix"
 # ---------------------------------------------------------------------------
 # Resolve the release tag (latest or pinned)
 # ---------------------------------------------------------------------------
-$headers = @{}
-if ($env:GITHUB_TOKEN) {
-    $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
-}
+$headers = @{ "Authorization" = "Bearer $privateToken" }
 
 if (-not $Version) {
     Write-Host "Fetching latest release tag..."
@@ -136,7 +143,7 @@ try {
         $attempts = 3
         for ($i = 1; $i -le $attempts; $i++) {
             try {
-                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -Headers $headers -UseBasicParsing
                 return
             } catch {
                 if ($i -eq $attempts) { throw }

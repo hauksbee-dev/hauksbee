@@ -5,33 +5,206 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import io
+import json
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import textwrap
+import threading
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "scripts" / "make-public.sh"
 PREFLIGHT = ROOT / "scripts" / "preflight-private-release.sh"
-RELEASE_URL_SURFACES = (
-    Path("scripts/get-hauksbee.sh"),
-    Path("scripts/get-hauksbee.ps1"),
-    Path("scripts/bundle.sh"),
-    Path("app/macos/build-app.sh"),
-    Path("docker/Dockerfile.slim"),
-    Path("docker/Dockerfile.full"),
-    Path(".github/workflows/docker.yml"),
-    Path("integrations/github-action/action.yml"),
-    Path("integrations/kicad-plugin/build-pcm.sh"),
-    Path("integrations/kicad-plugin/metadata.json"),
-    Path("frontend/src/lib/version.ts"),
-    Path("crates/hauksbee-ci/src/integrate.rs"),
-)
+SURFACE_MANIFEST = ROOT / "scripts" / "private-release-surfaces.json"
+SURFACE_CHECKER = ROOT / "scripts" / "check-private-release-surfaces.py"
 
 
 class PrivateReleasePolicyTests(unittest.TestCase):
+    def test_canonical_surface_manifest_exists(self) -> None:
+        self.assertTrue(
+            SURFACE_MANIFEST.is_file(),
+            "private release surfaces need one canonical, machine-readable manifest",
+        )
+
+    def surface_manifest(self) -> dict[str, object]:
+        return json.loads(SURFACE_MANIFEST.read_text())
+
+    def release_url_surfaces(self) -> tuple[Path, ...]:
+        manifest = self.surface_manifest()
+        return tuple(Path(entry["path"]) for entry in manifest["surfaces"])
+
+    def test_surface_manifest_classifies_every_repository_slug_occurrence(self) -> None:
+        result = subprocess.run(
+            ["python3", str(SURFACE_CHECKER), str(ROOT)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        manifest = self.surface_manifest()
+        entries = manifest["surfaces"]
+        paths = [entry["path"] for entry in entries]
+        self.assertEqual(len(paths), len(set(paths)), "manifest paths must be unique")
+        self.assertTrue(all(entry["classification"] for entry in entries))
+
+    def private_installer_fixture(self) -> tuple[str, bytes, bytes]:
+        system = subprocess.check_output(["uname", "-s"], text=True).strip()
+        machine = subprocess.check_output(["uname", "-m"], text=True).strip()
+        os_slug = {"Linux": "linux", "Darwin": "darwin"}[system]
+        arch_slug = {
+            "x86_64": "x86_64",
+            "aarch64": "aarch64",
+            "arm64": "arm64",
+        }[machine]
+        asset = f"hauksbee-0.1.0-{os_slug}-{arch_slug}.tar.gz"
+        root = asset.removesuffix(".tar.gz")
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            for binary in ("hauksbee", "hauksbee-ci", "hauksbee-mcp"):
+                content = b"#!/usr/bin/env bash\nexit 0\n"
+                info = tarfile.TarInfo(f"{root}/bin/{binary}")
+                info.mode = 0o755
+                info.size = len(content)
+                archive.addfile(info, io.BytesIO(content))
+        tarball = buffer.getvalue()
+        checksum = f"{hashlib.sha256(tarball).hexdigest()}  {asset}\n".encode()
+        return asset, tarball, checksum
+
+    def run_private_installer(
+        self, *, token: str | None
+    ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+        asset, tarball, checksum = self.private_installer_fixture()
+        expected_auth = "Bearer installer-token"
+        requests: list[str] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(handler) -> None:  # noqa: N802 - stdlib callback name
+                requests.append(handler.headers.get("Authorization", ""))
+                if handler.headers.get("Authorization") != expected_auth:
+                    handler.send_response(401)
+                    handler.end_headers()
+                    return
+                body = {
+                    f"/downloads/v0.1.0/{asset}": tarball,
+                    f"/downloads/v0.1.0/{asset}.sha256": checksum,
+                }.get(handler.path)
+                if body is None:
+                    handler.send_response(404)
+                    handler.end_headers()
+                    return
+                handler.send_response(200)
+                handler.send_header("Content-Length", str(len(body)))
+                handler.end_headers()
+                handler.wfile.write(body)
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as raw_tmp:
+                env = os.environ.copy()
+                env.pop("GITHUB_TOKEN", None)
+                env.pop("HAUKSBEE_GITHUB_TOKEN", None)
+                env["HAUKSBEE_RELEASES_BASE"] = (
+                    f"http://127.0.0.1:{server.server_port}/downloads"
+                )
+                if token is not None:
+                    env["HAUKSBEE_GITHUB_TOKEN"] = token
+                result = subprocess.run(
+                    [
+                        "bash",
+                        str(ROOT / "scripts/get-hauksbee.sh"),
+                        "--version",
+                        "v0.1.0",
+                        "--prefix",
+                        str(Path(raw_tmp) / "prefix"),
+                    ],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+        return result, requests
+
+    def test_private_installer_refuses_to_download_without_credential(self) -> None:
+        result, requests = self.run_private_installer(token=None)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("HAUKSBEE_GITHUB_TOKEN", result.stdout + result.stderr)
+        self.assertEqual(requests, [], "missing credentials must fail before HTTP")
+
+    def test_private_installer_authenticates_every_asset_download(self) -> None:
+        result, requests = self.run_private_installer(token="installer-token")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(requests, ["Bearer installer-token", "Bearer installer-token"])
+
+    def test_powershell_installer_authenticates_asset_downloads(self) -> None:
+        text = (ROOT / "scripts/get-hauksbee.ps1").read_text()
+        self.assertIn("HAUKSBEE_GITHUB_TOKEN", text)
+        self.assertIn("Invoke-WebRequest -Uri $Uri -OutFile $OutFile -Headers $headers", text)
+
+    def test_private_action_requires_and_forwards_authorized_credential(self) -> None:
+        action = (ROOT / "integrations/github-action/action.yml").read_text()
+        self.assertIn("hauksbee-token:", action)
+        self.assertIn("GH_TOKEN: ${{ inputs.hauksbee-token }}", action)
+        self.assertIn("token: ${{ inputs.hauksbee-token }}", action)
+
+        readme = (ROOT / "integrations/github-action/README.md").read_text()
+        self.assertIn("fine-grained personal access token", readme)
+        self.assertIn("GitHub App installation token", readme)
+        self.assertIn("Contents: read", readme)
+        self.assertIn("uses: ./.hauksbee-action/integrations/github-action", readme)
+        self.assertIn("hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}", readme)
+
+        generated = (ROOT / "crates/hauksbee-ci/src/integrate.rs").read_text()
+        self.assertIn('${{ secrets.HAUKSBEE_READ_TOKEN }}', generated)
+        self.assertIn("path: .hauksbee-action", generated)
+        self.assertIn("token: {}", generated)
+        self.assertIn("uses: ./.hauksbee-action/integrations/github-action", generated)
+        self.assertIn("hauksbee-token: {}", generated)
+
+        frontend_workflow = (ROOT / "frontend/src/lib/ci-workflow.ts").read_text()
+        self.assertIn("repository: ${ACTION_REPOSITORY}", frontend_workflow)
+        self.assertIn("token: ${PRIVATE_TOKEN_SECRET}", frontend_workflow)
+        self.assertIn("uses: ./.hauksbee-action/integrations/github-action", frontend_workflow)
+        self.assertIn("hauksbee-token: ${PRIVATE_TOKEN_SECRET}", frontend_workflow)
+        version = (ROOT / "frontend/src/lib/version.ts").read_text()
+        self.assertIn("${{ secrets.HAUKSBEE_READ_TOKEN }}", version)
+
+    def test_shipped_installer_examples_authenticate_the_private_script_fetch(self) -> None:
+        for relative in (Path("README.md"), Path("docs/START_HERE.md")):
+            text = (ROOT / relative).read_text()
+            with self.subTest(path=relative):
+                self.assertIn("export HAUKSBEE_GITHUB_TOKEN", text)
+                self.assertIn("Authorization: Bearer %s", text)
+                self.assertIn("curl --config -", text)
+
+    def test_b3_names_the_real_qc_path_and_manual_failure_contract(self) -> None:
+        tasks = (ROOT / "docs/dev-plans/tasks.md").read_text()
+        start = tasks.index("- [~] B3 ")
+        end = tasks.index("\n- [~] B4 ", start)
+        b3 = tasks[start:end]
+        self.assertIn("qc/scenarios/", b3)
+        self.assertIn("qc/results/<timestamp>/report.md", b3)
+        self.assertIn("exits non-zero", b3)
+        self.assertIn("manually", b3)
+        self.assertNotIn("files a defect", b3)
+
     def test_release_contract_never_requires_public_repository_or_issues(self) -> None:
         forbidden_by_file = {
             ROOT / ".github/workflows/release.yml": (
@@ -87,18 +260,20 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         token: str | None = "release-token",
         visibility: str = "private",
         drift: Path | None = None,
+        extra_unclassified: Path | None = None,
+        requested_repo: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             checkout = tmp / "hauksbee"
-            for relative in RELEASE_URL_SURFACES:
+            for relative in self.release_url_surfaces():
                 destination = checkout / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(ROOT / relative, destination)
-            if PREFLIGHT.exists():
-                destination = checkout / PREFLIGHT.relative_to(ROOT)
+            for policy_file in (PREFLIGHT, SURFACE_MANIFEST, SURFACE_CHECKER):
+                destination = checkout / policy_file.relative_to(ROOT)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(PREFLIGHT, destination)
+                shutil.copy2(policy_file, destination)
             if drift is not None:
                 path = checkout / drift
                 path.write_text(
@@ -106,6 +281,24 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                         "hauksbee-dev/hauksbee", "wrong-owner/wrong-repo"
                     )
                 )
+            if extra_unclassified is not None:
+                path = checkout / extra_unclassified
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('repository = "hauksbee-dev/hauksbee"\n')
+            if requested_repo is not None:
+                manifest_path = checkout / SURFACE_MANIFEST.relative_to(ROOT)
+                manifest_path.write_text(
+                    manifest_path.read_text().replace(
+                        "hauksbee-dev/hauksbee", requested_repo
+                    )
+                )
+                for relative in self.release_url_surfaces():
+                    path = checkout / relative
+                    path.write_text(
+                        path.read_text().replace(
+                            "hauksbee-dev/hauksbee", requested_repo
+                        )
+                    )
 
             gh = tmp / "gh"
             gh.write_text(
@@ -114,6 +307,12 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     #!/usr/bin/env bash
                     set -eu
                     printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+                    [ "$#" -eq 4 ] || exit 64
+                    [ "$1" = api ] || exit 64
+                    [ "$2" = repos/hauksbee-dev/hauksbee ] || exit 64
+                    [ "$3" = --jq ] || exit 64
+                    [ "$4" = .visibility ] || exit 64
+                    [ "${GH_TOKEN:-}" = release-token ] || exit 65
                     [ "$FAKE_GH_VISIBILITY" != missing ] || exit 1
                     printf '%s\\n' "$FAKE_GH_VISIBILITY"
                     """
@@ -156,7 +355,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_release_preflight_fails_closed_on_every_baked_url_surface(self) -> None:
-        for relative in RELEASE_URL_SURFACES:
+        for relative in self.release_url_surfaces():
             with self.subTest(path=relative):
                 result = self.run_release_preflight(drift=relative)
                 self.assertNotEqual(
@@ -165,6 +364,24 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     f"slug drift in {relative} was ignored:\n{result.stdout}{result.stderr}",
                 )
                 self.assertIn(str(relative), result.stdout + result.stderr)
+
+    def test_release_preflight_rejects_new_unclassified_slug_occurrence(self) -> None:
+        result = self.run_release_preflight(
+            extra_unclassified=Path("new-package-metadata.json")
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("new-package-metadata.json", result.stdout + result.stderr)
+        self.assertIn("unclassified", result.stdout + result.stderr)
+
+    def test_release_preflight_fake_gh_rejects_wrong_repository(self) -> None:
+        result = self.run_release_preflight(requested_repo="wrong-owner/wrong-repo")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gh api repos/wrong-owner/wrong-repo failed", result.stdout + result.stderr)
+
+    def test_release_preflight_rejects_inaccessible_authorization(self) -> None:
+        result = self.run_release_preflight(token="inaccessible-token")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gh api repos/hauksbee-dev/hauksbee failed", result.stdout + result.stderr)
 
     def run_privacy_phase(
         self,
