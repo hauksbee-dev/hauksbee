@@ -56,36 +56,35 @@ ln -s "$PWD/target/release/hauksbee-ci" /usr/local/bin/hauksbee-ci
 
 ## Install
 
-Three ways in, pick one. All three end the same way: in the PCB editor run
+Two ways in, pick one. Both end the same way: in the PCB editor run
 **Tools -> External Plugins -> Refresh Plugins** (or restart KiCad after a PCM
 install) and a "hauksbee-ci: run hardware check" entry appears, plus a toolbar
 button.
 
-### Plugin and Content Manager, from file (available now)
+### Plugin and Content Manager, from an authenticated release asset
 
-Build the PCM package and hand it to KiCad's Plugin and Content Manager:
+The repository and its release assets remain private. Download the PCM archive
+with an authorized fine-grained token or GitHub App installation token that
+has `Contents: read` access to `hauksbee-dev/hauksbee`:
 
 ```bash
-bash integrations/kicad-plugin/build-pcm.sh
-# -> integrations/kicad-plugin/dist/hauksbee-ci-pcm-v<version>.zip
+export GH_TOKEN="$(gh auth token)"
+gh release download "v<version>" --repo hauksbee-dev/hauksbee \
+  --pattern "hauksbee-ci-pcm-v<version>.zip" --dir "$HOME/Downloads"
 ```
 
 In KiCad: **Plugin and Content Manager -> Install from File...**, pick the zip,
-apply. PCM handles updates and clean uninstall from then on. The package layout
-(metadata.json at the zip root, sources under `plugins/`) follows the KiCad
-addons spec; `metadata.json` in this directory is the package manifest and is
-validated against the PCM schema (https://go.kicad.org/pcm/schemas/v1).
+and apply it. PCM can uninstall the package, but it cannot authenticate to the
+private GitHub release for discovery or updates. You must manually repeat the
+authenticated download and **Install from File...** for each version. We do not
+publish an official-list endpoint because that would require an
+unauthenticated public package URL.
 
-### Plugin and Content Manager, from the official listing (at launch)
-
-At launch we submit the package to the KiCad addon registry
-(https://gitlab.com/kicad/addons/metadata), after which it appears in the PCM's
-built-in listing and installs with one click, no zip handling. The submission
-is the same `metadata.json` plus the `versions[]` download fields
-(`download_url`, `download_sha256`, `download_size`, `install_size`) that
-`build-pcm.sh` computes and prints, with `download_url` pointing at the zip
-attached to the GitHub release. Until that lands, use "Install from File..."
-above.
+Maintainers can instead build the same archive locally with
+`bash integrations/kicad-plugin/build-pcm.sh`. The package layout
+(`metadata.json` at the zip root, sources under `plugins/`) follows the KiCad
+addons spec; `metadata.json` in this directory is validated against the PCM
+schema (https://go.kicad.org/pcm/schemas/v1).
 
 ### Symlink (development)
 
@@ -164,5 +163,5 @@ PY
 - `metadata.json` - the KiCad PCM package manifest. Its `versions[0].version`
   must match the workspace Cargo.toml version; `build-pcm.sh` enforces that.
 - `build-pcm.sh` - builds `dist/hauksbee-ci-pcm-v<version>.zip` in the PCM
-  layout and prints the sha256/size fields a registry listing needs. `dist/`
+  layout and prints its sha256 and size for release-asset verification. `dist/`
   is gitignored (repo root `dist/` pattern).

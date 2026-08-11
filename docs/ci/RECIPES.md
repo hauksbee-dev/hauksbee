@@ -11,6 +11,11 @@ live in `ci/` in a hardware repo; `run` also accepts several specs at once and
 writes one merged JUnit file, exiting with the worst code of the set), then
 publishes the JUnit XML so the assertions show up as test results.
 
+The GHCR image is private. Every recipe below obtains an authorized package-read
+credential from its CI system's protected secret store; no token belongs in the
+pipeline file or repository. A fine-grained PAT or GitHub App installation
+token may be used, provided the repository has granted it access to the package.
+
 ## The exit-code contract
 
 This is the canonical table. The other CI docs link here.
@@ -35,6 +40,10 @@ the per-assertion results into the merge-request Tests tab, and
 `artifacts:when: always` keeps the report on a red build, which is exactly
 when you want it. `allow_failure:exit_codes` maps exit 3 to GitLab's orange
 "passed with warnings" state while 1 and 2 stay red.
+Because GitLab pulls the job image before `script`, configure a protected,
+masked `DOCKER_AUTH_CONFIG` CI variable containing Docker auth JSON for
+`ghcr.io` and an authorized package-read token. Generate and store that JSON in
+GitLab's variable UI, never in this YAML.
 
 ```yaml
 hauksbee:
@@ -61,7 +70,11 @@ whatever the verdict.
 ```groovy
 pipeline {
     agent {
-        docker { image 'ghcr.io/hauksbee-dev/hauksbee:slim' }
+        docker {
+            image 'ghcr.io/hauksbee-dev/hauksbee:slim'
+            registryUrl 'https://ghcr.io'
+            registryCredentialsId 'hauksbee-ghcr-read'
+        }
     }
     stages {
         stage('hauksbee-ci') {
@@ -90,6 +103,9 @@ pipeline {
 }
 ```
 
+`hauksbee-ghcr-read` is a Jenkins username/password credential whose password
+is the authorized token. Jenkins passes it to Docker without committing it.
+
 ## Azure DevOps
 
 A container job runs every step inside the image, so the bash step calls
@@ -100,11 +116,17 @@ non-zero it fails. `PublishTestResults@2` with `condition: always()` uploads
 the JUnit file on every verdict.
 
 ```yaml
+resources:
+  containers:
+    - container: hauksbee
+      image: ghcr.io/hauksbee-dev/hauksbee:slim
+      endpoint: hauksbee-ghcr
+
 jobs:
   - job: hauksbee
     pool:
       vmImage: ubuntu-latest
-    container: ghcr.io/hauksbee-dev/hauksbee:slim
+    container: hauksbee
     steps:
       - bash: |
           set +e
@@ -124,12 +146,15 @@ jobs:
           testRunTitle: hauksbee-ci
 ```
 
+`hauksbee-ghcr` is an Azure DevOps Docker Registry service connection for
+`ghcr.io`, backed by an authorized package-read credential.
+
 ## Buildkite
 
-The docker plugin runs the command inside the image with the checkout
-mounted; `propagate-uid-gid: true` runs the container as the agent user so
+The step logs in and runs Docker explicitly so the private pull cannot happen
+before authentication. `--user` runs the container as the agent user so
 `report.xml` is writable in the mounted checkout (the same ownership point
-[DOCKER.md](DOCKER.md) makes about `--user`). `soft_fail` on exit status 3
+[DOCKER.md](DOCKER.md) makes). `soft_fail` on exit status 3
 turns the non-verdict into a soft-failed (annotated, non-blocking) step while
 1 and 2 stay hard failures, and `artifact_paths` uploads the report; add the
 `junit-annotate` plugin in a follow-up step if you want the failures rendered
@@ -138,16 +163,20 @@ as a build annotation.
 ```yaml
 steps:
   - label: "hauksbee-ci"
-    command: hauksbee-ci run ci/power-up.toml --junit report.xml
+    command: |
+      printf '%s' "$HAUKSBEE_GHCR_TOKEN" \
+        | docker login ghcr.io --username "$HAUKSBEE_GHCR_USER" --password-stdin
+      docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" \
+        ghcr.io/hauksbee-dev/hauksbee:slim \
+        hauksbee-ci run ci/power-up.toml --junit report.xml
     soft_fail:
       - exit_status: 3
     artifact_paths:
       - report.xml
-    plugins:
-      - docker#v5.12.0:
-          image: ghcr.io/hauksbee-dev/hauksbee:slim
-          propagate-uid-gid: true
 ```
+
+Inject `HAUKSBEE_GHCR_USER` and `HAUKSBEE_GHCR_TOKEN` with Buildkite's secret
+manager. The token must be redacted from logs and authorized for package read.
 
 ## Where to go next
 

@@ -55,6 +55,22 @@ CI runner). The bundled example boards live inside the image, under the
 binaries' embedded data. The boards and specs you check usually come from
 your own repo, mounted in.
 
+The images are private. Authenticate before the first pull with a fine-grained
+PAT or GitHub App installation token authorized for this GHCR package. Load it
+from your platform's secret manager; this example assumes it is already in
+`HAUKSBEE_GITHUB_TOKEN`, with the corresponding login name in
+`HAUKSBEE_GHCR_USER`:
+
+```bash
+printf '%s' "$HAUKSBEE_GITHUB_TOKEN" \
+  | docker login ghcr.io --username "$HAUKSBEE_GHCR_USER" --password-stdin
+```
+
+For a user token, the login name is that GitHub user; for a GitHub App
+installation token, use `x-access-token`.
+Docker writes the credential to its configured credential store. The token is
+read from stdin, not placed in the process argv or checked into a file.
+
 Report a board (the bind report table):
 
 ```bash

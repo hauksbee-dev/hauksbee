@@ -16,7 +16,9 @@ import type { Startup } from '../types/report'
 
 const BANNER = 'A recorded run of the real engine, byte for byte. Install to run your own boards.'
 const INSTALL_CMD =
-  'curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash'
+  'export HAUKSBEE_GITHUB_TOKEN="$(gh auth token)"\n' +
+  'printf \'header = "Authorization: Bearer %s"\\n\' "$HAUKSBEE_GITHUB_TOKEN" ' +
+  '| curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash'
 
 /** The one line that must never leave the screen, on every demo surface. */
 function HonestyBanner() {
@@ -57,8 +59,9 @@ function InstallCta({ compact }: { compact?: boolean }) {
       </div>
       {!compact && (
         <p className="text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)', margin: '0 0 10px' }}>
-          This demo replays recorded runs; it cannot take an upload. One line
-          installs hauksbee, then <code>hauksbee run your_board.kicad_pcb</code>{' '}
+          This demo replays recorded runs; it cannot take an upload. The copied
+          command uses your authorized GitHub CLI token to install hauksbee,
+          then <code>hauksbee run your_board.kicad_pcb</code>{' '}
           opens this exact surface on a live simulation of your board.
         </p>
       )}
