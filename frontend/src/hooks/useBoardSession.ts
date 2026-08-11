@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { buildBoardUpload } from '../lib/board-upload'
 import type { LiveLaunchResponse, LiveStatus, WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
@@ -62,6 +63,7 @@ export interface BoardSession {
   uploadNotice: string | null
   dismissNotice: () => void
   firmwareFile: File | null
+  schematicFile: File | null
   /** The uploaded board File (null when the server preloaded the board). */
   boardFile: File | null
   /** Best display name for the current board. */
@@ -91,10 +93,12 @@ export interface BoardSession {
   setSelectedComponent: (c: SelectedComponent | null) => void
   handleBoard: (f: File) => void
   handleFirmware: (f: File) => void
+  handleSchematic: (f: File) => void
   /** Unstage the firmware WITHOUT touching the board, and re-analyse the board
    *  on its own so the report stops describing a co-sim that is no longer
    *  loaded. No-op when nothing is staged. */
   clearFirmware: () => void
+  clearSchematic: () => void
   runSample: (s: SampleSpec) => void
   resetFlow: () => void
   /** Put a saved session's report back on screen with no file behind it. */
@@ -124,6 +128,7 @@ export function useBoardSession(opts: {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadNotice, setUploadNotice] = useState<string | null>(null)
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null)
+  const [schematicFile, setSchematicFile] = useState<File | null>(null)
   const [boardFile, setBoardFile] = useState<File | null>(null)
   const [analyzedAt, setAnalyzedAt] = useState<number | null>(preloadedReport ? Date.now() : null)
   const lastBoardFile = useRef<File | null>(null)
@@ -225,7 +230,11 @@ export function useBoardSession(opts: {
     setRunEpoch(n => n + 1)
   }, [])
 
-  const analyze = useCallback(async (board: File, firmware: File | null) => {
+  const analyze = useCallback(async (
+    board: File,
+    firmware: File | null,
+    schematic: File | null,
+  ) => {
     const { signal, isCurrent } = beginRun()
     clearRunState()
     setBusy({ board: board.name, firmware: firmware?.name ?? null })
@@ -246,10 +255,8 @@ export function useBoardSession(opts: {
     let status: number | undefined
     try {
       let res: Response
-      if (firmware) {
-        const fd = new FormData()
-        fd.append('board', board, board.name)
-        fd.append('firmware', firmware, firmware.name)
+      if (firmware || schematic) {
+        const fd = buildBoardUpload(board, firmware, schematic)
         res = await fetch('/api/analyze-with-firmware', { method: 'POST', body: fd, signal })
       } else {
         res = await fetch('/api/analyze', {
@@ -304,8 +311,14 @@ export function useBoardSession(opts: {
     // replaces.
     if (busy) return
     setFirmwareFile(f)
-    if (lastBoardFile.current) void analyze(lastBoardFile.current, f)
-  }, [analyze, busy])
+    if (lastBoardFile.current) void analyze(lastBoardFile.current, f, schematicFile)
+  }, [analyze, busy, schematicFile])
+
+  const handleSchematic = useCallback((file: File) => {
+    if (busy) return
+    setSchematicFile(file)
+    if (lastBoardFile.current) void analyze(lastBoardFile.current, firmwareFile, file)
+  }, [analyze, busy, firmwareFile])
 
   const clearFirmware = useCallback(() => {
     // Removing the firmware is a real change to what was analysed, not just a
@@ -314,10 +327,19 @@ export function useBoardSession(opts: {
     if (busy) return
     setFirmwareFile(prev => {
       if (!prev) return prev
-      if (lastBoardFile.current) void analyze(lastBoardFile.current, null)
+      if (lastBoardFile.current) void analyze(lastBoardFile.current, null, schematicFile)
       return null
     })
-  }, [analyze, busy])
+  }, [analyze, busy, schematicFile])
+
+  const clearSchematic = useCallback(() => {
+    if (busy) return
+    setSchematicFile(previous => {
+      if (!previous) return previous
+      if (lastBoardFile.current) void analyze(lastBoardFile.current, firmwareFile, null)
+      return null
+    })
+  }, [analyze, busy, firmwareFile])
 
   /** Accept `f` as the board and run it. Split out of `handleBoard` so the
    *  zip-classification path (which has to await a read) reaches the same
@@ -331,13 +353,14 @@ export function useBoardSession(opts: {
     setBoardFile(f)
     if (switchingBoards) {
       setFirmwareFile(null)
+      setSchematicFile(null)
       setSelectedNet(null)
       setSelectedComponentRaw(null)
-      void analyze(f, null)
+      void analyze(f, null, null)
     } else {
-      void analyze(f, firmwareFile)
+      void analyze(f, firmwareFile, schematicFile)
     }
-  }, [analyze, firmwareFile])
+  }, [analyze, firmwareFile, schematicFile])
 
   const handleBoard = useCallback((f: File) => {
     if (busy) return
@@ -396,6 +419,7 @@ export function useBoardSession(opts: {
     setBoardFile(null)
     setBusy(null)
     setFirmwareFile(null)
+    setSchematicFile(null)
     setBoardUrl(prev => {
       if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
       return null
@@ -461,7 +485,7 @@ export function useBoardSession(opts: {
       lastBoardFile.current = board
       setBoardFile(board)
       setFirmwareFile(fw)
-      await analyze(board, fw)
+      await analyze(board, fw, null)
     } catch (e) {
       if (isAbort(e)) return
       if (isCurrent()) {
@@ -476,9 +500,7 @@ export function useBoardSession(opts: {
   const performLaunch = useCallback(async (board: File, onReady: () => void) => {
     setLaunch({ phase: 'launching' })
     try {
-      const fd = new FormData()
-      fd.append('board', board, board.name)
-      if (firmwareFile) fd.append('firmware', firmwareFile, firmwareFile.name)
+      const fd = buildBoardUpload(board, firmwareFile, schematicFile)
       const res = await fetch('/api/live/launch', { method: 'POST', body: fd })
       const text = await res.text()
       let parsed: LiveLaunchResponse
@@ -495,7 +517,7 @@ export function useBoardSession(opts: {
     } catch (e) {
       setLaunch({ phase: 'error', error: e instanceof Error ? e.message : String(e) })
     }
-  }, [firmwareFile])
+  }, [firmwareFile, schematicFile])
 
   // A launch waiting on the in-app replace confirmation.
   const pendingReady = useRef<(() => void) | null>(null)
@@ -586,6 +608,7 @@ export function useBoardSession(opts: {
     uploadNotice,
     dismissNotice: () => setUploadNotice(null),
     firmwareFile,
+    schematicFile,
     boardFile,
     // A failed analysis must not crown its (possibly garbage) filename as the
     // header's board title: the title names a board this app can speak about,
@@ -615,7 +638,9 @@ export function useBoardSession(opts: {
     setSelectedComponent: selectComponent,
     handleBoard,
     handleFirmware,
+    handleSchematic,
     clearFirmware,
+    clearSchematic,
     runSample: (s: SampleSpec) => void runSample(s),
     resetFlow,
     restoreReport,

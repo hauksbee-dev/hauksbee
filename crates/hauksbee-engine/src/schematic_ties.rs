@@ -147,6 +147,55 @@ pub fn resolve(
     }))
 }
 
+/// Validate and resolve a browser-uploaded companion schematic without
+/// inventing a filesystem path. Unlike sibling discovery, a supplied upload is
+/// explicit input: malformed, mismatched, or non-Eagle data fails closed.
+pub fn resolve_uploaded(
+    board_name: &str,
+    board: &hauksbee_extract::ExtractedBoard,
+    schematic: Option<(&str, &[u8])>,
+    board_is_eagle: bool,
+) -> anyhow::Result<Option<SchematicTies>> {
+    let Some((schematic_name, raw)) = schematic else {
+        return Ok(None);
+    };
+    let board_path = Path::new(board_name);
+    let schematic_path = Path::new(schematic_name);
+    if !board_is_eagle {
+        anyhow::bail!(
+            "schematic upload {}: this board is not an Eagle .brd; refusing unrelated companion input",
+            schematic_name
+        );
+    }
+    if board_path.file_stem() != schematic_path.file_stem() {
+        anyhow::bail!(
+            "schematic upload {}: design identity does not match board {}: Eagle companion files must share a basename",
+            schematic_name,
+            board_name
+        );
+    }
+    if hauksbee_extract::looks_like_eagle_binary(raw) {
+        anyhow::bail!(
+            "schematic upload {}: {}",
+            schematic_name,
+            hauksbee_extract::eagle_binary_message()
+        );
+    }
+    let text = String::from_utf8_lossy(raw);
+    if !hauksbee_extract::looks_like_eagle_schematic(&text) {
+        anyhow::bail!("schematic upload {schematic_name}: not an Eagle .sch (XML, Eagle 6+)");
+    }
+    let ties = hauksbee_extract::declared_net_ties(&text)
+        .map_err(|error| anyhow::anyhow!("schematic upload {schematic_name}: {error}"))?;
+    verify_design_identity(board_path, board, schematic_path, &text)?;
+    Ok(Some(SchematicTies {
+        path: schematic_path.to_path_buf(),
+        raw: raw.to_vec(),
+        ties,
+        auto_discovered: false,
+    }))
+}
+
 fn verify_design_identity(
     board_path: &Path,
     board: &hauksbee_extract::ExtractedBoard,
@@ -165,6 +214,15 @@ fn verify_design_identity(
     board_parts.dedup();
     let schematic_parts = hauksbee_extract::schematic_part_identities(schematic)
         .map_err(|error| anyhow::anyhow!("--schematic {}: {error}", schematic_path.display()))?;
+    if board_parts.is_empty() || schematic_parts.is_empty() {
+        anyhow::bail!(
+            "--schematic {}: design identity does not match board {}: no shared physical parts \
+             exist to prove this .brd/.sch pair belongs to the same design. Refusing to qualify \
+             any copper contact.",
+            schematic_path.display(),
+            board_path.display(),
+        );
+    }
     if board_parts != schematic_parts {
         anyhow::bail!(
             "--schematic {}: design identity does not match board {}: physical reference/value \
@@ -173,6 +231,50 @@ fn verify_design_identity(
             board_path.display(),
             board_parts.len(),
             schematic_parts.len(),
+        );
+    }
+
+    let net_names: std::collections::HashMap<_, _> = board
+        .nets
+        .iter()
+        .map(|net| (net.id, net.name.as_str()))
+        .collect();
+    let mut board_pin_nets: Vec<_> = board
+        .components
+        .iter()
+        .flat_map(|component| {
+            component.pins.iter().filter_map(|pin| {
+                let net = net_names.get(&pin.net?)?;
+                Some(hauksbee_extract::SchematicPinNetIdentity {
+                    reference: component.reference.clone(),
+                    pin: pin.number.clone(),
+                    net: (*net).to_string(),
+                })
+            })
+        })
+        .collect();
+    board_pin_nets.sort();
+    board_pin_nets.dedup();
+    let schematic_pin_nets = hauksbee_extract::schematic_pin_net_identities(schematic)
+        .map_err(|error| anyhow::anyhow!("--schematic {}: {error}", schematic_path.display()))?;
+    if board_pin_nets.is_empty() || schematic_pin_nets.is_empty() {
+        anyhow::bail!(
+            "--schematic {}: design identity does not match board {}: no shared physical pin/net \
+             incidence exists to prove this .brd/.sch pair belongs to the same design. Refusing \
+             to qualify any copper contact.",
+            schematic_path.display(),
+            board_path.display(),
+        );
+    }
+    if board_pin_nets != schematic_pin_nets {
+        anyhow::bail!(
+            "--schematic {}: design identity does not match board {}: canonical physical pin/net \
+             incidence differs (board {}, schematic {}). The schematic may be stale or from \
+             another revision; refusing to qualify any copper contact.",
+            schematic_path.display(),
+            board_path.display(),
+            board_pin_nets.len(),
+            schematic_pin_nets.len(),
         );
     }
     Ok(())
@@ -354,5 +456,102 @@ mod tests {
             error.to_string().contains("reference/value sets differ"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn the_same_bom_with_different_pin_net_incidence_is_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let schematic = dir.path().join("design.sch");
+        std::fs::write(
+            &schematic,
+            r#"<?xml version="1.0"?>
+<eagle><drawing><schematic>
+<libraries><library name="device">
+  <symbols><symbol name="R"><pin name="1"/><pin name="2"/></symbol></symbols>
+  <devicesets><deviceset name="R"><gates><gate name="G$1" symbol="R"/></gates>
+    <devices><device name="" package="R0603"><connects>
+      <connect gate="G$1" pin="1" pad="1"/><connect gate="G$1" pin="2" pad="2"/>
+    </connects></device></devices>
+  </deviceset></devicesets>
+</library></libraries>
+<parts><part name="R1" library="device" deviceset="R" device="" value="10k"/></parts>
+<sheets><sheet><nets>
+  <net name="GND"><segment><pinref part="R1" gate="G$1" pin="2"/></segment></net>
+  <net name="OTHER"><segment><pinref part="R1" gate="G$1" pin="1"/></segment></net>
+</nets></sheet></sheets>
+</schematic></drawing></eagle>"#,
+        )
+        .expect("write schematic");
+        let board = hauksbee_extract::ExtractedBoard {
+            name: "design".into(),
+            nets: vec![
+                hauksbee_extract::Net {
+                    id: 1,
+                    name: "GND".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 2,
+                    name: "SIGNAL".into(),
+                },
+            ],
+            components: vec![hauksbee_extract::Component {
+                reference: "R1".into(),
+                value: "10k".into(),
+                lib_id: "device:R0603".into(),
+                footprint: "R0603".into(),
+                position: None,
+                layer: String::new(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: vec![
+                    hauksbee_extract::Pin {
+                        number: "1".into(),
+                        net: Some(1),
+                        function: String::new(),
+                        kind: String::new(),
+                        position: None,
+                    },
+                    hauksbee_extract::Pin {
+                        number: "2".into(),
+                        net: Some(2),
+                        function: String::new(),
+                        kind: String::new(),
+                        position: None,
+                    },
+                ],
+            }],
+        };
+
+        let error = resolve(
+            &dir.path().join("design.brd"),
+            &board,
+            Some(&schematic),
+            true,
+        )
+        .expect_err("a stale same-BOM schematic must not establish design identity");
+        assert!(
+            error.to_string().contains("pin/net incidence"),
+            "the refusal must name the stronger identity contract: {error}"
+        );
+    }
+
+    #[test]
+    fn an_empty_physical_identity_cannot_authorize_a_downgrade() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let schematic = dir.path().join("design.sch");
+        std::fs::write(
+            &schematic,
+            r#"<?xml version="1.0"?><eagle><drawing><schematic><libraries/><parts/><sheets/></schematic></drawing></eagle>"#,
+        )
+        .expect("write schematic");
+
+        let error = resolve(
+            &dir.path().join("design.brd"),
+            &empty_board(),
+            Some(&schematic),
+            true,
+        )
+        .expect_err("an empty identity has no shared physical evidence");
+        assert!(error.to_string().contains("no shared physical"), "{error}");
     }
 }

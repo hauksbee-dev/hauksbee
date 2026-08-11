@@ -19,6 +19,23 @@ fn tracked_declared_pair_qualifies_one_physical_multilayer_contact() {
 }
 
 #[test]
+fn aligned_contacts_on_separate_layers_need_vertical_copper_evidence() {
+    let board = include_str!("fixtures/eagle_ties/aligned_unplated.brd");
+    let schematic = include_str!("fixtures/eagle_ties/declared.sch");
+    let report = ExtractedBoard::drc(board).expect("tracked board parses");
+    let ties = hauksbee_extract::declared_net_ties(schematic).expect("tracked schematic parses");
+    let qualified = report.qualify_with_declared_ties("declared.sch", &ties);
+
+    assert_eq!(report.short_count(), 2, "one independent contact per layer");
+    assert_eq!(
+        qualified.qualified_count(),
+        0,
+        "matching X/Y does not prove the two copper layers are one plated contact"
+    );
+    assert_eq!(qualified.undeclared_shorts(&report).count(), 2);
+}
+
+#[test]
 fn tracked_undeclared_pair_leaves_the_short_gating() {
     let board = include_str!("fixtures/eagle_ties/undeclared.brd");
     let schematic = include_str!("fixtures/eagle_ties/undeclared.sch");

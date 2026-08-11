@@ -274,7 +274,9 @@ cannot tell this from a solder bridge.
 **The companion input.** Supply the schematic with `--schematic <FILE>`, or leave
 it beside the board under the board's own name (`<project>.brd` / `<project>.sch`)
 and it is found automatically, the same sibling convention the `.kicad_pro`
-clearance lookup uses. The parser (`hauksbee-extract/src/eagle_sch.rs`) reads one
+clearance lookup uses. In `hauksbee serve`, choose the optional Eagle schematic
+companion beside the board/firmware inputs; the same uploaded bytes feed the
+report and live-launch paths. The parser (`hauksbee-extract/src/eagle_sch.rs`) reads one
 thing and nothing else: which named nets the schematic declares deliberately tied.
 It is not a schematic extractor, because the `.brd` already carries the netlist.
 A supply symbol is recognised by Eagle's own marker and two narrowing tests, and
@@ -322,9 +324,13 @@ files are not provisioned; the always-run guard is the tracked undeclared pair i
 `crates/hauksbee-extract/tests/fixtures/eagle_ties/`.
 
 **Identity and physical scope fail closed.** An explicit companion must share the
-board basename and its physical reference/value set must exactly match the board.
-A declaration qualifies a same-location contact cluster, including its multiple
-copper layers, only when that net pair has no second spatial cluster. A schematic
+board basename, physical reference/value set, and canonical physical
+reference/package-pad/net incidence with the board. Empty designs and designs
+with no shared pin/net incidence cannot authorize a downgrade. A declaration
+qualifies a same-location contact cluster only when that net pair has no second
+spatial cluster. Contacts reported on multiple copper layers collapse into one
+cluster only when the findings share an actual through-layer via; matching X/Y
+coordinates alone are not plating evidence. A schematic
 net-name declaration carries no board-location identity, so cluster size cannot
 choose between an intended tie and a bridge: when two locations exist, neither is
 downgraded. Eagle schematic sheet coordinates are deliberately not projected onto

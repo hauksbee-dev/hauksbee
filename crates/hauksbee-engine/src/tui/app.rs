@@ -38,10 +38,19 @@ pub fn run(
     board_text: &str,
     models_dir: Option<&Path>,
     firmware: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    run_with_schematic(board_path, board_text, models_dir, firmware, None)
+}
+
+pub fn run_with_schematic(
+    board_path: &Path,
+    board_text: &str,
+    models_dir: Option<&Path>,
+    firmware: Option<PathBuf>,
     schematic: Option<&Path>,
 ) -> anyhow::Result<()> {
     // Build the model on the SAME analysis path the --json/text surfaces use.
-    let state = build_state(board_path, board_text, models_dir, schematic)?;
+    let state = build_state_with_schematic(board_path, board_text, models_dir, schematic)?;
 
     // Firmware: explicit arg wins; otherwise auto-detect a sibling .elf.
     let firmware = firmware.or_else(|| cosim::autodetect_firmware(board_path));
@@ -59,6 +68,14 @@ pub fn run(
 /// SAME bind / SI / lint / DRC paths as the CLI (`--json`/text), then converts
 /// to the TUI model. It never re-runs or re-implements a check.
 pub fn build_state(
+    board_path: &Path,
+    board_text: &str,
+    models_dir: Option<&Path>,
+) -> anyhow::Result<AppState> {
+    build_state_with_schematic(board_path, board_text, models_dir, None)
+}
+
+pub fn build_state_with_schematic(
     board_path: &Path,
     board_text: &str,
     models_dir: Option<&Path>,
