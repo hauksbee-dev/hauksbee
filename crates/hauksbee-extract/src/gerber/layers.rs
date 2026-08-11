@@ -160,13 +160,22 @@ impl<'a> Name<'a> {
 /// read before the non-copper word sweep, which cannot otherwise be talked out of
 /// claiming a file whose project name happens to contain one of its words.
 fn explicit_kicad_copper(n: &Name) -> Option<LayerRole> {
-    if n.has("f_cu") || n.has("f.cu") {
+    let stem = n.original.to_ascii_lowercase();
+    let token_suffix = |token: &str| {
+        stem.strip_suffix(token).is_some_and(|prefix| {
+            prefix
+                .as_bytes()
+                .last()
+                .is_none_or(|byte| !byte.is_ascii_alphanumeric())
+        })
+    };
+    if token_suffix("f_cu") || token_suffix("f.cu") {
         return Some(LayerRole::Copper {
             index: 0,
             name: top_label(n.original),
         });
     }
-    if n.has("b_cu") || n.has("b.cu") {
+    if token_suffix("b_cu") || token_suffix("b.cu") {
         return Some(LayerRole::Copper {
             index: usize::MAX,
             name: bottom_label(n.original),
@@ -174,13 +183,16 @@ fn explicit_kicad_copper(n: &Name) -> Option<LayerRole> {
     }
     for sep in ['_', '.'] {
         let tail = format!("{sep}cu");
-        for pos in n.full.match_indices("in").map(|(p, _)| p) {
-            let rest = &n.full[pos + 2..];
+        for pos in stem.match_indices("in").map(|(p, _)| p) {
+            if pos > 0 && stem.as_bytes()[pos - 1].is_ascii_alphanumeric() {
+                continue;
+            }
+            let rest = &stem[pos + 2..];
             let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
             let Ok(k) = digits.parse::<usize>() else {
                 continue;
             };
-            if (1..=32).contains(&k) && rest[digits.len()..].starts_with(&tail) {
+            if (1..=32).contains(&k) && rest[digits.len()..] == tail {
                 return Some(LayerRole::Copper {
                     index: k,
                     name: n.original.to_string(),
@@ -1126,6 +1138,16 @@ mod tests {
                 LayerRole::Copper { index, .. } => assert_eq!(index, want, "{name}"),
                 other => panic!("{name} should be copper, got {other:?}"),
             }
+        }
+        for name in [
+            "Pin2_Cu-Mechanical_1.gbr",
+            "Spin2_Cu-Documentation_1.gbr",
+            "project-in2_cu-mechanical.gbr",
+        ] {
+            assert!(
+                !role(name).is_copper(),
+                "an in<n>_cu substring in the project name must not override the film role: {name}"
+            );
         }
         // `.GM1` is Altium's board-outline film and `Mechanical_1` is the layer it is
         // plotted from, so the word sweep claimed it and the outline was lost.
