@@ -852,6 +852,7 @@ mod tests {
         gpio_drivers.insert(('A', 5u8), drv(n));
         let mcu = McuBinding {
             reference: "U1".to_string(),
+            evidence_subject: "U1".to_string(),
             backend: String::new(),
             requested_part: String::new(),
             external_clock_present: false,

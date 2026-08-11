@@ -61,6 +61,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-ir/evidence.md
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 mod date;
@@ -746,6 +747,32 @@ impl Assumption {
     /// The `YYYY-MM-DD` a waiver lapses, for `Waived` only.
     pub fn expires(&self) -> Option<&str> {
         self.expires.as_deref()
+    }
+
+    /// Give one of several unequal claims sharing a producer's base id a stable,
+    /// content-derived identity. Producers normally keep the concise
+    /// `kind:subject` id. The post-bind merge calls this only after observing an
+    /// actual collision, where retaining the bare id would either discard a
+    /// claim or make the registry reject the whole run.
+    ///
+    /// The digest covers the complete typed claim, so ordering two sibling CI
+    /// assertions differently cannot decide which one inherits a bare id.
+    pub fn disambiguate_colliding_id(mut self) -> Self {
+        let claim = serde_json::to_vec(&(
+            self.kind,
+            self.source,
+            &self.scope,
+            &self.statement,
+            &self.because,
+            &self.consequence,
+            &self.replacement,
+            &self.expires,
+        ))
+        .expect("a validated assumption identity is JSON-serializable");
+        let digest = Sha256::digest(claim);
+        self.id.0.push('~');
+        self.id.0.push_str(&hex_bytes(&digest));
+        self
     }
 
     /// Raw constructor, private on purpose: every public constructor below goes

@@ -141,6 +141,24 @@ fn uncovered_windows(
 
 const OCCURRENCE_PREFIX: &str = "@hkb-occurrence:";
 
+pub(crate) fn component_occurrence_subject(
+    reference: &str,
+    total_occurrences: usize,
+    ordinal: usize,
+) -> String {
+    let reference = reference.trim();
+    if !reference.is_empty() && total_occurrences <= 1 && !reference.starts_with(OCCURRENCE_PREFIX)
+    {
+        return reference.to_string();
+    }
+    let encoded = reference
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    format!("{OCCURRENCE_PREFIX}{encoded}:{ordinal}")
+}
+
 /// Give board components and bind rows the same injective causal identity.
 /// Ordinary unique designators remain readable. Blank, repeated, or reserved-
 /// prefix designators use the exact source bytes plus a 1-based occurrence, so
@@ -180,18 +198,11 @@ fn component_occurrence_subjects(
                 let reference = reference.trim();
                 let ordinal = seen.entry(reference.to_string()).or_default();
                 *ordinal += 1;
-                let needs_occurrence = reference.is_empty()
-                    || maximums.get(reference).copied().unwrap_or_default() > 1
-                    || reference.starts_with(OCCURRENCE_PREFIX);
-                if !needs_occurrence {
-                    return reference.to_string();
-                }
-                let encoded = reference
-                    .as_bytes()
-                    .iter()
-                    .map(|byte| format!("{byte:02X}"))
-                    .collect::<String>();
-                format!("{OCCURRENCE_PREFIX}{encoded}:{ordinal}")
+                component_occurrence_subject(
+                    reference,
+                    maximums.get(reference).copied().unwrap_or_default(),
+                    *ordinal,
+                )
             })
             .collect()
     };
@@ -407,7 +418,7 @@ impl BoardEvidence {
             }
             classify_reader_note(
                 normalized,
-                board,
+                &component_subjects,
                 &mut assumptions,
                 &mut reader_contributions,
                 &mut reader_ignored,
@@ -689,12 +700,39 @@ impl BoardEvidence {
     ) -> Result<Self, EvidenceError> {
         let artifacts = self.registry.artifacts().to_vec();
         let mut assumptions = self.registry.assumptions().to_vec();
+        // Equal claims are idempotent. Unequal claims sharing a producer's
+        // concise base id are not: the CI runner legitimately emits one
+        // check-scoped claim per sibling assertion on a peripheral. Group the
+        // incoming batch before merging so every member receives a stable
+        // content-derived id; input order cannot decide which claim survives
+        // under the bare id.
+        let mut incoming = Vec::new();
         for assumption in new_assumptions {
-            if !assumptions
+            if !incoming.contains(&assumption) {
+                incoming.push(assumption);
+            }
+        }
+        let mut counts = BTreeMap::new();
+        for assumption in &incoming {
+            *counts.entry(assumption.id().clone()).or_insert(0usize) += 1;
+        }
+        for assumption in incoming {
+            let assumption = if counts[assumption.id()] > 1 {
+                assumption.disambiguate_colliding_id()
+            } else {
+                assumption
+            };
+            match assumptions
                 .iter()
-                .any(|known| known.id() == assumption.id())
+                .find(|known| known.id() == assumption.id())
             {
-                assumptions.push(assumption);
+                Some(known) if known == &assumption => {}
+                Some(_) => {
+                    return Err(EvidenceError::DuplicateAssumption {
+                        id: assumption.id().to_string(),
+                    });
+                }
+                None => assumptions.push(assumption),
             }
         }
         let mut registry = EvidenceRegistry::new(assumptions)?;
@@ -710,32 +748,21 @@ impl BoardEvidence {
     /// matching is provenance, not automatically a semantic stand-in; it does
     /// not enter this assumption registry.
     pub fn with_substitutions(
-        mut self,
+        self,
         substitutions: &[crate::scheduler::McuSubstitution],
     ) -> Result<Self, EvidenceError> {
         if substitutions.is_empty() {
             return Ok(self);
         }
-        let artifacts = self.registry.artifacts().to_vec();
-        let mut assumptions = self.registry.assumptions().to_vec();
-        for sub in substitutions {
-            let assumption = Assumption::substitute_model(
+        self.with_assumptions(substitutions.iter().map(|sub| {
+            Assumption::substitute_model_for_component(
                 AssumptionSource::Scheduler,
+                &sub.evidence_subject,
                 &sub.reference,
                 &sub.requested_part,
                 &sub.modelled_core,
-            );
-            if !assumptions.iter().any(|a| a.id() == assumption.id()) {
-                assumptions.push(assumption);
-            }
-        }
-        let mut registry = EvidenceRegistry::new(assumptions)?;
-        for artifact in artifacts {
-            registry.add_artifact(artifact)?;
-        }
-        self.assumptions = registry.assumptions().to_vec();
-        self.registry = registry;
-        Ok(self)
+            )
+        }))
     }
 
     pub fn inventory(&self) -> &[ArtifactProvenance] {
@@ -1374,7 +1401,7 @@ fn input_contributions(kind: crate::board_input::InputKind) -> Vec<Contribution>
 
 fn classify_reader_note(
     note: &str,
-    board: &ExtractedBoard,
+    component_subjects: &[String],
     assumptions: &mut Vec<Assumption>,
     contributions: &mut Vec<Contribution>,
     ignored: &mut Vec<IgnoredInput>,
@@ -1409,11 +1436,9 @@ fn classify_reader_note(
     if lower.contains("treated every placed part as fitted")
         || lower.contains("every placed part has been treated as fitted")
     {
-        let subjects = board
-            .components
+        let subjects = component_subjects
             .iter()
-            .filter(|component| !component.reference.trim().is_empty())
-            .map(|component| EntityRef::new(EntityKind::Part, component.reference.clone()))
+            .map(|subject| EntityRef::new(EntityKind::Part, subject.clone()))
             .collect::<Result<Vec<_>, _>>()?;
         let scope = if subjects.is_empty() {
             Scope::Board
@@ -2065,6 +2090,200 @@ mod duplicate_open_part_tests {
         }
         BoardEvidence::from_bound(&board(), &defaults, &[], RunDate::unknown())
             .expect("documented-default evidence must not collide");
+    }
+
+    #[test]
+    fn fitted_by_default_reaches_duplicate_and_blank_components_on_their_own_nets() {
+        let component = |reference: &str, net| hauksbee_extract::Component {
+            reference: reference.to_string(),
+            value: "placed".to_string(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: "F.Cu".to_string(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: vec![hauksbee_extract::Pin {
+                number: "1".to_string(),
+                net: Some(net),
+                function: String::new(),
+                kind: String::new(),
+                position: None,
+            }],
+        };
+        let board = ExtractedBoard {
+            name: "reader-occurrence-scope".to_string(),
+            nets: [(1, "DUP_A"), (2, "DUP_B"), (3, "BLANK")]
+                .into_iter()
+                .map(|(id, name)| hauksbee_extract::Net {
+                    id,
+                    name: name.to_string(),
+                })
+                .collect(),
+            components: vec![component("U1", 1), component("U1", 2), component("", 3)],
+        };
+
+        let evidence = BoardEvidence::from_bound(
+            &board,
+            &BindReport::default(),
+            &["every placed part has been treated as fitted".to_string()],
+            RunDate::unknown(),
+        )
+        .expect("reader note builds");
+
+        assert_eq!(evidence.maps().len(), 3);
+        for map in evidence.maps() {
+            assert_eq!(
+                map.status(),
+                EvidenceStatus::Undermined,
+                "reader default fell off {}",
+                map.assertion()
+            );
+            assert_eq!(map.assumptions().len(), 1);
+        }
+    }
+
+    #[test]
+    fn unequal_post_bind_claims_with_one_base_id_are_both_retained() {
+        let empty_evidence = || {
+            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
+                .expect("empty evidence builds")
+        };
+        let assumption = |kind: &str| {
+            Assumption::not_exercised(
+                AssumptionSource::Scheduler,
+                Subject::new("i2c/sensor", "I2C peripheral sensor"),
+                Scope::Check {
+                    check: "ci".into(),
+                    kind: Some(kind.to_string()),
+                },
+                "the MCU platform models no matching controller",
+                "add the controller to the SoC descriptor, then re-run",
+            )
+        };
+        let first = assumption("assertion-a");
+        let second = assumption("assertion-b");
+        assert_eq!(
+            first.id(),
+            second.id(),
+            "fixture must reproduce the collision"
+        );
+
+        let evidence = empty_evidence()
+            .with_assumptions([first.clone(), second.clone()])
+            .expect("unequal same-subject claims are disambiguated");
+        assert_eq!(evidence.assumptions().len(), 2);
+        assert_ne!(
+            evidence.assumptions()[0].id(),
+            evidence.assumptions()[1].id()
+        );
+
+        let reversed = empty_evidence()
+            .with_assumptions([second, first])
+            .expect("reverse order also builds");
+        let ids = |evidence: &BoardEvidence| {
+            evidence
+                .assumptions()
+                .iter()
+                .map(|assumption| assumption.id().clone())
+                .collect::<BTreeSet<_>>()
+        };
+        assert_eq!(
+            ids(&evidence),
+            ids(&reversed),
+            "ids must not depend on input order"
+        );
+    }
+
+    #[test]
+    fn substitutions_keep_occurrence_identity_and_do_not_dedupe_distinct_cores() {
+        let component = |net| hauksbee_extract::Component {
+            reference: "U1".to_string(),
+            value: "STM32F411".to_string(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: "F.Cu".to_string(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: vec![hauksbee_extract::Pin {
+                number: "1".to_string(),
+                net: Some(net),
+                function: String::new(),
+                kind: String::new(),
+                position: None,
+            }],
+        };
+        let board = ExtractedBoard {
+            name: "duplicate-mcu-substitutions".to_string(),
+            nets: [(1, "MCU_A"), (2, "MCU_B")]
+                .into_iter()
+                .map(|(id, name)| hauksbee_extract::Net {
+                    id,
+                    name: name.to_string(),
+                })
+                .collect(),
+            components: vec![component(1), component(2)],
+        };
+        let mut report = BindReport::default();
+        for core in ["core-a", "core-b"] {
+            report.push(BindRow {
+                reference: "U1".to_string(),
+                value: "STM32F411".to_string(),
+                model_id: Some(core.to_string()),
+                confidence: Confidence::Exact,
+                source: None,
+                outcome: BindOutcome::Mcu {
+                    backend: format!("renode:{core}"),
+                },
+                warning: None,
+                guesses: Vec::new(),
+            });
+        }
+        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
+            .expect("duplicate MCUs build");
+        let subjects = component_occurrence_subjects(&board, &report).1;
+        let substitutions = [
+            crate::scheduler::McuSubstitution {
+                reference: "U1".to_string(),
+                evidence_subject: subjects[0].clone(),
+                backend: "renode:core-a".to_string(),
+                requested_part: "STM32F411".to_string(),
+                modelled_core: "STM32F407".to_string(),
+            },
+            crate::scheduler::McuSubstitution {
+                reference: "U1".to_string(),
+                evidence_subject: subjects[1].clone(),
+                backend: "renode:core-b".to_string(),
+                requested_part: "STM32F411".to_string(),
+                modelled_core: "STM32F405".to_string(),
+            },
+        ];
+
+        let evidence = evidence
+            .with_substitutions(&substitutions)
+            .expect("both substitutions survive");
+        let substitutions: Vec<_> = evidence
+            .assumptions()
+            .iter()
+            .filter(|assumption| {
+                assumption.kind() == hauksbee_ir::evidence::AssumptionKind::SubstituteModel
+            })
+            .collect();
+        assert_eq!(substitutions.len(), 2);
+        assert_ne!(substitutions[0].id(), substitutions[1].id());
+
+        for net in ["MCU_A", "MCU_B"] {
+            let map = evidence
+                .simulation_map(net, &[net.to_string()], &[], None)
+                .expect("net simulation map builds");
+            assert_eq!(map.status(), EvidenceStatus::Undermined);
+            assert_eq!(
+                map.assumptions().len(),
+                1,
+                "each net receives only its own substitution"
+            );
+        }
     }
 
     /// Ids are cited in acknowledgment files and diffed across runs, so the same
