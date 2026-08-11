@@ -1311,6 +1311,38 @@ fn cli_cosim_command(board_file: &str, fw_file: &str) -> String {
     format!("\"{exe}\" run \"{board_file}\" --firmware \"{fw_file}\" --headless")
 }
 
+/// Project ordinary coverage limitations/events onto the web finding cards.
+/// Strict timing refusal deliberately stays out: it already has the structural
+/// `timing_refusals` field and the typed [`Refusal`] contract, so projecting it
+/// here would render the same invalidity again as a lower-severity note.
+fn coverage_findings_for_web(
+    caveats: &[crate::reports::coverage::CoverageCaveat],
+) -> Vec<WebFinding> {
+    use crate::reports::coverage::CoverageClass;
+
+    caveats
+        .iter()
+        .filter(|c| {
+            matches!(
+                c.class,
+                CoverageClass::AdcDropped
+                    | CoverageClass::UnexercisedBus
+                    | CoverageClass::WatchdogLimitation
+                    | CoverageClass::WatchdogReboot
+                    | CoverageClass::TimingLimitation
+            )
+        })
+        .map(|c| WebFinding {
+            level: "note".to_string(),
+            what: c.headline.clone(),
+            why: c.message.clone(),
+            fix: c.fix.clone(),
+            x: None,
+            y: None,
+        })
+        .collect()
+}
+
 fn run_web_cosim(
     board: &ExtractedBoard,
     board_file_name: &str,
@@ -1632,35 +1664,13 @@ fn run_web_cosim(
     // `timing_coverage` field below instead, the tier `--json` gives it and the
     // mechanism `spi_framing` already uses on this surface.
     {
-        use crate::reports::coverage::{CoverageClass, CoverageInputs};
+        use crate::reports::coverage::CoverageInputs;
         let caveats = CoverageInputs::from_scheduler(sched).caveats();
-        for c in caveats.iter().filter(|c| {
-            matches!(
-                c.class,
-                CoverageClass::AdcDropped
-                    | CoverageClass::UnexercisedBus
-                    | CoverageClass::WatchdogLimitation
-                    | CoverageClass::WatchdogReboot
-                    | CoverageClass::TimingLimitation
-                    | CoverageClass::TimingRefusal
-            )
-        }) {
-            findings.insert(
-                0,
-                WebFinding {
-                    // Note-level for the same reason as the substitution and
-                    // short-pulse caveats: it is an honesty statement about what
-                    // the run means, not a board defect, so it demotes the
-                    // headline via `cosim_caveat_headline` without inventing a
-                    // serious fault.
-                    level: "note".to_string(),
-                    what: c.headline.clone(),
-                    why: c.message.clone(),
-                    fix: c.fix.clone(),
-                    x: None,
-                    y: None,
-                },
-            );
+        for finding in coverage_findings_for_web(&caveats) {
+            // Note-level for the same reason as the substitution and short-pulse
+            // caveats: these qualify what the run means rather than inventing a
+            // board defect. Strict-invalid timing refusals are not in this list.
+            findings.insert(0, finding);
         }
     }
     // Zero-activity refusal: a run that drove nothing proves nothing.
@@ -2897,6 +2907,30 @@ fn main {
         assert!(
             refusal.missing_prerequisite.contains("PWL replay refused"),
             "{refusal:?}"
+        );
+    }
+
+    #[test]
+    fn strict_timing_refusal_is_not_projected_as_an_ordinary_note_finding() {
+        use crate::reports::coverage::CoverageInputs;
+
+        let caveats = CoverageInputs {
+            watchdog_resets: vec![("U1".to_string(), 1)],
+            timing_refusals: vec![
+                "PWL replay refused on net /CLK: transition budget exceeded".to_string()
+            ],
+            ..Default::default()
+        }
+        .caveats();
+        let findings = coverage_findings_for_web(&caveats);
+
+        assert_eq!(findings.len(), 1, "only the reboot is an ordinary note");
+        assert!(findings[0].why.contains("watchdog rebooted"));
+        assert!(
+            findings
+                .iter()
+                .all(|finding| !finding.why.contains("TIMING INVALID")),
+            "strict invalidity belongs only in timing_refusals + Refusal: {findings:?}"
         );
     }
 

@@ -40,6 +40,11 @@ pub enum CoverageDisposition {
     TimingBound,
     StrictRefusal,
     FallbackQualification,
+    /// A run-state transition that actually happened and changes how later
+    /// observations must be read; it is evidence, not missing coverage.
+    ObservedEvent,
+    /// An electrical conflict the co-simulation actually observed.
+    ElectricalFault,
 }
 
 /// One class of co-sim coverage disclosure. Twelve of them, which is the count
@@ -132,6 +137,10 @@ impl CoverageClass {
             CoverageClass::TimingCoverage => CoverageDisposition::TimingBound,
             CoverageClass::TimingRefusal => CoverageDisposition::StrictRefusal,
             CoverageClass::FallbackIntegration => CoverageDisposition::FallbackQualification,
+            CoverageClass::WatchdogReboot | CoverageClass::DriveConflict => {
+                CoverageDisposition::ObservedEvent
+            }
+            CoverageClass::DriverContention => CoverageDisposition::ElectricalFault,
             _ => CoverageDisposition::Limitation,
         }
     }
@@ -466,9 +475,12 @@ mod tests {
                 .into_iter()
                 .filter(|class| class.is_hole())
                 .count(),
-            9,
-            "nine classes are holes; timing resolution is a statement"
+            6,
+            "only missing observability/model support is a hole; observed events and faults are not"
         );
+        assert!(!CoverageClass::WatchdogReboot.is_hole());
+        assert!(!CoverageClass::DriverContention.is_hole());
+        assert!(!CoverageClass::DriveConflict.is_hole());
         assert_eq!(
             CoverageClass::TimingCoverage.disposition(),
             CoverageDisposition::TimingBound
@@ -537,7 +549,7 @@ mod tests {
             );
         }
         assert_eq!(caveats.len(), 12, "one caveat per class in this fixture");
-        assert_eq!(hole_count(&caveats), 9);
+        assert_eq!(hole_count(&caveats), 6);
         assert_eq!(classes_present(&caveats), CoverageClass::ALL.to_vec());
         // Every caveat names the input that would unlock it.
         for c in &caveats {
@@ -623,5 +635,31 @@ mod tests {
         assert!(caveats[0].message.contains("ADC1"), "{:?}", caveats[0]);
         assert_eq!(caveats[1].subject, "FLASH1");
         assert!(caveats[1].message.contains("FLASH1"), "{:?}", caveats[1]);
+    }
+
+    #[test]
+    fn web_matrix_marks_external_only_disclosures_as_not_run() {
+        let docs = include_str!("../../../../docs/cosim/MCU.md");
+        for label in [
+            "dropped ADC injections",
+            "unexercised buses",
+            "watchdog limitation",
+            "timing limitation",
+        ] {
+            let row = docs
+                .lines()
+                .find(|line| line.starts_with(&format!("| {label} |")))
+                .unwrap_or_else(|| panic!("missing matrix row for {label}"));
+            let web_cell = row
+                .trim_matches('|')
+                .split('|')
+                .next_back()
+                .expect("web-frontdoor cell")
+                .trim();
+            assert_eq!(
+                web_cell, "not run (external backend)",
+                "the synchronous web front door returns before these scheduler signals exist: {row}"
+            );
+        }
     }
 }

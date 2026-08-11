@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-ci"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-extract"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cfb",
  "encoding_rs",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-ir"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "evalexpr",
  "schemars",
@@ -1341,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "hauksbee-ci",
@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-mcu"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bindgen 0.71.1",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-models"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "forge-sexpr",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1406,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-solve"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1421,7 +1421,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-testkit"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "heapless"
