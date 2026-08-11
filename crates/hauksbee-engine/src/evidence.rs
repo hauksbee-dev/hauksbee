@@ -345,15 +345,17 @@ impl BoardEvidence {
             .map(|name| ((*name).to_string(), BTreeSet::new()))
             .collect();
         for component in &board.components {
-            if component.reference.trim().is_empty() {
-                continue;
-            }
+            let reference = if component.reference.trim().is_empty() {
+                AssumptionId::UNNAMED_SUBJECT
+            } else {
+                component.reference.as_str()
+            };
             for pin in &component.pins {
                 if let Some(name) = pin.net.and_then(|id| net_names.get(&id)).copied() {
                     incidence
                         .entry(name.to_string())
                         .or_default()
-                        .insert(component.reference.clone());
+                        .insert(reference.to_string());
                 }
             }
         }
@@ -1751,6 +1753,60 @@ mod duplicate_open_part_tests {
         assert!(fixes.iter().any(|fix| fix.contains("ACME-1")));
         assert!(fixes.iter().any(|fix| fix.contains("ACME-2")));
         assert_ne!(open[0].id(), open[1].id());
+    }
+
+    #[test]
+    fn distinct_raw_designators_are_not_aggregated_by_prose_normalization() {
+        let mut report = BindReport::default();
+        report.push(unresolved("R7", "10k", "no model matched"));
+        report.push(unresolved("R7.", "10k", "no model matched"));
+
+        let open = open_part_claims(&report);
+
+        assert_eq!(open.len(), 2, "distinct source identifiers are two claims");
+        assert_ne!(open[0].id(), open[1].id());
+        assert!(
+            open.iter()
+                .all(|claim| !claim.statement().contains("2 parts")),
+            "normalizing prose must not fabricate a shared designator"
+        );
+    }
+
+    #[test]
+    fn an_unnamed_open_part_on_a_real_net_undermines_that_net() {
+        let board = ExtractedBoard {
+            name: "anonymous-connected-part".to_string(),
+            nets: vec![hauksbee_extract::Net {
+                id: 1,
+                name: "SENSE".to_string(),
+            }],
+            components: vec![hauksbee_extract::Component {
+                reference: String::new(),
+                value: "mystery".to_string(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: "F.Cu".to_string(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: vec![hauksbee_extract::Pin {
+                    number: "1".to_string(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                }],
+            }],
+        };
+        let mut report = BindReport::default();
+        report.push(unresolved("", "mystery", "no model matched"));
+
+        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
+            .expect("evidence builds");
+        let map = evidence.static_coverage_map().expect("coverage map builds");
+
+        assert!(map.is_undermined(), "anonymous open part was off-path");
+        assert_eq!(map.assumptions().len(), 1);
     }
 
     /// Ids are cited in acknowledgment files and diffed across runs, so the same

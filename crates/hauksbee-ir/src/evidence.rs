@@ -619,7 +619,14 @@ fn sentence_or(s: &str, fallback: &str) -> String {
 }
 
 fn part_scope(reference: &str) -> Scope {
-    let reference = or_else(reference, AssumptionId::UNNAMED_SUBJECT);
+    // A reference is an identifier, not prose. Preserve every source byte other
+    // than surrounding whitespace so `R7` and `R7.` cannot collapse onto one
+    // causal subject while their sentences are tidied for display.
+    let reference = if reference.trim().is_empty() {
+        AssumptionId::UNNAMED_SUBJECT.to_string()
+    } else {
+        reference.trim().to_string()
+    };
     Scope::Subjects(SubjectSet(vec![EntityRef {
         kind: EntityKind::Part,
         id: reference,
@@ -761,28 +768,30 @@ impl Assumption {
         // fragment.
         let statement = sentence(&statement);
         let because = sentence(&because);
+        let consequence = sentence(&consequence);
+        let replacement = sentence(&replacement);
+        // Length-prefix every reader-visible sentence. A claim can differ only
+        // in its consequence or remediation, and an unnameable subject still
+        // needs a distinct public id in that case. Delimiters are insufficient
+        // because caller data can contain any delimiter byte.
+        let claim = format!(
+            "{}:{statement}{}:{because}{}:{consequence}{}:{replacement}",
+            statement.len(),
+            because.len(),
+            consequence.len(),
+            replacement.len(),
+        );
         let built = Self {
             // The sentences are composed FIRST because together they are what
             // disambiguates an id whose subject the producer could not name.
-            // The two sentences are LENGTH-PREFIXED, not delimited, before they are
-            // hashed. Hashing "{statement} {because}" over any separator is
-            // ambiguous, because the caller's own value and reason sit inside those
-            // sentences and can contain the separator: a value carrying the rest of
-            // one sentence and a reason carrying the start of another produced the
-            // same bytes as a different pair, so two distinct gaps landed on one id.
-            // A leading byte count cannot be forged from inside either half.
-            id: AssumptionId::disambiguated(
-                kind,
-                subject,
-                &format!("{}:{statement}{because}", statement.len()),
-            ),
+            id: AssumptionId::disambiguated(kind, subject, &claim),
             kind,
             source,
             scope,
             statement,
             because,
-            consequence: sentence(&consequence),
-            replacement: sentence(&replacement),
+            consequence,
+            replacement,
             expires,
         };
         // Every constructor's output must satisfy the rules `validate` states,
@@ -851,7 +860,7 @@ impl Assumption {
     /// assert!(a.because().starts_with("One channel of eight"));
     /// ```
     pub fn partial_model(reference: &str, value: &str, gap: &str, replacement: &str) -> Self {
-        let subject = fragment(reference);
+        let subject = reference.trim().to_string();
         let subject_text = if value.trim().is_empty() {
             or_else(reference, "an unnamed part").to_string()
         } else {
@@ -952,7 +961,7 @@ impl Assumption {
         // the ID keeps the raw subject and lets `AssumptionId` disambiguate:
         // prose in an id would collide two blank-designator parts onto one
         // entry, and the evidence map's dedupe would then drop one of them.
-        let subject = fragment(reference);
+        let subject = reference.trim().to_string();
         let reference = or_else(reference, "an unnamed part");
         let value = fragment(value);
         let named = if value.is_empty() {
@@ -1060,7 +1069,7 @@ impl Assumption {
         // A producer with no name for one side still has a real gap to report,
         // so the sentence names what it can rather than leaving a hole. The id
         // keeps the raw subject: see `open_part`.
-        let subject = fragment(reference);
+        let subject = reference.trim().to_string();
         let reference = or_else(reference, "an unnamed part");
         let requested = or_else(requested, "the part the board asks for");
         let stand_in = or_else(stand_in, "a stand-in model");

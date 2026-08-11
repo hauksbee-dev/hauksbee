@@ -443,7 +443,7 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
         "two reasons are two gaps: {}",
         same_statement_a.id()
     );
-    // The two sentences are LENGTH-PREFIXED before being hashed, because any
+    // All four sentences are LENGTH-PREFIXED before being hashed, because any
     // separator can be forged from inside them: the caller's own value and reason
     // sit in those sentences, so a value carrying the tail of one and a reason
     // carrying the head of another produce identical bytes under a delimiter. Both
@@ -630,6 +630,27 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
             assert_eq!(map.assumptions().len(), 2, "a real gap went missing");
         }
     }
+}
+
+#[test]
+fn unnameable_claims_with_different_remediation_have_distinct_public_ids() {
+    let marker = Assumption::UNLOCKED_BY_MARKER;
+    let first = Assumption::open_part(
+        "",
+        "",
+        &format!("no model matched{marker}add ACME-1's datasheet"),
+    );
+    let second = Assumption::open_part(
+        "",
+        "",
+        &format!("no model matched{marker}add ACME-2's datasheet"),
+    );
+
+    assert_eq!(first.statement(), second.statement());
+    assert_eq!(first.because(), second.because());
+    assert_ne!(first.replacement(), second.replacement());
+    assert_ne!(first.id(), second.id());
+    EvidenceRegistry::new(vec![first, second]).expect("distinct claims coexist");
 }
 
 #[test]
