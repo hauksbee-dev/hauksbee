@@ -120,7 +120,10 @@ pub fn emit(
                 eprintln!("{}", refusal.render_text());
             }
         }
-        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        crate::reports::ci_artifacts::exit_with_refusal(
+            EXIT_INVALID_FOR_ANALYSIS,
+            validity.refusal.as_ref().expect("invalid thermal refusal"),
+        );
     }
     // Default escalation: partial coverage fails (exit 3) unless the caller
     // opted out with --no-strict-thermal. The opt-out changes ONLY the exit
@@ -131,10 +134,21 @@ pub fn emit(
                 eprintln!("{}", refusal.render_text());
             }
         }
-        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        crate::reports::ci_artifacts::exit_with_refusal(
+            EXIT_INVALID_FOR_ANALYSIS,
+            strict_partial_refusal
+                .as_ref()
+                .expect("partial thermal refusal"),
+        );
     }
     if report_evidence.is_undermined() && strict {
-        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        let refusal = crate::result::Refusal::new(
+            "a trustworthy thermal result",
+            "the thermal evidence is undermined",
+            vec!["the emitted component and coverage inventory remains available"],
+            "resolve the cited evidence assumptions, then rerun the thermal analysis",
+        );
+        crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
     Ok(())
 }

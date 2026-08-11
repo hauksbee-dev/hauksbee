@@ -1078,10 +1078,11 @@ hauksbee run my_board.kicad_pcb --check --strict \
 ```
 
 `--junit <file>` and `--sarif <file>` are flags on `hauksbee run`, not just on
-`hauksbee-ci`. They write the whole static suite (bind, DRC, lint, SI, USB-C,
-with waivers already applied) regardless of which report flag you asked for, so
-the file lands even on a `--drc`-only run. Waivers are applied before the file is
-written, so a waived finding is absent rather than present-and-ignored.
+`hauksbee-ci`. They write the selected `run` surface, with waivers already
+applied: `--drc` contains DRC, `--lint` contains lint, `--check` contains the
+whole static suite, and `--headless` contains the co-sim findings. Waivers are
+applied before finalization, so a waived finding is absent rather than
+present-and-ignored.
 
 - **JUnit** gives one `<testsuite>` per check and one `<testcase>` per finding,
   with the findings that fail the gate as `<failure>` elements. A check that
@@ -1105,20 +1106,14 @@ verdict-critical parts, undermined run-level coverage) are a `<failure>` like
 any other gate-grade finding, so what tells those apart is the text
 (`INVALID evidence: …`) and the `evidence/undermined` rule id, not the element.
 
-The artifact's subject is the whole static suite, so it grades the `--check`
-gate whichever selector asked for it. On a narrow selector that is deliberately
-wider than the exit code: `--drc --strict` on a board whose only gate-grade
-finding is a lint one exits 0 and still archives that finding as a failure,
-because the file reports the suite it ran, not the one report you printed. Pair
-the artifact flags with `--check --strict` when you want the exit code and the
-file to be answering the same question.
-
-Each file is written before the chosen report renders, and the run says so on
-stderr (`wrote JUnit report to hauksbee.xml`). That ordering means the artifact
-survives a red build, which is the case you actually want it in. Pair them with
-`--strict`: without it the run exits 0 and the pipeline goes green next to a
-JUnit file full of failures. The GitHub Action's `mode: check` is this path
-pre-wired.
+The selected JSON verdict, process exit, JUnit, SARIF and GitHub annotations all
+answer the same question. Requested paths receive a fail-closed pending document
+before board or firmware parsing and are committed once at the terminal outcome;
+CLI usage errors replace them before exiting too. Red builds remain archiveable
+without allowing a pre-analysis error, refusal, abrupt exit or interruption to
+leave a previous green file at the same path. Pair gate-grade findings with
+`--strict` when the process exit itself must gate the job. The GitHub Action's
+`mode: check` is this path pre-wired.
 
 ## Exit codes (the pipeline contract)
 
@@ -1219,19 +1214,14 @@ on a `warning`-severity finding reads `verdict: "fail"` in the very document its
 exit code was printed beside, and the `--junit`/`--sarif` files it archives mark
 that finding failed.
 
-The `gating` flag makes the artifact agree with the exit code about FINDINGS. It
-does not make the file cover a non-zero exit whose reason never became a finding,
-because there is then nothing in the file to mark; read the document for those.
-Known cases: the boot advisory `--strict-boot` exits 2 on is not a finding
-anywhere in the artifact; a refusal for a board with no component placement
-exits 3 before the artifact is written at all, so a pipeline archiving a fixed
-path keeps the previous run's file; `--firmware` on a board that bound no
-processor exits 3 leaving whatever the static suite already wrote, which says
-nothing about the missing processor; and the timing-evidence refusal, the
-`--ac`/`--thermal` validity refusals, and an `invalid` verdict from an analysis
-section's own `valid:false` all exit 3 without adding anything to the file (the
-zero-activity and analog-abort co-sim refusals DO rewrite it with the refusal).
-The exit-1 usage errors raised after the write are the same class.
+The `gating` flag makes every finding-backed surface agree. Terminal conditions
+that are not findings use the same final outcome path: `--strict-boot` becomes a
+typed co-sim finding, while no-placement, no-processor, timing, AC, thermal,
+zero-activity and analog-abort outcomes finalize a JUnit `<error>`, SARIF
+`hauksbee/invalid-for-analysis` result and GitHub error annotation. Invocation
+errors use `hauksbee/run-error` and retain their actual exit code. A pending
+error document occupies requested paths until that final write, so there is no
+stale-file exception.
 
 Do not use a non-strict run to predict a strict one. On the static surfaces the
 document does not change with the flag (a refusing verdict prints beside exit 0

@@ -43,21 +43,21 @@ escaped spellings should match on the real names.
 
 ## CI artifact flags
 
-`run --junit <file>` and `run --sarif <file>` write the full static suite
-(the `--check` findings, waivers already applied) as JUnit XML and SARIF
-2.1.0 respectively, alongside whatever report was requested. A finding maps
+`run --junit <file>` and `run --sarif <file>` write the selected run surface
+(waivers already applied) as JUnit XML and SARIF 2.1.0. A finding maps
 to a JUnit `<failure>` / SARIF `error` result when its `gating` flag is set.
 That flag is set on more than the `serious` findings (see the `Finding` shape
 below), so a run that gates on a finding does not archive `failures="0"` beside
-its red verdict. The artifact always covers the whole static suite, so it grades the
-`--check` gate whichever selector asked for it: on a narrower selector it can be
-redder than that selector's own exit code (`--drc --strict` exits 0 and still
-archives a gating lint finding as a failure). A whole-run refusal is a JUnit
+its red verdict. A whole-run refusal is a JUnit
 `<error>` and a SARIF `hauksbee/invalid-for-analysis` result instead of a
 failure; the bind-blocker `invalid` route is a failure carrying `INVALID
 evidence:` text under the `evidence/undermined` rule. Under GitHub Actions a
 failing `--strict` gate also prints `::error` workflow annotations for each
-gate-grade finding.
+gate-grade finding. Requested paths first receive a fail-closed pending document
+and are finalized once with the terminal outcome, so early errors and interrupted
+runs cannot expose a stale green file from an earlier invocation. Usage/input
+errors use the SARIF `hauksbee/run-error` rule and preserve their process exit
+code; invalid analysis uses `hauksbee/invalid-for-analysis` and exit 3.
 
 ## Top-level verdict
 

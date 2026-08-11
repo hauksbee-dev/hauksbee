@@ -1,13 +1,208 @@
 //! CI-native artifacts for `hauksbee run`: `--junit <path>` (JUnit XML) and
-//! `--sarif <path>` (SARIF 2.1.0), both computed from the SAME full static
-//! suite the `--check` report renders, so a pipeline consumes findings as
-//! test results / code-scanning alerts without parsing the human report.
+//! `--sarif <path>` (SARIF 2.1.0), both computed from the SAME selected run
+//! surface, so a pipeline consumes findings and terminal refusals as test
+//! results / code-scanning alerts without parsing the human report.
 //! GitHub annotations for gate-grade findings ride the `--strict` gate
 //! (see [`super::strict_gate_exit`]'s caller in `reports::mod`).
 
 use std::path::Path;
 
 use crate::result::{JsonFinding, Refusal};
+
+#[derive(Clone)]
+struct CurrentRunArtifacts {
+    board_name: String,
+    board_path: std::path::PathBuf,
+    junit: Option<std::path::PathBuf>,
+    sarif: Option<std::path::PathBuf>,
+    findings: Vec<JsonFinding>,
+    refusal: Option<Refusal>,
+    selected_checks: Vec<String>,
+}
+
+thread_local! {
+    static CURRENT_RUN: std::cell::RefCell<Option<CurrentRunArtifacts>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[derive(Clone, Copy)]
+enum TerminalOutcomeKind {
+    AnalysisRefusal,
+    RunError,
+}
+
+fn write_current(
+    state: &CurrentRunArtifacts,
+    refusal: Option<&Refusal>,
+    exit_code: i32,
+    outcome_kind: TerminalOutcomeKind,
+) -> anyhow::Result<()> {
+    let refusal = refusal.or(state.refusal.as_ref());
+    let mut errors = Vec::new();
+    if let Some(path) = &state.junit {
+        if let Err(error) = std::fs::write(
+            path,
+            junit_xml_for_checks(
+                &state.board_name,
+                &state.findings,
+                refusal,
+                &state.selected_checks,
+            ),
+        ) {
+            errors.push(format!("writing --junit '{}': {error}", path.display()));
+        }
+    }
+    if let Some(path) = &state.sarif {
+        if let Err(error) = std::fs::write(
+            path,
+            sarif_json_with_terminal_outcome(
+                &state.board_path,
+                &state.findings,
+                refusal,
+                exit_code,
+                outcome_kind,
+            ),
+        ) {
+            errors.push(format!("writing --sarif '{}': {error}", path.display()));
+        }
+    }
+    if !errors.is_empty() {
+        anyhow::bail!(errors.join("; "));
+    }
+    Ok(())
+}
+
+/// Start one artifact transaction. The fail-closed placeholder is written
+/// before board/firmware parsing, so an early return, panic, signal or legacy
+/// exit can never leave a previous run's green file at the requested path.
+pub fn begin_run(
+    board_path: &Path,
+    junit: Option<&Path>,
+    sarif: Option<&Path>,
+    selected_checks: Vec<String>,
+) -> anyhow::Result<()> {
+    if junit.is_none() && sarif.is_none() {
+        return Ok(());
+    }
+    let state = CurrentRunArtifacts {
+        board_name: board_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("board")
+            .to_string(),
+        board_path: board_path.to_path_buf(),
+        junit: junit.map(Path::to_path_buf),
+        sarif: sarif.map(Path::to_path_buf),
+        findings: Vec::new(),
+        refusal: None,
+        selected_checks,
+    };
+    let pending = Refusal::new(
+        "a completed Hauksbee run",
+        "the run did not reach its final outcome",
+        Vec::<String>::new(),
+        "inspect the process error, fix it, and rerun the same command",
+    );
+    write_current(
+        &state,
+        Some(&pending),
+        crate::result::EXIT_INVALID_FOR_ANALYSIS,
+        TerminalOutcomeKind::RunError,
+    )?;
+    CURRENT_RUN.with(|slot| *slot.borrow_mut() = Some(state));
+    Ok(())
+}
+
+/// Replace the selected run's current finding set. Nothing is committed to the
+/// requested paths until the one terminal finalizer below runs.
+pub fn set_current_findings(findings: Vec<JsonFinding>) {
+    CURRENT_RUN.with(|slot| {
+        if let Some(state) = slot.borrow_mut().as_mut() {
+            state.findings = findings;
+        }
+    });
+}
+
+pub fn set_current_refusal(refusal: Refusal) {
+    CURRENT_RUN.with(|slot| {
+        if let Some(state) = slot.borrow_mut().as_mut() {
+            state.refusal = Some(refusal);
+        }
+    });
+}
+
+fn take_current() -> Option<CurrentRunArtifacts> {
+    CURRENT_RUN.with(|slot| slot.borrow_mut().take())
+}
+
+pub fn finish_success() -> anyhow::Result<()> {
+    if let Some(state) = take_current() {
+        if let Err(error) = write_current(&state, None, 0, TerminalOutcomeKind::AnalysisRefusal) {
+            let refusal = Refusal::new(
+                "a complete set of requested CI artifacts",
+                error.to_string(),
+                Vec::<String>::new(),
+                "fix the artifact output path or permissions, then rerun",
+            );
+            let _ = write_current(&state, Some(&refusal), 1, TerminalOutcomeKind::RunError);
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+pub fn finish_error(error: &anyhow::Error, exit_code: i32) {
+    let Some(state) = take_current() else {
+        return;
+    };
+    let refusal = Refusal::new(
+        "a completed Hauksbee run",
+        error.to_string(),
+        Vec::<String>::new(),
+        "fix the reported input or invocation error, then rerun the same command",
+    );
+    if let Err(write_error) = write_current(
+        &state,
+        Some(&refusal),
+        exit_code,
+        TerminalOutcomeKind::RunError,
+    ) {
+        eprintln!("error: could not finalize requested CI artifact: {write_error}");
+    }
+    github_refusal_annotation(&refusal);
+}
+
+pub fn exit_with_refusal(code: i32, refusal: &Refusal) -> ! {
+    if let Some(state) = take_current() {
+        if let Err(error) = write_current(
+            &state,
+            Some(refusal),
+            code,
+            TerminalOutcomeKind::AnalysisRefusal,
+        ) {
+            eprintln!("error: could not finalize requested CI artifact: {error}");
+        }
+    }
+    github_refusal_annotation(refusal);
+    std::process::exit(code)
+}
+
+pub fn exit_with_findings(code: i32, annotation_items: &[String]) -> ! {
+    let mut retained_refusal = None;
+    if let Some(state) = take_current() {
+        retained_refusal = state.refusal.clone();
+        if let Err(error) = write_current(&state, None, code, TerminalOutcomeKind::AnalysisRefusal)
+        {
+            eprintln!("error: could not finalize requested CI artifact: {error}");
+        }
+    }
+    if let Some(refusal) = retained_refusal.as_ref() {
+        github_refusal_annotation(refusal);
+    }
+    github_annotations(annotation_items);
+    std::process::exit(code)
+}
 
 /// Convert non-clean evidence statuses into the same finding vocabulary CI
 /// writers already consume. Undermined RUN-LEVEL evidence is gate-grade;
@@ -59,19 +254,8 @@ pub fn evidence_findings_with_gate(
 /// annotation surface agrees with the gate-grade JUnit/SARIF entry the same
 /// blockers produce. No-op outside GitHub Actions.
 ///
-/// At most once per process. It has 2 call sites: the artifact writer in
-/// `commands::run`, gated on `--junit`/`--sarif` alone, and
-/// [`super::exit_invalid_for_analysis`], which must annotate a gating run
-/// whether or not artifacts were asked for. Only the first is reachable without
-/// `--strict`: all 7 callers of that exit helper (in `reports::lint` twice,
-/// `reports::check` twice, `reports::si`, `reports::usb_c` and `commands::run`)
-/// are behind a `strict &&` guard.
-///
-/// A run that passes through both would otherwise spend two of GitHub's ten
-/// annotations-per-type-per-step on the same refusal. The artifact writer runs
-/// first and names the whole run's blockers, so the surviving annotation is the
-/// widest one: on `--usb-c`, whose exit site names only the CC-scoped subset,
-/// the kept line is the superset rather than that surface's own list.
+/// At most once per process, because multiple report layers can converge on
+/// [`super::exit_invalid_for_analysis`] for the same blocker set.
 pub fn github_blocker_annotation(blockers: &[String]) {
     static ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if blockers.is_empty() || std::env::var_os("GITHUB_ACTIONS").is_none() {
@@ -196,6 +380,20 @@ pub fn junit_xml_with_refusal(
     findings: &[JsonFinding],
     refusal: Option<&Refusal>,
 ) -> String {
+    junit_xml_for_checks(
+        board_name,
+        findings,
+        refusal,
+        &["drc".into(), "lint".into(), "si".into(), "usb_c".into()],
+    )
+}
+
+fn junit_xml_for_checks(
+    board_name: &str,
+    findings: &[JsonFinding],
+    refusal: Option<&Refusal>,
+    selected_checks: &[String],
+) -> String {
     use std::fmt::Write;
     // Group by check family, preserving first-seen order (deterministic:
     // findings arrive in report order).
@@ -205,9 +403,9 @@ pub fn junit_xml_with_refusal(
             order.push(&f.check);
         }
     }
-    // The full suite always covers these families even when clean.
-    for known in ["drc", "lint", "si", "usb_c"] {
-        if !order.contains(&known) {
+    // The selected surface always records its families even when clean.
+    for known in selected_checks {
+        if !order.contains(&known.as_str()) {
             order.push(known);
         }
     }
@@ -305,6 +503,22 @@ pub fn sarif_json_with_refusal(
     findings: &[JsonFinding],
     refusal: Option<&Refusal>,
 ) -> String {
+    sarif_json_with_terminal_outcome(
+        board_path,
+        findings,
+        refusal,
+        crate::result::EXIT_INVALID_FOR_ANALYSIS,
+        TerminalOutcomeKind::AnalysisRefusal,
+    )
+}
+
+fn sarif_json_with_terminal_outcome(
+    board_path: &Path,
+    findings: &[JsonFinding],
+    refusal: Option<&Refusal>,
+    exit_code: i32,
+    outcome_kind: TerminalOutcomeKind,
+) -> String {
     let mut rule_ids: Vec<String> = Vec::new();
     for f in findings {
         let id = format!("{}/{}", f.check, f.kind);
@@ -338,17 +552,23 @@ pub fn sarif_json_with_refusal(
         })
         .collect();
     if let Some(refusal) = refusal {
-        rules.push(serde_json::json!({ "id": "hauksbee/invalid-for-analysis" }));
+        let (rule_id, status) = match outcome_kind {
+            TerminalOutcomeKind::AnalysisRefusal => {
+                ("hauksbee/invalid-for-analysis", "invalid_for_analysis")
+            }
+            TerminalOutcomeKind::RunError => ("hauksbee/run-error", "run_error"),
+        };
+        rules.push(serde_json::json!({ "id": rule_id }));
         results.push(serde_json::json!({
-            "ruleId": "hauksbee/invalid-for-analysis",
+            "ruleId": rule_id,
             "level": "error",
             "message": { "text": refusal.render_text() },
             "locations": [{
                 "physicalLocation": { "artifactLocation": { "uri": uri } }
             }],
             "properties": {
-                "status": "invalid_for_analysis",
-                "exit_code": 3,
+                "status": status,
+                "exit_code": exit_code,
                 "refusal": refusal,
             }
         }));

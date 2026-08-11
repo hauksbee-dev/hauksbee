@@ -153,22 +153,18 @@ fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
 }
 
 /// Exit 3 for a bind-blocked run, naming the blockers on the GitHub checks tab
-/// on the way out whether or not `--junit`/`--sarif` were asked for. The
-/// artifact writer annotates the same blockers for a non-gating run, but it
-/// only runs when an artifact flag is present, so a pipeline gating on the exit
-/// code alone saw a clean checks tab beside an exit 3.
-/// [`ci_artifacts::github_blocker_annotation`] is once-per-process, so a run
-/// that passes through both sites still annotates once.
+/// on the way out whether or not `--junit`/`--sarif` were asked for. The current
+/// artifact transaction already contains the same blockers as gate-grade
+/// evidence and is finalized by this exit.
 ///
 /// Narrower than [`strict_gate_exit`], deliberately: it prints no failure line
 /// (the surfaces that exit 3 already printed their INCONCLUSIVE verdict) and it
-/// is not the chokepoint for every exit-3 route. A run that exits 3 for
-/// undermined coverage alone, and the analysis surfaces that refuse on their
-/// own validity (`--thermal`, `--ac`), carry no blockers to name and annotate
-/// nothing. No-op outside GitHub Actions.
+/// is not the chokepoint for typed whole-run refusals: those use
+/// `ci_artifacts::exit_with_refusal` so JUnit, SARIF and GitHub receive the
+/// refusal itself. No-op outside GitHub Actions.
 pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
     ci_artifacts::github_blocker_annotation(blockers);
-    std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS)
+    ci_artifacts::exit_with_findings(crate::result::EXIT_INVALID_FOR_ANALYSIS, &[])
 }
 
 /// The mandatory last word of the eight report gate sites that route through
@@ -225,8 +221,7 @@ pub fn strict_gate_exit(mode: OutputMode, items: &[String]) -> ! {
     }
     // Under GitHub Actions the same gate-grade findings become workflow
     // annotations, so the failing job names them in the PR UI.
-    ci_artifacts::github_annotations(items);
-    std::process::exit(2);
+    ci_artifacts::exit_with_findings(2, items);
 }
 
 /// A gate item ("drc-short GND/+5V", "crystal_load_cap XTAL1") in words a

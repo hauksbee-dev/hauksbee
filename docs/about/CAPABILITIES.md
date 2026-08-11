@@ -121,16 +121,16 @@ integrity. This is the flag a pre-commit hook or a first look wants.
 
 ### CI artifacts (`--junit`, `--sarif`)
 
-Either flag makes any `hauksbee run` publish the whole static suite as a file a
-CI system already knows how to render, whichever report flag was actually asked
-for: `--junit <out.xml>` for JUnit XML (a testsuite per check, a testcase per
-finding, the findings that fail the gate as failures) and `--sarif <out.sarif>`
+Either flag makes any `hauksbee run` publish the selected run surface as a file
+a CI system already knows how to render: `--junit <out.xml>` for JUnit XML (a
+testsuite per check, a testcase per finding, gate-grade findings as failures)
+and `--sarif <out.sarif>`
 for SARIF 2.1.0, which GitHub code scanning turns into pull-request
 annotations. Waivers are applied first, so a waived finding is absent from the
-file rather than present and ignored. This is the gate path for a repo with no
-spec written yet: pair either flag with `--check --strict` so the exit code and
-the file are grading the same suite (the file always covers the whole suite, so
-a narrower selector's exit code can be greener than it).
+file rather than present and ignored. Non-finding invalid/refused terminal
+outcomes are JUnit errors and SARIF error results. Requested paths are invalidated before
+analysis and committed once at the final outcome, so a failed or interrupted
+run cannot leave a prior green artifact archiveable.
 
 ### Waivers
 

@@ -580,10 +580,11 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
 fn boot_advisory_emits_note_and_strict_boot_gates() {
     let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
     let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
-    if !fw.exists() {
-        eprintln!("skipping: boot_gate_a firmware not built");
-        return;
-    }
+    assert!(
+        fw.exists(),
+        "required tracked firmware fixture: {}",
+        fw.display()
+    );
     let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
 
     // Advisory present in JSON, and NOT a gate by default.
@@ -636,10 +637,11 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
 fn default_text_headless_surfaces_the_boot_hazard() {
     let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
     let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
-    if !fw.exists() {
-        eprintln!("skipping: boot_gate_a firmware not built");
-        return;
-    }
+    assert!(
+        fw.exists(),
+        "required tracked firmware fixture: {}",
+        fw.display()
+    );
     let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
     // No --json, no --plain: the plain-text default persona.
     let out = run(&[
@@ -672,10 +674,11 @@ fn default_text_headless_surfaces_the_boot_hazard() {
 fn clean_firmware_raises_no_boot_advisory() {
     let b = board("../hauksbee-ci/examples/boards/blinky.kicad_pcb");
     let fw = board("../../testdata/firmware/demo/demo.hex");
-    if !fw.exists() {
-        eprintln!("skipping: demo firmware not present");
-        return;
-    }
+    assert!(
+        fw.exists(),
+        "required tracked firmware fixture: {}",
+        fw.display()
+    );
     let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
     let out = run(&[
         "run",
@@ -712,10 +715,12 @@ fn boot_state_panel_reports_gate_drive_state() {
     let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
     let fw_a = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
     let fw_b = board("../../testdata/firmware/boot_gate_b/boot_gate.hex");
-    if !fw_a.exists() || !fw_b.exists() {
-        eprintln!("skipping: boot_gate firmware not built");
-        return;
-    }
+    assert!(
+        fw_a.exists() && fw_b.exists(),
+        "required tracked firmware fixtures: {}, {}",
+        fw_a.display(),
+        fw_b.display()
+    );
     let b = b.to_str().unwrap();
 
     // Variant A: gate driven HIGH and held -> plain panel + json say so.
@@ -789,10 +794,11 @@ fn boot_state_panel_reports_gate_drive_state() {
 fn boot_panel_reports_high_even_with_a_gate_pulldown() {
     let b = board("tests/fixtures/boot_gate_pulldown.kicad_pcb");
     let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
-    if !fw.exists() {
-        eprintln!("skipping: boot_gate_a firmware not built");
-        return;
-    }
+    assert!(
+        fw.exists(),
+        "required tracked firmware fixture: {}",
+        fw.display()
+    );
     let out = run(&[
         "run",
         b.to_str().unwrap(),
