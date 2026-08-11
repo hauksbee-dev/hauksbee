@@ -1342,6 +1342,10 @@ impl Mcu for AvrMcu {
         self.register_port_hooks(&ports);
     }
 
+    fn input_responder_batches_atomic(&self) -> bool {
+        true
+    }
+
     fn on_input_responder_batch(
         &mut self,
         responder: Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>,
@@ -1512,6 +1516,10 @@ mod cycle_budget_tests {
     #[test]
     fn port_hook_batches_every_pin_changed_by_one_register_write() {
         let mut mcu = AvrMcu::atmega328p_16mhz().expect("create live simavr core");
+        assert!(
+            mcu.input_responder_batches_atomic(),
+            "simavr preserves one hardware port write as one responder batch"
+        );
         let batches = Arc::new(Mutex::new(Vec::new()));
         let observed = Arc::clone(&batches);
         mcu.on_input_responder_batch(Box::new(move |edges, _cycle| {
