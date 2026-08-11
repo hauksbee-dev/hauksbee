@@ -393,7 +393,7 @@ pub fn reconstruct(
                 .map(|(rgi, contours, weights)| {
                     let verts: usize = contours.iter().map(Vec::len).sum();
                     // Resolution scales with vertex count, so detail buys cells,
-                    // and the ceiling is 2048 rather than 512 because the cell
+                    // and the ceiling is 4096 rather than 512 because the cell
                     // size decides how often a query falls back to the exact
                     // test. A negative plane's pads sit ~0.2 mm from the void rim
                     // that isolates them, which at 512 cells over a 100 mm board
