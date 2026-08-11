@@ -1500,13 +1500,16 @@ impl Scheduler {
             let ports = self.digital[component].memory_ports();
             for port in ports {
                 for (mcu, gpio) in gpio_maps.iter().enumerate() {
-                    // The synchronous responder is a push-backend facility.
-                    // Poll backends cannot apply a data-bus answer between two
-                    // guest instructions; leave the component on the ordinary
-                    // tick path there (with its sub-chunk cadence warning)
-                    // instead of claiming edge-exact ownership and then never
-                    // answering a read.
-                    if !self.mcus[mcu].core.cycle_exact() {
+                    // The synchronous responder requires both exact edge stamps
+                    // and an atomic hardware-port batch. Poll backends cannot
+                    // answer between guest instructions, while an existing push
+                    // backend using the source-compatible singleton fallback can
+                    // expose a transient /WE-/OE ordering and close an EEPROM
+                    // page early. Leave either case on the ordinary tick path
+                    // instead of claiming ownership the backend cannot honor.
+                    if !self.mcus[mcu].core.cycle_exact()
+                        || !self.mcus[mcu].core.input_responder_batches_atomic()
+                    {
                         continue;
                     }
                     let chains: Vec<crate::digital::Hc595Chain> = self
@@ -6583,6 +6586,163 @@ mod tests {
                 crashed: false,
             }
         }
+    }
+
+    struct LegacySingletonResponderCore {
+        responder_installs: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Mcu for LegacySingletonResponderCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            Ok(n)
+        }
+        fn run_micros(&mut self, _us: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            16_000_000
+        }
+        fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
+        fn on_input_responder(
+            &mut self,
+            _responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<hauksbee_mcu::PinDrive> + Send>,
+        ) {
+            self.responder_installs
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {}
+        fn on_spi(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {}
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: 0,
+                cycles: 0,
+                sleeping: false,
+                done: false,
+                crashed: false,
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_singleton_responder_does_not_claim_parallel_memory() {
+        const SPEC: &str = r#"
+inputs = ["a0", "ce_n", "oe_n", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["a0"]
+write = { pin = "we_n", edge = "rising" }
+write_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "high" },
+]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
+data_in = ["io0"]
+data_out = ["io0"]
+"#;
+
+        let mut circuit = Circuit::new();
+        let mut roles = HashMap::new();
+        let mut gpio_drivers = HashMap::new();
+        for (index, role) in ["a0", "ce_n", "oe_n", "we_n", "io0"]
+            .into_iter()
+            .enumerate()
+        {
+            let node = circuit.node(role);
+            roles.insert(role.to_string(), node);
+            let pin = ('B', index as u8);
+            gpio_drivers.insert(
+                pin,
+                crate::drivers::PinDriver::stamp(&mut circuit, node, role, "legacy", 50.0),
+            );
+        }
+        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).expect("parse memory");
+        let logic =
+            crate::logic::LogicComponent::compile("legacy-memory", &spec).expect("compile memory");
+        let digital = crate::digital::DigitalComponent {
+            reference: "U1".into(),
+            levels: crate::digital::LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            roles,
+            drivers: HashMap::new(),
+            logic: Some(logic),
+            supply: None,
+        };
+        let net_nodes = ["a0", "ce_n", "oe_n", "we_n", "io0"]
+            .into_iter()
+            .map(|name| (name.to_string(), circuit.node(name)))
+            .collect();
+        let bound = crate::binder::BoundBoard {
+            name: "legacy-memory".into(),
+            circuit,
+            net_nodes,
+            net_names: ["a0", "ce_n", "oe_n", "we_n", "io0"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            digital: vec![digital],
+            mcus: Vec::new(),
+            dnp_mcus: Vec::new(),
+            component_kinds: HashMap::new(),
+            input_sources: HashMap::new(),
+            supplies: Vec::new(),
+            behavioral: Vec::new(),
+            device_meta: Vec::new(),
+            dacs: Vec::new(),
+            report: crate::report::BindReport::default(),
+        };
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let responder_installs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let core = LegacySingletonResponderCore {
+            responder_installs: Arc::clone(&responder_installs),
+        };
+        assert!(core.cycle_exact(), "the legacy backend is cycle-exact");
+        let binding = McuBinding {
+            reference: "M1".into(),
+            backend: "legacy:test".into(),
+            requested_part: String::new(),
+            external_clock_present: false,
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers,
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+            max_supply_v: None,
+        };
+        sched.mcus.push(core_with_hooks(Box::new(core), binding));
+        sched.responder_registries.push(None);
+
+        sched.build_and_install_parallel_memories();
+
+        assert_eq!(
+            responder_installs.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the default singleton fallback cannot promise atomic memory control batches"
+        );
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "legacy singleton callbacks must leave memory on the ordinary tick path"
+        );
     }
 
     /// A board with NO MCU module: two pulled nets (10 k to +5 V, 10 k to
