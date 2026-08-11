@@ -132,6 +132,28 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         publish_at = release_job.index("softprops/action-gh-release")
         self.assertLess(verify_at, publish_at)
 
+    def test_release_and_required_corpus_actions_are_immutable(self) -> None:
+        workflows = (
+            Path(__file__).resolve().parents[1] / ".github/workflows/release.yml",
+            Path(__file__).resolve().parents[1] / ".github/workflows/corpus-gate.yml",
+        )
+        pinned = re.compile(
+            r"^\s*(?:-\s+)?uses:\s+[^./][^@\s]+@[0-9a-f]{40}\s+#\s+\S+",
+            re.MULTILINE,
+        )
+        for mutable in (
+            "uses: actions/checkout@v4",
+            "- uses: actions/cache@main # mutable",
+        ):
+            with self.subTest(mutable_fixture=mutable):
+                self.assertIsNone(pinned.search(mutable))
+        for workflow in workflows:
+            for line in workflow.read_text().splitlines():
+                if "uses:" not in line or "uses: ./" in line:
+                    continue
+                with self.subTest(workflow=workflow.name, action=line.strip()):
+                    self.assertRegex(line, pinned)
+
     def test_release_required_integrations_cover_every_release_platform(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1]
@@ -1050,7 +1072,7 @@ while True:
                 except ProcessLookupError:
                     pass
 
-    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux subreaper contract")
+    @unittest.skipUnless(os.name == "posix", "daemon containment requires POSIX")
     def test_timeout_reaps_double_forked_reparented_descendant(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             state = Path(raw_tmp) / "daemon-state"
@@ -1101,6 +1123,132 @@ while True:
                     os.killpg(daemon_pgid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
+    def _assert_normal_exit_reaps_double_forked_daemon(self, returncode: int) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            state = Path(raw_tmp) / "daemon-state"
+            parent_code = r"""
+import os, signal, sys, time
+state = sys.argv[1]
+exit_code = int(sys.argv[2])
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    daemon_pid = os.fork()
+    if daemon_pid > 0:
+        os._exit(0)
+    with open(state, 'w') as stream:
+        stream.write(f'{os.getpid()} {os.getpgrp()}')
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    os.close(0)
+    os.close(1)
+    os.close(2)
+    while True:
+        time.sleep(1)
+os.waitpid(pid, 0)
+while not os.path.exists(state):
+    time.sleep(0.01)
+raise SystemExit(exit_code)
+"""
+            result = run_command(
+                (
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    parent_code,
+                    str(state),
+                    str(returncode),
+                ),
+                Path.cwd(),
+                timeout_seconds=5,
+            )
+            daemon_pid, daemon_pgid = map(int, state.read_text().split())
+            try:
+                self.assertEqual(result.returncode, returncode, result.stdout)
+                for _ in range(50):
+                    try:
+                        os.kill(daemon_pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.02)
+                else:
+                    self.fail(
+                        f"double-forked daemon {daemon_pid} survived normal exit "
+                        f"{returncode}"
+                    )
+            finally:
+                try:
+                    os.killpg(daemon_pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    @unittest.skipUnless(os.name == "posix", "daemon containment requires POSIX")
+    def test_zero_exit_reaps_double_forked_reparented_descendant(self) -> None:
+        self._assert_normal_exit_reaps_double_forked_daemon(0)
+
+    @unittest.skipUnless(os.name == "posix", "daemon containment requires POSIX")
+    def test_nonzero_exit_reaps_double_forked_reparented_descendant(self) -> None:
+        self._assert_normal_exit_reaps_double_forked_daemon(7)
+
+    @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
+    def test_enumeration_failure_kills_root_group_and_fails_cleanup_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            state = Path(raw_tmp) / "root-pid"
+            code = (
+                "import os,pathlib,sys,time; "
+                "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); "
+                "time.sleep(30)"
+            )
+            real_process_table = required_integrations._process_table
+            calls = 0
+
+            def fail_after_baseline(
+                run_token: str | None = None,
+            ) -> list[tuple[int, int, int, int, bool]]:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    return real_process_table(run_token)
+                raise RuntimeError("forced process-table failure")
+
+            result = None
+            raised = None
+            root_pid = None
+            alive_after_run = False
+            try:
+                with mock.patch.object(
+                    required_integrations, "_process_table", fail_after_baseline
+                ):
+                    try:
+                        result = run_command(
+                            (sys.executable, "-u", "-c", code, str(state)),
+                            Path.cwd(),
+                            timeout_seconds=1,
+                        )
+                    except RuntimeError as error:
+                        raised = error
+                deadline = time.monotonic() + 2
+                while not state.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                root_pid = int(state.read_text())
+                try:
+                    os.kill(root_pid, 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    alive_after_run = True
+            finally:
+                if root_pid is not None:
+                    try:
+                        os.killpg(root_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+            self.assertIsNone(raised, raised)
+            self.assertIsNotNone(result)
+            self.assertEqual(result.returncode, 125, result.stdout)
+            self.assertIn("CLEANUP FAILED", result.stdout)
+            self.assertFalse(alive_after_run, "known root process group survived")
 
 
 if __name__ == "__main__":

@@ -28,15 +28,15 @@ jobs:
     # Fetching and simulating three hundred layouts is not a five-minute job.
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # The corpus is pinned by commit in corpus.toml, so this cache key only
       # changes when the manifest does. A board changing upstream cannot
       # silently change our results.
       - name: Cache the board corpus
         id: corpus-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: board-corpus
           key: corpus-${{ hashFiles('corpus.toml') }}
@@ -96,7 +96,7 @@ jobs:
       # both a non-zero command and the old false-green shape (exit 0 plus SKIP),
       # and requires the exact named test plus a one-test green summary.
       - name: Cache required simulator archives
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/hauksbee/simulator-archives
           key: required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/required-simulator-versions.env', 'scripts/renode-checksums.txt', 'scripts/espressif-qemu-checksums.txt') }}
@@ -158,7 +158,7 @@ jobs:
 
       - name: Keep the log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: corpus-gate-log
           path: corpus-gate.log

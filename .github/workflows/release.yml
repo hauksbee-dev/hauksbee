@@ -109,12 +109,12 @@ jobs:
       # Checkout into a subdirectory; the build steps cd into it explicitly. The
       # forge-* crates are vendored inside this repo, so no sibling is needed.
       - name: Checkout hauksbee
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: hauksbee
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-03
 
       # bundle.sh builds frontend/dist and embeds it into the binary (embed-web)
       # so `hauksbee serve` works from a bare install. That needs a JS toolchain;
@@ -122,10 +122,10 @@ jobs:
       # Without this step bundle.sh would find no bun/npm, skip the frontend
       # build, and (absent a committed dist/) ship a binary with no web UI.
       - name: Install bun (for the embedded web UI)
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -462,7 +462,7 @@ jobs:
           done
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: hauksbee-${{ matrix.label }}
           path: |
@@ -494,13 +494,13 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout exact release commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.sha }}
           path: hauksbee
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-03
 
       - name: Install macOS simulator runtime dependencies
         if: runner.os == 'macOS'
@@ -513,7 +513,7 @@ jobs:
         run: brew install mono
 
       - name: Cache checksum-verified simulator archives
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/hauksbee/simulator-archives
           key: release-required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hauksbee/scripts/install-sims.sh', 'hauksbee/scripts/required-simulator-versions.env', 'hauksbee/scripts/renode-checksums.txt', 'hauksbee/scripts/espressif-qemu-checksums.txt') }}
@@ -529,7 +529,7 @@ jobs:
             --evidence-out "required-integrations-${{ matrix.label }}.json"
 
       - name: Upload required integration evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: required-integration-evidence-${{ matrix.label }}
           path: hauksbee/required-integrations-${{ matrix.label }}.json
@@ -544,7 +544,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout (for the slug preflight)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: hauksbee
 
@@ -572,7 +572,7 @@ jobs:
           fi
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
 
@@ -608,7 +608,7 @@ jobs:
           done
 
       - name: Create / update GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             dist/*.tar.gz
