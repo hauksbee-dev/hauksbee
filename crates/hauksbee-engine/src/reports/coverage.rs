@@ -9,8 +9,8 @@
 //! `reports::cosim::heuristic_framing_warnings`) but no single place said WHICH
 //! classes exist. Every surface re-listed them by hand, and the interactive
 //! surfaces fell behind: `docs/cosim/MCU.md` measured the interactive TUI
-//! carrying 1 of the 10 classes and the web front door 5 of 10, while
-//! `hauksbee run` and hauksbee-ci carried 8 to 10 of them. A user watching a
+//! carrying only a subset of the typed classes while batch surfaces carried
+//! more of them. A user watching a
 //! live co-sim saw a quiet pane over a run whose ADC channel was dropped.
 //!
 //! [`CoverageInputs::from_scheduler`] is the single extraction point from the
@@ -30,7 +30,19 @@ use crate::scheduler::{
     UnexercisedBus,
 };
 
-/// One class of co-sim coverage caveat. Ten of them, which is the count
+/// Semantic tier of a co-sim disclosure. These are deliberately not collapsed
+/// into one warning count: a strict-invalid timing refusal is stronger than a
+/// bounded limitation, while a measured timing floor and a fallback-method
+/// qualification are evidence about resolution rather than missing coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverageDisposition {
+    Limitation,
+    TimingBound,
+    StrictRefusal,
+    FallbackQualification,
+}
+
+/// One class of co-sim coverage disclosure. Twelve of them, which is the count
 /// `docs/cosim/MCU.md`'s per-surface matrix rows are counted from;
 /// [`CoverageClass::ALL`] is the list and `class_count_matches_the_matrix`
 /// counts it rather than asserting it.
@@ -53,6 +65,12 @@ pub enum CoverageClass {
     /// live core at the chunk actually run. The one class that is a resolution
     /// STATEMENT rather than a hole (see [`CoverageClass::is_hole`]).
     TimingCoverage,
+    /// A runtime edge stream exceeded the replay implementation budget. The
+    /// analog path retained only the final DC level, so strict evidence is invalid.
+    TimingRefusal,
+    /// A converged span produced by a second-class integration rung after the
+    /// primary method failed, with its method and measured estimate attached.
+    FallbackIntegration,
     /// A GPIO pulse that rose and fell inside one solver chunk, invisible to
     /// tick-evaluated sequential parts.
     ShortPulse,
@@ -66,13 +84,15 @@ pub enum CoverageClass {
 
 impl CoverageClass {
     /// Every class, in the order the caveat list emits them.
-    pub const ALL: [CoverageClass; 10] = [
+    pub const ALL: [CoverageClass; 12] = [
         CoverageClass::AdcDropped,
         CoverageClass::UnexercisedBus,
         CoverageClass::WatchdogLimitation,
         CoverageClass::WatchdogReboot,
         CoverageClass::TimingLimitation,
         CoverageClass::TimingCoverage,
+        CoverageClass::TimingRefusal,
+        CoverageClass::FallbackIntegration,
         CoverageClass::ShortPulse,
         CoverageClass::DriverContention,
         CoverageClass::DriveConflict,
@@ -89,6 +109,8 @@ impl CoverageClass {
             CoverageClass::WatchdogReboot => "watchdog reboot",
             CoverageClass::TimingLimitation => "timing bias",
             CoverageClass::TimingCoverage => "timing resolution",
+            CoverageClass::TimingRefusal => "timing replay invalid",
+            CoverageClass::FallbackIntegration => "fallback-qualified span",
             CoverageClass::ShortPulse => "pulse too short to see",
             CoverageClass::DriverContention => "driver contention",
             CoverageClass::DriveConflict => "drive overridden",
@@ -102,7 +124,16 @@ impl CoverageClass {
     /// permanent red number on a healthy run, which is how a caveat stops being
     /// read at all.
     pub fn is_hole(self) -> bool {
-        !matches!(self, CoverageClass::TimingCoverage)
+        matches!(self.disposition(), CoverageDisposition::Limitation)
+    }
+
+    pub fn disposition(self) -> CoverageDisposition {
+        match self {
+            CoverageClass::TimingCoverage => CoverageDisposition::TimingBound,
+            CoverageClass::TimingRefusal => CoverageDisposition::StrictRefusal,
+            CoverageClass::FallbackIntegration => CoverageDisposition::FallbackQualification,
+            _ => CoverageDisposition::Limitation,
+        }
     }
 }
 
@@ -140,6 +171,8 @@ pub struct CoverageInputs {
     pub watchdog_resets: Vec<(String, u64)>,
     pub timing_limitations: Vec<(String, String)>,
     pub timing_coverage: Vec<TimingCoverage>,
+    pub timing_refusals: Vec<String>,
+    pub fallback_windows: Vec<crate::result::CosimFallbackWindow>,
     pub short_pulses: Vec<ShortPulse>,
     pub driver_contentions: Vec<DriverContention>,
     pub drive_conflicts: Vec<String>,
@@ -158,6 +191,18 @@ impl CoverageInputs {
             watchdog_resets: sched.watchdog_resets(),
             timing_limitations: sched.timing_limitations(),
             timing_coverage: sched.timing_coverage(),
+            timing_refusals: sched.timing_refusals().to_vec(),
+            fallback_windows: sched
+                .fallback_windows()
+                .iter()
+                .map(|window| crate::result::CosimFallbackWindow {
+                    start_s: window.start_s,
+                    end_s: window.end_s,
+                    method: window.method.as_str().to_string(),
+                    fidelity_note: window.method.fidelity_note().to_string(),
+                    error_estimate_v: window.error_estimate_v,
+                })
+                .collect(),
             short_pulses: sched.short_pulses().to_vec(),
             driver_contentions: sched.driver_contentions().to_vec(),
             drive_conflicts: sched.drive_conflicts(),
@@ -255,6 +300,34 @@ impl CoverageInputs {
                     .to_string(),
             });
         }
+        for refusal in &self.timing_refusals {
+            out.push(CoverageCaveat {
+                class: CoverageClass::TimingRefusal,
+                subject: String::new(),
+                headline: "timing replay was refused; strict evidence is invalid".to_string(),
+                message: format!("TIMING INVALID: {refusal}"),
+                fix: "Reduce the transitions per solver chunk (for example with a narrower \
+                      --chunk-us), then rerun the same firmware so the analog path can replay \
+                      every edge instead of retaining only the final DC level."
+                    .to_string(),
+            });
+        }
+        for window in &self.fallback_windows {
+            out.push(CoverageCaveat {
+                class: CoverageClass::FallbackIntegration,
+                subject: format!("{:.6}-{:.6}s", window.start_s, window.end_s),
+                headline: format!(
+                    "{:.3}-{:.3} ms used fallback integration",
+                    window.start_s * 1e3,
+                    window.end_s * 1e3
+                ),
+                message: fallback_qualification_message(window),
+                fix: "Treat this span as numerically second-class. Narrow the chunk or fix the \
+                      primary solve failure, then rerun if the fallback's damping or measured \
+                      chunk-end error matters to the conclusion."
+                    .to_string(),
+            });
+        }
         for p in &self.short_pulses {
             out.push(CoverageCaveat {
                 class: CoverageClass::ShortPulse,
@@ -326,6 +399,24 @@ pub fn hole_count(caveats: &[CoverageCaveat]) -> usize {
     caveats.iter().filter(|c| c.is_hole()).count()
 }
 
+pub fn disposition_count(caveats: &[CoverageCaveat], disposition: CoverageDisposition) -> usize {
+    caveats
+        .iter()
+        .filter(|caveat| caveat.class.disposition() == disposition)
+        .count()
+}
+
+pub fn fallback_qualification_message(window: &crate::result::CosimFallbackWindow) -> String {
+    let estimate = window
+        .error_estimate_v
+        .map(|value| format!("measured chunk-end error estimate {value:.3e} V"))
+        .unwrap_or_else(|| "no measured error estimate (no companion re-solve converged)".into());
+    format!(
+        "[{:.6}s .. {:.6}s) via {}; {}; {}",
+        window.start_s, window.end_s, window.method, estimate, window.fidelity_note
+    )
+}
+
 /// The distinct classes present in `caveats`, in [`CoverageClass::ALL`] order,
 /// so a cramped surface can list "which kinds" without repeating a class once
 /// per offending net.
@@ -369,7 +460,7 @@ mod tests {
     /// being recounted, this fails.
     #[test]
     fn class_count_matches_the_matrix() {
-        assert_eq!(CoverageClass::ALL.len(), 10);
+        assert_eq!(CoverageClass::ALL.len(), 12);
         assert_eq!(
             CoverageClass::ALL
                 .into_iter()
@@ -377,6 +468,18 @@ mod tests {
                 .count(),
             9,
             "nine classes are holes; timing resolution is a statement"
+        );
+        assert_eq!(
+            CoverageClass::TimingCoverage.disposition(),
+            CoverageDisposition::TimingBound
+        );
+        assert_eq!(
+            CoverageClass::TimingRefusal.disposition(),
+            CoverageDisposition::StrictRefusal
+        );
+        assert_eq!(
+            CoverageClass::FallbackIntegration.disposition(),
+            CoverageDisposition::FallbackQualification
         );
     }
 
@@ -396,6 +499,16 @@ mod tests {
             watchdog_resets: vec![("U1".to_string(), 3)],
             timing_limitations: vec![("U1".to_string(), "virtual time runs slow".to_string())],
             timing_coverage: vec![timing_row("U1", false)],
+            timing_refusals: vec![
+                "PWL replay refused on net /CLK: transition budget exceeded".to_string()
+            ],
+            fallback_windows: vec![crate::result::CosimFallbackWindow {
+                start_s: 0.001,
+                end_s: 0.002,
+                method: "backward-euler".to_string(),
+                fidelity_note: "first-order and numerically dissipative".to_string(),
+                error_estimate_v: Some(0.012),
+            }],
             short_pulses: vec![ShortPulse {
                 net: "/STROBE".to_string(),
                 mcu_ref: "U1".to_string(),
@@ -423,7 +536,7 @@ mod tests {
                 "class {class:?} is never emitted"
             );
         }
-        assert_eq!(caveats.len(), 10, "one caveat per class in this fixture");
+        assert_eq!(caveats.len(), 12, "one caveat per class in this fixture");
         assert_eq!(hole_count(&caveats), 9);
         assert_eq!(classes_present(&caveats), CoverageClass::ALL.to_vec());
         // Every caveat names the input that would unlock it.
@@ -469,7 +582,10 @@ mod tests {
             by(CoverageClass::WatchdogReboot),
             watchdog_reset_message("U2", 1)
         );
-        assert_eq!(by(CoverageClass::TimingCoverage), timing_coverage_line(&row));
+        assert_eq!(
+            by(CoverageClass::TimingCoverage),
+            timing_coverage_line(&row)
+        );
     }
 
     /// The timing-resolution statement tracks the backend it came from: a poll

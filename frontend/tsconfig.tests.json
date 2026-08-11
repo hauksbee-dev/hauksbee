@@ -10,10 +10,11 @@
     "target": "ES2023",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",
-    "types": ["bun-types"],
+    "types": ["bun-types", "vite/client"],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
     "isolatedModules": true,
     "moduleDetection": "force",
     "noEmit": true,
@@ -23,5 +24,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["tests", "mock-server.ts"]
+  "include": ["tests", "mock-server.ts", "src/vite-env.d.ts"]
 }

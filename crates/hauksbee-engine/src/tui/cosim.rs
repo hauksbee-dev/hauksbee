@@ -68,8 +68,8 @@ pub struct CosimUpdate {
     /// surfaces' wording comes from. The pane renders the WHOLE list (a count
     /// banner plus the `c` overlay), so a class added to that enumeration
     /// appears here without a second edit; the previous per-caveat fields were
-    /// how the pane came to carry one of the ten while `hauksbee run` carried
-    /// nine.
+    /// how the pane came to carry only a subset while batch reports carried
+    /// more.
     ///
     /// Recomputed at every chunk boundary, so a caveat that only becomes true
     /// mid-run (a watchdog reboot, a contended net) appears as it happens.
@@ -692,6 +692,54 @@ mod tests {
         assert!(
             build(Vec::new()).coverage.is_empty(),
             "a run with nothing to disclose carries an empty list"
+        );
+    }
+
+    #[cfg(feature = "avr")]
+    #[test]
+    fn real_worker_rerun_replaces_watchdog_coverage_with_the_control_run() {
+        use crate::reports::coverage::CoverageClass;
+        use std::time::Duration;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let board_path = root.join("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb");
+        let board = std::fs::read_to_string(&board_path)
+            .unwrap_or_else(|error| panic!("tracked board fixture {board_path:?}: {error}"));
+        let run = |name: &str| {
+            let firmware = root.join(format!("testdata/firmware/avr_watchdog/{name}.elf"));
+            assert!(firmware.exists(), "tracked required fixture {firmware:?}");
+            let handle = spawn(
+                board.clone(),
+                Some(firmware),
+                "blinky.kicad_pcb".into(),
+                0.05,
+                1.0,
+            );
+            loop {
+                let update = handle
+                    .rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap_or_else(|error| panic!("worker {name} did not finish: {error}"));
+                assert!(update.error.is_none(), "worker {name}: {:?}", update.error);
+                if update.done {
+                    break update.coverage;
+                }
+            }
+        };
+
+        let watchdog = run("wdt");
+        assert!(
+            watchdog
+                .iter()
+                .any(|caveat| caveat.class == CoverageClass::WatchdogReboot),
+            "the real worker must carry the scheduler's reboot disclosure: {watchdog:?}"
+        );
+        let control = run("nowdt");
+        assert!(
+            control
+                .iter()
+                .all(|caveat| caveat.class != CoverageClass::WatchdogReboot),
+            "a rerun must carry only its own coverage, never the prior worker's: {control:?}"
         );
     }
 }

@@ -710,7 +710,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
 /// which kinds, and the key that shows the sentences.
 ///
 /// Two lines at most, whatever the caveat count, because the pane is a quarter
-/// of the terminal wide and ten full sentences there would push the GPIO table
+/// of the terminal wide and twelve full sentences there would push the GPIO table
 /// and the UART tail out of the frame. The count is the thing that must be
 /// impossible to miss; the wording lives one keypress away in
 /// [`draw_coverage_overlay`]. Holes and resolution statements are counted apart
@@ -722,14 +722,25 @@ fn coverage_banner(state: &AppState) -> Vec<Line<'static>> {
         return Vec::new();
     }
     let holes = state.coverage_hole_count();
-    let notes = state.coverage_note_count();
-    let mut head = match (holes, notes) {
-        (0, n) => format!("COVERAGE: {n} note(s)"),
-        (h, 0) => format!("COVERAGE: {h} hole(s)"),
-        (h, n) => format!("COVERAGE: {h} hole(s) + {n} note(s)"),
-    };
+    let notes = state.coverage_bound_count();
+    let refusals = state.coverage_refusal_count();
+    let fallbacks = state.coverage_fallback_count();
+    let mut tiers = Vec::new();
+    if holes > 0 {
+        tiers.push(format!("{holes} hole(s)"));
+    }
+    if notes > 0 {
+        tiers.push(format!("{notes} bound(s)"));
+    }
+    if refusals > 0 {
+        tiers.push(format!("{refusals} invalid refusal(s)"));
+    }
+    if fallbacks > 0 {
+        tiers.push(format!("{fallbacks} fallback qualification(s)"));
+    }
+    let mut head = format!("COVERAGE: {}", tiers.join(" + "));
     head.push_str("  press [c]");
-    let style = if holes > 0 {
+    let style = if holes > 0 || refusals > 0 {
         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
@@ -762,6 +773,7 @@ fn draw_coverage_overlay(f: &mut Frame, state: &AppState) {
         return;
     }
     let holes = state.coverage_hole_count();
+    let refusals = state.coverage_refusal_count();
     let area = centered_rect(OVERLAY_PCT_X, OVERLAY_PCT_Y, f.area());
     f.render_widget(Clear, area);
     let block = Block::default()
@@ -772,7 +784,7 @@ fn draw_coverage_overlay(f: &mut Frame, state: &AppState) {
         ))
         .borders(Borders::ALL)
         .border_style(
-            if holes > 0 {
+            if holes > 0 || refusals > 0 {
                 Style::default().fg(Color::Red)
             } else {
                 Style::default().fg(Color::Yellow)
@@ -787,14 +799,14 @@ fn draw_coverage_overlay(f: &mut Frame, state: &AppState) {
     )));
     lines.push(Line::from(""));
     for c in caveats.iter().skip(state.coverage_scroll) {
-        let tag = if c.is_hole() { "HOLE" } else { "NOTE" };
-        let tag_style = if c.is_hole() {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+        use crate::reports::coverage::CoverageDisposition;
+        let (tag, color) = match c.class.disposition() {
+            CoverageDisposition::Limitation => ("HOLE", Color::Red),
+            CoverageDisposition::TimingBound => ("BOUND", Color::Yellow),
+            CoverageDisposition::StrictRefusal => ("INVALID", Color::Red),
+            CoverageDisposition::FallbackQualification => ("QUALIFIED", Color::Yellow),
         };
+        let tag_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
         lines.push(Line::from(vec![
             Span::styled(format!("[{tag}] "), tag_style),
             Span::styled(
@@ -1032,7 +1044,7 @@ fn draw_footer(f: &mut Frame, area: Rect, state: &AppState, running: bool) {
     // scrolled the co-sim pane still learns the run has holes.
     let coverage_hint = match state.coverage().len() {
         0 => String::new(),
-        _ => format!("  c coverage ({})", state.coverage_hole_count()),
+        _ => format!("  c coverage ({})", state.coverage().len()),
     };
 
     let line = Line::from(vec![
@@ -1417,7 +1429,7 @@ mod tests {
     }
 
     // ── Co-sim coverage parity ───────────────────────────────────────────────
-    // `docs/cosim/MCU.md` measured this pane carrying 1 of the 10 co-sim
+    // `docs/cosim/MCU.md` measured this pane carrying only a subset of the co-sim
     // coverage caveat classes while `hauksbee run` carried 9 of them, so a user
     // watching a live co-sim saw a quiet pane over a run whose ADC channel was
     // dropped or whose bus was never exercised. These tests drive the REAL
@@ -1445,14 +1457,19 @@ mod tests {
     /// and collapsing reconstructs the word sequence without asserting on where
     /// the wrap happened to land.
     fn flat(rows: &[String]) -> String {
-        rows.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+        rows.join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// One scheduler signal per class, so each class can be driven alone and its
     /// silence control is every other class staying empty.
     fn inputs_for(class: crate::reports::coverage::CoverageClass) -> CoverageInputs {
         use crate::reports::coverage::CoverageClass as C;
-        use crate::scheduler::{AdcDrop, DriverContention, ShortPulse, TimingCoverage, UnexercisedBus};
+        use crate::scheduler::{
+            AdcDrop, DriverContention, ShortPulse, TimingCoverage, UnexercisedBus,
+        };
         let mut i = CoverageInputs::default();
         match class {
             C::AdcDropped => {
@@ -1486,6 +1503,19 @@ mod tests {
                     timestamp_precision_s: 1e-3,
                     minimum_guaranteed_pulse_s: 2e-3,
                     chunk_s: 1e-3,
+                }]
+            }
+            C::TimingRefusal => {
+                i.timing_refusals =
+                    vec!["PWL replay refused on net /CLK: transition budget exceeded".into()]
+            }
+            C::FallbackIntegration => {
+                i.fallback_windows = vec![crate::result::CosimFallbackWindow {
+                    start_s: 0.001,
+                    end_s: 0.002,
+                    method: "backward-euler".into(),
+                    fidelity_note: "first-order and numerically dissipative".into(),
+                    error_estimate_v: Some(0.012),
                 }]
             }
             C::ShortPulse => {
@@ -1530,6 +1560,8 @@ mod tests {
             C::WatchdogReboot => "the watchdog rebooted the core 12 times",
             C::TimingLimitation => "virtual time runs slow here",
             C::TimingCoverage => "poll-boundary stamps",
+            C::TimingRefusal => "TIMING INVALID",
+            C::FallbackIntegration => "via backward-euler",
             C::ShortPulse => "is NEVER observed",
             C::DriverContention => "driver contention on net '/LED'",
             C::DriveConflict => "is overridden to 20.000 V after each solve",
@@ -1591,6 +1623,18 @@ mod tests {
             st.toggle_coverage();
             assert!(st.coverage_open, "{class:?}: `c` did not open the overlay");
             let open = flat(&render_rows_with(&st, Some(&live_update()), 240, 40));
+            let tier = match class.disposition() {
+                crate::reports::coverage::CoverageDisposition::Limitation => "[HOLE]",
+                crate::reports::coverage::CoverageDisposition::TimingBound => "[BOUND]",
+                crate::reports::coverage::CoverageDisposition::StrictRefusal => "[INVALID]",
+                crate::reports::coverage::CoverageDisposition::FallbackQualification => {
+                    "[QUALIFIED]"
+                }
+            };
+            assert!(
+                open.contains(tier),
+                "{class:?}: disclosure rendered at the wrong tier ({tier}):\n{open}"
+            );
             assert!(
                 open.contains(sentence_fragment(class)),
                 "{class:?}: the overlay does not carry the sentence \
@@ -1619,18 +1663,18 @@ mod tests {
     #[test]
     fn holes_and_resolution_statements_are_counted_apart() {
         use crate::reports::coverage::CoverageClass;
-        // Nine of the ten classes name something the run could not do; per-core
-        // timing coverage states the resolution the run delivered. A pane that
-        // counted the statement as a hole would put a permanent number on a
-        // healthy run.
+        // Limitations name something the run could not do; per-core timing
+        // coverage states the resolution delivered. Strict refusal and
+        // fallback qualification retain their own tiers instead of inflating
+        // either number.
         let mut st = scope_sample_state();
         st.dismiss_banner();
         st.set_coverage(inputs_for(CoverageClass::TimingCoverage).caveats());
         assert_eq!(st.coverage_hole_count(), 0);
-        assert_eq!(st.coverage_note_count(), 1);
+        assert_eq!(st.coverage_bound_count(), 1);
         let notes_only = flat(&render_rows_with(&st, Some(&live_update()), 240, 40));
         assert!(
-            notes_only.contains("COVERAGE: 1 note(s)"),
+            notes_only.contains("COVERAGE: 1 bound(s)"),
             "a resolution statement is a note, not a hole:\n{notes_only}"
         );
 
@@ -1642,7 +1686,7 @@ mod tests {
         assert_eq!(both.coverage_hole_count(), 1);
         let mixed = flat(&render_rows_with(&both, Some(&live_update()), 240, 40));
         assert!(
-            mixed.contains("COVERAGE: 1 hole(s) + 1 note(s)"),
+            mixed.contains("COVERAGE: 1 hole(s) + 1 bound(s)"),
             "the banner counts each kind:\n{mixed}"
         );
     }

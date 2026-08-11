@@ -230,6 +230,9 @@ degradation so a run that silently lost fidelity never reads as healthy:
   their real slice, never an inferred silicon limit.
 - `timing_refusals[]`, any runtime edge/PWL limit reached; under `--strict` a
   non-empty list exits INVALID rather than trusting a collapsed waveform.
+- `fallback_windows[]`, spans converged only through a second-class integration
+  rung. Each retains `{start_s, end_s, method, fidelity_note,
+  error_estimate_v?}`; absence of the measured estimate is not zero error.
 - `substituted`: the firmware ran on a substitute core (also in `notes`).
 - `adc_dropped[]`, ADC channels whose modelled voltage the platform could not
   inject (the firmware read nothing on that pin).
@@ -269,7 +272,7 @@ degradation so a run that silently lost fidelity never reads as healthy:
   than they look, and this array is where the run says so.
 
 Every array above (`activity_summary[]`, `timing_coverage[]`,
-`timing_refusals[]`, `failed_windows[]`, `spi_framing[]`,
+`timing_refusals[]`, `failed_windows[]`, `fallback_windows[]`, `spi_framing[]`,
 `adc_dropped[]`, `unexercised_buses[]`, `short_pulses[]`,
 `driver_contention[]`, `watchdog_limitations[]`, `watchdog_resets[]`,
 `timing_limitations[]`) is omitted when empty; the scalars are always present.

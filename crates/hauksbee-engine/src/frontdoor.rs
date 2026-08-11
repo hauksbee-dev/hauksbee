@@ -299,6 +299,15 @@ pub struct WebCosimSection {
     /// JSON shape is unchanged for existing consumers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timing_coverage: Vec<crate::scheduler::TimingCoverage>,
+    /// Strict timing replays that were refused because the edge stream could
+    /// not be represented faithfully. A non-empty list invalidates strict
+    /// co-sim conclusions; it is not an ordinary limitation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timing_refusals: Vec<String>,
+    /// Windows solved only by a second-class fallback integrator. Each window
+    /// retains its method, fidelity qualification and measured error estimate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_windows: Vec<crate::result::CosimFallbackWindow>,
     /// Per-gate power-up state panel (what the firmware does to each
     /// transistor-gate control net at boot). Mirrors the CLI `--json`
     /// `boot_gates` / `--plain` gate panel so the web surface cannot give false
@@ -1090,6 +1099,18 @@ fn refusal_for_cosim(cosim: &WebCosimSection) -> Option<Refusal> {
         ));
     }
 
+    if let Some(diagnosis) = cosim.timing_refusals.first() {
+        return Some(Refusal::new(
+            "timing-sensitive firmware and electrical conclusions",
+            diagnosis.clone(),
+            vec![
+                "Static board analysis and its reported findings remain valid.",
+                "Non-timing-sensitive observations outside the refused replay remain available.",
+            ],
+            "reduce transitions per solver chunk (for example with a narrower --chunk-us), then rerun the same firmware",
+        ));
+    }
+
     None
 }
 
@@ -1151,7 +1172,12 @@ fn cosim_caveat_headline(cosim: &WebCosimSection, current_headline: &str) -> Opt
     // verdict without touching the serious/total badge.
     let has_note = cosim.findings.iter().any(|f| f.level == "note");
     let caveat = cosim.ran
-        && (!cosim.firmware_exercised || cosim.substituted || !cosim.analog_valid || has_note);
+        && (!cosim.firmware_exercised
+            || cosim.substituted
+            || !cosim.analog_valid
+            || !cosim.timing_refusals.is_empty()
+            || !cosim.fallback_windows.is_empty()
+            || has_note);
     if caveat && current_headline == overall_headline(0, 0, false, false) {
         Some(overall_headline(0, 0, true, false))
     } else {
@@ -1183,6 +1209,8 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
         // No co-sim ran, so no core was live and there is no measured timing
         // resolution to report. An empty row set, never a fabricated one.
         timing_coverage: Vec::new(),
+        timing_refusals: Vec::new(),
+        fallback_windows: Vec::new(),
         boot_gates: Vec::new(),
         // ran == false: the headline demotion is gated on `ran`, so these remain
         // neutral defaults inside the co-sim section. The containing WebReport's
@@ -1614,6 +1642,7 @@ fn run_web_cosim(
                     | CoverageClass::WatchdogLimitation
                     | CoverageClass::WatchdogReboot
                     | CoverageClass::TimingLimitation
+                    | CoverageClass::TimingRefusal
             )
         }) {
             findings.insert(
@@ -1761,6 +1790,18 @@ fn run_web_cosim(
     // field reads (see the field's doc comment for why it is a field and not a
     // finding).
     let timing_coverage = sched.timing_coverage();
+    let timing_refusals = sched.timing_refusals().to_vec();
+    let fallback_windows = sched
+        .fallback_windows()
+        .iter()
+        .map(|window| crate::result::CosimFallbackWindow {
+            start_s: window.start_s,
+            end_s: window.end_s,
+            method: window.method.as_str().to_string(),
+            fidelity_note: window.method.fidelity_note().to_string(),
+            error_estimate_v: window.error_estimate_v,
+        })
+        .collect();
 
     let error_budget = match sched.error_budget() {
         Ok(budget) => Some(budget),
@@ -1798,6 +1839,8 @@ fn run_web_cosim(
             failed_windows,
             spi_framing,
             timing_coverage,
+            timing_refusals,
+            fallback_windows,
             boot_gates,
             firmware_exercised: firmware_ran,
             substituted,
@@ -2758,6 +2801,8 @@ fn main {
             failed_windows: Vec::new(),
             spi_framing: Vec::new(),
             timing_coverage: Vec::new(),
+            timing_refusals: Vec::new(),
+            fallback_windows: Vec::new(),
             boot_gates: Vec::new(),
             firmware_exercised: true,
             substituted: false,
@@ -2816,6 +2861,42 @@ fn main {
             cosim_caveat_headline(&caveated, &demoted),
             None,
             "an already-heads-up headline is not rewritten"
+        );
+    }
+
+    #[test]
+    fn timing_refusal_is_structured_and_refuses_while_fallback_is_qualified() {
+        let window = crate::result::CosimFallbackWindow {
+            start_s: 0.001,
+            end_s: 0.002,
+            method: "backward-euler".to_string(),
+            fidelity_note: "first-order and numerically dissipative".to_string(),
+            error_estimate_v: Some(0.012),
+        };
+        let mut fallback_only = clean_ran_section();
+        fallback_only.fallback_windows = vec![window.clone()];
+        assert!(
+            refusal_for_cosim(&fallback_only).is_none(),
+            "a converged second-class span is qualified, not refused"
+        );
+        assert!(
+            cosim_caveat_headline(&fallback_only, &overall_headline(0, 0, false, false)).is_some(),
+            "second-class evidence cannot leave a bare healthy headline"
+        );
+
+        let mut section = fallback_only;
+        section.timing_refusals =
+            vec!["PWL replay refused on net /CLK: transition budget exceeded".to_string()];
+
+        let json = serde_json::to_value(&section).unwrap();
+        assert_eq!(json["timing_refusals"][0], section.timing_refusals[0]);
+        assert_eq!(json["fallback_windows"][0]["method"], "backward-euler");
+        assert_eq!(json["fallback_windows"][0]["error_estimate_v"], 0.012);
+
+        let refusal = refusal_for_cosim(&section).expect("timing collapse is invalid");
+        assert!(
+            refusal.missing_prerequisite.contains("PWL replay refused"),
+            "{refusal:?}"
         );
     }
 
@@ -2974,6 +3055,8 @@ fn main {
             }],
             spi_framing: Vec::new(),
             timing_coverage: Vec::new(),
+            timing_refusals: Vec::new(),
+            fallback_windows: Vec::new(),
             boot_gates: Vec::new(),
             firmware_exercised: true,
             substituted: false,
@@ -3019,6 +3102,8 @@ fn main {
             failed_windows: Vec::new(),
             spi_framing: Vec::new(),
             timing_coverage: Vec::new(),
+            timing_refusals: Vec::new(),
+            fallback_windows: Vec::new(),
             boot_gates: vec![WebBootGate {
                 reference: "Q1".to_string(),
                 net: "GATE_CTRL".to_string(),

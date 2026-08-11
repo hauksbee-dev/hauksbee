@@ -1,9 +1,7 @@
 //! Co-sim coverage parity on the INTERACTIVE surfaces.
 //!
-//! `docs/cosim/MCU.md` measured the ten classes of per-run co-sim coverage
-//! caveat across the six run-report surfaces and found the interactive ones
-//! quiet: the TUI co-sim pane carried 1 of the 10 while `hauksbee run` carried
-//! 9 of them, and the web front door carried 4, with two of its silent classes
+//! `docs/cosim/MCU.md` measured the typed per-run co-sim disclosures across the
+//! run-report surfaces and found the interactive ones quiet. Two silent classes
 //! reachable on the AVR backend it actually runs (watchdog reboots, and per-core
 //! timing coverage). A user watching a live co-sim saw no caveat and concluded
 //! the board was fully modelled, while the same run under `--check --json` said
@@ -31,34 +29,32 @@ use std::path::PathBuf;
 use hauksbee_engine::frontdoor::{analyze_with_firmware, WebCosimSection, WebReport};
 
 fn repo(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
 /// An ATmega328P board, the same one the batch-surface watchdog test uses.
 fn avr_board() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-ci/examples/boards/blinky.kicad_pcb")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../hauksbee-ci/examples/boards/blinky.kicad_pcb")
 }
 
 /// Run the web front door over the AVR board and a firmware image.
-fn web_run(fw_rel: &str) -> Option<WebReport> {
+fn web_run(fw_rel: &str) -> WebReport {
     let fw = repo(fw_rel);
-    if !fw.exists() {
-        eprintln!("SKIP: {fw_rel} not built (run make in testdata/firmware/avr_watchdog)");
-        return None;
-    }
+    assert!(fw.exists(), "tracked required fixture is absent: {fw_rel}");
     let board = std::fs::read(avr_board()).expect("the AVR board fixture reads");
     let fw_bytes = std::fs::read(&fw).expect("the firmware fixture reads");
     let fw_name = fw.file_name().unwrap().to_str().unwrap().to_string();
-    Some(analyze_with_firmware(
-        "blinky.kicad_pcb",
-        &board,
-        &fw_name,
-        &fw_bytes,
-    ))
+    analyze_with_firmware("blinky.kicad_pcb", &board, &fw_name, &fw_bytes)
 }
 
 fn cosim(report: &WebReport) -> &WebCosimSection {
-    let cosim = report.cosim.as_ref().expect("a firmware run has a co-sim section");
+    let cosim = report
+        .cosim
+        .as_ref()
+        .expect("a firmware run has a co-sim section");
     assert!(
         cosim.ran,
         "the AVR co-sim must have run: {:?}",
@@ -80,9 +76,7 @@ fn note_prose(cosim: &WebCosimSection) -> String {
 
 #[test]
 fn a_watchdog_reboot_reaches_the_web_front_door_and_a_fed_watchdog_does_not() {
-    let Some(report) = web_run("testdata/firmware/avr_watchdog/wdt.elf") else {
-        return;
-    };
+    let report = web_run("testdata/firmware/avr_watchdog/wdt.elf");
     let section = cosim(&report);
     let prose = note_prose(section);
     // The shared formatter's sentence, not a web paraphrase of it.
@@ -115,9 +109,7 @@ fn a_watchdog_reboot_reaches_the_web_front_door_and_a_fed_watchdog_does_not() {
     );
 
     // The silence control: the same firmware with the arming line removed.
-    let Some(control) = web_run("testdata/firmware/avr_watchdog/nowdt.elf") else {
-        return;
-    };
+    let control = web_run("testdata/firmware/avr_watchdog/nowdt.elf");
     let control_prose = note_prose(cosim(&control));
     assert!(
         !control_prose.contains("watchdog rebooted"),
@@ -127,9 +119,7 @@ fn a_watchdog_reboot_reaches_the_web_front_door_and_a_fed_watchdog_does_not() {
 
 #[test]
 fn per_core_timing_coverage_reaches_the_web_front_door_and_a_run_with_no_core_carries_none() {
-    let Some(report) = web_run("testdata/firmware/avr_watchdog/nowdt.elf") else {
-        return;
-    };
+    let report = web_run("testdata/firmware/avr_watchdog/nowdt.elf");
     let section = cosim(&report);
     // One row per live MCU, from the same accessor the CLI `--json`
     // `cosim.timing_coverage` field reads.
