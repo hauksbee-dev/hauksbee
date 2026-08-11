@@ -75,6 +75,10 @@ pub struct BoardEvidence {
     model_by_ref: BTreeMap<String, ModelFact>,
     today: RunDate,
     assumptions: Vec<Assumption>,
+    /// Base ids proven to name more than one unequal claim. Once a base enters
+    /// this set, every member uses its content-derived id even across later
+    /// singleton merges.
+    colliding_assumption_bases: BTreeSet<AssumptionId>,
     maps: Vec<EvidenceMap>,
     board_artifact: Option<ArtifactId>,
     firmware_artifact: Option<ArtifactId>,
@@ -159,6 +163,30 @@ pub(crate) fn component_occurrence_subject(
     format!("{OCCURRENCE_PREFIX}{encoded}:{ordinal}")
 }
 
+pub(crate) fn component_occurrence_subjects_for_references<'a>(
+    references: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let references: Vec<_> = references.into_iter().collect();
+    let mut totals = BTreeMap::<String, usize>::new();
+    for reference in &references {
+        *totals.entry(reference.trim().to_string()).or_default() += 1;
+    }
+    let mut seen = BTreeMap::<String, usize>::new();
+    references
+        .into_iter()
+        .map(|reference| {
+            let reference = reference.trim();
+            let ordinal = seen.entry(reference.to_string()).or_default();
+            *ordinal += 1;
+            component_occurrence_subject(
+                reference,
+                totals.get(reference).copied().unwrap_or_default(),
+                *ordinal,
+            )
+        })
+        .collect()
+}
+
 fn provenance_display_reference(reference: &str) -> String {
     let reference = reference.trim();
     if reference.is_empty() {
@@ -176,62 +204,63 @@ fn component_occurrence_subjects(
     board: &ExtractedBoard,
     report: &BindReport,
 ) -> (Vec<String>, Vec<String>) {
-    fn counts<'a>(references: impl IntoIterator<Item = &'a str>) -> BTreeMap<String, usize> {
-        let mut out = BTreeMap::new();
-        for reference in references {
-            *out.entry(reference.trim().to_string()).or_default() += 1;
-        }
-        out
-    }
-
-    let board_counts = counts(
+    // Mint component identities from the board exactly once. The binder emits
+    // one non-rail row per board component, in board order, so carry those
+    // identities onto the corresponding rows instead of deriving them from the
+    // whole report. Synthetic rail rows are appended later and must never turn
+    // a unique real designator into an occurrence key.
+    let component_subjects = component_occurrence_subjects_for_references(
         board
             .components
             .iter()
             .map(|component| component.reference.as_str()),
     );
-    let row_counts = counts(report.rows.iter().map(|row| row.reference.as_str()));
-    let mut maximums = board_counts;
-    for (reference, count) in row_counts {
-        maximums
-            .entry(reference)
-            .and_modify(|known| *known = (*known).max(count))
-            .or_insert(count);
-    }
-
-    let assign = |references: Vec<&str>| {
-        let mut seen = BTreeMap::<String, usize>::new();
-        references
-            .into_iter()
-            .map(|reference| {
-                let reference = reference.trim();
-                let ordinal = seen.entry(reference.to_string()).or_default();
-                *ordinal += 1;
-                component_occurrence_subject(
-                    reference,
-                    maximums.get(reference).copied().unwrap_or_default(),
-                    *ordinal,
-                )
-            })
-            .collect()
-    };
-
-    (
-        assign(
-            board
+    let fallback_rows: Vec<_> = report
+        .rows
+        .iter()
+        .filter(|row| !matches!(&row.outcome, BindOutcome::PowerRail { .. }))
+        .map(|row| row.reference.as_str())
+        .collect();
+    let fallback_subjects = component_occurrence_subjects_for_references(fallback_rows);
+    let mut component_index = 0usize;
+    let mut fallback_index = 0usize;
+    let mut synthetic_index = 0usize;
+    let row_subjects = report
+        .rows
+        .iter()
+        .map(|row| {
+            if matches!(&row.outcome, BindOutcome::PowerRail { .. }) {
+                synthetic_index += 1;
+                let encoded = row
+                    .reference
+                    .trim()
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| format!("{byte:02X}"))
+                    .collect::<String>();
+                // Live component subjects can only carry uppercase hex after
+                // OCCURRENCE_PREFIX; this non-hex reserved branch therefore
+                // cannot collide even with an adversarial literal designator.
+                return format!("{OCCURRENCE_PREFIX}synthetic-rail:{encoded}:{synthetic_index}");
+            }
+            let fallback = fallback_subjects
+                .get(fallback_index)
+                .cloned()
+                .unwrap_or_else(|| row.reference.trim().to_string());
+            fallback_index += 1;
+            let subject = board
                 .components
-                .iter()
-                .map(|component| component.reference.as_str())
-                .collect(),
-        ),
-        assign(
-            report
-                .rows
-                .iter()
-                .map(|row| row.reference.as_str())
-                .collect(),
-        ),
-    )
+                .get(component_index)
+                .filter(|component| component.reference.trim() == row.reference.trim())
+                .and_then(|_| component_subjects.get(component_index))
+                .cloned()
+                .unwrap_or(fallback);
+            component_index += 1;
+            subject
+        })
+        .collect();
+
+    (component_subjects, row_subjects)
 }
 
 /// The open-part assumptions for one bind report: one per DISTINCT claim, not
@@ -607,6 +636,7 @@ impl BoardEvidence {
             model_by_ref,
             today,
             assumptions: registry.assumptions().to_vec(),
+            colliding_assumption_bases: BTreeSet::new(),
             maps,
             board_artifact: None,
             firmware_artifact: None,
@@ -711,7 +741,7 @@ impl BoardEvidence {
         mut self,
         new_assumptions: impl IntoIterator<Item = Assumption>,
     ) -> Result<Self, EvidenceError> {
-        let artifacts = self.registry.artifacts().to_vec();
+        let mut artifacts = self.registry.artifacts().to_vec();
         let mut assumptions = self.registry.assumptions().to_vec();
         // Equal claims are idempotent. Unequal claims sharing a producer's
         // concise base id are not: the CI runner legitimately emits one
@@ -730,25 +760,44 @@ impl BoardEvidence {
             *counts.entry(assumption.id().clone()).or_insert(0usize) += 1;
         }
         for assumption in incoming {
-            let mut assumption = if counts[assumption.id()] > 1 {
-                assumption.disambiguate_colliding_id()
-            } else {
-                assumption
-            };
-            if let Some(known) = assumptions
-                .iter()
-                .find(|known| known.id() == assumption.id())
-            {
-                if known == &assumption {
-                    continue;
+            let base = assumption.id().clone();
+            let disambiguated = assumption.clone().disambiguate_colliding_id();
+            if assumptions.contains(&assumption) || assumptions.contains(&disambiguated) {
+                continue;
+            }
+            let collision = counts[&base] > 1
+                || self.colliding_assumption_bases.contains(&base)
+                || assumptions
+                    .iter()
+                    .any(|known| known.id() == &base && known != &assumption);
+            let mut assumption = assumption;
+            if collision {
+                // If the first member arrived alone it may already own the bare
+                // id and completed maps/artifacts may cite it. Convert that
+                // member and every reference in one transaction before adding
+                // the newcomer. Both singleton orders then converge on the
+                // same content-derived id set.
+                if let Some(position) = assumptions.iter().position(|known| known.id() == &base) {
+                    let previous = assumptions[position].clone();
+                    let replacement = previous.clone().disambiguate_colliding_id();
+                    let replacement_id = replacement.id().clone();
+                    for artifact in &mut artifacts {
+                        artifact.rekey_colliding_assumption(&previous, &replacement)?;
+                    }
+                    for map in &mut self.maps {
+                        map.rekey_colliding_assumption(&previous, &replacement)?;
+                    }
+                    for defaults in self.defaults_by_ref.values_mut() {
+                        for default in defaults {
+                            if default.assumption == base {
+                                default.assumption = replacement_id.clone();
+                            }
+                        }
+                    }
+                    assumptions[position] = replacement;
                 }
-                // Ensemble members are merged incrementally in production.
-                // The earlier claim may already be referenced by that member's
-                // completed maps, so re-keying it would break referential
-                // integrity. Keep its stable base id and give this later,
-                // unequal claim its content-derived collision id instead of
-                // aborting or discarding it.
-                assumption = assumption.disambiguate_colliding_id();
+                self.colliding_assumption_bases.insert(base);
+                assumption = disambiguated;
             }
             match assumptions
                 .iter()
@@ -762,6 +811,13 @@ impl BoardEvidence {
                 }
                 None => assumptions.push(assumption),
             }
+        }
+        if !self.colliding_assumption_bases.is_empty() {
+            // Collision members are content-addressed; sort the completed
+            // registry by those stable ids so reversing incremental singleton
+            // calls cannot reorder human, JSON, or JUnit-facing assumption
+            // inventories. Artifact ids are independent stable indices.
+            assumptions.sort_by(|left, right| left.id().cmp(right.id()));
         }
         let mut registry = EvidenceRegistry::new(assumptions)?;
         for artifact in artifacts {
@@ -782,15 +838,30 @@ impl BoardEvidence {
         if substitutions.is_empty() {
             return Ok(self);
         }
-        self.with_assumptions(substitutions.iter().map(|sub| {
-            Assumption::substitute_model_for_component(
-                AssumptionSource::Scheduler,
-                &sub.evidence_subject,
-                &sub.reference,
-                &sub.requested_part,
-                &sub.modelled_core,
-            )
-        }))
+        let assumptions: Vec<_> = substitutions
+            .iter()
+            .flat_map(|sub| {
+                let mut subjects: Vec<_> = self
+                    .display_ref_by_subject
+                    .iter()
+                    .filter(|(_, display)| display.trim() == sub.reference.trim())
+                    .map(|(subject, _)| subject.clone())
+                    .collect();
+                if subjects.is_empty() {
+                    subjects.push(sub.reference.trim().to_string());
+                }
+                subjects.into_iter().map(|subject| {
+                    Assumption::substitute_model_for_component(
+                        AssumptionSource::Scheduler,
+                        &subject,
+                        &sub.reference,
+                        &sub.requested_part,
+                        &sub.modelled_core,
+                    )
+                })
+            })
+            .collect();
+        self.with_assumptions(assumptions)
     }
 
     pub fn inventory(&self) -> &[ArtifactProvenance] {
@@ -2295,12 +2366,98 @@ mod duplicate_open_part_tests {
             .expect("a later ensemble member must not abort on the shared base id");
         assert_eq!(incremental.assumptions().len(), 2);
 
+        let incremental_reversed = empty_evidence()
+            .with_assumptions([assumption("assertion-b")])
+            .expect("reversed first member merges")
+            .with_assumptions([assumption("assertion-a")])
+            .expect("reversed later member merges");
+        assert_eq!(
+            ids(&incremental),
+            ids(&incremental_reversed),
+            "singleton merge order must not decide which claim owns the base id",
+        );
+        let ordered_claims = |evidence: &BoardEvidence| {
+            evidence
+                .assumptions()
+                .iter()
+                .map(|assumption| (assumption.id().clone(), assumption.statement().to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ordered_claims(&incremental),
+            ordered_claims(&incremental_reversed),
+            "human and JSON registry order must also survive singleton reversal",
+        );
+
         let repeated_and_new = empty_evidence()
             .with_assumptions([assumption("assertion-a")])
             .expect("first member merges")
             .with_assumptions([assumption("assertion-a"), assumption("assertion-b")])
             .expect("repeated facts stay idempotent while a sibling is added");
         assert_eq!(repeated_and_new.assumptions().len(), 2);
+    }
+
+    #[test]
+    fn incremental_collision_rekeys_completed_map_references_atomically() {
+        let board = ExtractedBoard {
+            name: "collision-map-integrity".to_string(),
+            nets: vec![hauksbee_extract::Net {
+                id: 1,
+                name: "MCU_NET".to_string(),
+            }],
+            components: vec![hauksbee_extract::Component {
+                reference: "U1".to_string(),
+                value: "MCU".to_string(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: "F.Cu".to_string(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: vec![hauksbee_extract::Pin {
+                    number: "1".to_string(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                }],
+            }],
+        };
+        let claim = |core: &str| {
+            Assumption::substitute_model_for_component(
+                AssumptionSource::Scheduler,
+                "U1",
+                "U1",
+                "STM32F411",
+                core,
+            )
+        };
+        let first = claim("STM32F407");
+        let second = claim("STM32F405");
+        assert_eq!(first.id(), second.id());
+
+        let evidence =
+            BoardEvidence::from_bound(&board, &BindReport::default(), &[], RunDate::unknown())
+                .expect("base evidence builds")
+                .with_assumptions([first])
+                .expect("first claim merges");
+        let completed = evidence
+            .simulation_map("MCU simulation", &["MCU_NET".to_string()], &[], None)
+            .expect("completed map cites first claim");
+        let evidence = evidence
+            .with_maps(vec![completed])
+            .with_assumptions([second])
+            .expect("second claim rekeys the collision domain");
+
+        let known: BTreeSet<_> = evidence
+            .assumptions()
+            .iter()
+            .map(|assumption| assumption.id())
+            .collect();
+        assert_eq!(known.len(), 2);
+        assert_eq!(evidence.maps()[0].assumptions().len(), 1);
+        assert!(known.contains(&evidence.maps()[0].assumptions()[0]));
+        assert!(evidence.maps()[0].assumptions()[0].as_str().contains('~'));
     }
 
     #[test]
@@ -2354,23 +2511,32 @@ mod duplicate_open_part_tests {
         let substitutions = [
             crate::scheduler::McuSubstitution {
                 reference: "U1".to_string(),
-                evidence_subject: subjects[0].clone(),
                 backend: "renode:core-a".to_string(),
                 requested_part: "STM32F411".to_string(),
                 modelled_core: "STM32F407".to_string(),
             },
             crate::scheduler::McuSubstitution {
                 reference: "U1".to_string(),
-                evidence_subject: subjects[1].clone(),
                 backend: "renode:core-b".to_string(),
                 requested_part: "STM32F411".to_string(),
                 modelled_core: "STM32F405".to_string(),
             },
         ];
 
-        let evidence = evidence
-            .with_substitutions(&substitutions)
-            .expect("both substitutions survive");
+        let evidence =
+            evidence
+                .with_assumptions(substitutions.iter().zip(subjects).map(
+                    |(substitution, subject)| {
+                        Assumption::substitute_model_for_component(
+                            AssumptionSource::Scheduler,
+                            &subject,
+                            &substitution.reference,
+                            &substitution.requested_part,
+                            &substitution.modelled_core,
+                        )
+                    },
+                ))
+                .expect("both exact scheduler substitutions survive");
         let substitutions: Vec<_> = evidence
             .assumptions()
             .iter()
@@ -2392,6 +2558,90 @@ mod duplicate_open_part_tests {
                 "each net receives only its own substitution"
             );
         }
+    }
+
+    #[test]
+    fn synthetic_rail_rows_cannot_steal_a_real_component_substitution_scope() {
+        let board = ExtractedBoard {
+            name: "rail-reference-collision".to_string(),
+            nets: vec![hauksbee_extract::Net {
+                id: 1,
+                name: "MCU_SUPPLY".to_string(),
+            }],
+            components: vec![hauksbee_extract::Component {
+                reference: "RAIL:+5V".to_string(),
+                value: "STM32F411".to_string(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: "F.Cu".to_string(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: vec![hauksbee_extract::Pin {
+                    number: "1".to_string(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                }],
+            }],
+        };
+        let mut report = BindReport::default();
+        report.push(BindRow {
+            reference: "RAIL:+5V".to_string(),
+            value: "STM32F411".to_string(),
+            model_id: Some("stm32f4".to_string()),
+            confidence: Confidence::Exact,
+            source: None,
+            outcome: BindOutcome::Mcu {
+                backend: "renode:stm32f4".to_string(),
+            },
+            warning: None,
+            guesses: Vec::new(),
+        });
+        report.push(BindRow {
+            reference: "RAIL:+5V".to_string(),
+            value: "5 V ideal rail".to_string(),
+            model_id: None,
+            confidence: Confidence::Exact,
+            source: None,
+            outcome: BindOutcome::PowerRail { volts: 5.0 },
+            warning: None,
+            guesses: Vec::new(),
+        });
+
+        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
+            .expect("colliding synthetic rail row builds")
+            .with_substitutions(&[crate::scheduler::McuSubstitution {
+                reference: "RAIL:+5V".to_string(),
+                backend: "renode:stm32f4".to_string(),
+                requested_part: "STM32F411".to_string(),
+                modelled_core: "STM32F407".to_string(),
+            }])
+            .expect("substitution evidence merges");
+
+        let simulation = evidence
+            .simulation_map(
+                "Firmware co-simulation for MCU_SUPPLY",
+                &["MCU_SUPPLY".to_string()],
+                &[],
+                None,
+            )
+            .expect("simulation map builds");
+        assert_eq!(simulation.status(), EvidenceStatus::Undermined);
+        assert_eq!(simulation.assumptions().len(), 1);
+
+        let ci = evidence
+            .ci_assertion_map(
+                "MCU supply remains valid",
+                &["MCU_SUPPLY".to_string()],
+                &[],
+                None,
+                None,
+            )
+            .expect("CI causal map builds");
+        assert_eq!(ci.status(), EvidenceStatus::Undermined);
+        assert_eq!(ci.assumptions(), simulation.assumptions());
     }
 
     /// Ids are cited in acknowledgment files and diffed across runs, so the same

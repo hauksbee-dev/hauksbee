@@ -878,7 +878,13 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         cfg.firmware.as_deref(),
         &format!("/boards/{}", crate::commands::common::file_name(&cfg.board)),
     )?;
-    board_evidence = board_evidence.with_substitutions(engine.scheduler().substitutions())?;
+    board_evidence = board_evidence.with_assumptions(
+        engine
+            .scheduler()
+            .substitution_assumptions()
+            .iter()
+            .cloned(),
+    )?;
 
     // --apply-shorts: bridge every detected copper short before simulating.
     if cfg.apply_shorts {

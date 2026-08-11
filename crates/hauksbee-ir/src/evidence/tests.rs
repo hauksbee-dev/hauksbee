@@ -1409,3 +1409,68 @@ fn a_named_abstention_puts_its_unlocking_input_in_the_what_to_do() {
     assert_eq!(bare.because, "No model in the library matched this part.");
     assert!(bare.replacement.contains("models directory"));
 }
+
+#[test]
+fn rekeying_an_assumption_updates_artifact_map_and_default_parameter_references() {
+    let assumption = Assumption::default_parameter("U1", "vout", "3.3 V");
+    let old = assumption.id().clone();
+    let replacement = assumption.clone().disambiguate_colliding_id();
+    let new = replacement.id().clone();
+    let mut registry = EvidenceRegistry::new(vec![assumption.clone()]).unwrap();
+    let graph = CausalPathIndex::from_net_parts([("3V3", ["U1"].as_slice())]).unwrap();
+    let traversal = graph
+        .traverse(&NetScope::new(["3V3"], None).unwrap(), &registry)
+        .unwrap();
+    let mut map = EvidenceMap::from_traversal("3V3 is regulated", traversal, &registry, today())
+        .unwrap()
+        .with_parameters(
+            &registry,
+            vec![ParameterProvenance::new(
+                "U1.vout",
+                "3.3 V",
+                ValueOrigin::Default {
+                    assumption: old.clone(),
+                },
+            )
+            .unwrap()],
+        )
+        .unwrap();
+    let artifact_id = registry
+        .add_artifact(
+            ArtifactProvenance::new(
+                "board.kicad_pcb",
+                ArtifactKind::KiCadPcb,
+                ArtifactRole::Layout,
+                "0".repeat(64),
+                vec![old.clone()],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    map = map.with_artifacts(&registry, [artifact_id]).unwrap();
+    let mut artifact = registry.artifacts()[0].clone();
+
+    let unrelated =
+        Assumption::default_parameter("U1", "vout", "5.0 V").disambiguate_colliding_id();
+    assert!(artifact
+        .clone()
+        .rekey_colliding_assumption(&assumption, &unrelated)
+        .is_err());
+    artifact
+        .rekey_colliding_assumption(&assumption, &replacement)
+        .unwrap();
+    map.rekey_colliding_assumption(&assumption, &replacement)
+        .unwrap();
+
+    assert_eq!(artifact.assumptions(), std::slice::from_ref(&new));
+    assert_eq!(map.assumptions(), std::slice::from_ref(&new));
+    assert!(matches!(
+        map.parameters()[0].origin(),
+        ValueOrigin::Default { assumption } if assumption == &new
+    ));
+    let mut rekeyed = EvidenceRegistry::new(vec![replacement]).unwrap();
+    rekeyed.add_artifact(artifact).unwrap();
+    let parameters = map.parameters().to_vec();
+    map.with_parameters(&rekeyed, parameters)
+        .expect("every re-keyed reference resolves in the replacement registry");
+}

@@ -17,7 +17,7 @@
 //! Unresolved analog parts sitting on connected nets raise a loud warning and
 //! default to an open circuit.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use hauksbee_extract::{Component, ExtractedBoard};
 use hauksbee_ir::evidence::Assumption;
@@ -40,10 +40,6 @@ pub const DEFAULT_VCC: f64 = 5.0;
 /// One MCU instance discovered on the board (instantiated by the scheduler).
 pub struct McuBinding {
     pub reference: String,
-    /// Injective board-occurrence identity used by causal evidence. This is the
-    /// raw designator for a unique part and an internal occurrence key for a
-    /// blank or reused designator.
-    pub evidence_subject: String,
     /// hauksbee-mcu backend string, e.g. `"simavr:atmega328p"`.
     pub backend: String,
     /// The exact part the board asked for (the component value, e.g.
@@ -361,26 +357,8 @@ pub fn bind_board_with(
     // DNP parts the model DB recognises as processors, as (reference, value).
     let mut dnp_mcus: Vec<(String, String)> = Vec::new();
 
-    let mut reference_counts = BTreeMap::new();
-    for comp in &board.components {
-        *reference_counts
-            .entry(comp.reference.trim().to_string())
-            .or_insert(0usize) += 1;
-    }
-    let mut reference_ordinals = BTreeMap::new();
-
     // ── Pass 2: bind every component ────────────────────────────────────────
     for comp in &board.components {
-        let reference = comp.reference.trim();
-        let ordinal = reference_ordinals
-            .entry(reference.to_string())
-            .or_insert(0usize);
-        *ordinal += 1;
-        let evidence_subject = crate::evidence::component_occurrence_subject(
-            reference,
-            reference_counts.get(reference).copied().unwrap_or_default(),
-            *ordinal,
-        );
         // The three-state assembled-component contract, asked once per part:
         // only a Present record reaches model resolution; the two absent
         // states each leave a visible row rather than a silent hole.
@@ -458,7 +436,6 @@ pub fn bind_board_with(
                 let kind_str = format!("{:?}", m.kind).to_ascii_lowercase();
                 let (outcome, warning, guesses) = bind_component(
                     comp,
-                    &evidence_subject,
                     m,
                     conf,
                     &mut circuit,
@@ -1885,7 +1862,6 @@ fn unresolved_outcome(
 #[allow(clippy::too_many_arguments)]
 fn bind_component(
     comp: &Component,
-    evidence_subject: &str,
     model: &ModelEntry,
     _conf: Confidence,
     circuit: &mut Circuit,
@@ -2090,16 +2066,7 @@ fn bind_component(
         }
         Mcu => {
             let backend = mcu_backend_string(comp, model);
-            let warning = bind_mcu(
-                comp,
-                evidence_subject,
-                model,
-                circuit,
-                node_of,
-                &pad_nodes,
-                power_nets,
-                mcus,
-            );
+            let warning = bind_mcu(comp, model, circuit, node_of, &pad_nodes, power_nets, mcus);
             (BindOutcome::Mcu { backend }, warning)
         }
         Connector => (
@@ -3848,7 +3815,6 @@ fn bind_nor_latches(
 #[allow(clippy::too_many_arguments)]
 fn bind_mcu(
     comp: &Component,
-    evidence_subject: &str,
     model: &ModelEntry,
     circuit: &mut Circuit,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
@@ -3962,7 +3928,6 @@ fn bind_mcu(
 
     mcus.push(McuBinding {
         reference: comp.reference.clone(),
-        evidence_subject: evidence_subject.to_string(),
         backend,
         // The raw requested part string, captured before family routing collapsed
         // e.g. STM32F411RET6 -> the stm32f4 backend. Empty when the board gives no
@@ -6550,7 +6515,6 @@ mod crystal_fallback_tests {
 
             let (outcome, warning, _) = bind_component(
                 &c,
-                &c.reference,
                 &model,
                 Confidence::Exact,
                 &mut circuit,
@@ -6837,7 +6801,6 @@ mod crystal_fallback_tests {
 
             let (outcome, warning, _) = bind_component(
                 &c,
-                &c.reference,
                 &model,
                 Confidence::Exact,
                 &mut circuit,
@@ -6934,7 +6897,6 @@ mod crystal_fallback_tests {
 
             let (outcome, warning, _) = bind_component(
                 &c,
-                &c.reference,
                 &model,
                 Confidence::Exact,
                 &mut circuit,
@@ -7003,7 +6965,6 @@ mod crystal_fallback_tests {
 
         let (outcome, warning, _) = bind_component(
             &c,
-            &c.reference,
             &model,
             Confidence::Exact,
             &mut circuit,
@@ -7082,7 +7043,6 @@ mod crystal_fallback_tests {
         let before = circuit.devices.len();
         let (outcome, warning, _) = bind_component(
             &c,
-            &c.reference,
             &model,
             Confidence::Exact,
             &mut circuit,
@@ -7190,7 +7150,6 @@ mod crystal_fallback_tests {
 
             let (outcome, warning, _) = bind_component(
                 &c,
-                &c.reference,
                 &model,
                 Confidence::Exact,
                 &mut circuit,
@@ -7271,7 +7230,6 @@ mod crystal_fallback_tests {
 
             let (outcome, _, _) = bind_component(
                 &c,
-                &c.reference,
                 &model,
                 Confidence::Exact,
                 &mut circuit,
