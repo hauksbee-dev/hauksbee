@@ -2099,6 +2099,12 @@ pub enum ValueOrigin {
 /// Provenance for one bound parameter of one device.
 #[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct ParameterProvenance {
+    /// Injective causal identity of the component occurrence, when the
+    /// producer has one. Kept separate from human-readable `parameter` so a
+    /// literal reference cannot collide with generated display prose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    subject: Option<String>,
     /// Reference-qualified, so an evidence map can select by part:
     /// "R7.resistance", "U1.model", "Q2.beta".
     parameter: String,
@@ -2127,10 +2133,34 @@ impl ParameterProvenance {
             });
         }
         Ok(Self {
+            subject: None,
             parameter,
             value,
             origin,
         })
+    }
+
+    /// Construct parameter provenance tied to an injective component
+    /// occurrence while retaining a readable parameter label.
+    pub fn for_subject(
+        subject: impl Into<String>,
+        parameter: impl Into<String>,
+        value: impl Into<String>,
+        origin: ValueOrigin,
+    ) -> Result<Self, EvidenceError> {
+        let subject = subject.into();
+        if subject.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "parameter_provenance.subject",
+            });
+        }
+        let mut provenance = Self::new(parameter, value, origin)?;
+        provenance.subject = Some(subject);
+        Ok(provenance)
+    }
+
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
     }
 
     pub fn parameter(&self) -> &str {
@@ -2769,6 +2799,8 @@ impl ErrorBudget {
 /// A model on the causal path.
 #[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct ModelOnPath {
+    /// Injective causal identity of the exact component occurrence.
+    subject: String,
     /// The part it is bound to.
     reference: String,
     /// The model that bound.
@@ -2790,7 +2822,26 @@ impl ModelOnPath {
         confidence: MatchConfidence,
     ) -> Result<Self, EvidenceError> {
         let reference = reference.into();
+        Self::for_subject(reference.clone(), reference, model_id, source, confidence)
+    }
+
+    /// Construct a model-path record with machine identity separate from the
+    /// human reference shown by report renderers.
+    pub fn for_subject(
+        subject: impl Into<String>,
+        reference: impl Into<String>,
+        model_id: impl Into<String>,
+        source: ModelSource,
+        confidence: MatchConfidence,
+    ) -> Result<Self, EvidenceError> {
+        let subject = subject.into();
+        let reference = reference.into();
         let model_id = model_id.into();
+        if subject.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "model_on_path.subject",
+            });
+        }
         if reference.trim().is_empty() {
             return Err(EvidenceError::Empty {
                 field: "model_on_path.reference",
@@ -2802,12 +2853,17 @@ impl ModelOnPath {
             });
         }
         Ok(Self {
+            subject,
             reference,
             model_id,
             layer: source.layer(),
             source,
             confidence,
         })
+    }
+
+    pub fn subject(&self) -> &str {
+        &self.subject
     }
 
     pub fn reference(&self) -> &str {
