@@ -9,6 +9,7 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
+import re
 import shutil
 import subprocess
 import tarfile
@@ -115,6 +116,44 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         )
         self.assertIn("manifest['excluded_prefixes'] = []", builder)
         self.assertIn("surface.get('scopes', ['development', 'mirror'])", builder)
+
+    def test_private_suite_disclosure_counts_each_absent_test_file(self) -> None:
+        builder = (ROOT / "scripts/build-public-mirror.sh").read_text()
+        board_block = builder.split("BOARD_EXCLUDE=(", 1)[1].split("\n)", 1)[0]
+        absent_paths = [
+            ROOT / line.strip()
+            for line in board_block.splitlines()
+            if line.strip().endswith(".rs") and "/tests/" in line
+        ]
+
+        disclosure = (ROOT / "docs/about/PRIVATE_SUITE.md").read_text()
+        rows = {
+            name: int(count)
+            for name, count in re.findall(
+                r"^\| `([^`]+)` \| ([0-9]+) \|", disclosure, re.MULTILINE
+            )
+        }
+        actual: dict[str, int] = {}
+        for path in absent_paths:
+            count = len(re.findall(r"^#\[(?:tokio::)?test\]", path.read_text(), re.MULTILINE))
+            actual[path.stem] = count
+            with self.subTest(suite=path.stem):
+                self.assertEqual(rows.get(path.stem), count)
+
+        headline = re.search(
+            r"\*\*([0-9]+) tests: ([0-9]+) in the ([0-9]+) absent files below, "
+            r"plus ([0-9]+) removed",
+            disclosure,
+        )
+        self.assertIsNotNone(headline)
+        total, absent, files, removed = map(int, headline.groups())
+        self.assertEqual(files, len(actual))
+        self.assertEqual(absent, sum(actual.values()))
+        self.assertEqual(total, absent + removed)
+
+        nep = (ROOT / "crates/hauksbee-engine/tests/nep_private_acceptance.rs").read_text()
+        self.assertIn("fn real_nep_host_exposes_standard_grade_7ms_gap()", nep)
+        self.assertIn("fn real_nep_host_succeeds_with_compliant_firmware()", nep)
 
     def private_installer_fixture(self) -> tuple[str, bytes, bytes]:
         system = subprocess.check_output(["uname", "-s"], text=True).strip()

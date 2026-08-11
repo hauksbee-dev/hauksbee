@@ -12,7 +12,7 @@ misleading test count.
 
 ## What is missing
 
-**67 tests: 57 in the 16 absent files below, plus 10 removed from files that
+**68 tests: 58 in the 16 absent files below, plus 10 removed from files that
 otherwise ship. Also absent: 11 engine examples.**
 
 | Suite | Tests | What it covers |
@@ -32,7 +32,7 @@ otherwise ship. Also absent: 11 engine examples.**
 | `hardware_history` | 2 | Replay against recorded hardware traces |
 | `mcp4728_cosim` | 2 | DAC peripheral co-simulation |
 | `tarski_decomposition_analysis` | 1 | Tearing choices on a mesh that does not converge fused |
-| `nep_private_acceptance` | 1 | Cycle-exact AT28C256 page-program acceptance for a second private board, driven by the board owner's real host tool |
+| `nep_private_acceptance` | 2 | Cycle-exact AT28C256 page-program rejection and corrected-firmware positive control for a second private board, both driven by the board owner's real host tool |
 
 The ten tests missing from files that otherwise ship are in
 `spec_and_assertions`, `cli_boardcode`, `dnp_processor`, `diode_fallback` and
