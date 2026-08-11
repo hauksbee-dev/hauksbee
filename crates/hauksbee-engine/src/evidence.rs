@@ -159,6 +159,23 @@ pub(crate) fn component_occurrence_subject(
     format!("{OCCURRENCE_PREFIX}{encoded}:{ordinal}")
 }
 
+fn occurrence_provenance_reference(component_subject: &str, reference: &str) -> String {
+    let reference = reference.trim();
+    if !component_subject.starts_with(OCCURRENCE_PREFIX) {
+        return reference.to_string();
+    }
+    let ordinal = component_subject
+        .rsplit_once(':')
+        .map(|(_, ordinal)| ordinal)
+        .unwrap_or("?");
+    let display = if reference.is_empty() {
+        "unnamed part"
+    } else {
+        reference
+    };
+    format!("{display} [occurrence {ordinal}]")
+}
+
 /// Give board components and bind rows the same injective causal identity.
 /// Ordinary unique designators remain readable. Blank, repeated, or reserved-
 /// prefix designators use the exact source bytes plus a 1-based occurrence, so
@@ -452,7 +469,10 @@ impl BoardEvidence {
                     .entry(component_subject.to_string())
                     .or_default()
                     .push(DefaultFact {
-                        reference: row.reference.clone(),
+                        reference: occurrence_provenance_reference(
+                            component_subject,
+                            &row.reference,
+                        ),
                         parameter,
                         value,
                         assumption: assumption.id().clone(),
@@ -517,6 +537,8 @@ impl BoardEvidence {
             for reference in refs {
                 if let Some(row) = rows.get(reference.as_str()) {
                     if let Some(model_id) = row.model_id.as_deref() {
+                        let provenance_reference =
+                            occurrence_provenance_reference(reference, &row.reference);
                         let confidence = match row.confidence {
                             Confidence::Exact => MatchConfidence::Exact,
                             Confidence::Family => MatchConfidence::High,
@@ -529,13 +551,13 @@ impl BoardEvidence {
                             .clone()
                             .unwrap_or_else(|| unspecified_source(model_id));
                         models.push(ModelOnPath::new(
-                            &row.reference,
+                            &provenance_reference,
                             model_id,
                             source.clone(),
                             confidence,
                         )?);
                         parameters.push(ParameterProvenance::new(
-                            format!("{}.model", row.reference),
+                            format!("{provenance_reference}.model"),
                             model_id,
                             ValueOrigin::Model {
                                 model_id: model_id.to_string(),
@@ -569,7 +591,10 @@ impl BoardEvidence {
                 Some((
                     (*component_subject).to_string(),
                     ModelFact {
-                        reference: row.reference.clone(),
+                        reference: occurrence_provenance_reference(
+                            component_subject,
+                            &row.reference,
+                        ),
                         model_id: model_id.clone(),
                         confidence: confidence(row.confidence),
                         source: row
@@ -1991,6 +2016,53 @@ mod duplicate_open_part_tests {
     }
 
     #[test]
+    fn a_modelled_unnamed_part_has_citeable_occurrence_provenance() {
+        let board = ExtractedBoard {
+            name: "anonymous-modelled-part".to_string(),
+            nets: vec![hauksbee_extract::Net {
+                id: 1,
+                name: "SENSE".to_string(),
+            }],
+            components: vec![hauksbee_extract::Component {
+                reference: String::new(),
+                value: "known-device".to_string(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: "F.Cu".to_string(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: vec![hauksbee_extract::Pin {
+                    number: "1".to_string(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                }],
+            }],
+        };
+        let mut report = BindReport::default();
+        report.push(BindRow {
+            reference: String::new(),
+            value: "known-device".to_string(),
+            model_id: Some("known-model".to_string()),
+            confidence: Confidence::Exact,
+            source: None,
+            outcome: BindOutcome::Analog {
+                device: "resistor".to_string(),
+            },
+            warning: None,
+            guesses: Vec::new(),
+        });
+
+        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
+            .expect("a resolved unnamed component must not abort provenance");
+        let model = &evidence.maps()[0].models()[0];
+        assert_eq!(model.model_id(), "known-model");
+        assert_eq!(model.reference(), "unnamed part [occurrence 1]");
+    }
+
+    #[test]
     fn duplicate_designators_do_not_saturate_nets_or_steal_model_provenance() {
         let component = |net| hauksbee_extract::Component {
             reference: "Via".to_string(),
@@ -2056,6 +2128,7 @@ mod duplicate_open_part_tests {
         assert_eq!(maps[1].status(), EvidenceStatus::Clean);
         assert_eq!(maps[1].models().len(), 1);
         assert_eq!(maps[1].models()[0].model_id(), "via_model_b");
+        assert_eq!(maps[1].models()[0].reference(), "Via [occurrence 2]");
 
         let by_display_reference = evidence
             .simulation_map("all Via occurrences", &[], &["Via".to_string()], None)
