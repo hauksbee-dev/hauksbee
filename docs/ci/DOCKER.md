@@ -62,14 +62,27 @@ from your platform's secret manager; this example assumes it is already in
 `HAUKSBEE_GHCR_USER`:
 
 ```bash
-printf '%s' "$HAUKSBEE_GITHUB_TOKEN" \
-  | docker login ghcr.io --username "$HAUKSBEE_GHCR_USER" --password-stdin
+(
+  export DOCKER_CONFIG="$(mktemp -d)"
+  cleanup() {
+    docker logout ghcr.io >/dev/null 2>&1 || true
+    find "$DOCKER_CONFIG" -depth -mindepth 1 -delete 2>/dev/null || true
+    rmdir "$DOCKER_CONFIG" 2>/dev/null || true
+  }
+  trap cleanup EXIT
+  trap 'exit 130' INT TERM
+  printf '%s' "$HAUKSBEE_GITHUB_TOKEN" \
+    | docker login ghcr.io --username "$HAUKSBEE_GHCR_USER" --password-stdin
+  docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
+    hauksbee run path/to/board.kicad_pcb --report
+)
 ```
 
 For a user token, the login name is that GitHub user; for a GitHub App
 installation token, use `x-access-token`.
-Docker writes the credential to its configured credential store. The token is
-read from stdin, not placed in the process argv or checked into a file.
+The example confines Docker's credential file to a temporary configuration,
+logs out and removes it on every exit path, and drops the configuration variable
+with the subshell. The token is read from stdin, not placed in process argv.
 
 Report a board (the bind report table):
 

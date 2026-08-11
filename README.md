@@ -55,18 +55,22 @@ This is macOS-only today. We are evaluating Windows but do not promise it yet. T
 **One-line installer (terminal, macOS/Linux):**
 
 ```bash
-export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
-printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
-  | curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh \
-  | bash
+(
+  export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
+  printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
+    | curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh \
+    | bash
+)
 ```
 
-This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee`, `hauksbee-ci`, and `hauksbee-mcp` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. The installer itself needs only `curl` and CA certificates (on minimal Debian/Ubuntu: `apt-get install -y curl ca-certificates`).
+This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee`, `hauksbee-ci`, and `hauksbee-mcp` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. The installer needs `curl`, CA certificates, and Python 3 (on minimal Debian/Ubuntu: `apt-get install -y curl ca-certificates python3`).
 The token must be a fine-grained PAT or GitHub App installation token with
 Contents: read on the private release repository. The example reads it from the
 macOS keychain; use your platform's secret manager in the same role. Curl reads
 the authorization header from stdin so the token is not placed in its argv or
-printed. The installer uses the exported token for the private release assets.
+printed. The subshell drops the exported token as soon as installation ends.
+The installer also needs Python 3 to parse the authenticated release metadata
+before it requests either asset through GitHub's release-assets API.
 
 **macOS signing, stated plainly.** Every macOS release binary is signed with a Developer ID identity. `Hauksbee.app` is signed and notarised with the ticket stapled, and the release workflow refuses to publish an app zip that is not, so the app opens on a double-click with no Gatekeeper warning. The tarball binaries are signed too, and notarised from launch onward; a bare command-line binary cannot carry a stapled ticket, so Gatekeeper confirms the notarisation online on first run, and a tarball fetched through a browser opens cleanly. Only a pre-release or locally built unsigned bundle still needs the one-time fallback `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci ~/.local/bin/hauksbee-mcp`, while a copy installed by the curl line above never carries the quarantine flag at all.
 
@@ -83,18 +87,30 @@ Building needs Rust via rustup (the pinned toolchain builds automatically), plus
 **Or run it in Docker** (no local toolchain needed: the slim image carries `hauksbee` + `hauksbee-ci`, the model db and AVR co-sim):
 
 ```bash
-export HAUKSBEE_GHCR_USER="<authorized GitHub user or x-access-token for an App token>"
-export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
-printf '%s' "$HAUKSBEE_GITHUB_TOKEN" \
-  | docker login ghcr.io --username "$HAUKSBEE_GHCR_USER" --password-stdin
-docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
-  hauksbee run path/to/board.kicad_pcb --report
+(
+  export HAUKSBEE_GHCR_USER="<authorized GitHub user or x-access-token for an App token>"
+  export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
+  export DOCKER_CONFIG="$(mktemp -d)"
+  cleanup() {
+    docker logout ghcr.io >/dev/null 2>&1 || true
+    find "$DOCKER_CONFIG" -depth -mindepth 1 -delete 2>/dev/null || true
+    rmdir "$DOCKER_CONFIG" 2>/dev/null || true
+  }
+  trap cleanup EXIT
+  trap 'exit 130' INT TERM
+  printf '%s' "$HAUKSBEE_GITHUB_TOKEN" \
+    | docker login ghcr.io --username "$HAUKSBEE_GHCR_USER" --password-stdin
+  docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
+    hauksbee run path/to/board.kicad_pcb --report
+)
 ```
 
 The credential needs package-read access to the private GHCR package. For a
 user token, set `HAUKSBEE_GHCR_USER` to that user; for a GitHub App installation
-token, use `x-access-token`. Docker stores the result in its configured
-credential store; do not place the token in the repository or an argument.
+token, use `x-access-token`. This example gives Docker an isolated temporary
+configuration, logs out on every exit path, deletes the configuration, and
+drops both exported values with the subshell. Do not place the token in the
+repository or an argument.
 
 The slim and full images and more `docker run` examples are in [`docs/ci/DOCKER.md`](docs/ci/DOCKER.md).
 

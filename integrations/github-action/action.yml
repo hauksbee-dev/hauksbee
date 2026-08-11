@@ -41,6 +41,10 @@ inputs:
   hauksbee-token:
     description: "Credential authorized for the private hauksbee repository: a fine-grained PAT or GitHub App installation token with Contents: read. The calling repository's github.token is not sufficient across repositories."
     required: true
+  registry-user:
+    description: "GHCR login name for use-image. Empty derives x-access-token for a GitHub App installation token and otherwise uses github.actor. Set explicitly for a PAT owned by another user."
+    required: false
+    default: ""
   hauksbee-version:
     description: "Release version to download a prebuilt hauksbee-ci from (e.g. 0.1.0 or a vX.Y.Z tag). Empty: use the release named by hauksbee-ref if that is a tag, the newest release if hauksbee-ref is the default, and otherwise build the pinned ref from source."
     required: false
@@ -142,14 +146,14 @@ runs:
         echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
     # A warm cache skips the release download entirely. The key is the
-    # concrete release tag, so a new release is a new key and a stale binary
-    # is never served.
+    # concrete repository + release tag, so neither a new release nor a
+    # different configured private repository can restore another build.
     - name: Cache prebuilt hauksbee
       if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' && steps.reltag.outputs.tag != '' }}
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: .hauksbee-prebuilt
-        key: hauksbee-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.reltag.outputs.tag }}
+        key: hauksbee-prebuilt-${{ inputs.hauksbee-repo }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.reltag.outputs.tag }}
 
     # 3. Try to download a prebuilt bundle from a GitHub Release, so most
     #    users never compile. Sets steps.prebuilt.outputs.bin (hauksbee-ci)
@@ -187,15 +191,14 @@ runs:
         fi
         dl=".hauksbee-prebuilt"
         mkdir -p "$dl"
-        find_bins() {
-          ci_bin="$(ls "$dl"/hauksbee-*/bin/hauksbee-ci 2>/dev/null | head -n1 || true)"
-          run_bin="$(ls "$dl"/hauksbee-*/bin/hauksbee 2>/dev/null | head -n1 || true)"
-        }
-        # A cache hit already holds the extracted bundle: reuse it.
-        find_bins
-        if [ -n "$ci_bin" ]; then
-          echo "prebuilt bundle restored from cache; skipping download"
+        platform="${os}-${arch}"
+        provenance=""
+        if provenance="$("$GITHUB_ACTION_PATH/prebuilt-provenance.sh" verify "$dl" "$REPO" "$TAG" "$platform" 2>/dev/null)"; then
+          echo "repository-bound prebuilt bundle restored from cache; skipping download"
         else
+          # A partial or mismatched restore is not executable evidence. Empty it
+          # before the authenticated release download populates this exact key.
+          find "$dl" -depth -mindepth 1 -delete
           asset_glob="hauksbee-*-${os}-${arch}.tar.gz"
           if [ -n "$TAG" ]; then
             gh release download "$TAG" --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
@@ -207,9 +210,19 @@ runs:
             echo "no prebuilt asset ($asset_glob) found; will build from source"
             exit 0
           fi
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null || true)"
+            if [ -z "$TAG" ]; then
+              echo "downloaded a latest asset but could not prove its release tag; will build from source"
+              exit 0
+            fi
+          fi
           tar -xzf "$tarball" -C "$dl"
-          find_bins
+          "$GITHUB_ACTION_PATH/prebuilt-provenance.sh" record "$dl" "$REPO" "$TAG" "$platform" >/dev/null
+          provenance="$("$GITHUB_ACTION_PATH/prebuilt-provenance.sh" verify "$dl" "$REPO" "$TAG" "$platform")"
         fi
+        ci_bin="$(printf '%s\n' "$provenance" | sed -n 's/^ci_bin=//p')"
+        run_bin="$(printf '%s\n' "$provenance" | sed -n 's/^engine_bin=//p')"
         if [ -z "$ci_bin" ] || [ ! -x "$ci_bin" ] || [ -z "$run_bin" ] || [ ! -x "$run_bin" ]; then
           echo "prebuilt bundle had no usable binaries; will build from source"
           exit 0
@@ -248,10 +261,10 @@ runs:
           ~/.cargo/registry/cache
           ~/.cargo/git/db
           .hauksbee/target
-        key: hauksbee-ci-${{ runner.os }}-${{ inputs.hauksbee-ref }}-${{ hashFiles('.hauksbee/Cargo.lock') }}
+        key: hauksbee-ci-${{ inputs.hauksbee-repo }}-${{ runner.os }}-${{ inputs.hauksbee-ref }}-${{ hashFiles('.hauksbee/Cargo.lock') }}
         restore-keys: |
-          hauksbee-ci-${{ runner.os }}-${{ inputs.hauksbee-ref }}-
-          hauksbee-ci-${{ runner.os }}-
+          hauksbee-ci-${{ inputs.hauksbee-repo }}-${{ runner.os }}-${{ inputs.hauksbee-ref }}-
+          hauksbee-ci-${{ inputs.hauksbee-repo }}-${{ runner.os }}-
 
     - name: Build hauksbee (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
@@ -260,12 +273,15 @@ runs:
         MODE: ${{ steps.resolve.outputs.mode }}
       run: |
         set -euo pipefail
-        # Only the binary the resolved mode needs is built: the engine for a
-        # board check, hauksbee-ci for a spec run.
+        # A stock runner has no system libsimavr. Build the honest GPL-free
+        # Renode + QEMU feature set; those backends still fail explicitly at
+        # runtime when a spec selects an emulator that is not installed.
         if [ "$MODE" = "check" ]; then
-          cargo build --release -p hauksbee-engine --manifest-path .hauksbee/Cargo.toml
+          cargo build --release -p hauksbee-engine --manifest-path .hauksbee/Cargo.toml \
+            --no-default-features --features renode,qemu
         else
-          cargo build --release -p hauksbee-ci --manifest-path .hauksbee/Cargo.toml
+          cargo build --release -p hauksbee-ci --manifest-path .hauksbee/Cargo.toml \
+            --no-default-features --features renode,qemu
         fi
 
     # 5. Run the check. Spec mode fans every resolved spec into ONE
@@ -322,13 +338,15 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.hauksbee-token }}
+        REGISTRY_USER_INPUT: ${{ inputs.registry-user }}
       run: |
         set -euo pipefail
         config="$(mktemp -d "$RUNNER_TEMP/hauksbee-docker-auth.XXXXXX")"
         chmod 700 "$config"
         echo "docker-config=$config" >> "$GITHUB_OUTPUT"
+        registry_user="$("$GITHUB_ACTION_PATH/resolve-registry-user.sh" "$REGISTRY_USER_INPUT" "$GITHUB_ACTOR")"
         printf '%s' "$GH_TOKEN" \
-          | docker --config "$config" login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          | docker --config "$config" login ghcr.io --username "$registry_user" --password-stdin
 
     - name: Run the hardware check (image)
       id: run-image
@@ -379,7 +397,7 @@ runs:
         DOCKER_CONFIG: ${{ steps.registry-auth.outputs.docker-config }}
       run: |
         docker logout ghcr.io >/dev/null 2>&1 || true
-        find "$DOCKER_CONFIG" -type f -delete 2>/dev/null || true
+        find "$DOCKER_CONFIG" -depth -mindepth 1 -delete 2>/dev/null || true
         rmdir "$DOCKER_CONFIG" 2>/dev/null || true
 
     # Always publish the JUnit results, even when the hardware check failed,

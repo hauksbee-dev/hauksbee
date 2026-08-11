@@ -38,9 +38,13 @@
   Install the GPL-free build instead of the default one.
 
 .EXAMPLE
-  $env:HAUKSBEE_GITHUB_TOKEN = Get-Secret hauksbee-read -AsPlainText
-  $headers = @{ Authorization = "Bearer $env:HAUKSBEE_GITHUB_TOKEN" }
-  irm -Headers $headers https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
+  try {
+    $env:HAUKSBEE_GITHUB_TOKEN = Get-Secret hauksbee-read -AsPlainText
+    $headers = @{ Authorization = "Bearer $env:HAUKSBEE_GITHUB_TOKEN" }
+    irm -Headers $headers https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
+  } finally {
+    Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue
+  }
 
 .EXAMPLE
   .\get-hauksbee.ps1 -Version v0.1.0 -Permissive
@@ -61,11 +65,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $Repo = "hauksbee-dev/hauksbee"
-# Base URLs are overridable for the same reason as the bash installer: a
-# GitHub Enterprise host, a self-hosted mirror, or a local mock for testing
-# the download/verify/install flow.
+# The API base is overridable for GitHub Enterprise or the local contract test.
 $ApiBase = if ($env:HAUKSBEE_API_BASE) { $env:HAUKSBEE_API_BASE } else { "https://api.github.com/repos/$Repo" }
-$ReleasesBase = if ($env:HAUKSBEE_RELEASES_BASE) { $env:HAUKSBEE_RELEASES_BASE } else { "https://github.com/$Repo/releases/download" }
 $privateToken = if ($env:HAUKSBEE_GITHUB_TOKEN) { $env:HAUKSBEE_GITHUB_TOKEN } else { $env:GITHUB_TOKEN }
 if (-not $privateToken) {
     Write-Error ("HAUKSBEE_GITHUB_TOKEN is required to download from the private $Repo release repository. " +
@@ -95,22 +96,31 @@ Write-Host "Detected platform: Windows/$arch -> asset suffix: $AssetSuffix"
 # ---------------------------------------------------------------------------
 # Resolve the release tag (latest or pinned)
 # ---------------------------------------------------------------------------
-$headers = @{ "Authorization" = "Bearer $privateToken" }
+$headers = @{
+    "Authorization" = "Bearer $privateToken"
+    "Accept" = "application/vnd.github+json"
+    "X-GitHub-Api-Version" = "2022-11-28"
+}
 
-if (-not $Version) {
+if ($Version) {
+    $releaseUri = "$ApiBase/releases/tags/$Version"
+} else {
+    $releaseUri = "$ApiBase/releases/latest"
     Write-Host "Fetching latest release tag..."
-    try {
-        $release = Invoke-RestMethod -Uri "$ApiBase/releases/latest" -Headers $headers
-        $Version = $release.tag_name
-    } catch {
-        Write-Error ("Could not determine the latest release tag from the GitHub API: $_`n" +
-            "Pass -Version vX.Y.Z explicitly, or check https://github.com/$Repo/releases")
-        exit 1
-    }
+}
+try {
+    $release = Invoke-RestMethod -Uri $releaseUri -Headers $headers
     if (-not $Version) {
-        Write-Error "The GitHub API answered without a tag_name. Pass -Version vX.Y.Z explicitly."
-        exit 1
+        $Version = $release.tag_name
     }
+} catch {
+    Write-Error ("Could not resolve the release through the authenticated GitHub API: $_`n" +
+        "Pass -Version vX.Y.Z explicitly, or check https://github.com/$Repo/releases")
+    exit 1
+}
+if (-not $Version -or $release.tag_name -ne $Version) {
+    Write-Error "The GitHub API response did not identify the requested release tag."
+    exit 1
 }
 
 # Strip a leading 'v' to match the asset naming convention used in bundle.sh.
@@ -124,8 +134,25 @@ $ShapeSuffix = if ($Permissive) { "-permissive" } else { "" }
 $AssetName = "hauksbee-$VersionBare-$AssetSuffix$ShapeSuffix"
 $ZipName = "$AssetName.zip"
 $ChecksumName = "$ZipName.sha256"
-$ZipUrl = "$ReleasesBase/$Version/$ZipName"
-$ChecksumUrl = "$ReleasesBase/$Version/$ChecksumName"
+function Resolve-AssetUrl([string]$Name) {
+    $matches = @($release.assets | Where-Object { $_.name -ceq $Name })
+    if ($matches.Count -ne 1 -or -not $matches[0].url) {
+        throw "Release $Version does not contain exactly one $Name asset."
+    }
+    $url = [string]$matches[0].url
+    $allowedPrefix = "$ApiBase/releases/assets/"
+    if (-not $url.StartsWith($allowedPrefix, [System.StringComparison]::Ordinal)) {
+        throw "Refusing release asset URL outside the configured GitHub API: $url"
+    }
+    return $url
+}
+$ZipUrl = Resolve-AssetUrl $ZipName
+$ChecksumUrl = Resolve-AssetUrl $ChecksumName
+$assetHeaders = @{
+    "Authorization" = "Bearer $privateToken"
+    "Accept" = "application/octet-stream"
+    "X-GitHub-Api-Version" = "2022-11-28"
+}
 
 # ---------------------------------------------------------------------------
 # Download to a temp directory; verify; then install
@@ -143,7 +170,7 @@ try {
         $attempts = 3
         for ($i = 1; $i -le $attempts; $i++) {
             try {
-                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -Headers $headers -UseBasicParsing
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -Headers $assetHeaders -UseBasicParsing
                 return
             } catch {
                 if ($i -eq $attempts) { throw }

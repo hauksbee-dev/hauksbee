@@ -68,9 +68,11 @@ with an authorized fine-grained token or GitHub App installation token that
 has `Contents: read` access to `hauksbee-dev/hauksbee`:
 
 ```bash
-export GH_TOKEN="$(gh auth token)"
-gh release download "v<version>" --repo hauksbee-dev/hauksbee \
-  --pattern "hauksbee-ci-pcm-v<version>.zip" --dir "$HOME/Downloads"
+(
+  export GH_TOKEN="$(gh auth token)"
+  gh release download "v<version>" --repo hauksbee-dev/hauksbee \
+    --pattern "hauksbee-ci-pcm-v<version>.zip" --dir "$HOME/Downloads"
+)
 ```
 
 In KiCad: **Plugin and Content Manager -> Install from File...**, pick the zip,

@@ -25,6 +25,9 @@ PREFLIGHT = ROOT / "scripts" / "preflight-private-release.sh"
 SURFACE_MANIFEST = ROOT / "scripts" / "private-release-surfaces.json"
 SURFACE_CHECKER = ROOT / "scripts" / "check-private-release-surfaces.py"
 CONTAINER_PREFLIGHT = ROOT / "scripts" / "check-private-container-publication.sh"
+MIRROR_DEPENDENCY_CHECKER = ROOT / "scripts" / "check-mirror-dependencies.py"
+PREBUILT_PROVENANCE = ROOT / "integrations" / "github-action" / "prebuilt-provenance.sh"
+REGISTRY_USER = ROOT / "integrations" / "github-action" / "resolve-registry-user.sh"
 
 
 class PrivateReleasePolicyTests(unittest.TestCase):
@@ -73,6 +76,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "docs/dev-plans/public-release-cleanup-plan.md",
             "docs/dev-plans/tasks.md",
             "frontend/capture/cards.ts",
+            "scripts/make-public.sh",
         }
         for entry in manifest["surfaces"]:
             path = entry["path"]
@@ -179,28 +183,58 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         return asset, tarball, checksum
 
     def run_private_installer(
-        self, *, token: str | None
-    ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+        self, *, token: str | None, corrupt_asset: bool = False
+    ) -> tuple[subprocess.CompletedProcess[str], list[tuple[str, str, str]]]:
         asset, tarball, checksum = self.private_installer_fixture()
+        if corrupt_asset:
+            tarball += b"corrupt-after-checksum"
         expected_auth = "Bearer installer-token"
-        requests: list[str] = []
+        requests: list[tuple[str, str, str]] = []
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(handler) -> None:  # noqa: N802 - stdlib callback name
-                requests.append(handler.headers.get("Authorization", ""))
+                requests.append(
+                    (
+                        handler.path,
+                        handler.headers.get("Authorization", ""),
+                        handler.headers.get("Accept", ""),
+                    )
+                )
                 if handler.headers.get("Authorization") != expected_auth:
                     handler.send_response(401)
                     handler.end_headers()
                     return
+                port = handler.server.server_port
+                release = json.dumps(
+                    {
+                        "tag_name": "v0.1.0",
+                        "assets": [
+                            {
+                                "name": asset,
+                                "url": f"http://127.0.0.1:{port}/repos/hauksbee-dev/hauksbee/releases/assets/101",
+                            },
+                            {
+                                "name": f"{asset}.sha256",
+                                "url": f"http://127.0.0.1:{port}/repos/hauksbee-dev/hauksbee/releases/assets/102",
+                            },
+                        ],
+                    }
+                ).encode()
                 body = {
-                    f"/downloads/v0.1.0/{asset}": tarball,
-                    f"/downloads/v0.1.0/{asset}.sha256": checksum,
+                    "/repos/hauksbee-dev/hauksbee/releases/tags/v0.1.0": release,
+                    "/repos/hauksbee-dev/hauksbee/releases/assets/101": tarball,
+                    "/repos/hauksbee-dev/hauksbee/releases/assets/102": checksum,
                 }.get(handler.path)
                 if body is None:
                     handler.send_response(404)
                     handler.end_headers()
                     return
+                if "/assets/" in handler.path and handler.headers.get("Accept") != "application/octet-stream":
+                    handler.send_response(406)
+                    handler.end_headers()
+                    return
                 handler.send_response(200)
+                handler.send_header("Content-Type", "application/json")
                 handler.send_header("Content-Length", str(len(body)))
                 handler.end_headers()
                 handler.wfile.write(body)
@@ -216,9 +250,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 env = os.environ.copy()
                 env.pop("GITHUB_TOKEN", None)
                 env.pop("HAUKSBEE_GITHUB_TOKEN", None)
-                env["HAUKSBEE_RELEASES_BASE"] = (
-                    f"http://127.0.0.1:{server.server_port}/downloads"
+                env["HAUKSBEE_API_BASE"] = (
+                    f"http://127.0.0.1:{server.server_port}/repos/hauksbee-dev/hauksbee"
                 )
+                env.pop("HAUKSBEE_RELEASES_BASE", None)
                 if token is not None:
                     env["HAUKSBEE_GITHUB_TOKEN"] = token
                 result = subprocess.run(
@@ -251,12 +286,131 @@ class PrivateReleasePolicyTests(unittest.TestCase):
     def test_private_installer_authenticates_every_asset_download(self) -> None:
         result, requests = self.run_private_installer(token="installer-token")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(requests, ["Bearer installer-token", "Bearer installer-token"])
+        self.assertEqual(
+            requests,
+            [
+                (
+                    "/repos/hauksbee-dev/hauksbee/releases/tags/v0.1.0",
+                    "Bearer installer-token",
+                    "application/vnd.github+json",
+                ),
+                (
+                    "/repos/hauksbee-dev/hauksbee/releases/assets/101",
+                    "Bearer installer-token",
+                    "application/octet-stream",
+                ),
+                (
+                    "/repos/hauksbee-dev/hauksbee/releases/assets/102",
+                    "Bearer installer-token",
+                    "application/octet-stream",
+                ),
+            ],
+        )
+
+        end_to_end = (ROOT / "scripts/test-install-mock.sh").read_text()
+        self.assertNotIn("HAUKSBEE_RELEASES_BASE", end_to_end)
+        self.assertIn("/releases/assets/101", end_to_end)
+        self.assertIn('"assets"', end_to_end)
+        self.assertNotIn("installer itself needs only `curl`", (ROOT / "README.md").read_text())
+
+    def test_private_installer_refuses_corrupt_api_asset_bytes(self) -> None:
+        result, requests = self.run_private_installer(
+            token="installer-token", corrupt_asset=True
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("did not match", (result.stdout + result.stderr).lower())
+        self.assertEqual(len(requests), 3)
 
     def test_powershell_installer_authenticates_asset_downloads(self) -> None:
         text = (ROOT / "scripts/get-hauksbee.ps1").read_text()
         self.assertIn("HAUKSBEE_GITHUB_TOKEN", text)
-        self.assertIn("Invoke-WebRequest -Uri $Uri -OutFile $OutFile -Headers $headers", text)
+        self.assertIn('"$ApiBase/releases/tags/$Version"', text)
+        self.assertIn("$matches[0].url", text)
+        self.assertIn('"Accept" = "application/octet-stream"', text)
+        self.assertIn("Get-FileHash -Algorithm SHA256", text)
+        self.assertNotIn("ReleasesBase", text)
+
+    def test_action_source_fallback_uses_the_stock_runner_feature_set(self) -> None:
+        action = (ROOT / "integrations/github-action/action.yml").read_text()
+        build = action[action.index("- name: Build hauksbee (fallback build)") :]
+        self.assertEqual(build.count("--no-default-features --features renode,qemu"), 2)
+        self.assertIn("stock runner", build)
+
+    def test_prebuilt_cache_is_repository_bound_and_rejects_wrong_provenance(self) -> None:
+        action = (ROOT / "integrations/github-action/action.yml").read_text()
+        key = next(line for line in action.splitlines() if "key: hauksbee-prebuilt-" in line)
+        self.assertIn("inputs.hauksbee-repo", key)
+        self.assertIn("prebuilt-provenance.sh", action)
+        self.assertIn('verify "$dl" "$REPO" "$TAG" "$platform"', action)
+        self.assertIn('TAG="$(gh release view', action)
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            cache = Path(raw_tmp)
+            (cache / "hauksbee-0.1.0/bin").mkdir(parents=True)
+            for binary in ("hauksbee", "hauksbee-ci"):
+                path = cache / "hauksbee-0.1.0/bin" / binary
+                path.write_text("#!/bin/sh\n")
+                path.chmod(0o755)
+            subprocess.run(
+                [
+                    "bash",
+                    str(PREBUILT_PROVENANCE),
+                    "record",
+                    str(cache),
+                    "owner/one",
+                    "v0.1.0",
+                    "linux-x86_64",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            good = subprocess.run(
+                [
+                    "bash",
+                    str(PREBUILT_PROVENANCE),
+                    "verify",
+                    str(cache),
+                    "owner/one",
+                    "v0.1.0",
+                    "linux-x86_64",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            wrong = subprocess.run(
+                [
+                    "bash",
+                    str(PREBUILT_PROVENANCE),
+                    "verify",
+                    str(cache),
+                    "owner/two",
+                    "v0.1.0",
+                    "linux-x86_64",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+            self.assertNotEqual(wrong.returncode, 0, wrong.stdout + wrong.stderr)
+
+    def test_registry_username_supports_pat_and_github_app_tokens(self) -> None:
+        def resolve(token: str, explicit: str = "") -> subprocess.CompletedProcess[str]:
+            env = os.environ.copy()
+            env["GH_TOKEN"] = token
+            return subprocess.run(
+                ["bash", str(REGISTRY_USER), explicit, "workflow-actor"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(resolve("github_pat_example").stdout.strip(), "workflow-actor")
+        self.assertEqual(resolve("ghs_example").stdout.strip(), "x-access-token")
+        self.assertEqual(resolve("ghs_example", "explicit-user").stdout.strip(), "explicit-user")
 
     def test_private_action_requires_and_forwards_authorized_credential(self) -> None:
         action = (ROOT / "integrations/github-action/action.yml").read_text()
@@ -317,6 +471,51 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 self.assertIn("export HAUKSBEE_GITHUB_TOKEN", text)
                 self.assertIn("Authorization: Bearer %s", text)
                 self.assertIn("curl --config -", text)
+                example = text[text.index("export HAUKSBEE_GITHUB_TOKEN") :]
+                self.assertIn("(\n", text[: text.index("export HAUKSBEE_GITHUB_TOKEN") + 1])
+                self.assertIn("\n)", example)
+
+        readme = (ROOT / "README.md").read_text()
+        docker_example = readme[readme.index("export HAUKSBEE_GHCR_USER") : readme.index("The credential needs")]
+        self.assertIn('DOCKER_CONFIG="$(mktemp -d)"', docker_example)
+        self.assertIn("trap cleanup EXIT", docker_example)
+        self.assertIn("docker logout ghcr.io", docker_example)
+
+    def test_mirror_rejects_retained_scripts_with_missing_operational_dependencies(self) -> None:
+        manifest = self.surface_manifest()
+        launcher = next(
+            item for item in manifest["surfaces"] if item["path"] == "scripts/make-public.sh"
+        )
+        self.assertEqual(launcher.get("scopes"), ["development"])
+        builder = (ROOT / "scripts/build-public-mirror.sh").read_text()
+        self.assertIn("scripts/make-public.sh", builder)
+        self.assertIn("check-mirror-dependencies.py .", builder)
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            mirror = Path(raw_tmp)
+            scripts = mirror / "scripts"
+            scripts.mkdir()
+            launcher_fixture = scripts / "launcher.sh"
+            launcher_fixture.write_text(
+                '#!/usr/bin/env bash\nbash "$HAUKSBEE_ROOT/scripts/missing-builder.sh"\n'
+            )
+            launcher_fixture.chmod(0o755)
+            bad = subprocess.run(
+                ["python3", str(MIRROR_DEPENDENCY_CHECKER), str(mirror)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(bad.returncode, 0, bad.stdout + bad.stderr)
+            self.assertIn("scripts/missing-builder.sh", bad.stderr)
+            launcher_fixture.unlink()
+            good = subprocess.run(
+                ["python3", str(MIRROR_DEPENDENCY_CHECKER), str(mirror)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
 
     def test_b3_names_the_real_qc_path_and_manual_failure_contract(self) -> None:
         tasks = (ROOT / "docs/dev-plans/tasks.md").read_text()
@@ -485,9 +684,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         for relative in (Path("README.md"), Path("docs/ci/DOCKER.md")):
             text = (ROOT / relative).read_text()
             with self.subTest(path=relative):
+                login = text.index("docker login ghcr.io")
                 self.assertLess(
-                    text.index("docker login ghcr.io"),
-                    text.index("\ndocker run"),
+                    login,
+                    text.index("\n  docker run", login),
                 )
 
         recipes = (ROOT / "docs/ci/RECIPES.md").read_text()

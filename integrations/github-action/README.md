@@ -101,10 +101,17 @@ list of what was found, rather than guessing.
 | `hauksbee-ref`     | no       | `main`                   | git ref of hauksbee to build hauksbee-ci from (fallback build).               |
 | `hauksbee-repo`    | no       | `hauksbee-dev/hauksbee`       | owner/name of the hauksbee repo (release download + fallback build).         |
 | `hauksbee-token`   | yes      | -                        | Fine-grained PAT or GitHub App installation token authorised for the private repository with Contents: read; add Packages: read for `use-image`. |
+| `registry-user`    | no       | derived                  | GHCR username for `use-image`; App installation tokens derive `x-access-token`, PATs derive `github.actor`. Set it when a PAT belongs to another user. |
 | `hauksbee-version` | no       | (empty)                  | Release version to download a prebuilt binary from; empty auto-detects.     |
 | `prefer-prebuilt` | no       | `true`                   | Download a prebuilt release binary when available, else build from source.  |
 | `use-image`       | no       | `false`                  | Run from the published Docker image instead of a binary; skips the download and build paths entirely. |
 | `image`           | no       | `ghcr.io/hauksbee-dev/hauksbee:slim` | Image to run when `use-image` is true. Use `ghcr.io/hauksbee-dev/hauksbee:full` for STM32 / ESP32 co-sim or autorouting. |
+
+The source fallback deliberately builds `--no-default-features --features
+renode,qemu`, because stock hosted runners do not carry the GPL system
+libsimavr dependency. AVR co-simulation therefore requires a prebuilt bundle
+or image; selecting AVR after a source fallback fails explicitly rather than
+pretending that backend is present.
 
 ## Outputs
 
