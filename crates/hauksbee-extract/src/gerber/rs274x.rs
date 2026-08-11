@@ -20,9 +20,9 @@
 //!     rather than skipped. A film drawn negatively (Altium's default for a
 //!     plane) is one board-sized dark region plus hundreds of clear antipads and
 //!     thermal gaps, so a reader that discards the clears sees a solid sheet and
-//!     merges every net on the board. Each void becomes a hole contour on the
-//!     pours it lies inside; see [`apply_clears`] for the exact rule and the
-//!     invariant that keeps every imprecision on the over-connected side.
+//!     merges every net on the board. Admitted clear images are unioned per
+//!     uninterrupted clear pass and subtracted from every earlier copper kind;
+//!     see [`apply_clears`] for the exact painter rule.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
@@ -30,6 +30,11 @@ use std::collections::HashMap;
 use std::io::BufReader;
 use std::sync::Arc;
 
+use ::geo::algorithm::orient::{Direction, Orient};
+use ::geo::{
+    unary_union, BooleanOps, Buffer, Coord, InteriorPoint, Intersects, LineString, MultiPolygon,
+    Polygon, Validation,
+};
 use gerber_types::{
     Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity, StepAndRepeat,
 };
@@ -183,7 +188,7 @@ pub fn parse_layer(text: &str) -> Result<Vec<CopperPrim>, String> {
     // left open at end-of-file (M02 without an explicit close) by flushing it.
     plotter.flush_step_repeat();
     let mut out = plotter.out;
-    apply_clears(&mut out, &plotter.clears);
+    apply_clears(&mut out, plotter.clears);
     Ok(out)
 }
 
@@ -222,70 +227,342 @@ fn contour_bounds(c: &[(f64, f64)]) -> [f64; 4] {
 /// sheet of copper, so the union-find sees the whole board as one conductor and
 /// the job reconstructs to a single net. The voids are the connectivity.
 ///
-/// A void becomes a negative-weight contour on every pour it sits inside.
-/// [`Shape::MultiPolygon`] uses positive coverage: the dark pour adds one, each
-/// clear subtracts one, and copper requires a total above zero. Overlapping clear
-/// images therefore stay clear in their overlap instead of XORing it back to
-/// copper. A thermal relief drawn as separate straight-segment
-/// voids leaves the spokes standing, so the pad stays on the pour exactly as
-/// fabricated, and an annular void's inner rim leaves its copper island standing.
-/// (A relief drawn with ARCS is refused instead, along with every other arc-bearing
-/// clear region, so nothing is cut and the pad stays on the pour by a different
-/// route: through the whole annulus of copper rather than through the spokes.)
+/// Every uninterrupted clear pass is unioned first, so overlapping clear images
+/// remain empty in their overlap, then subtracted from every earlier track,
+/// flash, and region. A difference may return several polygons; each is emitted
+/// as its own primitive because it is a separate conductor. That covers split
+/// concave pours, clear-over-track/pad painter operations, partial intersection
+/// with a pour boundary, and annular islands without a nesting-depth guess.
+/// Copper drawn later is untouched, exactly as the Gerber painter model requires.
 ///
-/// This is not a general polygon boolean. Signed coverage gives accepted clear
-/// images saturating set-difference semantics, while the admission gates keep
-/// every geometric approximation on the over-connected side. A void placed
-/// imperfectly is refused or under-cuts the removal, leaving a phantom speck of
-/// pour rather than fabricating a break in a conductor that is really whole. What that
-/// argument depends on is the void's own GEOMETRY never being larger than the
-/// void the film cleared, which is why over-approximated clear images are
-/// refused outright (see `aperture_image_is_exact`, `declared_line_width`, and
-/// the arc refusals in `close_region` and the clear-stroke branch).
+/// The admission gates still keep geometric approximation on the conservative
+/// side. Clear standard apertures are inscribed; unknown widths, unapplied
+/// transforms, aperture blocks, arc-bearing clear regions, and other
+/// over-approximations are refused before this function. Dark capsules and
+/// rounded polygons are converted with circumscribed tessellation, so conversion
+/// cannot itself erase real dark copper.
 ///
-/// The deliberate limits, all of which leave copper standing:
+/// A single convex plane carrying many independent interior antipads takes a
+/// topology-equivalent indexed signed-coverage fast path. Its preconditions
+/// exclude interleaved copper, concavity, overlap, boundary crossing, and every
+/// extra primitive. That keeps the 62,500-annulus stress shape from duplicating
+/// its roughly six million contour points in a generic overlay graph while the
+/// general path remains a true Boolean difference.
 ///
-///   - A void is cut only from `Region` primitives. Pours are what negative
-///     films void; a clear laid over a track or a pad is not how any exporter
-///     draws a break, and scanning every flash for every void is quadratic on
-///     boards where neither is small.
-///   - A void is cut only from a pour whose OWN contours, as it was drawn,
-///     contain every vertex of the void. That rejects a void whose corner falls
-///     outside the pour; a void whose vertices all sit in copper while an edge
-///     crosses out would need a true clip, so the whole cut is refused.
-///   - A void is cut only from copper painted BEFORE it (gerber is a painter's
-///     model), and from EVERY enclosing pour, not just one: a void inside two
-///     overlapping pours has to void both, or the other one fills it back in.
-///   - A void already covered whole by an earlier void is skipped as redundant.
-///     Partial overlaps are retained; signed coverage keeps their intersection
-///     clear rather than repainting it.
-///   - One clear image spanning TWO pours voids NEITHER: all-or-none is applied per
-///     pour, and enclosure demands every piece sit inside that pour. On a film that
-///     concatenates a plane's clearances across two pours the solid-slab reading
-///     returns whole. Over-connecting, and listed so it is not a surprise.
-///
-/// Finally, a void that RINGS copper (an annular clear flash, or a clear region
-/// carrying an island contour) leaves that island electrically separate from the
-/// pour around it, so [`free_ringed_islands`] moves it out of the pour and into a
-/// primitive of its own. Without that the island stayed in the pour's and the
-/// union-find shorted it to the plane, which for a negative-drawn plane is the very
-/// merge this function exists to break.
-///
-/// That is the ONLY decomposition done to a cut pour, and it is deliberately
-/// narrow: a void's own hole contours, promoted only when no other void's bounds
-/// overlap them. It is emphatically NOT a general re-split by nesting depth. Depth
-/// is meaningless across the voids of a whole film, which cross one another, and
-/// applying it here promoted 11890 of 12000 voids on an overlapping-antipad plane
-/// and brought the board-sized sheet straight back (see `group_contours`, which is
-/// valid only inside one region statement). Narrow is sufficient for a CONVEX pour:
-/// a void whose vertices all lie inside one cannot sever it, and one reaching past
-/// the pour's edge is refused for that pour entirely, so a ring-shaped void is the
-/// only cut that separates copper. A CONCAVE pour can be severed by a void lying
-/// wholly inside it, a gap drawn across the arms of a U, and a ring formed by
-/// SEVERAL separate voids is not one void's hole either; in both cases the pieces
-/// stay contours of one pour, over-connected. A plane deliberately split by a clear
-/// gap therefore reads as one conductor, which is on the limits list.
-fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
+/// Clears with the same `painted_before` value form one uninterrupted clear
+/// pass. Unioning that pass before subtracting it makes overlapping images
+/// idempotent and avoids repeatedly rebuilding a plane whose thousands of
+/// antipads were all emitted together. Each output polygon is a separate
+/// primitive because a clear may physically split one input conductor.
+fn apply_clears(out: &mut Vec<CopperPrim>, clears: Vec<Clear>) {
+    if clears.is_empty() || out.is_empty() {
+        return;
+    }
+    // A single convex plane with independent interior antipads is the dense CAM
+    // case: 62,500 annular images carry about six million contour points. Its
+    // topology is already known (one plane plus one island per annulus), so use
+    // the indexed signed-coverage replay below instead of materialising those six
+    // million points again inside a generic overlay graph. Every condition is
+    // required; anything interleaved, crossing, overlapping, concave, or touching
+    // another primitive takes the exact Boolean path.
+    if independent_convex_plane(&*out, &clears) {
+        apply_independent_plane_clears(out, &clears);
+        return;
+    }
+
+    struct PaintedPiece {
+        source_index: usize,
+        prim: CopperPrim,
+    }
+
+    let mut painted: Vec<PaintedPiece> = std::mem::take(out)
+        .into_iter()
+        .enumerate()
+        .map(|(source_index, prim)| PaintedPiece { source_index, prim })
+        .collect();
+    let mut clears = clears.into_iter().peekable();
+
+    while let Some(first) = clears.next() {
+        let painted_before = first.painted_before;
+        let mut batch = vec![first];
+        while clears
+            .peek()
+            .is_some_and(|clear| clear.painted_before == painted_before)
+        {
+            batch.push(clears.next().expect("peeked clear exists"));
+        }
+
+        let mut invalid_statements = Vec::new();
+
+        let mut batch_bounds = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        let mut clear_polygons = Vec::with_capacity(batch.len());
+        for clear in batch {
+            for &(x, y) in clear.contours.iter().flatten() {
+                batch_bounds[0] = batch_bounds[0].min(x);
+                batch_bounds[1] = batch_bounds[1].min(y);
+                batch_bounds[2] = batch_bounds[2].max(x);
+                batch_bounds[3] = batch_bounds[3].max(y);
+            }
+            match contours_to_geo_polygon(clear.contours) {
+                Some(polygon) if polygon.is_valid() => {
+                    clear_polygons.push((clear.statement, polygon.orient(Direction::Default)));
+                }
+                _ => invalid_statements.push(clear.statement),
+            }
+        }
+        clear_polygons.retain(|(statement, _)| !invalid_statements.contains(statement));
+        if clear_polygons.is_empty() {
+            continue;
+        }
+        let polygons: Vec<Polygon<f64>> = clear_polygons
+            .into_iter()
+            .map(|(_, polygon)| polygon)
+            .collect();
+        let clear_union = unary_union(&polygons).orient(Direction::Default);
+
+        let mut next = Vec::with_capacity(painted.len());
+        for piece in painted {
+            let bounds = piece.prim.shape.bounds();
+            let overlaps_batch = !(bounds[2] < batch_bounds[0]
+                || bounds[0] > batch_bounds[2]
+                || bounds[3] < batch_bounds[1]
+                || bounds[1] > batch_bounds[3]);
+            if piece.source_index >= painted_before || !overlaps_batch {
+                next.push(piece);
+                continue;
+            }
+
+            let Some(dark) = shape_to_geo(&piece.prim.shape) else {
+                // An unsupported/invalid dark representation cannot enter a
+                // destructive overlay. Preserving it may retain a false join;
+                // converting it to the empty set would erase real copper.
+                next.push(piece);
+                continue;
+            };
+            let CopperPrim { kind, attrs, .. } = piece.prim;
+            let remainder = dark.difference(&clear_union);
+            for shape in geo_to_shapes(remainder) {
+                next.push(PaintedPiece {
+                    source_index: piece.source_index,
+                    prim: CopperPrim {
+                        shape,
+                        kind,
+                        attrs: attrs.clone(),
+                    },
+                });
+            }
+        }
+        painted = next;
+    }
+
+    painted.sort_by(|a, b| {
+        a.source_index.cmp(&b.source_index).then_with(|| {
+            let aa = a.prim.shape.bounds();
+            let bb = b.prim.shape.bounds();
+            aa[0]
+                .total_cmp(&bb[0])
+                .then_with(|| aa[1].total_cmp(&bb[1]))
+                .then_with(|| aa[2].total_cmp(&bb[2]))
+                .then_with(|| aa[3].total_cmp(&bb[3]))
+        })
+    });
+    *out = painted.into_iter().map(|piece| piece.prim).collect();
+}
+
+fn independent_convex_plane(out: &[CopperPrim], clears: &[Clear]) -> bool {
+    let [plane] = out else {
+        return false;
+    };
+    let Shape::Polygon { pts: plane_pts, r } = &plane.shape else {
+        return false;
+    };
+    if plane.kind != PrimKind::Region || *r != 0.0 || !is_convex_contour(plane_pts) {
+        return false;
+    }
+    if clears.iter().any(|clear| {
+        clear.painted_before != 1
+            || clear.contours.len() != 2
+            || clear.contours[0].len() != 64
+            || clear.contours[1].len() != 32
+            || clear.contours[1]
+                .iter()
+                .any(|&(x, y)| !point_in_polygon(x, y, &clear.contours[0]))
+    }) {
+        return false;
+    }
+    let mut statements = std::collections::HashSet::with_capacity(clears.len());
+    if clears
+        .iter()
+        .any(|clear| !statements.insert(clear.statement))
+    {
+        return false;
+    }
+    let bounds: Vec<[f64; 4]> = clears
+        .iter()
+        .map(|clear| contour_bounds(&clear.contours.concat()))
+        .collect();
+    let tree = rstar::RTree::bulk_load(
+        bounds
+            .iter()
+            .enumerate()
+            .map(|(idx, &bounds)| BoundsLeaf { bounds, idx })
+            .collect(),
+    );
+    clears.iter().enumerate().all(|(idx, clear)| {
+        clear
+            .contours
+            .iter()
+            .flatten()
+            .all(|&(x, y)| point_in_polygon(x, y, plane_pts))
+            && tree
+                .locate_in_envelope_intersecting(rstar::AABB::from_corners(
+                    [bounds[idx][0], bounds[idx][1]],
+                    [bounds[idx][2], bounds[idx][3]],
+                ))
+                .all(|leaf| leaf.idx == idx)
+    })
+}
+
+fn is_convex_contour(points: &[(f64, f64)]) -> bool {
+    if points.len() < 3 {
+        return false;
+    }
+    let mut sign = 0.0f64;
+    for i in 0..points.len() {
+        let a = points[i];
+        let b = points[(i + 1) % points.len()];
+        let c = points[(i + 2) % points.len()];
+        let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
+        if cross.abs() <= 1e-12 {
+            continue;
+        }
+        if sign == 0.0 {
+            sign = cross.signum();
+        } else if cross.signum() != sign {
+            return false;
+        }
+    }
+    sign != 0.0
+}
+
+fn closed_line_string(mut points: Vec<(f64, f64)>) -> LineString<f64> {
+    if points.first() != points.last() {
+        if let Some(&first) = points.first() {
+            points.push(first);
+        }
+    }
+    LineString::new(points.into_iter().map(|(x, y)| Coord { x, y }).collect())
+}
+
+fn contours_to_geo_polygon(mut contours: Vec<Vec<(f64, f64)>>) -> Option<Polygon<f64>> {
+    if contours.first().is_none_or(|outer| outer.len() < 3) {
+        return None;
+    }
+    let outer = closed_line_string(contours.remove(0));
+    let holes = contours
+        .into_iter()
+        .filter(|contour| contour.len() >= 3)
+        .map(closed_line_string)
+        .collect();
+    Some(Polygon::new(outer, holes))
+}
+
+fn shape_to_geo(shape: &Shape) -> Option<MultiPolygon<f64>> {
+    match shape {
+        Shape::Capsule(capsule) => {
+            // `stadium_outline` samples a half-circle in 16 chords. Expanding by
+            // sec(half the chord angle) circumscribes the exact capsule, so the
+            // conversion cannot erase dark copper merely through tessellation.
+            let mut conservative = capsule.clone();
+            conservative.r *= 1.0 / (std::f64::consts::PI / 32.0).cos();
+            contours_to_geo_polygon(vec![stadium_outline(&conservative)])
+                .filter(Validation::is_valid)
+                .map(|polygon| MultiPolygon::new(vec![polygon.orient(Direction::Default)]))
+        }
+        Shape::Polygon { pts, r } => {
+            let polygon = contours_to_geo_polygon(vec![pts.clone()])?;
+            if !polygon.is_valid() {
+                return None;
+            };
+            if *r <= 0.0 {
+                Some(MultiPolygon::new(vec![polygon.orient(Direction::Default)]))
+            } else {
+                // geo's round buffer uses a 0.2 radian maximum turn. The same
+                // secant construction makes its chords an outer approximation.
+                Some(polygon.buffer(*r / 0.1f64.cos()).orient(Direction::Default))
+            }
+        }
+        Shape::MultiPolygon { contours, weights } => {
+            // Before painter replay, region and aperture shapes are one exterior
+            // followed by ordinary holes. Positive islands are already emitted as
+            // their own primitive by `group_contours_into_pieces`.
+            if weights.first() != Some(&1) || weights.iter().skip(1).any(|&weight| weight != -1) {
+                return None;
+            }
+            contours_to_geo_polygon(contours.clone())
+                .filter(Validation::is_valid)
+                .map(|polygon| MultiPolygon::new(vec![polygon.orient(Direction::Default)]))
+        }
+    }
+}
+
+fn geo_to_shapes(multi: MultiPolygon<f64>) -> Vec<Shape> {
+    let mut shapes: Vec<Shape> = multi
+        .0
+        .into_iter()
+        .filter_map(|polygon| {
+            let ring_points = |ring: LineString<f64>| {
+                let mut points: Vec<(f64, f64)> =
+                    ring.0.into_iter().map(|coord| (coord.x, coord.y)).collect();
+                if points.len() >= 2 && points.first() == points.last() {
+                    points.pop();
+                }
+                points
+            };
+            let outer = ring_points(polygon.exterior().clone());
+            if outer.len() < 3 {
+                return None;
+            }
+            let holes: Vec<Vec<(f64, f64)>> = polygon
+                .interiors()
+                .iter()
+                .cloned()
+                .map(ring_points)
+                .filter(|ring| ring.len() >= 3)
+                .collect();
+            if holes.is_empty() {
+                Some(Shape::Polygon { pts: outer, r: 0.0 })
+            } else {
+                let mut contours = Vec::with_capacity(holes.len() + 1);
+                let mut weights = Vec::with_capacity(holes.len() + 1);
+                contours.push(outer);
+                weights.push(1);
+                for hole in holes {
+                    contours.push(hole);
+                    weights.push(-1);
+                }
+                Some(Shape::MultiPolygon { contours, weights })
+            }
+        })
+        .collect();
+    shapes.sort_by(|a, b| {
+        let aa = a.bounds();
+        let bb = b.bounds();
+        aa[0]
+            .total_cmp(&bb[0])
+            .then_with(|| aa[1].total_cmp(&bb[1]))
+            .then_with(|| aa[2].total_cmp(&bb[2]))
+            .then_with(|| aa[3].total_cmp(&bb[3]))
+    });
+    shapes
+}
+
+fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     if clears.is_empty() {
         return;
     }
@@ -508,10 +785,9 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     cut.sort_unstable();
     cut.dedup();
     // A void is cut from EVERY enclosing pour, so with two overlapping pours the
-    // same island is freed from both. It is one piece of copper, so it becomes one
-    // primitive: freeing it twice made two identical shapes that nothing unions
-    // (connectivity never unions region to region), i.e. one conductor counted as
-    // two.
+    // same island is freed from both. It is one piece of copper, so emit one
+    // primitive rather than duplicate geometry and force the connectivity pass to
+    // rediscover that the identical regions overlap.
     // Keyed on the void's identity, its clear image and which of that image's
     // contours it is, never on the coordinates. Comparing coordinates meant every
     // island was compared against every island freed so far, and all the islands of
@@ -519,43 +795,11 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     // 62500 annular antipads spent 5.4 s in that scan alone.
     let mut already_freed: std::collections::HashSet<(usize, usize, usize)> =
         std::collections::HashSet::new();
-    // Every primitive as it stands before any island is appended, by bounds, so the
-    // promotion test can ask "did anything painted after this void land on this
-    // island". Every copper kind participates. A track can bridge by its WIDTH while
-    // all of the connectivity pass's centre-line samples miss the small island; if
-    // the island were promoted in that case, the real conductor would become a
-    // fabricated open.
-    // Shapes as they stand before any island is appended, for the exact overlap test.
-    let out_shapes: Vec<Shape> = out.iter().map(|p| p.shape.clone()).collect();
-    let painted_tree = rstar::RTree::bulk_load(
-        (0..out.len())
-            .map(|i| BoundsLeaf {
-                bounds: out[i].shape.bounds(),
-                idx: i,
-            })
-            .collect(),
-    );
-    let bridged = |island: &[(f64, f64)], hb: [f64; 4], painted_before: usize| -> bool {
-        let probe = Shape::Polygon {
-            pts: island.to_vec(),
-            r: 0.0,
-        };
-        painted_tree
-            .locate_in_envelope_intersecting(rstar::AABB::from_corners(
-                [hb[0], hb[1]],
-                [hb[2], hb[3]],
-            ))
-            .filter(|l| l.idx >= painted_before)
-            // Bounds are only the prefilter; the verdict is whether the later
-            // primitive's COPPER actually reaches the island. Stopping at bounds let a
-            // 0.2 mm frame hugging the board edge, whose box is the whole board,
-            // veto promotion for every island under it, so the same geometry
-            // answered differently depending on paint order. Later dark regions are
-            // the NORM on a negatively-drawn film (the `%LPD*%` islands), so one
-            // long or L-shaped one disabled promotion board-wide. Exact shape-gap
-            // also accounts for the finite width of later tracks and flashes.
-            .any(|l| super::geo::shape_gap(&probe, &out_shapes[l.idx]) <= 0.0)
-    };
+    // The caller proved this is exactly one convex plane, every clear was painted
+    // after it, and no two clear bounds overlap. There can therefore be no other
+    // primitive bridging an annular island. In particular, do not clone the now
+    // multi-million-point cut plane merely to answer this constant false question.
+    let bridged = |_island: &[(f64, f64)], _hb: [f64; 4], _painted_before: usize| false;
     for slot in cut {
         let i = regions[slot];
         for (key, shape) in free_ringed_islands(
@@ -646,14 +890,10 @@ fn free_ringed_islands(
         if applied.any_other_overlaps(hb, uid) {
             continue;
         }
-        // Promotion REPARTITIONS primitives, which is not a coverage operation, and
-        // connectivity never unions one region to another however much their copper
-        // overlaps. So if a REGION painted after the void reaches this island,
-        // promoting it cuts a conductor the film joined. An exporter re-adding a
-        // spoke across a cleared annulus as a dark region is exactly that: the plane,
-        // the spoke and the island came back as three nets on a film with one
-        // conductor. Leaving the island as a contour of the pour over-connects
-        // instead, which is this module's direction.
+        // Promotion repartitions primitives, which is not itself a coverage
+        // operation. If later copper reaches the island, the promoted shape must be
+        // joined again by finite filled-area contact; decline promotion when that
+        // bridge cannot be proved here, preserving the conservative direction.
         //
         // Every later copper kind blocks promotion when its finite geometry reaches
         // the island. In particular, a track may lap onto a small island only by its
@@ -2358,7 +2598,7 @@ fn contour_area2(c: &[(f64, f64)]) -> f64 {
 /// angle is convex and the bisector of the two edges leaving it points into the
 /// interior. A short step along that bisector, a thousandth of the shorter
 /// adjacent edge, therefore lands strictly inside and on no vertex.
-fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
+pub(super) fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
     let n = poly.len();
     if n < 3 {
         return poly.first().copied().unwrap_or((0.0, 0.0));
@@ -2437,6 +2677,41 @@ fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
         .min((q.0 - c.0).hypot(q.1 - c.1));
     let step = (short * 1e-3).max(diag * 1e-6);
     (c.0 + bx / blen * step, c.1 + by / blen * step)
+}
+
+/// A representative point in the shape's actual filled copper.
+///
+/// The cheap outer-contour witness is sufficient for almost every region and
+/// avoids cloning a dense plane. If that point lands in one of the shape's
+/// holes, fall back to `geo`'s hole-aware interior-point algorithm. This fallback
+/// is exceptional; the common multi-million-vertex plane keeps its borrowed
+/// contours and constant extra memory.
+pub(super) fn filled_interior_witness(shape: &Shape) -> Option<(f64, f64)> {
+    match shape {
+        Shape::Capsule(capsule) => Some((
+            (capsule.ax + capsule.bx) / 2.0,
+            (capsule.ay + capsule.by) / 2.0,
+        )),
+        Shape::Polygon { pts, .. } => Some(interior_witness(pts)),
+        Shape::MultiPolygon { contours, weights } => {
+            let outer = contours.first()?;
+            let candidate = interior_witness(outer);
+            if super::geo::point_in_weighted_contours(candidate.0, candidate.1, contours, weights) {
+                return Some(candidate);
+            }
+            let point = shape_to_geo(shape)?.interior_point()?;
+            Some((point.x(), point.y()))
+        }
+    }
+}
+
+/// Exact filled-area contact for two region shapes, including their holes.
+/// Unsupported weighted representations fail closed as "not proven joined".
+pub(super) fn filled_regions_touch(a: &Shape, b: &Shape) -> bool {
+    let (Some(a), Some(b)) = (shape_to_geo(a), shape_to_geo(b)) else {
+        return false;
+    };
+    a.intersects(&b)
 }
 
 /// Group closed contours into one bucket per connected piece of copper, each
@@ -2568,6 +2843,40 @@ fn regular_polygon(cx: f64, cy: f64, r: f64, vertices: u8, rot_deg: f64) -> Shap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_dark_contour_weights_are_preserved_fail_closed() {
+        let original = Shape::MultiPolygon {
+            contours: vec![
+                vec![(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
+                vec![(6.0, 0.0), (8.0, 0.0), (8.0, 2.0), (6.0, 2.0)],
+            ],
+            // This is two positive islands, not the one-exterior-plus-holes
+            // representation accepted by the overlay adapter.
+            weights: vec![1, 1],
+        };
+        let mut copper = vec![CopperPrim::bare(original.clone(), PrimKind::Region)];
+        apply_clears(
+            &mut copper,
+            vec![Clear {
+                contours: vec![vec![(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]],
+                painted_before: 1,
+                statement: 0,
+                piece: 0,
+            }],
+        );
+
+        assert_eq!(
+            copper.len(),
+            1,
+            "unsupported dark geometry must not be erased"
+        );
+        let Shape::MultiPolygon { contours, weights } = &copper[0].shape else {
+            panic!("unsupported dark geometry must retain its representation");
+        };
+        assert_eq!(contours.len(), 2);
+        assert_eq!(weights, &[1, 1]);
+    }
 
     const SIMPLE: &str = "\
 %FSLAX46Y46*%
@@ -2968,12 +3277,17 @@ G37*
             piece_at(&pieces, 14.5, 10.0).is_some(),
             "the pour beyond the void stands"
         );
-        // The two rims differ by the 0.48% circumscription, so a hair-thin ring of
-        // island copper survives between them, 4 um wide. The second void's bounds
-        // overlap it, so it is NOT freed into its own conductor: an island another
-        // void may have touched stays a contour of the pour, over-connected, which
-        // is the conservative side. Asserted so the choice is on the record.
-        assert_eq!(pieces.len(), 1);
+        // The two admitted rims differ by the 0.48% conservative
+        // circumscription, so a hair-thin ring of real modelled copper survives
+        // between them. Exact difference retains it as the separate conductor it
+        // is instead of hiding it inside the surrounding pour primitive.
+        assert_eq!(pieces.len(), 2);
+        let hair = piece_at(&pieces, 11.002, 10.0).expect("the conservative hair remains");
+        let pour = piece_at(&pieces, 14.5, 10.0).expect("the outer pour remains");
+        assert_ne!(
+            hair, pour,
+            "the cleared annulus separates the hair from the pour"
+        );
     }
 
     #[test]
@@ -3146,6 +3460,234 @@ G37*
             "arbitrarily many overlapping clears must saturate at empty"
         );
         assert!(piece_at(&pieces, 2.0, 2.0).is_some(), "the plane stands");
+    }
+
+    #[test]
+    fn ten_thousand_independent_annular_antipads_replay_without_a_plane_clone() {
+        // This is the bounded CI-sized form of the 250x250 (62,500 antipad)
+        // stress board. One convex plane and non-overlapping, interior annular
+        // clears take the indexed topology path: one retained plane and one
+        // isolated copper island per antipad. The old promotion guard cloned the
+        // complete cut plane solely to ask whether later copper bridged an island,
+        // doubling the dominant geometry at the 62,500 case.
+        let mut flashes = String::from("D10*\n");
+        for row in 0..100i64 {
+            for col in 0..100i64 {
+                let x = 10_000_000 + col * 1_400_000;
+                let y = 10_000_000 + row * 1_400_000;
+                flashes.push_str(&format!("X{x}Y{y}D03*\n"));
+            }
+        }
+        let gerber = format!(
+            "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,0.800000X0.400000*%
+G36*
+X0Y0D02*
+X160000000Y0D01*
+X160000000Y160000000D01*
+X0Y160000000D01*
+X0Y0D01*
+G37*
+%LPC*%
+{flashes}M02*
+"
+        );
+        let prims = parse_layer(&gerber).unwrap();
+        assert_eq!(
+            prims
+                .iter()
+                .filter(|prim| prim.kind == PrimKind::Region)
+                .count(),
+            10_001,
+            "one plane plus every annular island"
+        );
+        let (_board, stats) =
+            crate::gerber::connect::reconstruct("dense-annular-plane", vec![prims], vec![], vec![]);
+        assert_eq!(
+            stats.n_nets, 10_001,
+            "end-to-end connectivity must retain every isolated island without a quadratic plane scan"
+        );
+    }
+
+    #[test]
+    fn a_later_clear_flash_splits_an_earlier_track() {
+        // Gerber polarity is a painter's model for every object, not only G36
+        // pours. This 1 mm track is physically cut in two by a later 2 mm clear
+        // flash. Ignoring LPC outside Region primitives leaves one fabricated
+        // conductor straight through the gap.
+        let prims = parse_layer(
+            "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,1.000000*%
+%ADD11C,2.000000*%
+D10*
+X2000000Y10000000D02*
+X18000000Y10000000D01*
+%LPC*%
+D11*
+X10000000Y10000000D03*
+M02*
+",
+        )
+        .unwrap();
+        let (_board, stats) =
+            crate::gerber::connect::reconstruct("clear-over-track", vec![prims], vec![], vec![]);
+        assert_eq!(stats.n_nets, 2, "the clear flash opens the track");
+    }
+
+    #[test]
+    fn a_later_clear_region_splits_an_earlier_pad() {
+        // A legal clear region can cross a flashed aperture too. The stripe spans
+        // the whole 4 mm pad, leaving two copper lobes; treating the flash as
+        // immune to LPC silently shorts those lobes back together.
+        let prims = parse_layer(
+            "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,4.000000*%
+D10*
+X10000000Y10000000D03*
+%LPC*%
+G36*
+X7000000Y9500000D02*
+X13000000Y9500000D01*
+X13000000Y10500000D01*
+X7000000Y10500000D01*
+X7000000Y9500000D01*
+G37*
+M02*
+",
+        )
+        .unwrap();
+        let (_board, stats) =
+            crate::gerber::connect::reconstruct("clear-over-pad", vec![prims], vec![], vec![]);
+        assert_eq!(stats.n_nets, 2, "the clear stripe opens the pad");
+    }
+
+    #[test]
+    fn a_clear_crossing_a_concave_pour_splits_its_neck() {
+        // Two large lobes joined only by the 4x4 mm waist. The clear stripe
+        // crosses beyond the waist's top and bottom, so an enclosure-only
+        // implementation refuses it and leaves one fabricated conductor. Exact
+        // painter clipping keeps the two physical copper components.
+        let prims = parse_layer(
+            "\
+%FSLAX46Y46*%
+%MOMM*%
+G36*
+X0Y0D02*
+X8000000Y0D01*
+X8000000Y8000000D01*
+X12000000Y8000000D01*
+X12000000Y0D01*
+X20000000Y0D01*
+X20000000Y20000000D01*
+X12000000Y20000000D01*
+X12000000Y12000000D01*
+X8000000Y12000000D01*
+X8000000Y20000000D01*
+X0Y20000000D01*
+X0Y0D01*
+G37*
+%LPC*%
+G36*
+X9500000Y7000000D02*
+X10500000Y7000000D01*
+X10500000Y13000000D01*
+X9500000Y13000000D01*
+X9500000Y7000000D01*
+G37*
+M02*
+",
+        )
+        .unwrap();
+        assert_eq!(
+            prims
+                .iter()
+                .filter(|prim| prim.kind == PrimKind::Region)
+                .count(),
+            2,
+            "the waist cut produces two region primitives"
+        );
+        let (_board, stats) =
+            crate::gerber::connect::reconstruct("split-concave-pour", vec![prims], vec![], vec![]);
+        assert_eq!(stats.n_nets, 2, "the lobes are electrically separate");
+    }
+
+    #[test]
+    fn an_earlier_dark_region_can_bridge_an_annular_clear_island() {
+        // The spoke is painted before the clear ring. The ring cuts the plane and
+        // spoke where they overlap, but the surviving spoke still reaches both the
+        // central island and the surrounding plane. Promotion used to inspect only
+        // copper painted after the clear, so it split the island out anyway and the
+        // region-only connectivity path returned three nets for two physical ones.
+        let prims = parse_layer(
+            "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,6.000000X2.000000*%
+G36*
+X0Y0D02*
+X20000000Y0D01*
+X20000000Y20000000D01*
+X0Y20000000D01*
+X0Y0D01*
+G37*
+G36*
+X9000000Y9900000D02*
+X14000000Y9900000D01*
+X14000000Y10100000D01*
+X9000000Y10100000D01*
+X9000000Y9900000D01*
+G37*
+%LPC*%
+D10*
+X10000000Y10000000D03*
+M02*
+",
+        )
+        .unwrap();
+        let covered = |x: f64, y: f64| {
+            prims.iter().any(|prim| match &prim.shape {
+                Shape::Capsule(c) => {
+                    super::super::geo::shape_gap(
+                        &Shape::disc(x, y, 0.0),
+                        &Shape::Capsule(c.clone()),
+                    ) <= 0.0
+                }
+                Shape::Polygon { pts, .. } => point_in_polygon(x, y, pts),
+                Shape::MultiPolygon { contours, weights } => {
+                    super::super::geo::point_in_weighted_contours(x, y, contours, weights)
+                }
+            })
+        };
+        assert!(
+            covered(10.0, 10.0),
+            "the clear aperture's hole leaves its island"
+        );
+        assert!(!covered(12.0, 10.0), "the clear annulus itself is empty");
+        assert!(covered(14.0, 10.0), "the outer plane and spoke survive");
+        let layout: Vec<_> = prims
+            .iter()
+            .map(|prim| (prim.kind, prim.shape.bounds()))
+            .collect();
+        assert!(
+            super::super::geo::shape_gap(&prims[0].shape, &prims[1].shape) > 1.0,
+            "the plane and island retain the annular gap"
+        );
+        let (_board, stats) = crate::gerber::connect::reconstruct(
+            "pre-clear-region-bridge",
+            vec![prims],
+            vec![],
+            vec![],
+        );
+        assert_eq!(
+            stats.n_nets, 2,
+            "the surviving spoke keeps the plane-side island partition connected: {layout:?}"
+        );
     }
 
     #[test]
@@ -3352,13 +3894,16 @@ M02*
             piece_at(&pieces, 3.0, 3.0).is_some(),
             "copper the film painted and never cleared must stay"
         );
-        // The whole void straddles the pour, so nothing is cut at all: the outer
-        // and its island are one image and are decided together.
-        assert_eq!(pieces.len(), 1);
-        assert_eq!(pieces[0].len(), 1, "the pour is untouched");
-        // Now a pour that DOES contain the void. The ring is cut and the island is
-        // freed as its own conductor, which only happens if the two contours were
-        // grouped as one void.
+        // Exact clipping cuts only the part of the clear image that overlaps the
+        // pour; it no longer has to refuse the whole image merely because its
+        // outer contour crosses the pour boundary.
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(
+            piece_at(&pieces, 6.5, 6.5),
+            None,
+            "the overlapping ring is cut"
+        );
+        // A containing pour produces the same ring/island topology.
         let contained = g.replace("X-1000000Y-1000000D02*\nX7000000Y-1000000D01*\nX7000000Y7000000D01*\nX-1000000Y7000000D01*\nX-1000000Y-1000000D01*", "X-1000000Y-1000000D02*\nX12000000Y-1000000D01*\nX12000000Y12000000D01*\nX-1000000Y12000000D01*\nX-1000000Y-1000000D01*");
         let pieces = pieces_of(&contained);
         assert_eq!(pieces.len(), 2, "the ring cuts the island free");
@@ -3403,7 +3948,20 @@ M02*
             .iter()
             .filter(|p| matches!(&p.shape, Shape::Polygon { pts, .. } if pts.len() == 32))
             .count();
-        assert_eq!(islands, 1, "one piece of copper is one primitive");
+        assert_eq!(
+            islands, 2,
+            "each painted pour retains its own exact remainder"
+        );
+        let (_board, stats) = crate::gerber::connect::reconstruct(
+            "overlapping-pour-island",
+            vec![prims],
+            vec![],
+            vec![],
+        );
+        assert_eq!(
+            stats.n_nets, 2,
+            "overlapping copies are electrically one island plus one surrounding pour"
+        );
     }
 
     #[test]
@@ -3502,13 +4060,11 @@ G37*
     }
 
     #[test]
-    fn an_island_a_later_region_bridges_is_not_freed() {
-        // Freeing an island REPARTITIONS primitives, which is not a parity operation,
-        // and connectivity never unions one region to another however much their
-        // copper overlaps. So when the film re-adds a spoke across the cleared
-        // annulus AS A DARK REGION, promoting the island cut a conductor the film
-        // joined: plane, spoke and island came back as three nets on a film with one.
-        // Nothing may be painted over an island after its void for it to be freed.
+    fn a_later_region_or_track_bridge_reconnects_a_freed_island() {
+        // Exact difference frees the annular island into its own primitive. A
+        // later dark spoke then reconnects it to the surrounding plane by actual
+        // filled-area contact, whether the spoke is a region or a finite-width
+        // track.
         let head = "\
 %FSLAX46Y46*%
 %MOMM*%
@@ -3527,8 +4083,7 @@ D10*
 X10000000Y10000000D03*
 %LPD*%
 ";
-        // Bridged by a REGION: the island stays a contour of the pour, so the pour
-        // and the spoke are the only two region primitives and nothing is freed.
+        // Bridged by a REGION.
         let prims = parse_layer(&format!(
             "{head}\
 G36*
@@ -3542,23 +4097,15 @@ M02*
 "
         ))
         .unwrap();
-        let regions = prims.iter().filter(|p| p.kind == PrimKind::Region).count();
-        assert_eq!(
-            regions, 2,
-            "the pour keeps its island; only the spoke joins it"
-        );
-        // Bridged by a DRAW instead: finite track geometry participates in the same
-        // promotion guard. Keeping the island with the pour avoids depending on the
-        // connectivity pass's sparse centre-line samples.
+        let (_board, stats) =
+            crate::gerber::connect::reconstruct("later-region-bridge", vec![prims], vec![], vec![]);
+        assert_eq!(stats.n_nets, 1, "the later spoke joins island and pour");
+        // Bridged by a DRAW instead: its finite width, not only centre-line
+        // samples, reaches both island and plane.
         let prims = parse_layer(&format!(
             "{head}D11*\nX9700000Y10150000D02*\nX14000000Y10150000D01*\nM02*\n"
         ))
         .unwrap();
-        let regions = prims.iter().filter(|p| p.kind == PrimKind::Region).count();
-        assert_eq!(
-            regions, 1,
-            "the track bridge keeps the island with the pour"
-        );
         assert!(prims.iter().any(|p| p.kind == PrimKind::Track));
         let (_board, stats) =
             crate::gerber::connect::reconstruct("track-bridge", vec![prims], vec![], vec![]);
@@ -3567,6 +4114,10 @@ M02*
 
     #[test]
     fn a_width_only_later_track_bridge_does_not_fabricate_an_open() {
+        // The centre line stops 90 um short of the island; the 100 um track
+        // radius overlaps it by only 10 um. A former 40 um penetration heuristic
+        // missed this real copper contact and stranded thermal spokes/power pads
+        // after exact Boolean splitting.
         let gerber = "\
 %FSLAX46Y46*%
 %MOMM*%
@@ -3585,7 +4136,7 @@ D10*
 X10000000Y10000000D03*
 %LPD*%
 D11*
-X8950000Y10000000D02*
+X8910000Y10000000D02*
 X40000000Y10000000D01*
 M02*
 ";
@@ -3644,14 +4195,24 @@ M02*
             .iter()
             .filter(|p| p.kind == PrimKind::Region)
             .collect();
-        assert_eq!(regions.len(), 1);
-        let Shape::Polygon { pts, .. } = &regions[0].shape else {
-            panic!("the pour is uncut, so it is still one plain contour");
+        let covered = |x: f64, y: f64| {
+            regions.iter().any(|region| match &region.shape {
+                Shape::Polygon { pts, .. } => point_in_polygon(x, y, pts),
+                Shape::MultiPolygon { contours, weights } => {
+                    super::super::geo::point_in_weighted_contours(x, y, contours, weights)
+                }
+                Shape::Capsule(_) => false,
+            })
         };
         assert!(
-            !super::super::geo::point_in_polygon(10.0, 10.0, pts),
-            "the slot the pour was routed with stays bare board"
+            !covered(10.0, 10.0),
+            "exact clipping never fills the slot the pour was routed with"
         );
+        assert!(
+            !covered(8.5, 8.5),
+            "the intersecting part of the clear ring is cut"
+        );
+        assert!(covered(5.0, 5.0), "copper outside the clear image remains");
     }
 
     #[test]
