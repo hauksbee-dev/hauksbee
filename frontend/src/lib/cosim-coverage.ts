@@ -1,4 +1,5 @@
 import type { WebFallbackWindow, WebTimingCoverage } from '../types/report'
+import type { RefusalContract } from './refusal-contract'
 
 function duration(value: number): string {
   if (value < 1e-3) return `${(value * 1e6).toFixed(3)} us`
@@ -15,4 +16,13 @@ export function fallbackWindowLine(window: WebFallbackWindow): string {
     ? 'no measured error estimate'
     : `${window.error_estimate_v.toFixed(3)} V measured chunk-end error estimate`
   return `${(window.start_s * 1e3).toFixed(3)}-${(window.end_s * 1e3).toFixed(3)} ms: ${window.method}; ${estimate}; ${window.fidelity_note}.`
+}
+
+/** Keep the complete wire data while avoiding a second human rendering of the
+ * exact diagnosis already carried by the typed analysis-refusal contract. */
+export function uncoveredTimingRefusals(
+  refusals: string[] | undefined,
+  refusal: RefusalContract | null | undefined,
+): string[] {
+  return (refusals ?? []).filter(line => line !== refusal?.missing_prerequisite)
 }

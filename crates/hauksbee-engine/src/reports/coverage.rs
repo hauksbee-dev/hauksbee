@@ -157,8 +157,9 @@ pub struct CoverageCaveat {
     /// The whole sentence, verbatim from the formatter the batch surfaces use.
     /// Never paraphrased here.
     pub message: String,
-    /// What would close the hole. An abstention must name the input that would
-    /// unlock it, so every caveat carries one.
+    /// The next action appropriate to this disclosure: close a coverage gap,
+    /// refine a bound, rerun a refusal, respond to an event, or fix a fault.
+    /// Kept as `fix` for the existing report-card wire contract.
     pub fix: String,
 }
 
@@ -551,7 +552,7 @@ mod tests {
         assert_eq!(caveats.len(), 12, "one caveat per class in this fixture");
         assert_eq!(hole_count(&caveats), 6);
         assert_eq!(classes_present(&caveats), CoverageClass::ALL.to_vec());
-        // Every caveat names the input that would unlock it.
+        // Every disclosure names a concrete next action.
         for c in &caveats {
             assert!(!c.fix.trim().is_empty(), "{:?} has no fix", c.class);
             assert!(!c.message.trim().is_empty(), "{:?} has no message", c.class);

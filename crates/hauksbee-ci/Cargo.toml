@@ -40,19 +40,19 @@ regex = "1"
 # type (see tests/schema_drift.rs), so the derive lives on the real structs and
 # a new field can never silently miss the schema.
 schemars = "1.2"
-hauksbee-extract = { version = "0.2.0", path = "../hauksbee-extract" }
-hauksbee-models = { version = "0.2.0", path = "../hauksbee-models" }
-hauksbee-ir = { version = "0.2.0", path = "../hauksbee-ir" }
-hauksbee-solve = { version = "0.2.0", path = "../hauksbee-solve" }
-hauksbee-engine = { version = "0.2.0", path = "../hauksbee-engine", default-features = false }
-hauksbee-server = { version = "0.2.0", path = "../hauksbee-server", default-features = false }
+hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
+hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
+hauksbee-engine = { version = "0.1.0", path = "../hauksbee-engine", default-features = false }
+hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false }
 # Direct dep (was dev-only) for two uses: main() installs the emulator child
 # signal reaper (hauksbee_mcu::children), and the boot-coverage tests reuse
 # the backend's real Espressif-QEMU / Renode discovery (is_available) so heavy
 # co-sim cases skip cleanly when the emulator is absent. default-features =
 # false and no `avr` here on purpose: this line must never drag GPL simavr
 # into the permissive shape (see docs/about/release-and-licensing.md).
-hauksbee-mcu = { version = "0.2.0", path = "../hauksbee-mcu", default-features = false, features = ["qemu", "renode"] }
+hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false, features = ["qemu", "renode"] }
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }

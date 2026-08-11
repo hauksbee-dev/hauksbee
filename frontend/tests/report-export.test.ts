@@ -163,6 +163,25 @@ test('it still carries the report it is an export of', () => {
   expect(html).toContain('0.012 V')
 })
 
+test('a typed timing refusal is rendered once while the wire keeps both fields', () => {
+  const diagnosis = 'PWL replay refused on net /CLK: transition budget exceeded'
+  const report: WebReport = {
+    ...hostile,
+    refusal: {
+      claim: 'timing-sensitive firmware and electrical conclusions',
+      missing_prerequisite: diagnosis,
+      valid_partial_conclusions: ['Static board analysis remains valid.'],
+      next_action: 'reduce transitions per solver chunk, then rerun',
+    },
+    cosim: { ...hostile.cosim!, timing_refusals: [diagnosis] },
+  }
+  const html = buildReportHtml({ ...input, report })
+  expect(html.match(/PWL replay refused on net \/CLK/g)?.length).toBe(1)
+  expect(html).not.toContain('TIMING INVALID')
+  expect(report.cosim?.timing_refusals).toEqual([diagnosis])
+  expect(report.refusal?.missing_prerequisite).toBe(diagnosis)
+})
+
 test('the provenance block does not repeat one name three times', () => {
   const plain: WebReport = { ...hostile, board_name: 'watchy.kicad_pcb', file_name: 'watchy.kicad_pcb' }
   const html = buildReportHtml({ ...input, report: plain, boardLabel: 'watchy.kicad_pcb', sessionName: 'watchy.kicad_pcb' })

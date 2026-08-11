@@ -1,20 +1,19 @@
 //! Downstream compile fixture for the public web co-sim presentation type.
 //!
-//! `WebCosimSection` is constructible outside `hauksbee-engine`; adding fields
-//! to it is a Rust source break even when those fields are optional on the JSON
-//! wire. This fixture pins the complete 0.2 literal so a later field addition
-//! cannot be mistaken for a wire-only additive change.
+//! `WebCosimSection` is constructible outside `hauksbee-engine`; this fixture
+//! pins the complete first-release literal and the repository's planned 0.1.0
+//! release line together.
 
 use hauksbee_engine::frontdoor::WebCosimSection;
 use hauksbee_engine::result::CosimFallbackWindow;
 use hauksbee_engine::scheduler::TimingCoverage;
 
 #[test]
-fn version_0_2_public_literal_includes_the_interactive_coverage_fields() {
+fn version_0_1_public_literal_includes_the_interactive_coverage_fields() {
     assert_eq!(
         env!("CARGO_PKG_VERSION"),
-        "0.2.0",
-        "adding required public fields is a pre-1.0 minor-version source break"
+        "0.1.0",
+        "the unreleased workspace and its first release tag stay on one version line"
     );
 
     let section = WebCosimSection {

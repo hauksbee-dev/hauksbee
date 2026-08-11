@@ -48,10 +48,10 @@ toml = "0.8"
 # system dependency). Chosen over a hand-rolled interpreter or a JS engine
 # service: the whole point is one self-contained binary an agent can launch.
 rquickjs = { version = "0.9", features = ["bindgen"] }
-hauksbee-ir = { version = "0.2.0", path = "../hauksbee-ir" }
-hauksbee-engine = { version = "0.2.0", path = "../hauksbee-engine", default-features = false }
-hauksbee-ci = { version = "0.2.0", path = "../hauksbee-ci", default-features = false }
-hauksbee-mcu = { version = "0.2.0", path = "../hauksbee-mcu", default-features = false }
+hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
+hauksbee-engine = { version = "0.1.0", path = "../hauksbee-engine", default-features = false }
+hauksbee-ci = { version = "0.1.0", path = "../hauksbee-ci", default-features = false }
+hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false }
 
 [lints]
 workspace = true
