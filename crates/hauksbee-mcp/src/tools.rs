@@ -46,7 +46,7 @@ pub fn definitions() -> Value {
     json!([
         {
             "name": "analyze_board",
-            "description": "Full physics-grounded analysis of a PCB design file (KiCad .kicad_pcb/.kicad_sch, Eagle .brd, Altium .PcbDoc, IPC-D-356 .d356, gerber zip, or Board-as-Code .board). Returns the front-door report JSON: overall headline, serious/total finding counts, per-section findings (DRC, connectivity, signal integrity), bind coverage (which components resolved to models), nets, detected supplies, and honesty notes. With firmware_path (.elf/.hex, a PlatformIO project, or a zip of either) it also runs a short firmware co-sim and attaches a `cosim` section. HONESTY CONTRACT: if the firmware question cannot be answered (no MCU on the board, external-only backend, firmware failed to load, or the analog solve aborted) the result is {\"status\":\"invalid_for_analysis\",\"reason\":...,\"report\":...} with the static report riding along. Never treat a refusal as pass or fail; it means the run declined to vouch for itself. Coverage degradations arrive as data fields, not prose; surface them. The front-door report carries five: the substituted-MCU-core caveat, driver contentions, short pulses, drive conflicts, and the per-bus `spi_framing` tier. It carries neither dropped ADC channels nor unexercised buses, and neither watchdog reboots nor per-core timing coverage. Those four reach `hauksbee run --json` and the `run_checks` tool's `coverage_warnings`, so use `run_checks` when the board has an unmapped ADC channel, a bus slave on a controller-less platform, or firmware whose watchdog may bite.",
+            "description": "Full physics-grounded analysis of a PCB design file (KiCad .kicad_pcb/.kicad_sch, Eagle .brd, Altium .PcbDoc, IPC-D-356 .d356, gerber zip, or Board-as-Code .board). Returns the front-door report JSON: overall headline, serious/total finding counts, per-section findings, bind coverage, nets, supplies, and honesty notes. With firmware_path it also runs a short firmware co-sim and attaches a `cosim` section. HONESTY CONTRACT: if the firmware question cannot be answered (no MCU, external-only backend, firmware load failure, analog abort, or strict-invalid timing replay) the result is {\"status\":\"invalid_for_analysis\",\"reason\":...,\"report\":...}; never treat a refusal as pass or fail. Read the complete structured co-sim contract: `timing_coverage` is a measured non-hole timing bound, `timing_refusals` contains strict-invalid replay refusals, and `fallback_windows` marks numerically second-class spans with method, fidelity note, and measured error estimate when available. Other coverage limitations and electrical faults remain in findings or their existing structured fields (`spi_framing`, `analog_valid`, `failed_windows`, substitutions). Surface every populated field alongside the verdict.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -227,14 +227,10 @@ fn analyze_board(args: &Value) -> ToolResult {
 }
 
 /// Decide whether a firmware-carrying analysis is answerable. Two unanswerable
-/// shapes, both the CLI's exit-3 territory: the co-sim never ran (no bound MCU,
-/// external-only backend, firmware failed to load), or it ran and the analog
-/// solve aborted. Returns the structured refusal carrying the report, so the
-/// static findings, and the five coverage holes the front door carries
-/// (substituted core, driver contentions, short pulses, drive conflicts, the
-/// `spi_framing` tier), still reach the caller as data. Four do not: dropped ADC
-/// channels, unexercised buses, watchdog reboots and per-core timing coverage.
-/// See `analyze_board`'s description.
+/// shapes in the CLI's exit-3 territory: the co-sim never ran, its analog solve
+/// aborted, or strict timing replay was refused. Returns the engine's structured
+/// refusal carrying the report, so every front-door finding and populated
+/// coverage field still reaches the caller as data.
 fn firmware_refusal(report: &Value) -> Option<Value> {
     // The engine owns the typed contract. MCP is a transport: passing the same
     // object through prevents a second renderer from drifting on claim scope,
@@ -470,6 +466,32 @@ fn backend_probes() -> Vec<Value> {
 #[cfg(any(feature = "qemu", feature = "renode"))]
 fn first_line(msg: &str) -> String {
     msg.lines().next().unwrap_or("").to_string()
+}
+
+#[cfg(test)]
+mod coverage_contract_tests {
+    use super::*;
+
+    #[test]
+    fn analyze_board_description_names_every_timing_qualification() {
+        let tools = definitions();
+        let description = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "analyze_board")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap();
+        for field in ["timing_coverage", "timing_refusals", "fallback_windows"] {
+            assert!(
+                description.contains(field),
+                "missing {field}: {description}"
+            );
+        }
+        assert!(description.contains("strict-invalid"), "{description}");
+        assert!(description.contains("second-class"), "{description}");
+    }
 }
 
 /// `board_to_code`: the editable Board-as-Code text form, via the engine's

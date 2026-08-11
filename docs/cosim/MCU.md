@@ -391,11 +391,13 @@ matrix below, because they do not read a finished run's caveats:
   `--json`; its output is text for a person.
 - `hauksbee serve`'s live sim streams frames over a websocket
   (`hauksbee-server` `SimFrame`). It drives the same scheduler, including the
-  Renode and QEMU backends, and carries none of the ten caveats below. Treat it
+  Renode and QEMU backends, and carries none of the twelve disclosures below. Treat it
   as a scope, not a report.
 
-Ten classes of per-run co-sim coverage caveat name something the run could not
-do. Counted from the emitting call sites rather than from intent. The `--plain`
+Twelve typed per-run co-sim disclosures share one completeness contract. Nine
+are limitations (holes), per-core timing coverage is a measured non-hole bound,
+`TIMING INVALID` is a strict refusal, and fallback windows are second-class
+qualifications. Counted from the emitting call sites rather than from intent. The `--plain`
 column is yes throughout because `--plain` renders the default text co-sim
 summary AND its own heads-ups (`run_headless` is called with `quiet = cfg.json`,
 so only `--json` silences the text block):
@@ -408,16 +410,17 @@ so only `--json` silences the text block):
 | watchdog reboots | yes | yes | yes | yes | yes | yes |
 | timing limitation | yes | yes | yes | yes | yes | yes |
 | per-core timing coverage | yes | yes | yes (field) | yes | yes | yes (field) |
+| strict timing replay refusal | yes | yes | yes (field) | yes (refuses timing claims) | yes | yes (field + refusal) |
+| fallback-qualified windows | yes | yes | yes (field) | yes (field/qualification) | yes | yes (field) |
 | short pulses | yes | yes | yes | yes | yes | yes |
 | driver contentions | yes | yes | yes | no | yes | yes |
 | drive conflicts | no | yes | yes | no | yes | yes |
 | heuristic SPI framing | yes | yes | yes | assertion detail | yes | yes (field) |
 
-Counting the columns: the TUI and the web front door carry 10 of the 10, the
-default text and `--plain` and `--json` carry 9 and 10 and 10, and hauksbee-ci
-carries 7 outright plus the SPI framing tier as an assertion detail. Three cells
-are `no`: hauksbee-ci renders no driver contention and no drive conflict, and the
-default text renders no drive conflict (`--plain` and `--json` do).
+The TUI and web front door carry all twelve typed disclosures while preserving
+their four distinct dispositions; this is not a coverage score and must not be
+presented as an all-green 10/10-style claim. The default text, `--plain`,
+`--json`, and hauksbee-ci retain the command-specific projections in the table.
 
 "yes (field)" means the caveat arrives as a structured field with no caveat
 sentence attached, so a consumer has to read the field to learn about it.
@@ -428,8 +431,7 @@ assertion gets the field only.
 **One enumeration behind all six columns.** Each class already had exactly one
 wording (`AdcDrop::message`, `scheduler::watchdog_reset_message`, and so on), but
 nothing said WHICH classes existed, so every surface re-listed them by hand and
-the interactive ones fell behind: this matrix used to read 1 of 10 for the TUI
-and 4 of 10 for the web front door. `reports::coverage::CoverageInputs::
+the interactive ones fell behind. `reports::coverage::CoverageInputs::
 from_scheduler` is now the single extraction point from the scheduler and
 `::caveats` the single enumeration, and each caveat's sentence is produced by the
 formatter that already owned that wording rather than paraphrased. The four batch
@@ -439,8 +441,9 @@ three `no` cells above; they were never the surface that fell behind.
 **Reading the TUI column.** The co-sim pane renders the WHOLE caveat list, so a
 class added to the enumeration appears there without a second edit. Screen space
 is handled by splitting count from wording: a persistent two-line banner directly
-under the pane's status lines gives the hole count, the note count and the class
-names, and `c` opens an overlay carrying every caveat's full sentence plus the
+under the pane's status lines gives separate limitation, timing-bound,
+strict-refusal and fallback-qualification counts plus the class names, and `c`
+opens an overlay carrying every disclosure's full sentence plus the
 input that would unlock it (scrolled with ↑/↓). The banner renders ABOVE the GPIO
 table and the UART tail, both of which grow during a run, because a caveat the
 user has to scroll to find has not been surfaced; `render.rs`'s
@@ -457,7 +460,12 @@ report is the record.
 `--json` gives it, because it is a resolution statement present on every run with
 a live core: as a finding it would demote every healthy report's headline through
 `cosim_caveat_headline` and stop being read. Heuristic SPI framing rides the
-`spi_framing` field for the same reason it does in `--json`. Of the remaining
+`spi_framing` field for the same reason it does in `--json`. Strict replay
+failures ride `timing_refusals` and populate the report's typed refusal; they
+must never be rendered as an ordinary warning or a pass. Fallback spans ride
+`fallback_windows`, retaining the method, fidelity note and optional measured
+error estimate so the browser and standalone HTML label them second-class.
+These optional fields preserve older report consumers. Of the remaining
 eight, seven are note-level `WebFinding` cards (which do demote a bare "Looks
 healthy") and driver contention is a serious one, because two push-pull drivers
 fighting a net is a real electrical fault rather than a caveat about the run. Four
@@ -472,12 +480,9 @@ this surface reached and did not report: `simavr`'s watchdog does bite and
 mid-window used to read quiet here. `interactive_coverage_parity.rs` proves both
 sides of that against the same firmware with and without its one arming line.
 
-Four further co-sim caveats sit outside this count, each for a stated reason.
-Three are refusals or accuracy statements rather than "the run could not do
-this": the `analog_valid` / failed-window refusal, the `TIMING INVALID:`
-unmet-contract refusal, and the per-window fallback-integration error estimates.
-Each reaches its own surfaces and is documented where it is raised. The fourth,
-`Scheduler::uart_rx_overflow`, is the same class as a dropped ADC injection but
+Two further co-sim signals sit outside this count for stated reasons. The
+`analog_valid` / failed-window refusal has its own run-validity contract.
+`Scheduler::uart_rx_overflow` is the same class as a dropped ADC injection but
 is read by one consumer only, `hauksbee run --serial-attach`, so it belongs to
 that command rather than to the report surfaces.
 

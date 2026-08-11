@@ -12,7 +12,7 @@ only the `tools` capability.
 
 | Tool | Does |
 |---|---|
-| `analyze_board` | Full physics-grounded analysis of a board file, returning the front-door report JSON: headline, `serious`/`total`, per-section findings, `bind` coverage, nets, supplies, notes, and `cosim` when firmware ran. |
+| `analyze_board` | Full physics-grounded analysis of a board file, returning the front-door report JSON: headline, `serious`/`total`, per-section findings, `bind` coverage, nets, supplies, notes, and `cosim` when firmware ran. In `cosim`, `timing_coverage` is a measured non-hole bound, `timing_refusals` is strict-invalid, and `fallback_windows` retains second-class method/fidelity/error qualifications. |
 | `run_checks` | Runs a `hauksbee-ci` spec against a board, booting optional firmware on the emulated MCU, and returns the machine verdict: `passed`, per-assertion results, `run_valid`, coverage and substitution data. |
 | `list_capabilities` | The scope table as data: which report kinds and assertion kinds exist, which board and firmware formats are accepted, and which MCU backends this machine actually has, probed with the engine's own discovery. |
 | `board_to_code` | Decompiles a text-format board (KiCad `.kicad_pcb`, Eagle `.brd`) into the editable Board-as-Code text form. |

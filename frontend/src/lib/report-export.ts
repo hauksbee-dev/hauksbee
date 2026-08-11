@@ -17,6 +17,7 @@ import type { WebReport, WebSection } from '../types/report'
 import { groupFindings } from './findings'
 import { summarizeEvidence } from './evidence'
 import { refusalLines } from './refusal-contract'
+import { fallbackWindowLine, timingCoverageLine } from './cosim-coverage'
 
 export interface ReportExportInput {
   report: WebReport
@@ -277,6 +278,9 @@ function cosimHtml(report: WebReport): string {
       <td class="mono num">${(g.volts || 0).toFixed(3)}</td>
       <td>${g.driven ? 'driven' : 'idle'}</td>
     </tr>`).join('')
+  const timingCoverage = (c.timing_coverage ?? []).map(row => `<div>${esc(timingCoverageLine(row))}</div>`).join('')
+  const timingRefusals = (c.timing_refusals ?? []).map(line => `<div>${esc(line)}</div>`).join('')
+  const fallbackWindows = (c.fallback_windows ?? []).map(window => `<div>${esc(fallbackWindowLine(window))}</div>`).join('')
   return `<section>
     <h2>Firmware co-sim</h2>
     <p class="verdict-line">
@@ -284,6 +288,9 @@ function cosimHtml(report: WebReport): string {
       ${c.analog_valid ? '' : ' The analog solve did not stay valid for the whole run.'}
     </p>
     ${findings}
+    ${timingCoverage ? `<h3>Timing coverage</h3><div class="card">${timingCoverage}</div>` : ''}
+    ${timingRefusals ? `<h3>TIMING INVALID</h3><div class="card" style="border-left-color:var(--err)">${timingRefusals}</div>` : ''}
+    ${fallbackWindows ? `<h3>Fallback-qualified windows</h3><div class="card" style="border-left-color:var(--warn)">${fallbackWindows}</div>` : ''}
     ${c.uart_output ? `<h3>UART output</h3><pre class="instrument">${esc(c.uart_output)}</pre>` : ''}
     ${gpio
       ? `<h3>GPIO nets</h3><div class="scroll-x"><table>
