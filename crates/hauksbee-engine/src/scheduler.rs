@@ -585,6 +585,9 @@ pub struct Scheduler {
 pub struct McuSubstitution {
     /// The MCU reference designator (e.g. `"U1"`).
     pub reference: String,
+    /// Injective causal identity of this exact board occurrence. This differs
+    /// from `reference` only when a designator is blank or reused.
+    pub evidence_subject: String,
     /// The backend string actually instantiated (e.g. `"renode:stm32f4"`).
     pub backend: String,
     /// The exact part the board asked for (e.g. `"STM32F411RET6"`).
@@ -5453,6 +5456,7 @@ fn detect_substitution(binding: &McuBinding) -> Option<McuSubstitution> {
     }
     Some(McuSubstitution {
         reference: binding.reference.clone(),
+        evidence_subject: binding.evidence_subject.clone(),
         backend: binding.backend.clone(),
         requested_part: requested.to_string(),
         modelled_core: modelled.1.to_string(),
@@ -5821,6 +5825,28 @@ fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn substitution_preserves_the_exact_board_occurrence_subject() {
+        let binding = McuBinding {
+            reference: "U1".into(),
+            evidence_subject: "@hkb-occurrence:5531:2".into(),
+            backend: "renode:stm32f4".into(),
+            requested_part: "STM32F411RET6".into(),
+            external_clock_present: false,
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers: HashMap::new(),
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+            max_supply_v: None,
+        };
+
+        let substitution = detect_substitution(&binding).expect("F411 uses the F407 stand-in");
+        assert_eq!(substitution.reference, "U1");
+        assert_eq!(substitution.evidence_subject, binding.evidence_subject);
+    }
+
     /// `instantiate_avr` used to SUBSTITUTE an ATmega328P for every simavr part
     /// token it did not literally recognise, silently. That is the wrong-ISA
     /// failure the QEMU and Renode arms of `instantiate_mcu` refuse by name: an
@@ -5892,6 +5918,7 @@ mod tests {
         adc_pin.insert(0u8, ('C', 0)); // ch0 owns (C,0); ch6 (A6) has NO entry
         let mut binding = McuBinding {
             reference: "U1".to_string(),
+            evidence_subject: "U1".to_string(),
             backend: String::new(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -6522,6 +6549,7 @@ mod tests {
         }
         let binding = McuBinding {
             reference: "U1".into(),
+            evidence_subject: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -6621,6 +6649,7 @@ mod tests {
             gpio_drivers.insert(cs_pin, drv);
             let binding = McuBinding {
                 reference: "U1".into(),
+                evidence_subject: "U1".into(),
                 backend: "simavr:test".into(),
                 requested_part: String::new(),
                 external_clock_present: false,
@@ -6700,6 +6729,7 @@ mod tests {
             gpio_drivers.insert(cs_pin, drv);
             let binding = McuBinding {
                 reference: format!("U{idx}"),
+                evidence_subject: format!("U{idx}"),
                 backend: "simavr:test".into(),
                 requested_part: String::new(),
                 external_clock_present: false,
@@ -6821,6 +6851,7 @@ mod tests {
         }
         let binding = McuBinding {
             reference: "U1".into(),
+            evidence_subject: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -6888,6 +6919,7 @@ mod tests {
         // Add a second MCU on a 3.3 V rail (renode external backend → 3.3 V).
         let binding = McuBinding {
             reference: "U2".into(),
+            evidence_subject: "U2".into(),
             backend: "renode:stm32f4".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -7046,6 +7078,7 @@ mod tests {
         let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
         let binding = McuBinding {
             reference: "U1".into(),
+            evidence_subject: "U1".into(),
             backend: "renode:nrf52840".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -7137,6 +7170,7 @@ mod tests {
         adc_nets.insert(0u8, node);
         let binding = McuBinding {
             reference: "U1".into(),
+            evidence_subject: "U1".into(),
             backend: "renode:nrf52840".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -7267,6 +7301,7 @@ mod tests {
         }
         let binding = McuBinding {
             reference: "U1".into(),
+            evidence_subject: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -7563,6 +7598,7 @@ mod tests {
         };
         let binding = McuBinding {
             reference: "U1".into(),
+            evidence_subject: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -7634,6 +7670,7 @@ mod tests {
         let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
         let binding = |reference: &str| McuBinding {
             reference: reference.into(),
+            evidence_subject: reference.into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -7695,6 +7732,7 @@ mod tests {
             gpio_drivers.insert(('0', 1u8), drv);
             McuBinding {
                 reference: if observable { "U1" } else { "U2" }.into(),
+                evidence_subject: if observable { "U1" } else { "U2" }.into(),
                 backend: "test".into(),
                 requested_part: String::new(),
                 external_clock_present: false,
@@ -7979,6 +8017,7 @@ mod tests {
         };
         let binding = McuBinding {
             reference: "U1".into(),
+            evidence_subject: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -8100,6 +8139,7 @@ mod tests {
             }
             McuBinding {
                 reference: reference.into(),
+                evidence_subject: reference.into(),
                 backend: "qemu:test".into(),
                 requested_part: String::new(),
                 external_clock_present: false,
@@ -8466,6 +8506,7 @@ mod pulse_and_contention_tests {
         }
         let binding = McuBinding {
             reference: "A1".into(),
+            evidence_subject: "A1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
             external_clock_present: false,
@@ -8814,6 +8855,7 @@ mod pulse_and_contention_tests {
         gpio_drivers.insert(pin, drv);
         let binding = McuBinding {
             reference: "A1".into(),
+            evidence_subject: "A1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
             external_clock_present: false,
