@@ -207,6 +207,7 @@ type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 /// edge (not once per analog chunk) is the read-direction analogue of the
 /// edge-driven 74HC595 write path.
 type InputResponderCb = Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>;
+type InputResponderBatchCb = Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>;
 
 struct Callbacks {
     on_pin_change: Option<PinChangeCb>,
@@ -216,6 +217,8 @@ struct Callbacks {
     /// Synchronous input responder, driven from the same port hook as
     /// `on_pin_change` (see [`InputResponderCb`]).
     input_responder: Option<InputResponderCb>,
+    /// Atomic variant used when one AVR port write changes several pins.
+    input_responder_batch: Option<InputResponderBatchCb>,
 }
 
 /// Per-port state tracked for edge detection.
@@ -425,7 +428,9 @@ macro_rules! make_port_hook {
                     } else {
                         unsafe { (*avr).cycle }
                     };
-                    // Fire callback for each bit that changed.
+                    let mut edges = Vec::new();
+                    // Fire the observation callback for each bit that changed,
+                    // while retaining one batch for synchronous device logic.
                     for bit in 0u8..8 {
                         if (changed >> bit) & 1 == 0 {
                             continue;
@@ -438,24 +443,33 @@ macro_rules! make_port_hook {
                         if let Some(cb) = &mut s.callbacks.on_pin_change {
                             cb(pin, high, cycle);
                         }
-                        // Synchronous input drive: the responder may push a
-                        // serial-out bit back onto an MCU input pin (e.g. the
-                        // 74HC165 QH -> MISO) so the firmware reads it on its
-                        // next instruction, within this same run. Split-borrow
-                        // the state so the drive can update the external-pull
-                        // shadow while the responder closure stays borrowed.
-                        let st = &mut *s;
-                        if let Some(resp) = &mut st.callbacks.input_responder {
-                            for update in resp(pin, high, cycle) {
-                                unsafe {
-                                    match update {
-                                        PinDrive::Drive { pin, high } => {
-                                            drive_ioport_input(avr, &mut st.ext_drive, pin, high)
-                                        }
-                                        PinDrive::Release { pin } => {
-                                            release_ioport_input(avr, &mut st.ext_drive, pin)
-                                        }
-                                    }
+                        edges.push((pin, high));
+                    }
+
+                    // Synchronous input drive: evaluate every bit changed by
+                    // this port write against the same final GPIO state, then
+                    // apply the response before the firmware's next
+                    // instruction. Legacy single-edge callbacks still receive
+                    // every edge in bit order.
+                    let st = &mut *s;
+                    let updates = if let Some(resp) = &mut st.callbacks.input_responder_batch {
+                        resp(&edges, cycle)
+                    } else if let Some(resp) = &mut st.callbacks.input_responder {
+                        edges
+                            .iter()
+                            .flat_map(|&(pin, high)| resp(pin, high, cycle))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    for update in updates {
+                        unsafe {
+                            match update {
+                                PinDrive::Drive { pin, high } => {
+                                    drive_ioport_input(avr, &mut st.ext_drive, pin, high)
+                                }
+                                PinDrive::Release { pin } => {
+                                    release_ioport_input(avr, &mut st.ext_drive, pin)
                                 }
                             }
                         }
@@ -856,6 +870,7 @@ impl AvrMcu {
                 on_i2c: None,
                 on_spi: None,
                 input_responder: None,
+                input_responder_batch: None,
             },
         }));
 
@@ -1319,9 +1334,23 @@ impl Mcu for AvrMcu {
         {
             let mut s = self.state.lock().unwrap();
             s.callbacks.input_responder = Some(responder);
+            s.callbacks.input_responder_batch = None;
         }
         // The responder fires from the per-port output hook, so the standard
         // ATmega328P ports must be hooked even if `on_pin_change` was never set.
+        let ports: Vec<char> = ['A', 'B', 'C', 'D'].to_vec();
+        self.register_port_hooks(&ports);
+    }
+
+    fn on_input_responder_batch(
+        &mut self,
+        responder: Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>,
+    ) {
+        {
+            let mut s = self.state.lock().unwrap();
+            s.callbacks.input_responder = None;
+            s.callbacks.input_responder_batch = Some(responder);
+        }
         let ports: Vec<char> = ['A', 'B', 'C', 'D'].to_vec();
         self.register_port_hooks(&ports);
     }
@@ -1432,8 +1461,9 @@ impl Drop for AvrMcu {
 
 #[cfg(test)]
 mod cycle_budget_tests {
-    use super::{cycle_budget, drive_ioport_input, release_ioport_input, AvrMcu};
-    use crate::traits::PinId;
+    use super::{cycle_budget, drive_ioport_input, port_hook_d, release_ioport_input, AvrMcu};
+    use crate::traits::{Mcu, PinId};
+    use std::sync::{Arc, Mutex};
 
     /// R6: `run_micros` must carry the sub-cycle remainder so a clock that
     /// isn't a multiple of the chunk rate doesn't drift. 3.6864 MHz over
@@ -1476,6 +1506,35 @@ mod cycle_budget_tests {
             state.ext_drive.get(&'B').unwrap().0 & 1,
             0,
             "release removes external ownership so DDR/PORT/pull state resolves the input"
+        );
+    }
+
+    #[test]
+    fn port_hook_batches_every_pin_changed_by_one_register_write() {
+        let mut mcu = AvrMcu::atmega328p_16mhz().expect("create live simavr core");
+        let batches = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&batches);
+        mcu.on_input_responder_batch(Box::new(move |edges, _cycle| {
+            observed.lock().unwrap().push(edges.to_vec());
+            Vec::new()
+        }));
+        mcu.state
+            .lock()
+            .unwrap()
+            .port_state
+            .entry('D')
+            .or_insert(super::PortState {
+                current: 0,
+                output_dir: 0,
+            })
+            .current = 0;
+
+        unsafe { port_hook_d(std::ptr::null_mut(), 0b0000_0110, mcu.callback_ptr) };
+
+        assert_eq!(
+            *batches.lock().unwrap(),
+            vec![vec![(PinId::new('D', 1), true), (PinId::new('D', 2), true),]],
+            "one AVR port write must reach device logic as one atomic batch"
         );
     }
 }

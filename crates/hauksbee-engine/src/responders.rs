@@ -14,7 +14,8 @@
 //! The hook takes ONE closure per MCU. This module is the multiplexer that
 //! lets several protocol responders share it: each [`InputResponder`] declares
 //! the output pins it consumes edges from, and the [`ResponderRegistry`]
-//! dispatches each edge to exactly the responders keyed on that pin. The
+//! dispatches each atomic port-update batch to exactly the responders keyed on
+//! its changed pins. The
 //! registry is what 05 §1.5 calls "input responder callbacks keyed on
 //! (MCU, input pin)": the MCU key is the registry instance (one per live MCU,
 //! held by the scheduler), the pin key is the dispatch map here.
@@ -65,10 +66,10 @@ impl InputDrive {
 /// One bit-banged input protocol instance: consumes MCU GPIO *output* edges
 /// on its watched pins and answers by driving MCU *input* pins.
 ///
-/// `on_edge` runs synchronously inside the MCU's run loop (from the backend's
-/// GPIO output hook, under its callback lock), so implementations must be
-/// cheap and must never block: lock only leaf resources (a device model, a
-/// voltage snapshot), never the scheduler or an MCU.
+/// Edge handlers run synchronously inside the MCU's run loop (from the
+/// backend's GPIO output hook, under its callback lock), so implementations
+/// must be cheap and must never block: lock only leaf resources (a device
+/// model, a voltage snapshot), never the scheduler or an MCU.
 pub trait InputResponder: Send {
     /// The MCU GPIO output pins this responder consumes edges from. Fixed for
     /// the responder's lifetime: the registry indexes these once at
@@ -86,6 +87,16 @@ pub trait InputResponder: Send {
     /// to an MCU implementation.
     fn on_edge_at(&mut self, pin: (char, u8), high: bool, _cycle: u64) -> Vec<InputDrive> {
         self.on_edge(pin, high)
+    }
+
+    /// Handle every GPIO edge produced by one atomic port update. All levels
+    /// in the batch are externally visible at once; responders whose gates
+    /// span several pins can override this to evaluate only the final state.
+    fn on_edges_at(&mut self, edges: &[((char, u8), bool)], cycle: u64) -> Vec<InputDrive> {
+        edges
+            .iter()
+            .flat_map(|&(pin, high)| self.on_edge_at(pin, high, cycle))
+            .collect()
     }
 }
 
@@ -124,7 +135,7 @@ impl ResponderRegistry {
 
     /// Route one GPIO output edge to every responder watching `pin`,
     /// concatenating their input-pin drives. This is the body of the single
-    /// closure the scheduler installs via `Mcu::on_input_responder`.
+    /// closure the scheduler installs via `Mcu::on_input_responder_batch`.
     pub fn dispatch(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         let Some(indices) = self.by_pin.get(&pin) else {
             return Vec::new();
@@ -143,14 +154,37 @@ impl ResponderRegistry {
 
     /// Cycle-stamped dispatch for the MCU callback path.
     pub fn dispatch_at(&mut self, pin: (char, u8), high: bool, cycle: u64) -> Vec<InputDrive> {
-        let Some(indices) = self.by_pin.get(&pin) else {
-            return Vec::new();
-        };
+        self.dispatch_batch_at(&[(pin, high)], cycle)
+    }
+
+    /// Cycle-stamped dispatch for every edge from one atomic GPIO-port update.
+    /// Each responder receives its watched subset once, after all levels in
+    /// that update are known.
+    pub fn dispatch_batch_at(
+        &mut self,
+        edges: &[((char, u8), bool)],
+        cycle: u64,
+    ) -> Vec<InputDrive> {
+        let mut by_responder = (0..self.responders.len())
+            .map(|_| Vec::new())
+            .collect::<Vec<Vec<((char, u8), bool)>>>();
+        for &(pin, high) in edges {
+            let Some(indices) = self.by_pin.get(&pin) else {
+                continue;
+            };
+            for &i in indices {
+                by_responder[i].push((pin, high));
+            }
+        }
+
         let mut updates = Vec::new();
-        for &i in indices {
+        for (i, responder_edges) in by_responder.iter().enumerate() {
+            if responder_edges.is_empty() {
+                continue;
+            }
             updates.extend(
                 self.responders[i]
-                    .on_edge_at(pin, high, cycle)
+                    .on_edges_at(responder_edges, cycle)
                     .into_iter()
                     .map(|u| (i, u)),
             );
@@ -255,17 +289,7 @@ pub(crate) struct ParallelMemoryResponder {
     pin_levels: HashMap<(char, u8), bool>,
     watched: Vec<(char, u8)>,
     last_write_cycle: Option<u64>,
-    edge_cycle: Option<u64>,
-    deferred_write: Option<DeferredParallelWrite>,
     runtime: Arc<Mutex<ParallelMemoryRuntime>>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct DeferredParallelWrite {
-    cycle: u64,
-    write_index: usize,
-    address: usize,
-    value: u64,
 }
 
 #[derive(Clone)]
@@ -342,8 +366,6 @@ impl ParallelMemoryResponder {
             pin_levels: HashMap::new(),
             watched,
             last_write_cycle: None,
-            edge_cycle: None,
-            deferred_write: None,
             runtime,
         }
     }
@@ -387,17 +409,21 @@ impl ParallelMemoryResponder {
                 value | (u64::from(self.source_level(source, volts)) << bit)
             })
     }
-}
 
-impl InputResponder for ParallelMemoryResponder {
-    fn watched_pins(&self) -> Vec<(char, u8)> {
-        self.watched.clone()
-    }
-
-    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
-        self.pin_levels.insert(pin, high);
+    fn process_edges(
+        &mut self,
+        edges: &[((char, u8), bool)],
+        cycle: Option<u64>,
+    ) -> Vec<InputDrive> {
+        for &(pin, high) in edges {
+            self.pin_levels.insert(pin, high);
+        }
+        let chain_edges = edges
+            .iter()
+            .map(|&(pin, high)| (pin.0, pin.1, high))
+            .collect::<Vec<_>>();
         for chain in &mut self.chains {
-            chain.replay(&[(pin.0, pin.1, high)]);
+            chain.replay(&chain_edges);
         }
 
         let volts_guard = self.volts.lock().unwrap_or_else(|e| e.into_inner());
@@ -417,13 +443,9 @@ impl InputResponder for ParallelMemoryResponder {
                 levels.decide(v, false)
             }
         };
-        let read_gates = &self.read_gates;
-        let read_active_now = read_gates
-            .iter()
-            .all(|&(source, active)| active.is_active(source_level(source)));
+
         let mut qualified = false;
-        let mut ambiguous_write = None;
-        for (write_index, write) in self.writes.iter_mut().enumerate() {
+        for write in &mut self.writes {
             let cur = source_level(write.signal);
             let fired = match write.edge {
                 Edge::Rising => cur && !write.prev,
@@ -435,65 +457,22 @@ impl InputResponder for ParallelMemoryResponder {
                 .iter()
                 .all(|&(source, active)| active.is_active(source_level(source)));
             qualified |= fired && gates_active;
-            if fired && !gates_active && read_active_now {
-                let inverse_gate_is_active = write.gates.iter().any(|&(source, write_level)| {
-                    !write_level.is_active(source_level(source))
-                        && read_gates.iter().any(|&(read_source, read_level)| {
-                            read_source == source
-                                && read_level != write_level
-                                && read_level.is_active(source_level(read_source))
-                        })
-                });
-                if inverse_gate_is_active {
-                    ambiguous_write = self.edge_cycle.map(|cycle| (cycle, write_index));
-                }
-            }
         }
 
-        let mut write_sample = None;
-        if let Some(deferred) = self.deferred_write.take() {
-            if self.edge_cycle == Some(deferred.cycle) {
-                let now_qualified = self.writes[deferred.write_index]
-                    .gates
-                    .iter()
-                    .all(|&(source, active)| active.is_active(source_level(source)));
-                if now_qualified {
-                    write_sample = Some((deferred.address, deferred.value, Some(deferred.cycle)));
-                } else {
-                    self.deferred_write = Some(deferred);
-                }
-            }
-        }
         if qualified {
-            self.deferred_write = None;
-            write_sample.get_or_insert_with(|| {
-                (self.address(volts), self.data_value(volts), self.edge_cycle)
-            });
-        } else if let Some((cycle, write_index)) = ambiguous_write {
-            self.deferred_write.get_or_insert(DeferredParallelWrite {
-                cycle,
-                write_index,
-                address: self.address(volts),
-                value: self.data_value(volts),
-            });
-        }
-
-        if let Some((address, value, write_cycle)) = write_sample {
-            let gap_exceeded = match (
-                write_cycle,
-                self.last_write_cycle,
-                self.port.byte_load_timeout_s,
-            ) {
+            let address = self.address(volts);
+            let value = self.data_value(volts);
+            let gap_exceeded = match (cycle, self.last_write_cycle, self.port.byte_load_timeout_s) {
                 (Some(now), Some(previous), Some(limit_s)) => {
                     now < previous
                         || (now - previous) as f64 > limit_s * self.frequency_hz.max(1) as f64
                 }
                 _ => false,
             };
-            if write_cycle.is_some() {
-                self.last_write_cycle = write_cycle;
+            if cycle.is_some() {
+                self.last_write_cycle = cycle;
             }
-            let accepted = if let Some(cycle) = write_cycle {
+            let accepted = if let Some(cycle) = cycle {
                 self.port.write_at(address, value, cycle, self.frequency_hz)
             } else {
                 self.port.write_after_gap(address, value, gap_exceeded)
@@ -505,25 +484,6 @@ impl InputResponder for ParallelMemoryResponder {
                     self.port.words()
                 );
             }
-        }
-
-        if self
-            .deferred_write
-            .is_some_and(|deferred| self.edge_cycle == Some(deferred.cycle))
-        {
-            // A write edge whose only failing gate is the active inverse of a
-            // read gate is ambiguous until the rest of this cycle's GPIO edges
-            // arrive. Do not let that transient state close an EEPROM page.
-            self.runtime
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .read_enabled = false;
-            return self
-                .data_out
-                .iter()
-                .copied()
-                .map(InputDrive::release)
-                .collect();
         }
 
         let read_active = self.gates_active(&self.read_gates, volts);
@@ -540,8 +500,7 @@ impl InputResponder for ParallelMemoryResponder {
                 .collect();
         }
         let address = self.address(volts);
-        let word = self
-            .edge_cycle
+        let word = cycle
             .and_then(|cycle| self.port.read_at(address, cycle, self.frequency_hz))
             .or_else(|| self.port.read(address));
         let Some(word) = word else {
@@ -564,12 +523,23 @@ impl InputResponder for ParallelMemoryResponder {
             .map(|(bit, &pin)| InputDrive::drive(pin, word & (1 << bit) != 0))
             .collect()
     }
+}
+
+impl InputResponder for ParallelMemoryResponder {
+    fn watched_pins(&self) -> Vec<(char, u8)> {
+        self.watched.clone()
+    }
+
+    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
+        self.process_edges(&[(pin, high)], None)
+    }
 
     fn on_edge_at(&mut self, pin: (char, u8), high: bool, cycle: u64) -> Vec<InputDrive> {
-        self.edge_cycle = Some(cycle);
-        let drives = self.on_edge(pin, high);
-        self.edge_cycle = None;
-        drives
+        self.process_edges(&[(pin, high)], Some(cycle))
+    }
+
+    fn on_edges_at(&mut self, edges: &[((char, u8), bool)], cycle: u64) -> Vec<InputDrive> {
+        self.process_edges(edges, Some(cycle))
     }
 }
 
@@ -1601,7 +1571,7 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         let ce = ('D', 0);
         let oe = ('D', 1);
         let we = ('D', 2);
-        let mut responder = ParallelMemoryResponder::new(
+        let responder = ParallelMemoryResponder::new(
             "U1.cell".into(),
             port,
             LogicLevels {
@@ -1643,44 +1613,236 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
         );
 
-        let set_bus = |responder: &mut ParallelMemoryResponder,
-                       address_value: usize,
-                       data_value: u8,
-                       cycle: u64| {
-            for (bit, &pin) in address.iter().enumerate() {
-                responder.on_edge_at(pin, address_value & (1 << bit) != 0, cycle);
-            }
-            for (bit, &pin) in data.iter().enumerate() {
-                responder.on_edge_at(pin, data_value & (1 << bit) != 0, cycle);
-            }
-        };
+        let mut registry = ResponderRegistry::new();
+        registry.register(Box::new(responder));
+        let set_bus =
+            |registry: &mut ResponderRegistry, address_value: usize, data_value: u8, cycle: u64| {
+                for (bit, &pin) in address.iter().enumerate() {
+                    registry.dispatch_at(pin, address_value & (1 << bit) != 0, cycle);
+                }
+                for (bit, &pin) in data.iter().enumerate() {
+                    registry.dispatch_at(pin, data_value & (1 << bit) != 0, cycle);
+                }
+            };
 
         // The previous page's data poll left /OE asserted. At the next page's
         // first write, firmware disables /OE at the same simulated cycle as
         // /WE rises. An emulator can report those equal-cycle GPIO edges in
         // either order; the transient intermediate state must neither lose the
         // 0x40 write nor turn it into a one-byte program operation.
-        responder.on_edge_at(ce, true, 900);
-        responder.on_edge_at(we, true, 900);
-        responder.on_edge_at(oe, false, 900);
-        responder.on_edge_at(ce, false, 900);
-        set_bus(&mut responder, 0x40, 0x11, 950);
-        responder.on_edge_at(we, false, 1_000);
-        responder.on_edge_at(we, true, 1_001);
-        responder.on_edge_at(oe, true, 1_001);
+        registry.dispatch_at(ce, true, 900);
+        registry.dispatch_at(we, true, 900);
+        registry.dispatch_at(oe, false, 900);
+        registry.dispatch_at(ce, false, 900);
+        set_bus(&mut registry, 0x40, 0x11, 950);
+        registry.dispatch_at(we, false, 1_000);
+        registry.dispatch_batch_at(&[(we, true), (oe, true)], 1_001);
 
-        set_bus(&mut responder, 0x41, 0x22, 1_050);
-        responder.on_edge_at(we, false, 1_100);
-        responder.on_edge_at(we, true, 1_101);
+        set_bus(&mut registry, 0x41, 0x22, 1_050);
+        registry.dispatch_at(we, false, 1_100);
+        registry.dispatch_at(we, true, 1_101);
 
         // A real read begins programming the two-byte page. Both bytes must be
         // present after tWC; the historical bug swallowed 0x41 as busy data.
-        responder.on_edge_at(oe, false, 1_200);
+        registry.dispatch_at(oe, false, 1_200);
         assert_eq!(inspect.read_at(0x40, 11_101, 1_000_000), Some(0x11));
         assert_eq!(
             inspect.read_at(0x41, 11_101, 1_000_000),
             Some(0x22),
             "equal-cycle /WE and /OE edges must not close a fresh page after its first byte"
+        );
+    }
+
+    #[test]
+    fn shipped_at28_we_rise_into_read_drives_bus_without_a_later_edge() {
+        const SPEC: &str = r#"
+inputs = ["a0", "ce_n", "oe_n", "we_n"]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 8
+page_words = 2
+byte_load_timeout_s = 0.00015
+program_time_s = 0.010
+init = 0xff
+address = ["a0"]
+write_cycles = [
+  { pin = "we_n", edge = "rising", gates = [
+    { pin = "ce_n", active = "low" },
+    { pin = "oe_n", active = "high" },
+  ] },
+  { pin = "ce_n", edge = "rising", gates = [
+    { pin = "we_n", active = "low" },
+    { pin = "oe_n", active = "high" },
+  ] },
+]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
+data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+"#;
+        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
+        let logic = crate::logic::LogicComponent::compile("at28c256", &spec).unwrap();
+        let port = logic.memory_ports().pop().expect("one memory");
+
+        let address = ('B', 0);
+        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
+        let ce = ('D', 0);
+        let oe = ('D', 1);
+        let we = ('D', 2);
+        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
+        let mut responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            1_000_000,
+            Arc::new(Mutex::new(vec![])),
+            vec![ParallelSignal::Mcu(address)],
+            vec![
+                ParallelMemoryWrite::new(
+                    ParallelSignal::Mcu(we),
+                    Edge::Rising,
+                    vec![
+                        (ParallelSignal::Mcu(ce), Level::Low),
+                        (ParallelSignal::Mcu(oe), Level::High),
+                    ],
+                ),
+                ParallelMemoryWrite::new(
+                    ParallelSignal::Mcu(ce),
+                    Edge::Rising,
+                    vec![
+                        (ParallelSignal::Mcu(we), Level::Low),
+                        (ParallelSignal::Mcu(oe), Level::High),
+                    ],
+                ),
+            ],
+            vec![
+                (ParallelSignal::Mcu(ce), Level::Low),
+                (ParallelSignal::Mcu(oe), Level::Low),
+                (ParallelSignal::Mcu(we), Level::High),
+            ],
+            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+            data.clone(),
+            Vec::new(),
+            Arc::clone(&runtime),
+        );
+
+        responder.on_edge_at(ce, false, 10);
+        responder.on_edge_at(oe, false, 10);
+        responder.on_edge_at(we, false, 20);
+        let drives = responder.on_edge_at(we, true, 21);
+
+        assert_eq!(
+            drives,
+            data.iter()
+                .copied()
+                .map(|pin| InputDrive::drive(pin, true))
+                .collect::<Vec<_>>(),
+            "a lone /WE rising edge enters a genuine read and must drive erased 0xff immediately"
+        );
+        assert!(
+            runtime
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .read_enabled,
+            "read visibility cannot wait for a companion GPIO edge that may never arrive"
+        );
+    }
+
+    #[test]
+    fn inverse_read_gate_does_not_repair_an_unrelated_failed_write_gate() {
+        const SPEC: &str = r#"
+inputs = ["a0", "ce_n", "oe_n", "wp_n", "we_n"]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 8
+init = 0xff
+address = ["a0"]
+write = { pin = "we_n", edge = "rising" }
+write_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "high" },
+  { pin = "wp_n", active = "high" },
+]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
+data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+"#;
+        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
+        let logic = crate::logic::LogicComponent::compile("protected-memory", &spec).unwrap();
+        let port = logic.memory_ports().pop().expect("one memory");
+        let inspect = port.clone();
+
+        let address = ('B', 0);
+        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
+        let ce = ('D', 0);
+        let oe = ('D', 1);
+        let wp = ('D', 2);
+        let we = ('D', 3);
+        let mut responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            1_000_000,
+            Arc::new(Mutex::new(vec![])),
+            vec![ParallelSignal::Mcu(address)],
+            vec![ParallelMemoryWrite::new(
+                ParallelSignal::Mcu(we),
+                Edge::Rising,
+                vec![
+                    (ParallelSignal::Mcu(ce), Level::Low),
+                    (ParallelSignal::Mcu(oe), Level::High),
+                    (ParallelSignal::Mcu(wp), Level::High),
+                ],
+            )],
+            vec![
+                (ParallelSignal::Mcu(ce), Level::Low),
+                (ParallelSignal::Mcu(oe), Level::Low),
+                (ParallelSignal::Mcu(we), Level::High),
+            ],
+            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+            data,
+            Vec::new(),
+            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
+        );
+
+        responder.on_edge_at(ce, false, 10);
+        responder.on_edge_at(oe, false, 10);
+        responder.on_edge_at(wp, false, 10);
+        responder.on_edge_at(we, false, 20);
+        for bit in 0..8 {
+            responder.on_edge_at(('C', bit), 0x5a & (1 << bit) != 0, 20);
+        }
+        responder.on_edge_at(we, true, 21);
+        responder.on_edge_at(oe, true, 21);
+        responder.on_edge_at(wp, true, 21);
+
+        assert_eq!(
+            inspect.read(0),
+            Some(0xff),
+            "a write edge blocked by /WP and /OE cannot be retroactively qualified"
         );
     }
 

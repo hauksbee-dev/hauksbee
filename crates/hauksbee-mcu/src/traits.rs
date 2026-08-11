@@ -233,7 +233,9 @@ pub trait Mcu {
     /// serial-out bit in the SAME tight loop: e.g. a 74HC165 presenting its next
     /// QH bit onto MISO on each SCLK edge. Resolving the response per output edge
     /// (not once per analog chunk) is the read-direction analogue of the
-    /// edge-driven 74HC595 write path.
+    /// edge-driven 74HC595 write path. New multipin device integrations should
+    /// use [`Mcu::on_input_responder_batch`] so one hardware port write is
+    /// evaluated atomically rather than in arbitrary bit order.
     ///
     /// The default is a no-op for backends that cannot drive an input pin
     /// synchronously from within their run loop (Renode / QEMU push state once
@@ -243,6 +245,22 @@ pub trait Mcu {
         &mut self,
         _responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>,
     ) {
+    }
+
+    /// Register a synchronous responder for one atomic GPIO-port update.
+    ///
+    /// Push backends should report all pins changed by one hardware port write
+    /// together so a device can evaluate multi-pin control gates against the
+    /// externally observable final state. The default preserves compatibility
+    /// with backends that only support the single-edge callback.
+    #[allow(clippy::type_complexity)]
+    fn on_input_responder_batch(
+        &mut self,
+        mut responder: Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>,
+    ) {
+        self.on_input_responder(Box::new(move |pin, high, cycle| {
+            responder(&[(pin, high)], cycle)
+        }));
     }
 
     // ---- UART ----
