@@ -1115,6 +1115,11 @@ leave a previous green file at the same path. Pair gate-grade findings with
 `--strict` when the process exit itself must gate the job. The GitHub Action's
 `mode: check` is this path pre-wired.
 
+Path identity is checked before that first write. A JUnit/SARIF path that is the
+same underlying file as a board, BOM, firmware, other run input/output, or the
+other CI artifact is refused even when the alias is a hard link. Unsafe paths
+are never modified; choose distinct files and rerun.
+
 ## Exit codes (the pipeline contract)
 
 Two commands gate, with two deliberately different contracts:
@@ -1220,8 +1225,8 @@ typed co-sim finding, while no-placement, no-processor, timing, AC, thermal,
 zero-activity and analog-abort outcomes finalize a JUnit `<error>`, SARIF
 `hauksbee/invalid-for-analysis` result and GitHub error annotation. Invocation
 errors use `hauksbee/run-error` and retain their actual exit code. A pending
-error document occupies requested paths until that final write, so there is no
-stale-file exception.
+error document occupies every accepted output path until that final write, so
+there is no stale-file exception for a path that passed identity validation.
 
 Do not use a non-strict run to predict a strict one. On the static surfaces the
 document does not change with the flag (a refusing verdict prints beside exit 0

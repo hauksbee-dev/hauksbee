@@ -1122,7 +1122,6 @@ mod tests {
             check: check.to_string(),
             kind: "k".to_string(),
             severity: severity.to_string(),
-            gating: severity == "serious",
             nets: vec!["/N".to_string()],
             location_mm: None,
             layer: None,

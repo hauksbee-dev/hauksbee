@@ -596,12 +596,15 @@ fn parse_seconds(s: &str) -> Result<f64, String> {
 }
 
 #[derive(Parser)]
-// The five "print one report and exit" flags pick the report to show, so they
-// are mutually exclusive: pass at most one (clap errors clearly if you pass two,
-// rather than silently honouring the first and ignoring the rest).
+// These flags each select one analysis surface. Mixing a static report, the
+// aggregate check, AC, thermal or headless co-sim would otherwise let execution,
+// artifacts and annotations silently choose different precedence.
 #[command(group(
     clap::ArgGroup::new("report_mode")
-        .args(["report", "drc", "ampacity", "lint", "si", "resources", "thermal", "usb_c"])
+        .args([
+            "report", "drc", "ampacity", "lint", "si", "resources", "thermal", "usb_c",
+            "check", "headless", "ac"
+        ])
         .multiple(false)
 ))]
 #[command(after_help = run_after_help())]
@@ -1250,9 +1253,17 @@ fn artifact_flag_value(args: &[String], flag: &str) -> Option<PathBuf> {
 }
 
 fn invalidate_run_artifacts_after_parse_error(args: &[String], error: &clap::Error) {
-    let Some(run_index) = args.iter().position(|arg| arg == "run") else {
+    // The only global option accepted before a top-level subcommand is the
+    // value-less --quiet flag. Do not scan arbitrary positional values for the
+    // word `run`: e.g. in `to-code run --junit FILE`, `run` is a board name and
+    // grants no permission to mutate FILE.
+    let mut run_index = 1;
+    while args.get(run_index).is_some_and(|arg| arg == "--quiet") {
+        run_index += 1;
+    }
+    if args.get(run_index).map(String::as_str) != Some("run") {
         return;
-    };
+    }
     let protected: Vec<PathBuf> = args
         .iter()
         .take_while(|arg| arg.as_str() != "--")
@@ -1284,43 +1295,32 @@ fn invalidate_run_artifacts_after_parse_error(args: &[String], error: &clap::Err
         .first()
         .cloned()
         .unwrap_or_else(|| PathBuf::from("unparsed-run-input"));
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let canonicalish = |path: &std::path::Path| {
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            cwd.join(path)
-        };
-        std::fs::canonicalize(&absolute).unwrap_or_else(|_| {
-            absolute
-                .parent()
-                .and_then(|parent| std::fs::canonicalize(parent).ok())
-                .and_then(|parent| absolute.file_name().map(|name| parent.join(name)))
-                .unwrap_or(absolute)
-        })
-    };
     let mut junit = artifact_flag_value(args, "--junit");
     let mut sarif = artifact_flag_value(args, "--sarif");
     if junit.as_ref().is_some_and(|path| {
         protected
             .iter()
-            .any(|input| canonicalish(path) == canonicalish(input))
+            .any(|input| hauksbee_engine::reports::ci_artifacts::paths_alias(path, input))
     }) {
         junit = None;
     }
     if sarif.as_ref().is_some_and(|path| {
         protected
             .iter()
-            .any(|input| canonicalish(path) == canonicalish(input))
+            .any(|input| hauksbee_engine::reports::ci_artifacts::paths_alias(path, input))
     }) {
         sarif = None;
     }
-    if junit.is_some()
-        && junit
-            .as_ref()
-            .zip(sarif.as_ref())
-            .is_some_and(|(junit, sarif)| canonicalish(junit) == canonicalish(sarif))
+    if junit
+        .as_ref()
+        .zip(sarif.as_ref())
+        .is_some_and(|(junit, sarif)| {
+            hauksbee_engine::reports::ci_artifacts::paths_alias(junit, sarif)
+        })
     {
+        // Neither name is safe: writing one mutates the other. A usage-error
+        // invalidator cannot report into an output pair it cannot distinguish.
+        junit = None;
         sarif = None;
     }
     if junit.is_none() && sarif.is_none() {
@@ -1386,17 +1386,10 @@ fn main() -> anyhow::Result<()> {
     };
     let quiet = cli.quiet;
     let result = match cli.command {
-        // NOTE: `--example` resolution must NOT use `?` here: that returns the
-        // error from `main` itself, printing anyhow's "Error:" + backtrace and
-        // bypassing the `--json` envelope below. Fold it into `result` so an
-        // unknown example name flows through the one error handler like every
-        // other input error.
-        Command::Run(mut args) => (|| {
-            if let Some(name) = &args.example {
-                args.board = Some(hauksbee_engine::commands::examples::board(name)?);
-            }
-            hauksbee_engine::commands::run::run(run_config(args), quiet)
-        })(),
+        // The run orchestrator owns embedded-example lookup so it can open the
+        // requested artifact transaction first. Its Result still flows through
+        // the shared JSON/text error envelope below.
+        Command::Run(args) => hauksbee_engine::commands::run::run(run_config(args), quiet),
         Command::Reproduce(args) => hauksbee_engine::run_manifest::reproduce(&args.manifest),
         Command::ToCode(args) => {
             hauksbee_engine::commands::boardcode::to_code(&args.board, args.out.as_deref())
@@ -1575,9 +1568,17 @@ fn looks_like_board_input(p: &std::path::Path) -> bool {
 /// argument parsing stays here.
 fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
     hauksbee_engine::commands::run::RunConfig {
-        // Present by construction: clap requires BOARD unless --example, and
-        // the dispatch materializes the example board before calling here.
-        board: a.board.expect("BOARD or --example (enforced by clap)"),
+        // Present by construction unless --example. The run orchestrator
+        // resolves embedded examples only after it has opened the requested
+        // fail-closed artifact transaction.
+        board: a.board.unwrap_or_else(|| {
+            PathBuf::from(format!(
+                "embedded-example-{}",
+                a.example
+                    .as_deref()
+                    .expect("BOARD or --example (enforced by clap)")
+            ))
+        }),
         example: a.example,
         bom: a.bom,
         bom_columns: a.bom_columns,

@@ -462,7 +462,6 @@ pub(crate) fn drc_short_findings(
             check: "drc".to_string(),
             kind: "short".to_string(),
             severity: if phantom { "warning" } else { "serious" }.to_string(),
-            gating: !phantom,
             nets: vec![f.net_a_name.clone(), f.net_b_name.clone()],
             location_mm: None,
             layer: Some(f.layer.clone()),
@@ -485,7 +484,7 @@ pub(crate) fn drc_short_findings(
 /// [`drc_short_findings`], so the exit code and the CI artifact count the same
 /// shorts. Shared with `--drc`, which gates on copper alone.
 pub(crate) fn drc_gate_fails(drc: &hauksbee_extract::DrcReport) -> bool {
-    drc_short_findings(drc).iter().any(|f| f.gating)
+    drc_short_findings(drc).iter().any(|f| f.gates())
 }
 
 /// What a static pass cannot see, said at the end of one.
