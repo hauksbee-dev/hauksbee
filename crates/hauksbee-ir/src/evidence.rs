@@ -153,7 +153,7 @@ pub enum EvidenceError {
 /// A subject the board fails to name uniquely still needs a unique id, because
 /// two different gaps sharing one is a duplicate the registry rejects rather than
 /// a cosmetic problem. Two shapes cover that: `open-part:unnamed~<hex>` when there
-/// is no designator at all, hashing the claim that distinguishes it, and
+/// is no designator at all, encoding the typed claim that distinguishes it, and
 /// `open-part:R7#2` for the second distinct claim on a designator the board
 /// reuses. Both are pure functions of the input, so a re-run of the same input
 /// mints the same bytes.
@@ -196,10 +196,10 @@ impl AssumptionId {
     /// complete bytes become the disambiguator. It stays deterministic across
     /// runs and avoids a truncated-hash collision.
     ///
-    /// The disambiguator covers the WHOLE claim, not the statement alone. Two
-    /// unnameable subjects can carry the same statement and differ only in why
-    /// the run had to assume it, and hashing the statement by itself collapsed
-    /// those onto one id: a real second gap then hit
+    /// The disambiguator covers the WHOLE typed claim, not the statement alone.
+    /// Two unnameable subjects can carry identical prose but differ in source,
+    /// causal scope or expiry; omitting those fields collapses a real second gap
+    /// onto one id, which then hits
     /// [`EvidenceError::DuplicateAssumption`] instead of being reported. The
     /// bytes hashed here are exactly the bytes that make two claims different,
     /// so equal ids now mean equal claims.
@@ -770,17 +770,22 @@ impl Assumption {
         let because = sentence(&because);
         let consequence = sentence(&consequence);
         let replacement = sentence(&replacement);
-        // Length-prefix every reader-visible sentence. A claim can differ only
-        // in its consequence or remediation, and an unnameable subject still
-        // needs a distinct public id in that case. Delimiters are insufficient
-        // because caller data can contain any delimiter byte.
-        let claim = format!(
-            "{}:{statement}{}:{because}{}:{consequence}{}:{replacement}",
-            statement.len(),
-            because.len(),
-            consequence.len(),
-            replacement.len(),
-        );
+        // An unnameable claim's id must cover every field that distinguishes
+        // the typed claim, not only its prose. Canonical tuple serialization is
+        // injective across arbitrary caller strings and also keeps two equal
+        // sentences on different causal scopes from collapsing in the registry.
+        // Every member is already validated/serializable by its constructor, so
+        // failure here is an internal invariant breach rather than input error.
+        let claim = serde_json::to_string(&(
+            source,
+            &scope,
+            &statement,
+            &because,
+            &consequence,
+            &replacement,
+            &expires,
+        ))
+        .expect("a validated assumption identity is JSON-serializable");
         let built = Self {
             // The sentences are composed FIRST because together they are what
             // disambiguates an id whose subject the producer could not name.
@@ -860,7 +865,21 @@ impl Assumption {
     /// assert!(a.because().starts_with("One channel of eight"));
     /// ```
     pub fn partial_model(reference: &str, value: &str, gap: &str, replacement: &str) -> Self {
-        let subject = reference.trim().to_string();
+        Self::partial_model_for_component(reference.trim(), reference, value, gap, replacement)
+    }
+
+    /// [`Self::partial_model`] with a causal component identity supplied by the
+    /// board adapter. This is needed when an input repeats or omits reference
+    /// designators: `reference` remains reader-facing prose while
+    /// `component_subject` stays unique and citeable.
+    pub fn partial_model_for_component(
+        component_subject: &str,
+        reference: &str,
+        value: &str,
+        gap: &str,
+        replacement: &str,
+    ) -> Self {
+        let subject = component_subject.trim().to_string();
         let subject_text = if value.trim().is_empty() {
             or_else(reference, "an unnamed part").to_string()
         } else {
@@ -943,6 +962,32 @@ impl Assumption {
         count: usize,
         ordinal: Option<usize>,
     ) -> Self {
+        let component_subject = if reference.trim().is_empty() {
+            AssumptionId::UNNAMED_SUBJECT.to_string()
+        } else {
+            reference.trim().to_string()
+        };
+        Self::open_part_group_for_components(
+            reference,
+            value,
+            reason,
+            count,
+            ordinal,
+            &[component_subject],
+        )
+    }
+
+    /// [`Self::open_part_group`] with the exact component occurrences covered
+    /// by the claim. A group may describe several indistinguishable rows, but
+    /// its causal scope must still reach only those occurrences' nets.
+    pub fn open_part_group_for_components(
+        reference: &str,
+        value: &str,
+        reason: &str,
+        count: usize,
+        ordinal: Option<usize>,
+        component_subjects: &[String],
+    ) -> Self {
         // A NAMED ABSTENTION arrives as one string carrying both halves, joined by
         // [`UNLOCKED_BY_MARKER`]: the binder has one `reason` channel to the report
         // and the two halves belong in two different fields here, so the split
@@ -988,11 +1033,26 @@ impl Assumption {
         debug_assert!(count > 0, "an open-part claim covers at least one part");
         let count = count.max(1);
         let plural = count > 1;
+        let components = component_subjects
+            .iter()
+            .filter(|component| !component.trim().is_empty())
+            .map(|component| EntityRef {
+                kind: EntityKind::Part,
+                id: component.trim().to_string(),
+            })
+            .collect::<Vec<_>>();
+        let scope = if components.is_empty() {
+            part_scope(&subject)
+        } else {
+            Scope::Subjects(
+                SubjectSet::new(components).expect("filtered component identities are non-empty"),
+            )
+        };
         let mut built = Self::build(
             AssumptionKind::OpenPart,
             AssumptionSource::Binder,
             &subject,
-            part_scope(&subject),
+            scope,
             match (plural, subject.is_empty()) {
                 // An unnamed group has no designator to share, so it is counted
                 // rather than named, and the value still goes in when there is one.
@@ -1066,10 +1126,27 @@ impl Assumption {
         requested: &str,
         stand_in: &str,
     ) -> Self {
+        Self::substitute_model_for_component(
+            source,
+            reference.trim(),
+            reference,
+            requested,
+            stand_in,
+        )
+    }
+
+    /// [`Self::substitute_model`] with an occurrence-safe causal component id.
+    pub fn substitute_model_for_component(
+        source: AssumptionSource,
+        component_subject: &str,
+        reference: &str,
+        requested: &str,
+        stand_in: &str,
+    ) -> Self {
         // A producer with no name for one side still has a real gap to report,
         // so the sentence names what it can rather than leaving a hole. The id
         // keeps the raw subject: see `open_part`.
-        let subject = reference.trim().to_string();
+        let subject = component_subject.trim().to_string();
         let reference = or_else(reference, "an unnamed part");
         let requested = or_else(requested, "the part the board asks for");
         let stand_in = or_else(stand_in, "a stand-in model");
@@ -1077,7 +1154,7 @@ impl Assumption {
             AssumptionKind::SubstituteModel,
             source,
             &subject,
-            part_scope(&subject),
+            part_scope(component_subject),
             format!("{reference} is modelled by {stand_in}, not {requested}."),
             format!(
                 "No model matched {requested}, and {stand_in} was the closest stand-in \
@@ -1098,12 +1175,22 @@ impl Assumption {
     /// A pin's role was inferred from the pin-rule table rather than read from
     /// the schematic.
     pub fn inferred_pin_role(reference: &str, pin: &str, role: &str) -> Self {
-        let subject = if reference.trim().is_empty() && pin.trim().is_empty() {
+        Self::inferred_pin_role_for_component(reference.trim(), reference, pin, role)
+    }
+
+    /// [`Self::inferred_pin_role`] with an occurrence-safe causal component id.
+    pub fn inferred_pin_role_for_component(
+        component_subject: &str,
+        reference: &str,
+        pin: &str,
+        role: &str,
+    ) -> Self {
+        let subject = if component_subject.trim().is_empty() && pin.trim().is_empty() {
             String::new()
         } else {
-            format!("{}/{}", fragment(reference), fragment(pin))
+            format!("{}/{}", component_subject.trim(), fragment(pin))
         };
-        let part_ref = fragment(reference);
+        let part_ref = component_subject.trim();
         let reference = or_else(reference, "an unnamed part");
         let pin = or_else(pin, "an unnamed pin");
         let role = or_else(role, "inferred");
@@ -1130,12 +1217,22 @@ impl Assumption {
 
     /// A parameter took a documented default because no input carried a value.
     pub fn default_parameter(reference: &str, parameter: &str, value: &str) -> Self {
-        let subject = if reference.trim().is_empty() && parameter.trim().is_empty() {
+        Self::default_parameter_for_component(reference.trim(), reference, parameter, value)
+    }
+
+    /// [`Self::default_parameter`] with an occurrence-safe causal component id.
+    pub fn default_parameter_for_component(
+        component_subject: &str,
+        reference: &str,
+        parameter: &str,
+        value: &str,
+    ) -> Self {
+        let subject = if component_subject.trim().is_empty() && parameter.trim().is_empty() {
             String::new()
         } else {
-            format!("{}.{}", fragment(reference), fragment(parameter))
+            format!("{}.{}", component_subject.trim(), fragment(parameter))
         };
-        let part_ref = fragment(reference);
+        let part_ref = component_subject.trim();
         let reference = or_else(reference, "an unnamed part");
         let parameter = or_else(parameter, "a parameter");
         let value = or_else(value, "the documented default");

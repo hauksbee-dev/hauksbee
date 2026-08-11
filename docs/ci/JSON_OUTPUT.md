@@ -29,8 +29,8 @@ An error line contributes exit 2 and carries the same sentence stderr prints. A
 multi-spec invocation keeps going after one, so a stream may mix both kinds:
 
 ```
-{"schema_version":1,"ok":true,"spec_name":"power resistor within thermal limits", ...}
-{"schema_version":1,"ok":true,"spec_name":"power resistor over thermal limit (hot ambient)", ...}
+{"schema_version":2,"ok":true,"spec_name":"power resistor within thermal limits", ...}
+{"schema_version":2,"ok":true,"spec_name":"power resistor over thermal limit (hot ambient)", ...}
 {"ok":false,"error":"no spec file at 'ci/typo.toml'. Check the path, or try a bundled example:\n  hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml"}
 ```
 
@@ -46,7 +46,7 @@ is present exactly for exit 3.
 
 | key | type | always | meaning |
 |---|---|---|---|
-| `schema_version` | integer | yes | the shape version, currently `1` |
+| `schema_version` | integer | yes | the shape version, currently `2` |
 | `ok` | `true` | yes | the discriminator |
 | `spec_name` | string | yes | the spec's `name`, or its file stem |
 | `board` | string | yes | the board path as the spec wrote it |
@@ -147,7 +147,7 @@ Every outcome a `results` entry can express:
 A green run, trimmed to the interesting keys:
 
 ```json
-{"schema_version":1,"ok":true,"spec_name":"power resistor within thermal limits",
+{"schema_version":2,"ok":true,"spec_name":"power resistor within thermal limits",
  "board":"boards/power_resistor.kicad_pcb","passed":true,"assertions_passed":true,
  "run_valid":true,"exit_code":0,"analog_abort":false,"seeds":1,"elapsed_s":0.196,
  "coverage":null,"substitutions":[],"coverage_warnings":[],"dead_rails":[],
@@ -207,7 +207,7 @@ co-sim aborted and no single assertion happened to cover the failed span.
 
 ## Compatibility policy
 
-`schema_version` is `1`. It answers one question: has the meaning of this
+`schema_version` is `2`. It answers one question: has the meaning of this
 document changed. It is not a build number and it does not move when fields are
 added.
 
@@ -248,12 +248,11 @@ newer `hauksbee-ci` still validates against an older copy of the schema, and
 - Exit codes keep the meanings in
   [CI.md](CI.md#exit-codes-the-pipeline-contract).
 
-**Where the next bump goes.** The evidence work has landed: per-assertion
-evidence, the component inventory, the assumption registry, timing coverage
-and the exit-3 refusal are all in the tables above. They arrived as additive
-keys and correctly did not bump anything. The scheduled semantic change above
-(the undermined-evidence invalid-for-analysis boundary) is what bumps, once,
-to `schema_version = 2`. The constant lives in
+**Current version.** Version 2 records the assumption-identity migration:
+anonymous ids now cover the complete typed claim, and repeated component
+designators use occurrence-safe causal subjects. That changes the meaning of
+the embedded assumption ids even though their JSON field type is still a
+string, so a version bump is required. The constant lives in
 `crates/hauksbee-ci/src/report.rs` as `CI_REPORT_SCHEMA_VERSION`, the
 generated file's description quotes it, and the drift test fails until the
 schema is regenerated with it, so the bump cannot land half-applied.
