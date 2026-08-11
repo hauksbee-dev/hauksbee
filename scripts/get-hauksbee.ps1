@@ -226,10 +226,17 @@ function Replace-Tree([string]$Staging, [string]$Target) {
     }
 }
 
+function Remove-AbandonedStaging([string]$Path) {
+    if ($Path -and (Test-Path -LiteralPath $Path)) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Download to a temp directory; verify; then install
 # ---------------------------------------------------------------------------
 $workDir = Join-Path ([System.IO.Path]::GetTempPath()) "get-hauksbee-$([System.IO.Path]::GetRandomFileName())"
+$installStaging = $null
 New-Item -ItemType Directory -Path $workDir | Out-Null
 try {
     $zipPath = Join-Path $workDir $ZipName
@@ -342,5 +349,6 @@ try {
     Write-Host "hauksbee $Version installed. Run: hauksbee --help"
     Write-Host "Licence: $licenceLine"
 } finally {
+    Remove-AbandonedStaging $installStaging
     Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue
 }

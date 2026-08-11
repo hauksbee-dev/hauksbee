@@ -9,6 +9,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "windows-owned-process.ps1")
 
 $actualSha = (& git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $actualSha -notmatch '^[0-9a-f]{40}$') {
@@ -18,10 +19,17 @@ if ($actualSha -ne $ExpectedSha) {
     throw "required integration SHA mismatch: expected $ExpectedSha, checked out $actualSha"
 }
 
-# Re-hash the repository-pinned archives and probe the installed trees in this
-# same evidence process; a prior install step is not sufficient proof.
-& (Join-Path $PSScriptRoot "install-sims-windows.ps1") -Check
-if ($LASTEXITCODE -ne 0) { throw "checksum-pinned simulator preflight failed" }
+# Re-hash the repository-pinned archives, freshly extract them, and compare the
+# complete installed payloads in this same evidence process. A prior install
+# step or a launcher-only probe is not sufficient proof.
+$preflightEvidence = Join-Path ([IO.Path]::GetTempPath()) "required-windows-backends-$PID-$([guid]::NewGuid().ToString('N')).json"
+try {
+    & (Join-Path $PSScriptRoot "install-sims-windows.ps1") -Check -EvidenceOut $preflightEvidence
+    if ($LASTEXITCODE -ne 0) { throw "checksum-pinned simulator preflight failed" }
+    $verifiedBackends = (Get-Content -LiteralPath $preflightEvidence -Raw | ConvertFrom-Json).backends
+} finally {
+    if (Test-Path -LiteralPath $preflightEvidence) { Remove-Item -LiteralPath $preflightEvidence -Force }
+}
 
 $renodePath = (Get-ChildItem -LiteralPath (Join-Path $HOME "renode-portable") -Filter Renode.exe -File -Recurse | Select-Object -First 1).FullName
 $xtensaPath = (Resolve-Path (Join-Path $HOME ".hauksbee-qemu-esp\qemu\bin\qemu-system-xtensa.exe")).Path
@@ -34,18 +42,27 @@ foreach ($path in @($renodePath, $xtensaPath, $riscv32Path)) {
 $backends = [ordered]@{
     HAUKSBEE_RENODE = [ordered]@{
         path = $renodePath
-        artifact_sha256 = (Get-FileHash -LiteralPath $renodePath -Algorithm SHA256).Hash.ToLowerInvariant()
-        archive_sha256 = "d09b7934cfd560cd06bde8f131ef78f521f10d423d5aac6096f2a583224aeb3e"
+        artifact_sha256 = $verifiedBackends.HAUKSBEE_RENODE.artifact_sha256
+        install_tree_sha256 = $verifiedBackends.HAUKSBEE_RENODE.install_tree_sha256
+        archive_sha256s = @("d09b7934cfd560cd06bde8f131ef78f521f10d423d5aac6096f2a583224aeb3e")
     }
     HAUKSBEE_QEMU_XTENSA = [ordered]@{
         path = $xtensaPath
-        artifact_sha256 = (Get-FileHash -LiteralPath $xtensaPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        archive_sha256 = "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a"
+        artifact_sha256 = $verifiedBackends.HAUKSBEE_QEMU_XTENSA.artifact_sha256
+        install_tree_sha256 = $verifiedBackends.HAUKSBEE_QEMU_XTENSA.install_tree_sha256
+        archive_sha256s = @(
+            "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a",
+            "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b"
+        )
     }
     HAUKSBEE_QEMU_RISCV32 = [ordered]@{
         path = $riscv32Path
-        artifact_sha256 = (Get-FileHash -LiteralPath $riscv32Path -Algorithm SHA256).Hash.ToLowerInvariant()
-        archive_sha256 = "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b"
+        artifact_sha256 = $verifiedBackends.HAUKSBEE_QEMU_RISCV32.artifact_sha256
+        install_tree_sha256 = $verifiedBackends.HAUKSBEE_QEMU_RISCV32.install_tree_sha256
+        archive_sha256s = @(
+            "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a",
+            "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b"
+        )
     }
 }
 
@@ -82,11 +99,10 @@ foreach ($gate in $gates) {
     $stdout = Join-Path ([IO.Path]::GetTempPath()) "required-$($gate.Name)-$PID.stdout"
     $stderr = Join-Path ([IO.Path]::GetTempPath()) "required-$($gate.Name)-$PID.stderr"
     try {
-        $process = Start-Process -FilePath "cargo" -ArgumentList $gate.Args -NoNewWindow -PassThru `
-            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        if (-not $process.WaitForExit(600000)) {
-            Stop-Process -InputObject $process -Force -ErrorAction SilentlyContinue
-            $process.WaitForExit()
+        $process = Invoke-HauksbeeJobProcess -FilePath "cargo" -ArgumentList $gate.Args `
+            -WorkingDirectory (Get-Location).Path -StandardOutput $stdout -StandardError $stderr `
+            -TimeoutMilliseconds 600000
+        if ($process.TimedOut) {
             throw "$($gate.Name) exceeded 600 seconds"
         }
         $output = ((Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue) +
@@ -117,10 +133,25 @@ foreach ($gate in $gates) {
     }
 }
 
+# A firmware test is repository code and may not mutate a backend after the
+# preflight and then retain stale evidence. Re-extract the same pinned archives
+# and compare the complete installed trees again before writing the receipt.
+$postflightEvidence = Join-Path ([IO.Path]::GetTempPath()) "required-windows-postflight-$PID-$([guid]::NewGuid().ToString('N')).json"
+try {
+    & (Join-Path $PSScriptRoot "install-sims-windows.ps1") -Check -EvidenceOut $postflightEvidence
+    $postflightBackends = (Get-Content -LiteralPath $postflightEvidence -Raw | ConvertFrom-Json).backends
+} finally {
+    if (Test-Path -LiteralPath $postflightEvidence) { Remove-Item -LiteralPath $postflightEvidence -Force }
+}
 foreach ($name in $backends.Keys) {
-    $current = (Get-FileHash -LiteralPath $backends[$name].path -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($current -ne $backends[$name].artifact_sha256) {
-        throw "required backend changed while gates ran: $name"
+    $postflight = $postflightBackends.PSObject.Properties[$name].Value
+    foreach ($field in @(
+        "artifact_sha256",
+        "install_tree_sha256"
+    )) {
+        if ($postflight.$field -ne $backends[$name][$field]) {
+            throw "required backend changed while gates ran: $name ($field)"
+        }
     }
 }
 
