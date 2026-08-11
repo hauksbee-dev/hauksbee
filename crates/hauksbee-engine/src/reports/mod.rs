@@ -89,13 +89,13 @@ pub fn kicad_pro_clearance_rules(
 /// finding fails the gate.
 ///
 /// Asked of the machine findings, not of the severity words: the CI artifacts
-/// mark a testcase failed from [`crate::result::JsonFinding::gating`], and a
+/// mark a testcase failed from [`crate::result::JsonFinding::gates`], and a
 /// gate that re-derived the rule here could grade the same run differently
 /// from the file the pipeline archives.
 pub fn lint_fails(report: &hauksbee_extract::NetLintReport) -> bool {
     crate::result::lint_findings_json(report)
         .iter()
-        .any(|f| f.gating)
+        .any(|finding| finding.gates())
 }
 
 /// Strict-mode predicate for the SI report: any real finding (high/medium/low,
@@ -104,7 +104,7 @@ pub fn lint_fails(report: &hauksbee_extract::NetLintReport) -> bool {
 pub fn si_fails(report: &hauksbee_extract::SiReport) -> bool {
     crate::result::si_findings_json(report)
         .iter()
-        .any(|f| f.gating)
+        .any(|finding| finding.gates())
 }
 
 /// How many gate-grade subjects the `--strict` failure line names before it
@@ -117,7 +117,7 @@ const STRICT_LINE_SUBJECTS: usize = 8;
 pub fn lint_gate_items(report: &hauksbee_extract::NetLintReport) -> Vec<String> {
     crate::result::lint_findings_json(report)
         .iter()
-        .filter(|f| f.gating)
+        .filter(|f| f.gates())
         .map(|f| gate_item(&f.kind, &f.nets, &f.refs))
         .collect()
 }
@@ -129,7 +129,7 @@ pub fn lint_gate_items(report: &hauksbee_extract::NetLintReport) -> Vec<String> 
 pub fn si_gate_items(report: &hauksbee_extract::SiReport) -> Vec<String> {
     crate::result::si_findings_json(report)
         .iter()
-        .filter(|f| f.gating)
+        .filter(|f| f.gates())
         .map(|f| gate_item(&f.kind, &f.nets, &f.refs))
         .collect()
 }
@@ -300,7 +300,10 @@ mod tests {
         // The findings the artifacts grade carry the same split.
         let findings = crate::result::lint_findings_json(&report);
         assert_eq!(
-            findings.iter().map(|f| f.gating).collect::<Vec<_>>(),
+            findings
+                .iter()
+                .map(|finding| finding.gates())
+                .collect::<Vec<_>>(),
             [false, true]
         );
         // Low only: nothing gates and nothing is named.
@@ -337,7 +340,10 @@ mod tests {
         let findings = crate::result::si_findings_json(&report);
         assert_eq!(findings.len(), 2);
         assert_eq!(
-            findings.iter().map(|f| f.gating).collect::<Vec<_>>(),
+            findings
+                .iter()
+                .map(|finding| finding.gates())
+                .collect::<Vec<_>>(),
             [false, true]
         );
         // Info only: no gate, no items, and the note is still reported.

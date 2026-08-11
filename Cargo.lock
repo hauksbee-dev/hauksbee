@@ -1282,6 +1282,7 @@ dependencies = [
  "notify",
  "ratatui",
  "rust-embed",
+ "same-file",
  "schemars",
  "serde",
  "serde_json",
