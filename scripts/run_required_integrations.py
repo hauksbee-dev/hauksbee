@@ -30,6 +30,9 @@ GATES = (
             "test",
             "-p",
             "hauksbee-mcu",
+            "--no-default-features",
+            "--features",
+            "renode",
             "--test",
             "renode_rp2040_adc",
             "rp2040_adc_injection_reaches_firmware",
@@ -47,6 +50,9 @@ GATES = (
             "test",
             "-p",
             "hauksbee-engine",
+            "--no-default-features",
+            "--features",
+            "qemu",
             "--test",
             "i2c_sensor_cosim_qemu",
             "esp32_i2c_firmware_drives_gpio_from_temperature",
@@ -64,6 +70,9 @@ GATES = (
             "test",
             "-p",
             "hauksbee-engine",
+            "--no-default-features",
+            "--features",
+            "qemu",
             "--test",
             "esp32_qemu_cosim",
             "esp32c3_full_cosim_through_solved_circuit",
@@ -104,8 +113,30 @@ def evaluate_result(gate: Gate, returncode: int, output: str) -> list[str]:
     return problems
 
 
-def _stop_process_group(process: subprocess.Popen[str]) -> str:
-    """Stop cargo and every emulator child it launched, returning final output."""
+def _text(output: str | bytes | None) -> str:
+    """Normalize subprocess timeout capture, which is bytes even in text mode."""
+
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
+
+
+def _merge_capture(earlier: str | bytes | None, final: str | bytes | None) -> str:
+    """Keep timeout output once when communicate returns overlapping captures."""
+
+    earlier_text = _text(earlier)
+    final_text = _text(final)
+    if final_text.startswith(earlier_text):
+        return final_text
+    if earlier_text.startswith(final_text):
+        return earlier_text
+    return earlier_text + final_text
+
+
+def _stop_process_group(process: subprocess.Popen[str]) -> tuple[str, bool]:
+    """Stop cargo and every emulator child; return output and whether KILL was needed."""
 
     try:
         os.killpg(process.pid, signal.SIGTERM)
@@ -113,16 +144,14 @@ def _stop_process_group(process: subprocess.Popen[str]) -> str:
         pass
     try:
         output, _ = process.communicate(timeout=5)
-        return output
+        return _text(output), False
     except subprocess.TimeoutExpired as error:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         output, _ = process.communicate()
-        if error.output and not output.startswith(error.output):
-            output = error.output + output
-        return output
+        return _merge_capture(error.output, output), True
 
 
 def run_command(
@@ -145,10 +174,11 @@ def run_command(
         output, _ = process.communicate(timeout=timeout_seconds)
         return subprocess.CompletedProcess(command, process.returncode, output)
     except subprocess.TimeoutExpired:
-        output = _stop_process_group(process)
+        output, killed = _stop_process_group(process)
+        termination = "SIGTERM then SIGKILL" if killed else "SIGTERM"
         output += (
             f"\nREQUIRED INTEGRATION TIMEOUT: exceeded {timeout_seconds}s; "
-            "cargo and its emulator process group were terminated\n"
+            f"cargo and its emulator process group were terminated with {termination}\n"
         )
         return subprocess.CompletedProcess(command, 124, output)
     except KeyboardInterrupt:
@@ -158,7 +188,10 @@ def run_command(
 
 def main() -> int:
     repo = Path(__file__).resolve().parent.parent
-    preflight = run_command((str(repo / "scripts/install-sims.sh"), "--check"), repo)
+    preflight = run_command(
+        (str(repo / "scripts/install-sims.sh"), "--check", "--require-pinned"),
+        repo,
+    )
     sys.stdout.write(preflight.stdout)
     if preflight.returncode != 0:
         print(

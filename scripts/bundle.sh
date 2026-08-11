@@ -304,6 +304,7 @@ mkdir -p "$ROOTDIR/scripts"
 for s in install.sh doctor.sh ci.sh install-sims.sh common.sh; do
   install -m 0755 "$HAUKSBEE_ROOT/scripts/$s" "$ROOTDIR/scripts/$s"
 done
+install -m 0644 "$HAUKSBEE_ROOT/scripts/required-simulator-versions.env" "$ROOTDIR/scripts/required-simulator-versions.env"
 # Examples: ship the specs, boards and READMEs (skip any scratch dirs).
 mkdir -p "$ROOTDIR/examples"
 cp -R "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/." "$ROOTDIR/examples/ci-specs"
