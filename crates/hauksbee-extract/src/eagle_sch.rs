@@ -61,6 +61,16 @@ pub struct SchematicPartIdentity {
     pub value: String,
 }
 
+/// One physical package pad's net incidence in the schematic. Eagle schematic
+/// pins are translated through the selected device's `<connect>` map so `pin`
+/// uses the same package-pad vocabulary as the companion `.brd`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SchematicPinNetIdentity {
+    pub reference: String,
+    pub pin: String,
+    pub net: String,
+}
+
 impl DeclaredNetTie {
     /// True when this declaration covers a copper contact between these two
     /// nets, in either order. Net names are compared exactly: Eagle net names
@@ -146,6 +156,15 @@ pub fn schematic_part_identities(text: &str) -> Result<Vec<SchematicPartIdentity
     Ok(parts)
 }
 
+pub fn schematic_pin_net_identities(
+    text: &str,
+) -> Result<Vec<SchematicPinNetIdentity>, ExtractError> {
+    let mut incidences = parse(text)?.physical_pin_nets;
+    incidences.sort();
+    incidences.dedup();
+    Ok(incidences)
+}
+
 /// One `<segment>` of one `<net>`: which net it belongs to and which of its
 /// `<pinref>`s name a part this file defines as a supply symbol.
 struct Segment {
@@ -206,6 +225,7 @@ struct Parsed {
     part_supply: HashMap<String, String>,
     segments: Vec<Segment>,
     physical_parts: Vec<SchematicPartIdentity>,
+    physical_pin_nets: Vec<SchematicPinNetIdentity>,
 }
 
 /// A single streaming pass, in the order Eagle writes the file: `<libraries>`
@@ -224,11 +244,18 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
     let mut part_supply: HashMap<String, String> = HashMap::new();
     let mut segments: Vec<Segment> = Vec::new();
     let mut physical_parts = Vec::new();
+    let mut physical_pin_nets = Vec::new();
+    // (library, deviceset, device, gate, schematic pin) -> package pad(s).
+    let mut device_pin_maps: HashMap<(LibraryId, String, String, String, String), Vec<String>> =
+        HashMap::new();
+    // Physical part -> its selected library/deviceset/device mapping.
+    let mut physical_part_devices: HashMap<String, (LibraryId, String, String)> = HashMap::new();
 
     let mut cur_library: Option<LibraryId> = None;
     let mut cur_symbol: Option<String> = None;
     let mut cur_symbol_pins = SymbolPins::default();
     let mut cur_deviceset: Option<DevicesetScan> = None;
+    let mut cur_device: Option<String> = None;
     let mut cur_net: Option<String> = None;
     let mut cur_segment: Option<Segment> = None;
     let mut saw_document_element = false;
@@ -350,6 +377,35 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                                 deviceset.any_device_has_package = true;
                             }
                         }
+                        cur_device = Some(a.get("name").cloned().unwrap_or_default());
+                    }
+                    b"connect" => {
+                        if let (
+                            Some(library),
+                            Some(deviceset),
+                            Some(device),
+                            Some(gate),
+                            Some(pin),
+                            Some(pads),
+                        ) = (
+                            cur_library.clone(),
+                            cur_deviceset.as_ref(),
+                            cur_device.as_ref(),
+                            a.get("gate"),
+                            a.get("pin"),
+                            a.get("pad"),
+                        ) {
+                            let entry = device_pin_maps
+                                .entry((
+                                    library,
+                                    deviceset.name.clone(),
+                                    device.clone(),
+                                    gate.clone(),
+                                    pin.clone(),
+                                ))
+                                .or_default();
+                            entry.extend(pads.split_whitespace().map(str::to_string));
+                        }
                     }
                     b"part" => {
                         let (Some(name), Some(library), Some(deviceset)) =
@@ -369,7 +425,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                                 })
                             },
                         );
-                        if let Some(supply) = library_id.and_then(|library_id| {
+                        if let Some(supply) = library_id.clone().and_then(|library_id| {
                             supply_devicesets
                                 .get(&(library_id, deviceset.clone()))
                                 .cloned()
@@ -380,6 +436,16 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                                 reference: name.clone(),
                                 value: a.get("value").cloned().unwrap_or_default(),
                             });
+                            if let Some(library_id) = library_id {
+                                physical_part_devices.insert(
+                                    name.clone(),
+                                    (
+                                        library_id,
+                                        deviceset.clone(),
+                                        a.get("device").cloned().unwrap_or_default(),
+                                    ),
+                                );
+                            }
                         }
                     }
                     b"net" => cur_net = a.get("name").cloned(),
@@ -395,10 +461,35 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                         if let (Some(segment), Some(part)) = (cur_segment.as_mut(), a.get("part")) {
                             if part_supply.contains_key(part) {
                                 segment.supply_parts.push(part.clone());
+                            } else if let (Some(gate), Some(pin), Some(net)) =
+                                (a.get("gate"), a.get("pin"), cur_net.as_ref())
+                            {
+                                if let Some((library, deviceset, device)) =
+                                    physical_part_devices.get(part)
+                                {
+                                    if let Some(pads) = device_pin_maps.get(&(
+                                        library.clone(),
+                                        deviceset.clone(),
+                                        device.clone(),
+                                        gate.clone(),
+                                        pin.clone(),
+                                    )) {
+                                        physical_pin_nets.extend(pads.iter().map(|pad| {
+                                            SchematicPinNetIdentity {
+                                                reference: part.clone(),
+                                                pin: pad.clone(),
+                                                net: net.clone(),
+                                            }
+                                        }));
+                                    }
+                                }
                             }
                         }
                     }
                     _ => {}
+                }
+                if is_empty && e.name().as_ref() == b"device" {
+                    cur_device = None;
                 }
             }
             Ok(Event::End(e)) => {
@@ -457,6 +548,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                             }
                         }
                     }
+                    b"device" => cur_device = None,
                     b"library" => cur_library = None,
                     b"net" => cur_net = None,
                     b"segment" => {
@@ -498,6 +590,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
         part_supply,
         segments,
         physical_parts,
+        physical_pin_nets,
     })
 }
 

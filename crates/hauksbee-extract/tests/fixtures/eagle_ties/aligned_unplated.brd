@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<eagle version="6.6.0"><drawing><layers>
+<layer number="1" name="Top"/><layer number="16" name="Bottom"/>
+</layers><board><libraries/><designrules name="default">
+<param name="mdWireWire" value="6mil"/><param name="mdWirePad" value="6mil"/>
+<param name="mdPadPad" value="6mil"/><param name="mdSmdSmd" value="6mil"/>
+</designrules><elements/><signals>
+<signal name="GND"><wire x1="0" y1="0" x2="10" y2="0" width="0.5" layer="1"/><wire x1="0" y1="0" x2="10" y2="0" width="0.5" layer="16"/></signal>
+<signal name="AGND"><wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="1"/><wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="16"/></signal>
+</signals></board></drawing></eagle>

@@ -31,6 +31,38 @@ pub fn emit(
     strict: bool,
     verbose: bool,
     inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
+    emit_with_schematic(
+        board_path,
+        board,
+        text,
+        raw,
+        input_kind,
+        altium_present,
+        lib,
+        reader_notes,
+        mode,
+        strict,
+        verbose,
+        inputs,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn emit_with_schematic(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    altium_present: bool,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    strict: bool,
+    verbose: bool,
+    inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
@@ -350,7 +382,7 @@ fn gate_items(
     usbc: &Option<crate::checks::usb_c::UsbcReport>,
 ) -> Vec<String> {
     let mut items = if drc_gates {
-        super::drc_gate_items(drc, qualification)
+        super::drc_gate_items_with_ties(drc, qualification)
     } else {
         Vec::new()
     };
@@ -370,6 +402,17 @@ fn gate_items(
 /// excluded here exactly as they are excluded from the gate, so a SARIF error
 /// can never fail a pipeline the report command would pass.
 pub fn gather_findings(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    altium_present: bool,
+    lib: &ModelLibrary,
+) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
+    gather_findings_with_schematic(board_path, board, text, raw, altium_present, lib, None)
+}
+
+pub fn gather_findings_with_schematic(
     board_path: &Path,
     board: &ExtractedBoard,
     text: &str,
@@ -724,7 +767,36 @@ pub(crate) fn render_waivers_scoped(
 /// Without it a bare `--json` would fall through to the TUI/websocket default and
 /// hang a piped / CI / AI caller. Carries the same findings as [`emit`]'s JSON,
 /// and (under `strict`) gates with the same exit-2 contract.
+#[allow(clippy::too_many_arguments)]
 pub fn emit_combined_json(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    altium_present: bool,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    strict: bool,
+    inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
+    emit_combined_json_with_schematic(
+        board_path,
+        board,
+        text,
+        raw,
+        input_kind,
+        altium_present,
+        lib,
+        reader_notes,
+        strict,
+        inputs,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn emit_combined_json_with_schematic(
     board_path: &Path,
     board: &ExtractedBoard,
     text: &str,

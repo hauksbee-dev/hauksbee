@@ -144,6 +144,31 @@ async fn spawn_fw() -> std::net::SocketAddr {
     addr
 }
 
+async fn spawn_schematic() -> std::net::SocketAddr {
+    let analyze: frontdoor::SchematicAnalyzer = Arc::new(
+        |name: &str,
+         contents: &[u8],
+         fw: Option<(&str, &[u8])>,
+         schematic: Option<(&str, &[u8])>| {
+            let (schematic_name, schematic_len) = schematic
+                .map(|(name, bytes)| (name, bytes.len()))
+                .unwrap_or(("none", 0));
+            format!(
+                "{{\"ok\":true,\"file_name\":\"{name}\",\"len\":{},\"fw\":{},\"schematic_name\":\"{schematic_name}\",\"schematic_len\":{schematic_len}}}",
+                contents.len(),
+                fw.is_some()
+            )
+        },
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = frontdoor::api_routes_with_schematic(analyze);
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    addr
+}
+
 /// Build a minimal multipart/form-data body for the given parts.
 /// Each part is (field_name, filename, raw_bytes).
 fn multipart_body(boundary: &str, parts: &[(&str, &str, &[u8])]) -> Vec<u8> {
@@ -220,6 +245,72 @@ async fn analyze_with_firmware_threads_board_and_firmware_bytes() {
     assert!(
         resp.contains(&format!("\"fw_len\":{}", fw.len())),
         "firmware bytes must reach the analyzer verbatim: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn analyze_threads_optional_eagle_schematic_bytes_to_the_analyzer() {
+    let addr = spawn_schematic().await;
+    let boundary = "----hauksbee-schematic-boundary";
+    let board = b"<eagle><drawing><board/></drawing></eagle>";
+    let schematic = b"<eagle><drawing><schematic/></drawing></eagle>";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("board", "design.brd", board),
+            ("schematic", "design.sch", schematic),
+        ],
+    );
+    let req = format!(
+        "POST /api/analyze-with-firmware HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let resp = http(addr, &req, &body).await;
+    assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
+    assert!(resp.contains("\"file_name\":\"design.brd\""), "{resp}");
+    assert!(resp.contains("\"schematic_name\":\"design.sch\""), "{resp}");
+    assert!(
+        resp.contains(&format!("\"schematic_len\":{}", schematic.len())),
+        "schematic bytes were not threaded verbatim: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn live_launch_threads_optional_eagle_schematic_to_the_launcher() {
+    let launch: frontdoor::SchematicLiveLauncher =
+        Arc::new(|_name, _board, _firmware, schematic| match schematic {
+            Some((name, bytes)) => Err(format!("saw {name} with {} bytes", bytes.len())),
+            None => Err("schematic missing".to_string()),
+        });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = frontdoor::live_routes_with_schematic(hauksbee_server::LiveHub::new(), launch);
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+    let boundary = "----hauksbee-live-schematic-boundary";
+    let schematic = b"<eagle><drawing><schematic/></drawing></eagle>";
+    let body = multipart_body(
+        boundary,
+        &[
+            (
+                "board",
+                "design.brd",
+                b"<eagle><drawing><board/></drawing></eagle>",
+            ),
+            ("schematic", "design.sch", schematic),
+        ],
+    );
+    let request = format!(
+        "POST /api/live/launch HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let response = http(addr, &request, &body).await;
+    assert!(response.contains("saw design.sch"), "{response}");
+    assert!(
+        response.contains(&format!("with {} bytes", schematic.len())),
+        "{response}"
     );
 }
 

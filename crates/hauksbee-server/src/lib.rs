@@ -16,7 +16,10 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use engine::Engine;
-use frontdoor::{CheckRunner, FirmwareAnalyzer, LiveLauncher, ToolHooks};
+use frontdoor::{
+    CheckRunner, FirmwareAnalyzer, LiveLauncher, SchematicAnalyzer, SchematicLiveLauncher,
+    ToolHooks,
+};
 use protocol::{ClientMessage, ServerMessage, SessionBacklog, SimFrame, Status};
 use std::path::Path;
 use std::sync::Arc;
@@ -354,9 +357,11 @@ impl Server {
             static_dir,
             board_file,
             Some(analyze),
+            None,
             check,
             tools,
             launch,
+            None,
             startup_json,
         )
     }
@@ -417,6 +422,36 @@ impl Server {
         axum::serve(listener, router).await?;
         Ok(())
     }
+
+    /// Schematic-aware counterpart to [`Self::serve_app_on`]. Kept separate so
+    /// existing embedders retain their public callback signatures.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn serve_app_on_with_schematic(
+        &self,
+        listener: tokio::net::TcpListener,
+        static_dir: Option<&Path>,
+        board_file: Option<(String, String)>,
+        analyze: SchematicAnalyzer,
+        check: Option<CheckRunner>,
+        tools: Option<ToolHooks>,
+        launch: Option<SchematicLiveLauncher>,
+        startup_json: String,
+    ) -> anyhow::Result<()> {
+        let router = unified_router(
+            Some(self.hub.clone()),
+            static_dir,
+            board_file,
+            None,
+            Some(analyze),
+            check,
+            tools,
+            None,
+            launch,
+            startup_json,
+        );
+        axum::serve(listener, router).await?;
+        Ok(())
+    }
 }
 
 /// Assemble the unified router from its optional parts. `hub` is the live-sim
@@ -430,9 +465,11 @@ fn unified_router(
     static_dir: Option<&Path>,
     board_file: Option<(String, String)>,
     analyze: Option<FirmwareAnalyzer>,
+    schematic_analyze: Option<SchematicAnalyzer>,
     check: Option<CheckRunner>,
     tools: Option<ToolHooks>,
     launch: Option<LiveLauncher>,
+    schematic_launch: Option<SchematicLiveLauncher>,
     startup_json: String,
 ) -> Router {
     let mut router = Router::new();
@@ -460,8 +497,14 @@ fn unified_router(
     if let (Some(hub), Some(launch)) = (&hub, launch) {
         router = router.merge(frontdoor::live_routes(hub.clone(), launch));
     }
+    if let (Some(hub), Some(launch)) = (&hub, schematic_launch) {
+        router = router.merge(frontdoor::live_routes_with_schematic(hub.clone(), launch));
+    }
     if let Some(analyze) = analyze {
         router = router.merge(frontdoor::api_routes(analyze));
+    }
+    if let Some(analyze) = schematic_analyze {
+        router = router.merge(frontdoor::api_routes_with_schematic(analyze));
     }
     // The web checks panel's backend (`POST /api/check`): present whenever the
     // embedding binary supplied a runner (the hauksbee-ci shell-out).
@@ -589,8 +632,40 @@ pub async fn serve_frontdoor_on(
         static_dir,
         None,
         Some(analyze),
+        None,
         check,
         tools,
+        launch,
+        None,
+        startup_json,
+    );
+    axum::serve(listener, router).await?;
+    Ok(())
+}
+
+/// Schematic-aware standalone front door. Existing callers keep using
+/// [`serve_frontdoor_on`]; the shipped engine uses this path so an uploaded
+/// Eagle `.sch` reaches both report analysis and live launch.
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_frontdoor_on_with_schematic(
+    listener: tokio::net::TcpListener,
+    static_dir: Option<&Path>,
+    analyze: SchematicAnalyzer,
+    check: Option<CheckRunner>,
+    tools: Option<ToolHooks>,
+    launch: Option<SchematicLiveLauncher>,
+    startup_json: String,
+) -> anyhow::Result<()> {
+    let hub = LiveHub::new();
+    let router = unified_router(
+        Some(hub),
+        static_dir,
+        None,
+        None,
+        Some(analyze),
+        check,
+        tools,
+        None,
         launch,
         startup_json,
     );

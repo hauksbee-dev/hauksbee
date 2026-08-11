@@ -138,7 +138,11 @@ pub fn si_gate_items(report: &hauksbee_extract::SiReport) -> Vec<String> {
 /// nor does a contact a companion schematic declares deliberate. The gate line
 /// names what failed the build, so a declared tie listed here would send the
 /// reader after copper that is doing exactly what the design asks.
-pub fn drc_gate_items(
+pub fn drc_gate_items(report: &hauksbee_extract::DrcReport) -> Vec<String> {
+    drc_gate_items_with_ties(report, None)
+}
+
+pub fn drc_gate_items_with_ties(
     report: &hauksbee_extract::DrcReport,
     qualification: Option<&hauksbee_extract::DrcTieQualification>,
 ) -> Vec<String> {
