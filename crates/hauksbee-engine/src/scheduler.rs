@@ -1374,11 +1374,17 @@ impl Scheduler {
         }
         let reg = Arc::new(Mutex::new(crate::responders::ResponderRegistry::new()));
         let cb = reg.clone();
-        self.mcus[mi].core.on_input_responder(Box::new(
-            move |pin: PinId, high: bool, cycle: u64| -> Vec<hauksbee_mcu::PinDrive> {
+        self.mcus[mi].core.on_input_responder_batch(Box::new(
+            move |edges: &[(PinId, bool)], cycle: u64| -> Vec<hauksbee_mcu::PinDrive> {
                 cb.lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .dispatch_at((pin.port, pin.bit), high, cycle)
+                    .dispatch_batch_at(
+                        &edges
+                            .iter()
+                            .map(|&(pin, high)| ((pin.port, pin.bit), high))
+                            .collect::<Vec<_>>(),
+                        cycle,
+                    )
                     .into_iter()
                     .map(|update| {
                         let pin = PinId {
