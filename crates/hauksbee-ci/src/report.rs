@@ -595,7 +595,7 @@ impl CiResult {
             };
             out.push_str(&format!(
                 "\nmodel {}={} source={} validation={} {accuracy}",
-                model.reference(),
+                model.cited_reference(),
                 model.model_id(),
                 source.tier(),
                 source.validation(),
@@ -1725,5 +1725,96 @@ mod substitution_tests {
         assert!(result
             .render_github_annotations()
             .contains("TIMING COVERAGE"));
+    }
+}
+
+#[cfg(test)]
+mod occurrence_evidence_tests {
+    use super::{AssertResult, CiResult};
+    use hauksbee_ir::evidence::{
+        CausalPathIndex, EvidenceMap, EvidenceRegistry, MatchConfidence, ModelLayer, ModelOnPath,
+        ModelSource, ModelSourceTier, ModelUncertainty, ModelValidation, NetScope, RunDate,
+    };
+    use std::time::Duration;
+
+    fn occurrence_map(label: &str) -> EvidenceMap {
+        let registry = EvidenceRegistry::new(Vec::new()).expect("empty registry is valid");
+        let references = ["Via"];
+        let paths = CausalPathIndex::from_net_parts([("SENSE", references.as_slice())])
+            .expect("fixture incidence is valid");
+        let scope = NetScope::new(["SENSE"], None).expect("fixture scope is valid");
+        let traversal = paths
+            .traverse(&scope, &registry)
+            .expect("fixture traversal is valid");
+        let source = ModelSource::new(
+            ModelSourceTier::CuratedPack,
+            ModelLayer::Pack,
+            "fixture pack",
+            ModelValidation::PhysicalBoundsOnly,
+            vec![
+                ModelUncertainty::unknown("all parameters", "fixture has no bounds")
+                    .expect("fixture uncertainty is valid"),
+            ],
+        )
+        .expect("fixture model source is valid");
+        EvidenceMap::from_traversal(label, traversal, &registry, RunDate::unknown())
+            .expect("fixture map is valid")
+            .with_models(vec![ModelOnPath::for_subject(
+                "component:v1:Via:2",
+                "Via",
+                "via_model_b",
+                source,
+                MatchConfidence::Exact,
+            )
+            .expect("fixture model is valid")])
+    }
+
+    #[test]
+    fn duplicate_model_occurrence_identity_reaches_human_and_junit_surfaces() {
+        let label = "Via model is on the SENSE path";
+        let result = CiResult {
+            spec_name: "occurrence-provenance".into(),
+            board: "duplicate-via.kicad_pcb".into(),
+            results: vec![AssertResult {
+                label: label.into(),
+                kind: "voltage".into(),
+                passed: true,
+                invalid: false,
+                detail: "held".into(),
+                failing_seed: None,
+                failing_seeds: Vec::new(),
+                seeds_total: 1,
+                why: None,
+                waived: None,
+                subject_nets: vec!["SENSE".into()],
+                subject_refs: vec!["Via".into()],
+            }],
+            seeds: 1,
+            elapsed: Duration::ZERO,
+            analog_abort: false,
+            coverage: None,
+            substitutions: Vec::new(),
+            coverage_warnings: Vec::new(),
+            timing_coverage: Vec::new(),
+            timing_refusals: Vec::new(),
+            dead_rails: Vec::new(),
+            waiver_notes: Vec::new(),
+            inventory: Vec::new(),
+            assumptions: Vec::new(),
+            evidence: vec![occurrence_map(label)],
+        };
+
+        let expected = "model Via [subject=\"component:v1:Via:2\"]=via_model_b";
+        let human = result.render_human();
+        assert!(
+            human.contains(expected),
+            "human report lost identity: {human}"
+        );
+        let junit = result.render_junit();
+        let junit_expected = "model Via [subject=&quot;component:v1:Via:2&quot;]=via_model_b";
+        assert!(
+            junit.contains(junit_expected),
+            "JUnit report lost identity: {junit}"
+        );
     }
 }

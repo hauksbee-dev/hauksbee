@@ -1327,7 +1327,7 @@ impl BoardEvidence {
                 let _ = writeln!(
                     out,
                     "  model {}={} source={} layer={:?} origin={} validation={} {accuracy}",
-                    model.reference(),
+                    model.cited_reference(),
                     model.model_id(),
                     source.tier(),
                     source.layer(),
@@ -2127,6 +2127,14 @@ mod duplicate_open_part_tests {
         assert_eq!(maps[1].models()[0].model_id(), "via_model_b");
         assert_eq!(maps[1].models()[0].reference(), "Via");
         assert!(maps[1].models()[0].subject().starts_with(OCCURRENCE_PREFIX));
+        let rendered = evidence.render_plain();
+        assert!(
+            rendered.contains(&format!(
+                "model Via [subject={:?}]=via_model_b",
+                maps[1].models()[0].subject()
+            )),
+            "plain evidence must distinguish the exact modelled occurrence: {rendered}"
+        );
 
         let by_display_reference = evidence
             .simulation_map("all Via occurrences", &[], &["Via".to_string()], None)

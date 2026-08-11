@@ -2870,6 +2870,17 @@ impl ModelOnPath {
         &self.reference
     }
 
+    /// A human citation that remains occurrence-specific when the readable
+    /// reference is reused. The debug-string form quotes and escapes the
+    /// opaque subject, so spaces or punctuation cannot blur its boundary.
+    pub fn cited_reference(&self) -> String {
+        if self.subject == self.reference {
+            self.reference.clone()
+        } else {
+            format!("{} [subject={:?}]", self.reference, self.subject)
+        }
+    }
+
     pub fn model_id(&self) -> &str {
         &self.model_id
     }
