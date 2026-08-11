@@ -293,16 +293,19 @@ Ordinary Eagle libraries mark a component's power pins `direction="sup"`: the
 any-`sup`-pin rule made the SD socket and the radio module "declare" ground tied
 to every net they touch: 6 false declarations on Margay and 19 on emonTx V3.2,
 including `3.3V` to `GND`, each of which would reclassify a genuine
-rail-to-ground short into a non-gating note. Measured over the twelve Eagle
-schematic/board pairs available, the three tests together yield declarations on
-exactly the five emonTx revisions that drew the tie (V3.4.1 to V3.4.5) and none
-anywhere else. A packaged testpoint whose symbol is a single `sup` pin is
-likewise not a supply symbol, which is what test 3 is for.
+rail-to-ground short into a non-gating note. The historical twelve-pair
+exploratory sweep was not retained as a release artifact, so it is not used as
+completion evidence. The release regression uses two tracked board/schematic
+pairs (one declared, one undeclared) and focused parser cases for multi-pin,
+packaged and duplicate-library-URN false positives. A packaged testpoint whose
+symbol is a single `sup` pin is likewise not a supply symbol, which is what test
+3 is for.
 
 **Reclassified, not deleted.** A covered finding keeps its net pair, layer,
 location and measured gap, and gains the declaration. Its severity drops from
 `serious` to `note`, it stops failing `--strict`
-(`DrcReport::undeclared_shorts` is the gating set, `shorts` stays the full one),
+(`DrcTieQualification::undeclared_shorts` is the side-data gating set; `shorts`
+stays the full measured set),
 and every surface states both halves: that the nets are joined in copper, and
 that the schematic declares the tie, naming the symbols and the net. Deleting the
 finding would hide that GND and AGND share copper, which is a fact about the board
@@ -313,29 +316,17 @@ names the schematic as the unlocking upload, on the finding's own `fix` text and
 as a report-level note. And a schematic that declares nothing qualifies nothing:
 matching is against an actual declaration, so a schematic on its own is not a
 downgrade. emonTx V3.4.0, the revision before the tie was drawn, declares none and
-its contacts stay serious even with its own schematic supplied. That is the guard
-the reverted `isolate` narrowing failed, and it is a test, not an intention.
+its contacts stay serious even with its own schematic supplied. That historical
+adjudication remains as an opt-in external-corpus test which fails closed when its
+files are not provisioned; the always-run guard is the tracked undeclared pair in
+`crates/hauksbee-extract/tests/fixtures/eagle_ties/`.
 
-**Two residual ways a declaration can reach copper it does not describe.** Both
-are recorded rather than claimed away, and both leave the copper contact and the
-`.sch` path visible on every surface, so the report is auditable in each case.
-
-- **No board/schematic identity check.** Matching is by net-name pair, so
-  `--schematic` pointed at a DIFFERENT revision of the same design reclassifies
-  contacts that revision never declared: V3.4.5's schematic supplied against the
-  V3.4.0 board downgrades V3.4.0's contacts. Auto-discovery cannot reach this
-  (it is bound to the board's own basename); it needs the flag and the wrong
-  file. Closing it properly needs a same-design test the `.brd` and `.sch` can
-  both support, which is not implemented.
-- **A declaration is not located.** A supply symbol says two nets meet, not
-  where. So a declared pair is qualified wherever those two nets touch, and a
-  second, accidental bridge on the SAME pair elsewhere is qualified too. The
-  report states how many contacts one declaration covered
-  (`2 copper contacts qualified`) and the remediation text asks the reader to
-  check the join is where the schematic puts it, because a star ground should
-  meet at one point. Eagle records the tie's sheet coordinates, but a schematic
-  coordinate does not map to a board coordinate, so no threshold here would be
-  measured rather than guessed.
+**Identity and physical scope fail closed.** An explicit companion must share the
+board basename and its physical reference/value set must exactly match the board.
+A declaration qualifies one unique same-location contact cluster, including its
+multiple copper layers. A spatially separate bridge remains gating; if two
+clusters are equally plausible, neither is downgraded. Eagle schematic sheet
+coordinates are deliberately not projected onto board coordinates.
 
 **Eagle only, and enforced.** A `.kicad_pcb` declares its ties in the layout the
 DRC already has and a `.kicad_sch` has no construct for a deliberate two-net join
@@ -368,9 +359,9 @@ cargo run -p hauksbee-extract --example sch_ties -- "<board>.brd" "<board>.sch"
 # still gating: 0
 ```
 
-Run against emonTx V3.4.0 it prints `declared ties: 0` and `still gating: 2`,
-which is the same board family three revisions earlier and the reason the
-false-negative guard is a test rather than an intention.
+The tracked undeclared fixture asserts the same fail-closed boundary without
+depending on that external corpus. When the optional emonTx V3.4.0 files are
+provisioned, the example prints `declared ties: 0` and `still gating: 2`.
 
 ## Simulation (`hauksbee-engine/src/shorts.rs`)
 

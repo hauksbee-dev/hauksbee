@@ -17,13 +17,15 @@ fn main() {
         println!("  {} <-> {}: {}", t.net, t.tied_net, t.describe());
     }
     let brd_text = String::from_utf8_lossy(&std::fs::read(&brd).expect("read board")).into_owned();
-    let mut report = hauksbee_extract::ExtractedBoard::drc(&brd_text).expect("drc runs");
+    let report = hauksbee_extract::ExtractedBoard::drc(&brd_text).expect("drc runs");
     println!("shorts: {}", report.short_count());
-    println!("hint: {:?}", report.tie_declaration_hint.is_some());
-    let n = report.qualify_with_declared_ties(&sch, &ties);
-    println!("qualified: {n}");
-    println!("source: {:?}", report.declared_tie_source);
-    println!("still gating: {}", report.undeclared_short_count());
+    let qualification = report.qualify_with_declared_ties(&sch, &ties);
+    println!("qualified: {}", qualification.qualified_count());
+    println!("source: {}", qualification.source_summary());
+    println!(
+        "still gating: {}",
+        qualification.undeclared_shorts(&report).count()
+    );
     for s in report.shorts() {
         println!(
             "  {}/{} on {} gap {:.4} declared={:?}",
@@ -31,7 +33,7 @@ fn main() {
             s.net_b_name,
             s.layer,
             s.gap_mm,
-            s.declared_tie.as_ref().map(|d| &d.declaration)
+            qualification.tie_for(s).map(|d| &d.declaration)
         );
     }
 }

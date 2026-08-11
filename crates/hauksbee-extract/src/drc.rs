@@ -505,12 +505,8 @@ pub struct Item {
 }
 
 /// A schematic's declaration that the two nets of a finding are joined on
-/// purpose, attached to the finding it qualifies.
-///
-/// This never removes a finding. The copper contact was measured and stays
-/// measured; this records that the design says the contact is intended, which is
-/// the difference between a defect and a star ground. See
-/// [`DrcReport::qualify_with_declared_ties`].
+/// purpose. Stored in [`DrcTieQualification`], not in [`DrcFinding`], so the
+/// established public finding/report struct-literal API remains source-compatible.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeclaredTie {
     /// The declaration in the schematic's own vocabulary, naming the symbols and
@@ -518,6 +514,91 @@ pub struct DeclaredTie {
     pub declaration: String,
     /// The companion input it was read from, as the user named it.
     pub source: String,
+}
+
+#[derive(Debug, Clone)]
+struct QualifiedFinding {
+    net_a_name: String,
+    net_b_name: String,
+    layer: String,
+    x_nm: i64,
+    y_nm: i64,
+    tie: DeclaredTie,
+}
+
+/// Non-breaking side data describing which measured copper contacts a
+/// companion schematic qualified. The DRC geometry remains untouched.
+#[derive(Debug, Clone, Default)]
+pub struct DrcTieQualification {
+    source: String,
+    declaration_count: usize,
+    qualified: Vec<QualifiedFinding>,
+}
+
+impl DrcTieQualification {
+    pub fn tie_for<'a>(&'a self, finding: &DrcFinding) -> Option<&'a DeclaredTie> {
+        self.tie_at(
+            &finding.net_a_name,
+            &finding.net_b_name,
+            &finding.layer,
+            finding.x,
+            finding.y,
+        )
+    }
+
+    pub fn tie_at(
+        &self,
+        net_a: &str,
+        net_b: &str,
+        layer: &str,
+        x: f64,
+        y: f64,
+    ) -> Option<&DeclaredTie> {
+        let x_nm = (x * 1_000_000.0).round() as i64;
+        let y_nm = (y * 1_000_000.0).round() as i64;
+        self.qualified
+            .iter()
+            .find(|qualified| {
+                qualified.net_a_name == net_a
+                    && qualified.net_b_name == net_b
+                    && qualified.layer == layer
+                    && qualified.x_nm == x_nm
+                    && qualified.y_nm == y_nm
+            })
+            .map(|qualified| &qualified.tie)
+    }
+
+    pub fn qualified_count(&self) -> usize {
+        self.qualified.len()
+    }
+
+    pub fn declaration_count(&self) -> usize {
+        self.declaration_count
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn source_summary(&self) -> String {
+        let qualified = self.qualified_count();
+        format!(
+            "{} ({} declared net tie{}, {qualified} copper contact{} qualified)",
+            self.source,
+            self.declaration_count,
+            if self.declaration_count == 1 { "" } else { "s" },
+            if qualified == 1 { "" } else { "s" },
+        )
+    }
+
+    pub fn undeclared_shorts<'a>(
+        &'a self,
+        report: &'a DrcReport,
+    ) -> impl Iterator<Item = &'a DrcFinding> + 'a {
+        report
+            .shorts()
+            .filter(|finding| self.tie_for(finding).is_none())
+    }
 }
 
 /// One short / clearance finding between two different nets.
@@ -546,10 +627,6 @@ pub struct DrcFinding {
     /// The two primitives that came closest.
     pub item_a: Item,
     pub item_b: Item,
-    /// Set when a companion schematic declares these two nets deliberately
-    /// tied. The geometry above is unchanged; this qualifies what it means.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub declared_tie: Option<DeclaredTie>,
 }
 
 /// The full DRC report for a board.
@@ -586,26 +663,6 @@ pub struct DrcReport {
     /// would assert "nothing was suppressed" about a run that never measured it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_pad_overlaps_suppressed: Option<usize>,
-    /// Set on a format whose deliberate net ties can be DECLARED in a companion
-    /// schematic this run was not handed. Names the unlocking upload, so a short
-    /// that stays serious says what input would settle it rather than leaving the
-    /// reader to guess. Cleared by
-    /// [`DrcReport::qualify_with_declared_ties`], which replaces it with
-    /// [`Self::declared_tie_source`].
-    ///
-    /// Eagle only, and for a concrete reason: an Eagle `.brd` carries no net-tie
-    /// field at all, so a `.brd`-only run genuinely cannot tell a star ground
-    /// from a solder bridge. A `.kicad_pcb` carries `net_tie_pad_groups`, so its
-    /// ties are already declared in the file the DRC was given and no companion
-    /// is missing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tie_declaration_hint: Option<String>,
-    /// Set once a companion schematic has been read: which file, and how many
-    /// declarations it carried. Present even when it qualified nothing, because
-    /// "the schematic declares no tie here" is a real result and differs from
-    /// never having looked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub declared_tie_source: Option<String>,
 }
 
 /// The newest `.kicad_pcb` format version hauksbee's copper extraction is
@@ -664,22 +721,6 @@ impl DrcReport {
         self.short_count() == 0
     }
 
-    /// Shorts between two nets NO schematic declares tied: the ones that are
-    /// still claims of a defect.
-    ///
-    /// This is the gating set. [`Self::shorts`] stays the full set, because a
-    /// declared tie is still copper joining two differently named nets and the
-    /// report must keep showing it; what changes is that it no longer fails a
-    /// build. A run with no schematic qualifies nothing, so the two are equal and
-    /// behaviour is unchanged.
-    pub fn undeclared_shorts(&self) -> impl Iterator<Item = &DrcFinding> {
-        self.shorts().filter(|f| f.declared_tie.is_none())
-    }
-
-    pub fn undeclared_short_count(&self) -> usize {
-        self.undeclared_shorts().count()
-    }
-
     /// Attach a companion schematic's declarations to the shorts they cover, and
     /// record the schematic as this report's tie source.
     ///
@@ -689,48 +730,71 @@ impl DrcReport {
     /// two differently named nets share copper, which is a fact about the board
     /// the user is entitled to see whether or not it was intended.
     ///
-    /// Matching is by net-name pair only. That is what the schematic declares
-    /// and all it declares: a supply symbol says "these two nets meet", not
-    /// "they meet at this coordinate". Requiring the declaration to also predict
-    /// a location would reject every real star ground, and inventing a location
-    /// from it would be a claim the schematic does not make.
+    /// A declaration can qualify only one physical contact location. Multiple
+    /// layer findings at that location are one plated/copper connection and are
+    /// qualified together. If the same net pair contacts at distinct locations,
+    /// only a unique largest same-location cluster can be the declared tie; an
+    /// equally plausible second contact is ambiguous and all remain gating.
     ///
     /// Clearance findings are untouched: they are near-misses, not contacts, so
     /// there is nothing about them a tie could excuse.
     ///
     /// Returns how many shorts were qualified.
     pub fn qualify_with_declared_ties(
-        &mut self,
+        &self,
         source: &str,
         ties: &[crate::eagle_sch::DeclaredNetTie],
-    ) -> usize {
-        let mut qualified = 0;
-        for finding in &mut self.findings {
-            if finding.kind != ViolationKind::Short {
-                continue;
+    ) -> DrcTieQualification {
+        let mut qualification = DrcTieQualification {
+            source: source.to_string(),
+            declaration_count: ties.len(),
+            qualified: Vec::new(),
+        };
+        for tie in ties {
+            let mut locations: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+            for (index, finding) in self.findings.iter().enumerate() {
+                if finding.kind == ViolationKind::Short
+                    && qualification.tie_for(finding).is_none()
+                    && tie.covers(&finding.net_a_name, &finding.net_b_name)
+                {
+                    // One nanometre is far below the source formats' coordinate
+                    // precision but absorbs harmless floating-point round-off
+                    // between layer-specific geometry paths.
+                    let location = (
+                        (finding.x * 1_000_000.0).round() as i64,
+                        (finding.y * 1_000_000.0).round() as i64,
+                    );
+                    locations.entry(location).or_default().push(index);
+                }
             }
-            let Some(tie) = ties
-                .iter()
-                .find(|t| t.covers(&finding.net_a_name, &finding.net_b_name))
-            else {
+            let Some(maximum) = locations.values().map(Vec::len).max() else {
                 continue;
             };
-            finding.declared_tie = Some(DeclaredTie {
-                declaration: tie.describe(),
-                source: source.to_string(),
-            });
-            qualified += 1;
+            let mut candidates = locations
+                .values()
+                .filter(|indices| indices.len() == maximum);
+            let Some(indices) = candidates.next() else {
+                continue;
+            };
+            if candidates.next().is_some() {
+                continue;
+            }
+            for &index in indices {
+                let finding = &self.findings[index];
+                qualification.qualified.push(QualifiedFinding {
+                    net_a_name: finding.net_a_name.clone(),
+                    net_b_name: finding.net_b_name.clone(),
+                    layer: finding.layer.clone(),
+                    x_nm: (finding.x * 1_000_000.0).round() as i64,
+                    y_nm: (finding.y * 1_000_000.0).round() as i64,
+                    tie: DeclaredTie {
+                        declaration: tie.describe(),
+                        source: source.to_string(),
+                    },
+                });
+            }
         }
-        self.declared_tie_source = Some(format!(
-            "{source} ({} declared net tie{}, {qualified} copper contact{} qualified)",
-            ties.len(),
-            if ties.len() == 1 { "" } else { "s" },
-            if qualified == 1 { "" } else { "s" },
-        ));
-        // The schematic was supplied, so the "you have not supplied it" hint is
-        // no longer true and must not survive alongside the source.
-        self.tie_declaration_hint = None;
-        qualified
+        qualification
     }
 
     /// Disclosure for the Zone-versus-Pad overlap class, when this run
@@ -2631,8 +2695,6 @@ fn sweep_buckets(
         primitive_count: buckets.by_layer.values().map(Vec::len).sum(),
         version_warning: None,
         zone_pad_overlaps_suppressed: Some(0),
-        tie_declaration_hint: None,
-        declared_tie_source: None,
     };
 
     // De-dup findings on the same net pair + layer + rounded location, so a
@@ -2686,7 +2748,6 @@ fn sweep_buckets(
             required_clearance_mm,
             item_a,
             item_b,
-            declared_tie: None,
         });
     };
 
@@ -4219,7 +4280,6 @@ pub mod eagle_drc {
                         .effective_clearance(&name_of(a.net), &name_of(b.net)),
                     item_a,
                     item_b,
-                    declared_tie: None,
                 });
             }
         }
@@ -4230,22 +4290,6 @@ pub mod eagle_drc {
                 .then(a.net_b.cmp(&b.net_b))
                 .then(a.layer.cmp(&b.layer))
         });
-        // An Eagle `.brd` has no net-tie field, so on this format alone a short
-        // between two named nets cannot be told from a deliberate tie without the
-        // schematic. Name that upload on every short this path reports; the
-        // caller clears the hint by supplying the `.sch`
-        // (`DrcReport::qualify_with_declared_ties`). Set only when there is a
-        // short to qualify: a clean board has no claim needing an input.
-        if report.short_count() > 0 {
-            report.tie_declaration_hint = Some(
-                "an Eagle .brd records no net ties, so a deliberate tie (a star ground drawn as \
-                 one net's supply symbol placed on another's) is indistinguishable here from a \
-                 defect. Supply the board's Eagle .sch alongside it, then re-run: a contact the \
-                 schematic declares is reported as a note naming the symbols instead of a serious \
-                 short."
-                    .to_string(),
-            );
-        }
         report
     }
 

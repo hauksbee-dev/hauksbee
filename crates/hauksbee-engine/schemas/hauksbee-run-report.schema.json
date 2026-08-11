@@ -977,24 +977,6 @@
       ],
       "type": "object"
     },
-    "DeclaredTieNote": {
-      "description": "A schematic's declaration that a reported copper contact is deliberate.\n\nMirrors [`hauksbee_extract::DeclaredTie`]. The extract crate carries no\nschema derives on purpose, so the published shape lives here with the rest of\nthe report schema rather than leaking `schemars` into the readers.",
-      "properties": {
-        "declaration": {
-          "description": "The declaration in the schematic's own vocabulary, naming the symbols and\nthe net, e.g. `AGND7 wired to SUPPLY6 in net GND`.",
-          "type": "string"
-        },
-        "source": {
-          "description": "The companion input it was read from, as the user named it.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "declaration",
-        "source"
-      ],
-      "type": "object"
-    },
     "DrcGroup": {
       "description": "A group of clearance findings that share (net_a, net_b, layer, root cause),\ncollapsed to one line with a count. `at_limit` separates `gap == rule` (no\nmargin, but not below) from genuine sub-clearance violations.",
       "properties": {
@@ -1069,17 +1051,6 @@
     "DrcShort": {
       "description": "A real short between two nets (gap <= 0: touching copper).",
       "properties": {
-        "declared_tie": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/DeclaredTieNote"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Set when a companion schematic declares these two nets deliberately\ntied. The copper contact above is unchanged and still reported; this says\nthe design intends it, and names the symbols and file that say so."
-        },
         "fix": {
           "description": "Suggested remediation, mirroring `JsonFinding.fix`.",
           "type": "string"
@@ -1141,13 +1112,6 @@
           "format": "double",
           "type": "number"
         },
-        "declared_tie_source": {
-          "description": "Set when a companion schematic WAS read: which file, and what it declared.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "primitive_count": {
           "format": "uint",
           "minimum": 0,
@@ -1161,13 +1125,6 @@
         },
         "suppression_note": {
           "description": "Set when the run suppressed zone-versus-pad overlaps as antipad carves.\n\"No shorts found\" and \"no shorts found, having skipped a whole class\"\nare different claims, so every renderer states this one.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tie_declaration_hint": {
-          "description": "Set when NO companion schematic was supplied on a format that can declare\ndeliberate net ties in one, naming that schematic as the unlocking upload.\nMutually exclusive with [`Self::declared_tie_source`]: an input is either\nmissing or it is not.",
           "type": [
             "string",
             "null"
@@ -2446,7 +2403,7 @@
       "type": "object"
     }
   },
-  "description": "The document `hauksbee run <board> --json` (and the per-report --json surfaces) emits. schema_version 3. GENERATED from `JsonReport` in crates/hauksbee-engine/src/result.rs plus the ok/verdict/serious_count/actionable_count rollup `to_json` prepends. Do not hand-edit; regenerate with: UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift",
+  "description": "The document `hauksbee run <board> --json` (and the per-report --json surfaces) emits. schema_version 4. GENERATED from `JsonReport` in crates/hauksbee-engine/src/result.rs plus the ok/verdict/serious_count/actionable_count rollup `to_json` prepends. Do not hand-edit; regenerate with: UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift",
   "properties": {
     "ac": {
       "anyOf": [
@@ -2558,7 +2515,7 @@
       "description": "Top-level refusal for a whole-run exit 3 (for example strict co-sim).\nAC/thermal refusals additionally live in their analysis section so a\nsection-only consumer sees the same contract."
     },
     "schema_version": {
-      "description": "Version of the `run --json` document contract. Bumped when a field\nchanges meaning or is removed; purely additive fields do not bump it.\nThe generated schema lives in `crates/hauksbee-engine/schemas/`.",
+      "description": "Version of the `run --json` document contract. Bumped when a field\nchanges meaning, is removed, or a closed enum gains a value; purely\nadditive optional fields do not bump it.\nThe generated schema lives in `crates/hauksbee-engine/schemas/`.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
