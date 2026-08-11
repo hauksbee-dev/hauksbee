@@ -75,6 +75,12 @@ jobs:
             echo "full_latest=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check private container publication before push
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ctx/hauksbee/scripts/check-private-container-publication.sh before
+
       - name: Write .dockerignore for the context
         shell: bash
         run: |
@@ -154,3 +160,9 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+
+      - name: Check private container publication after push
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ctx/hauksbee/scripts/check-private-container-publication.sh after

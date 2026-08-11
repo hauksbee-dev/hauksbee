@@ -10,8 +10,7 @@
 # The script only COPIES the plugin sources into a staging directory; it never
 # moves or renames them, so the symlink dev-install documented in README.md
 # keeps working. Output lands in dist/ (gitignored via the repo root dist/
-# pattern), and the download_* fields a registry listing needs are computed
-# and printed at the end.
+# pattern). A checksum and archive sizes are printed for release-asset auditing.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,7 +57,7 @@ contents=(metadata.json plugins)
 # -X strips platform extra fields so the archive hashes reproducibly-ish.
 (cd "$stage" && zip -q -r -X "$zip_path" "${contents[@]}")
 
-# --- listing fields -------------------------------------------------------------
+# --- release-asset audit fields ------------------------------------------------
 if command -v shasum >/dev/null 2>&1; then
     sha256="$(shasum -a 256 "$zip_path" | awk '{print $1}')"
 else
@@ -74,17 +73,3 @@ echo
 echo "sha256:        $sha256"
 echo "download size: $download_size bytes"
 echo "install size:  $install_size bytes"
-echo
-echo "versions[] entry for the registry listing (fill in the real release URL):"
-python3 - "$here/metadata.json" "$sha256" "$download_size" "$install_size" "$version" "$zip_name" <<'PY'
-import json, sys
-meta_path, sha256, dl_size, inst_size, version, zip_name = sys.argv[1:7]
-entry = dict(json.load(open(meta_path))["versions"][0])
-entry.update(
-    download_url=f"https://github.com/hauksbee-dev/hauksbee/releases/download/v{version}/{zip_name}",
-    download_sha256=sha256,
-    download_size=int(dl_size),
-    install_size=int(inst_size),
-)
-print(json.dumps(entry, indent=4))
-PY

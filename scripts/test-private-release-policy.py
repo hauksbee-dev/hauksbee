@@ -23,6 +23,7 @@ LAUNCHER = ROOT / "scripts" / "make-public.sh"
 PREFLIGHT = ROOT / "scripts" / "preflight-private-release.sh"
 SURFACE_MANIFEST = ROOT / "scripts" / "private-release-surfaces.json"
 SURFACE_CHECKER = ROOT / "scripts" / "check-private-release-surfaces.py"
+CONTAINER_PREFLIGHT = ROOT / "scripts" / "check-private-container-publication.sh"
 
 
 class PrivateReleasePolicyTests(unittest.TestCase):
@@ -54,6 +55,14 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         paths = [entry["path"] for entry in entries]
         self.assertEqual(len(paths), len(set(paths)), "manifest paths must be unique")
         self.assertTrue(all(entry["classification"] for entry in entries))
+        exclusions = manifest["excluded_prefixes"]
+        excluded_paths = [entry["path"] for entry in exclusions]
+        self.assertEqual(
+            len(excluded_paths),
+            len(set(excluded_paths)),
+            "manifest exclusions must be unique",
+        )
+        self.assertTrue(all(entry["classification"] for entry in exclusions))
 
     def private_installer_fixture(self) -> tuple[str, bytes, bytes]:
         system = subprocess.check_output(["uname", "-s"], text=True).strip()
@@ -205,6 +214,151 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("manually", b3)
         self.assertNotIn("files a defect", b3)
 
+    def test_docker_publication_checks_private_repo_and_package_before_and_after(self) -> None:
+        workflow = (ROOT / ".github/workflows/docker.yml").read_text()
+        before = workflow.index("Check private container publication before push")
+        slim = workflow.index("Build and push slim")
+        full = workflow.index("Build and push full")
+        after = workflow.index("Check private container publication after push")
+        self.assertLess(before, slim)
+        self.assertLess(full, after)
+        self.assertEqual(workflow.count("check-private-container-publication.sh"), 2)
+
+    def run_container_preflight(
+        self,
+        *,
+        phase: str = "before",
+        token: str | None = "container-token",
+        repo_visibility: str = "private",
+        package_visibility: str = "private",
+    ) -> tuple[subprocess.CompletedProcess[str], str]:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            log = tmp / "gh.log"
+            gh = tmp / "gh"
+            gh.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -eu
+                    printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+                    [ "${GH_TOKEN:-}" = container-token ] || exit 65
+                    if [ "$#" -eq 4 ] && [ "$1" = api ] && [ "$3" = --jq ] && [ "$4" = .visibility ]; then
+                      case "$2" in
+                        repos/hauksbee-dev/hauksbee)
+                          [ "$FAKE_REPO_VISIBILITY" != inaccessible ] || exit 66
+                          printf '%s\\n' "$FAKE_REPO_VISIBILITY"
+                          ;;
+                        orgs/hauksbee-dev/packages/container/hauksbee)
+                          [ "$FAKE_PACKAGE_VISIBILITY" != inaccessible ] || exit 66
+                          printf '%s\\n' "$FAKE_PACKAGE_VISIBILITY"
+                          ;;
+                        *) exit 64 ;;
+                      esac
+                    else
+                      exit 64
+                    fi
+                    """
+                )
+            )
+            gh.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{tmp}:{env['PATH']}",
+                    "FAKE_GH_LOG": str(log),
+                    "FAKE_REPO_VISIBILITY": repo_visibility,
+                    "FAKE_PACKAGE_VISIBILITY": package_visibility,
+                }
+            )
+            if token is None:
+                env.pop("GH_TOKEN", None)
+            else:
+                env["GH_TOKEN"] = token
+            result = subprocess.run(
+                ["bash", str(CONTAINER_PREFLIGHT), phase],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            return result, log.read_text() if log.exists() else ""
+
+    def test_container_publication_preflight_is_private_and_read_only(self) -> None:
+        for phase in ("before", "after"):
+            with self.subTest(phase=phase):
+                result, calls = self.run_container_preflight(phase=phase)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(
+                    calls.splitlines(),
+                    [
+                        "api repos/hauksbee-dev/hauksbee --jq .visibility",
+                        "api orgs/hauksbee-dev/packages/container/hauksbee --jq .visibility",
+                    ],
+                )
+
+        for kwargs, phrase in (
+            ({"token": None}, "GH_TOKEN"),
+            ({"repo_visibility": "public"}, "repository"),
+            ({"repo_visibility": "inaccessible"}, "repository"),
+            ({"package_visibility": "public"}, "package"),
+            ({"package_visibility": "missing"}, "package"),
+            ({"package_visibility": "inaccessible"}, "package"),
+        ):
+            with self.subTest(kwargs=kwargs):
+                result, _calls = self.run_container_preflight(**kwargs)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(phrase.lower(), (result.stdout + result.stderr).lower())
+
+    def test_private_pcm_is_manual_authenticated_install_from_file_only(self) -> None:
+        readme = (ROOT / "integrations/kicad-plugin/README.md").read_text()
+        self.assertNotIn("official listing", readme.lower())
+        self.assertNotIn("pcm handles updates", readme.lower())
+        self.assertIn("GH_TOKEN", readme)
+        self.assertIn("gh release download", readme)
+        self.assertIn("Install from File", readme)
+        self.assertIn("manually repeat", readme)
+
+        builder = (ROOT / "integrations/kicad-plugin/build-pcm.sh").read_text()
+        self.assertNotIn("registry listing", builder)
+        self.assertNotIn("download_url=", builder)
+
+    def test_all_named_private_consumers_authenticate_before_fetching(self) -> None:
+        mcp = (ROOT / "crates/hauksbee-mcp/README.md").read_text()
+        self.assertIn("HAUKSBEE_GITHUB_TOKEN", mcp)
+        self.assertIn("curl --config -", mcp)
+
+        demo = (ROOT / "frontend/src/demo/DemoApp.tsx").read_text()
+        self.assertIn("HAUKSBEE_GITHUB_TOKEN", demo)
+        self.assertIn("curl --config -", demo)
+        self.assertNotIn("curl -fsSL https://raw.githubusercontent.com", demo)
+
+        for relative in (Path("README.md"), Path("docs/ci/DOCKER.md")):
+            text = (ROOT / relative).read_text()
+            with self.subTest(path=relative):
+                self.assertLess(
+                    text.index("docker login ghcr.io"),
+                    text.index("\ndocker run"),
+                )
+
+        recipes = (ROOT / "docs/ci/RECIPES.md").read_text()
+        for credential_contract in (
+            "DOCKER_AUTH_CONFIG",
+            "registryCredentialsId",
+            "endpoint: hauksbee-ghcr",
+            "docker login ghcr.io",
+        ):
+            self.assertIn(credential_contract, recipes)
+
+    def test_release_plans_do_not_advertise_a_public_installer_endpoint(self) -> None:
+        for relative in (
+            Path("docs/dev-plans/launch-video.md"),
+            Path("docs/dev-plans/go-to-market.md"),
+        ):
+            with self.subTest(path=relative):
+                self.assertNotIn("hauksbee.dev/install", (ROOT / relative).read_text())
+
     def test_release_contract_never_requires_public_repository_or_issues(self) -> None:
         forbidden_by_file = {
             ROOT / ".github/workflows/release.yml": (
@@ -261,6 +415,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         visibility: str = "private",
         drift: Path | None = None,
         extra_unclassified: Path | None = None,
+        extra_content: str | None = None,
         requested_repo: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -284,7 +439,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             if extra_unclassified is not None:
                 path = checkout / extra_unclassified
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text('repository = "hauksbee-dev/hauksbee"\n')
+                path.write_text(
+                    extra_content
+                    if extra_content is not None
+                    else 'repository = "hauksbee-dev/hauksbee"\n'
+                )
             if requested_repo is not None:
                 manifest_path = checkout / SURFACE_MANIFEST.relative_to(ROOT)
                 manifest_path.write_text(
@@ -372,6 +531,33 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("new-package-metadata.json", result.stdout + result.stderr)
         self.assertIn("unclassified", result.stdout + result.stderr)
+
+    def test_release_preflight_discovers_wrong_repository_surface_by_pattern(self) -> None:
+        surfaces = {
+            "image": "image: ghcr.io/wrong-owner/wrong-repo:slim\n",
+            "installer": (
+                "curl https://raw.githubusercontent.com/wrong-owner/wrong-repo/"
+                "main/scripts/get-hauksbee.sh | bash\n"
+            ),
+            "action": "uses: wrong-owner/wrong-repo/integrations/github-action@v1\n",
+            "metadata": (
+                'repository = "https://github.com/wrong-owner/wrong-repo"\n'
+            ),
+        }
+        for kind, content in surfaces.items():
+            relative = Path(f"new-{kind}-surface.yml")
+            with self.subTest(kind=kind):
+                result = self.run_release_preflight(
+                    extra_unclassified=relative,
+                    extra_content=content,
+                )
+                self.assertNotEqual(
+                    result.returncode, 0, result.stdout + result.stderr
+                )
+                output = result.stdout + result.stderr
+                self.assertIn(str(relative), output)
+                self.assertIn("wrong-owner/wrong-repo", output)
+                self.assertIn("repository-bearing", output)
 
     def test_release_preflight_fake_gh_rejects_wrong_repository(self) -> None:
         result = self.run_release_preflight(requested_repo="wrong-owner/wrong-repo")

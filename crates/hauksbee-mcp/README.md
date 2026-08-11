@@ -29,12 +29,18 @@ retry expecting a different outcome.
 ## Install
 
 The binary ships in every release bundle as `bin/hauksbee-mcp`, alongside
-`hauksbee` and `hauksbee-ci`, and the one-line installer puts all three on your
+`hauksbee` and `hauksbee-ci`, and the installer command puts all three on your
 `PATH`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+export HAUKSBEE_GITHUB_TOKEN="$(gh auth token)"
+printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
+  | curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh \
+  | bash
 ```
+
+The token must have `Contents: read` access to the private repository. Passing
+the header through curl's stdin keeps the credential out of the process argv.
 
 From a checkout, `scripts/install.sh` builds and installs the same three.
 

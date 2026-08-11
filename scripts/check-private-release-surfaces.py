@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -17,13 +18,69 @@ EXCLUDED_PATHS = {
     "scripts/preflight-private-release.sh",
     "scripts/test-private-release-policy.py",
 }
+# These patterns identify release/distribution surfaces without using the
+# canonical slug as the search needle. That matters: a typo or owner drift must
+# still be discovered even though it no longer contains the expected value.
+REPOSITORY_PATTERNS = (
+    ("container image", re.compile(r"\bghcr\.io/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)")),
+    (
+        "private installer",
+        re.compile(
+            r"\braw\.githubusercontent\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/"
+            r"[^\s'\"]+/scripts/get-hauksbee(?:\.sh|\.ps1)?"
+        ),
+    ),
+    (
+        "GitHub Action",
+        re.compile(
+            r"\buses:\s*['\"]?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/"
+            r"integrations/github-action@"
+        ),
+    ),
+    (
+        "repository package metadata",
+        re.compile(
+            r"(?:repository|homepage|org\.opencontainers\.image\.source)"
+            r"[^\n]{0,80}?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
+        ),
+    ),
+)
+
+
+def repository_candidates(text: str) -> list[tuple[str, str]]:
+    """Return (surface kind, owner/name) candidates found independently."""
+    candidates: list[tuple[str, str]] = []
+    for kind, pattern in REPOSITORY_PATTERNS:
+        for match in pattern.finditer(text):
+            owner, name = match.groups()
+            candidates.append((kind, f"{owner}/{name.removesuffix('.git')}"))
+
+    # Cross-repository checkout YAML uses a bare owner/name rather than a URL.
+    # Restrict this to the generated Action checkout shape so ordinary corpus
+    # repository fields are not mistaken for distribution surfaces.
+    if ".hauksbee-action" in text:
+        bare_checkout = re.compile(
+            r"\brepository:\s*['\"]?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
+        )
+        for match in bare_checkout.finditer(text):
+            candidates.append(("private Action checkout", "/".join(match.groups())))
+    return candidates
 
 
 def shipped_files(root: Path) -> list[Path]:
     """Return tracked files, or all files in a manifest fixture without Git."""
     if (root / ".git").exists():
         result = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z"],
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
             check=True,
             capture_output=True,
         )
@@ -47,6 +104,24 @@ def validate(root: Path) -> tuple[str, list[str]]:
 
     expected: dict[str, dict[str, object]] = {}
     errors: list[str] = []
+    excluded_prefixes: list[str] = []
+    for exclusion in manifest.get("excluded_prefixes", []):
+        prefix = exclusion.get("path", "")
+        classification = exclusion.get("classification", "")
+        if (
+            not isinstance(prefix, str)
+            or not prefix
+            or prefix.startswith("/")
+            or ".." in Path(prefix).parts
+            or not prefix.endswith("/")
+        ):
+            errors.append(f"{MANIFEST_PATH}: invalid excluded prefix {prefix!r}")
+            continue
+        if not isinstance(classification, str) or not classification.strip():
+            errors.append(
+                f"{MANIFEST_PATH}: excluded prefix {prefix} has no classification"
+            )
+        excluded_prefixes.append(prefix)
     for entry in manifest.get("surfaces", []):
         relative = entry.get("path", "")
         classification = entry.get("classification", "")
@@ -74,7 +149,11 @@ def validate(root: Path) -> tuple[str, list[str]]:
             relative = path.relative_to(root).as_posix()
         except ValueError:
             continue
-        if relative in EXCLUDED_PATHS or not path.is_file():
+        if (
+            relative in EXCLUDED_PATHS
+            or relative.startswith(tuple(excluded_prefixes))
+            or not path.is_file()
+        ):
             continue
         try:
             data = path.read_bytes()
@@ -84,6 +163,17 @@ def validate(root: Path) -> tuple[str, list[str]]:
         count = data.count(needle)
         if count:
             observed[relative] = count
+        text = data.decode(errors="replace")
+        for kind, candidate in repository_candidates(text):
+            if candidate != repository:
+                errors.append(
+                    f"{relative}: repository-bearing {kind} references {candidate}; "
+                    f"expected {repository}"
+                )
+            elif relative not in expected:
+                errors.append(
+                    f"{relative}: unclassified repository-bearing {kind} references {candidate}"
+                )
 
     for relative in sorted(observed.keys() - expected.keys()):
         errors.append(
