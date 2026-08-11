@@ -542,6 +542,55 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         self.assertNotEqual(mismatched.returncode, 0)
         self.assertIn("commit SHA mismatch", mismatched.stdout + mismatched.stderr)
 
+    def test_windows_evidence_verifier_requires_platform_and_exact_backend_identities(
+        self,
+    ) -> None:
+        backend_rows = {
+            "HAUKSBEE_RENODE": {
+                "path": r"C:\Users\runneradmin\renode-portable\Renode.exe",
+                "artifact_sha256": "1" * 64,
+                "archive_sha256": "d09b7934cfd560cd06bde8f131ef78f521f10d423d5aac6096f2a583224aeb3e",
+            },
+            "HAUKSBEE_QEMU_XTENSA": {
+                "path": r"C:\Users\runneradmin\.hauksbee-qemu-esp\qemu\bin\qemu-system-xtensa.exe",
+                "artifact_sha256": "2" * 64,
+                "archive_sha256": "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a",
+            },
+            "HAUKSBEE_QEMU_RISCV32": {
+                "path": r"C:\Users\runneradmin\.hauksbee-qemu-esp\qemu\bin\qemu-system-riscv32.exe",
+                "artifact_sha256": "3" * 64,
+                "archive_sha256": "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b",
+            },
+        }
+        base = {
+            "schema_version": 1,
+            "platform": "windows-x86_64",
+            "commit_sha": "a" * 40,
+            "backends": backend_rows,
+            "gates": [gate.name for gate in GATES],
+        }
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            evidence = Path(raw_tmp) / "windows.json"
+            evidence.write_text(json.dumps(base))
+            self.assertEqual(
+                required_integrations._verify_evidence(
+                    evidence, "a" * 40, expected_platform="windows-x86_64"
+                ),
+                [],
+            )
+
+            for field, value in (
+                ("platform", "linux-x86_64"),
+                ("backends", {}),
+            ):
+                broken = dict(base)
+                broken[field] = value
+                evidence.write_text(json.dumps(broken))
+                problems = required_integrations._verify_evidence(
+                    evidence, "a" * 40, expected_platform="windows-x86_64"
+                )
+                self.assertTrue(problems, f"accepted invalid {field}: {value!r}")
+
     def _fake_backend(self, directory: Path, name: str, version: str) -> Path:
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / name

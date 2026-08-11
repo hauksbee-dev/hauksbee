@@ -727,7 +727,8 @@ jobs:
           test -n "$windows_evidence"
           python3 hauksbee/scripts/run_required_integrations.py \
             --verify-evidence "$windows_evidence" \
-            --expected-sha "$GITHUB_SHA"
+            --expected-sha "$GITHUB_SHA" \
+            --expected-platform "windows-x86_64"
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2

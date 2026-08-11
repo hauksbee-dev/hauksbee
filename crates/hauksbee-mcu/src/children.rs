@@ -11,15 +11,18 @@
 //! signal disposition terminates the process, so every SIGTERM/SIGINT of the
 //! server orphaned the emulators; 23 accumulated `qemu-system-xtensa`
 //! processes were found on one dev machine. The fix has two independent
-//! layers: process-tree kills on `Drop` (group kill on unix, `taskkill /T` on
-//! Windows), an owning kill-on-close Job Object on Windows, and
+//! layers: process-group kills on Unix, owning kill-on-close Job Objects on
+//! Windows, and
 //! [`install_signal_reaper`] for Unix paths where `Drop` never runs.
 //!
-//! The registry is a fixed-capacity, lock-free table of PIDs because the
-//! signal handler iterates it, and a signal handler must never take a lock the
-//! interrupted thread might hold. Everything the handler touches is
-//! async-signal-safe: atomic loads, `kill(2)`, `signal(2)`, `raise(2)`.
+//! On Unix the registry is a fixed-capacity, lock-free table of PIDs because
+//! the signal handler iterates it, and a signal handler must never take a lock
+//! the interrupted thread might hold. Everything the handler touches is
+//! async-signal-safe: atomic loads, `kill(2)`, `signal(2)`, `raise(2)`. Windows
+//! instead retains duplicated Job handles behind an ordinary mutex; there is
+//! no signal handler on that platform, and handles are stable identities.
 
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Owns the platform primitive that ties an emulator process tree to the
@@ -86,6 +89,23 @@ impl ProcessTreeGuard {
             let _ = child;
             Ok(Self {})
         }
+    }
+
+    /// Terminate the exact process tree owned by this guard.
+    ///
+    /// Windows uses the retained Job Object handle, never a numeric PID that
+    /// may already have been reaped and recycled. Unix teardown is performed
+    /// by the caller's process-group kill; the guard is only a marker there.
+    pub(crate) fn terminate(&self) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+            // SAFETY: `job` remains owned and live until this guard's Drop.
+            if unsafe { TerminateJobObject(self.job, 1) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -197,30 +217,80 @@ impl Drop for ProcessTreeGuard {
 const CAPACITY: usize = 64;
 
 /// Live child PIDs; 0 marks an empty slot (PID 0 is never a real child).
+#[cfg(unix)]
 static CHILD_PIDS: [AtomicU32; CAPACITY] = [const { AtomicU32::new(0) }; CAPACITY];
 
+/// Windows can use an ordinary mutex because no signal handler reads this
+/// registry there. Each value is an independently owned duplicate Job handle,
+/// so teardown cannot race the backend guard into a closed/reused handle.
+#[cfg(windows)]
+static CHILD_JOBS: std::sync::Mutex<Vec<(u32, usize)>> = std::sync::Mutex::new(Vec::new());
+
 /// Record a spawned emulator child.
-pub(crate) fn register(pid: u32) {
-    for slot in &CHILD_PIDS {
-        if slot
-            .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-        {
-            return;
+pub(crate) fn register(pid: u32, guard: &ProcessTreeGuard) {
+    #[cfg(unix)]
+    {
+        let _ = guard;
+        for slot in &CHILD_PIDS {
+            if slot
+                .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                return;
+            }
+        }
+        // Table full: the child still gets its Drop tree-kill, only the
+        // signal-reap coverage is lost. Not worth failing a spawn over.
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        let mut jobs = CHILD_JOBS.lock().unwrap_or_else(|error| error.into_inner());
+        if jobs.len() < CAPACITY {
+            let mut duplicate: HANDLE = std::ptr::null_mut();
+            // SAFETY: source and target are the current process; on success
+            // the registry exclusively owns `duplicate` until unregister or
+            // kill_all_registered closes it.
+            let copied = unsafe {
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    guard.job,
+                    GetCurrentProcess(),
+                    &mut duplicate,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            };
+            if copied != 0 {
+                jobs.push((pid, duplicate as usize));
+            }
         }
     }
-    // Table full: the child still gets its Drop tree-kill, only the
-    // signal-reap coverage is lost. Not worth failing a spawn over.
 }
 
 /// Forget a child that is being torn down normally.
 pub(crate) fn unregister(pid: u32) {
-    for slot in &CHILD_PIDS {
-        if slot
-            .compare_exchange(pid, 0, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-        {
-            return;
+    #[cfg(unix)]
+    {
+        for slot in &CHILD_PIDS {
+            if slot
+                .compare_exchange(pid, 0, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                return;
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        let mut jobs = CHILD_JOBS.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(index) = jobs.iter().position(|(registered, _)| *registered == pid) {
+            let (_, job) = jobs.swap_remove(index);
+            // SAFETY: this registry owns the duplicated handle.
+            unsafe { CloseHandle(job as windows_sys::Win32::Foundation::HANDLE) };
         }
     }
 }
@@ -228,20 +298,15 @@ pub(crate) fn unregister(pid: u32) {
 /// Kill one child's whole process tree, best effort. On unix the emulator was
 /// spawned into its own process group (`process_group(0)`), so `kill(-pid)`
 /// reaches the emulator and anything it forked; the direct-pid kill is the
-/// fallback for the (never observed) case where the group setup failed. On
-/// Windows `taskkill /T /F` walks the tree, the same pattern the dependency
-/// installer's timeout kill uses.
+/// fallback for the (never observed) case where the group setup failed.
+/// Windows must use the retained Job Object handle instead: a reaped numeric
+/// PID is not a stable process identity and may already name an unrelated
+/// process.
+#[cfg(unix)]
 pub(crate) fn kill_tree(pid: u32) {
-    #[cfg(unix)]
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
         libc::kill(pid as i32, libc::SIGKILL);
-    }
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .output();
     }
 }
 
@@ -251,15 +316,37 @@ pub(crate) fn kill_tree(pid: u32) {
 /// cannot call this: `taskkill` spawning is not async-signal-safe, and the
 /// handler is unix-only anyway).
 pub fn kill_all_registered() -> usize {
-    let mut killed = 0;
-    for slot in &CHILD_PIDS {
-        let pid = slot.swap(0, Ordering::AcqRel);
-        if pid != 0 {
-            kill_tree(pid);
-            killed += 1;
+    #[cfg(unix)]
+    {
+        let mut killed = 0;
+        for slot in &CHILD_PIDS {
+            let pid = slot.swap(0, Ordering::AcqRel);
+            if pid != 0 {
+                kill_tree(pid);
+                killed += 1;
+            }
         }
+        killed
     }
-    killed
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        let jobs = {
+            let mut registered = CHILD_JOBS.lock().unwrap_or_else(|error| error.into_inner());
+            std::mem::take(&mut *registered)
+        };
+        for (_, job) in &jobs {
+            // SAFETY: each value is a live handle duplicate exclusively owned
+            // by this drained registry entry.
+            unsafe {
+                let handle = *job as HANDLE;
+                TerminateJobObject(handle, 1);
+                CloseHandle(handle);
+            }
+        }
+        jobs.len()
+    }
 }
 
 /// The unix signal handler: group-kill every registered child, then restore
@@ -312,6 +399,7 @@ mod tests {
 
     /// register/unregister round-trips through the fixed table, and
     /// kill_all empties it.
+    #[cfg(unix)]
     #[test]
     fn registry_bookkeeping() {
         let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -320,8 +408,9 @@ mod tests {
         // harmless ESRCH.
         let a = 4_000_000_001u32;
         let b = 4_000_000_002u32;
-        register(a);
-        register(b);
+        let guard = ProcessTreeGuard {};
+        register(a, &guard);
+        register(b, &guard);
         unregister(a);
         // Only b is still registered; kill_all reports exactly it.
         let killed = kill_all_registered();
@@ -341,7 +430,8 @@ mod tests {
         cmd.arg("300");
         cmd.process_group(0);
         let mut child = cmd.spawn().expect("spawn sleep");
-        register(child.id());
+        let guard = ProcessTreeGuard {};
+        register(child.id(), &guard);
         assert!(kill_all_registered() >= 1);
         // SIGKILL is not blockable: wait() must report a signal death.
         let status = child.wait().expect("child reaped");
@@ -360,6 +450,36 @@ mod tests {
             !status.success(),
             "closing the job must terminate the child"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_kill_all_uses_registered_job_handles() {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "ping -n 30 127.0.0.1 > NUL"]);
+        let (mut child, guard) = spawn_owned(&mut command).expect("spawn in kill-on-close job");
+        register(child.id(), &guard);
+        assert_eq!(kill_all_registered(), 1);
+        let status = child.wait().expect("job-terminated child is waitable");
+        assert!(!status.success());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reaped_child_teardown_uses_owned_job() {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "exit 0"]);
+        let (mut child, guard) = spawn_owned(&mut command).expect("spawn in owned job");
+        register(child.id(), &guard);
+        let status = child.wait().expect("short child is reaped");
+        assert!(status.success());
+        unregister(child.id());
+
+        // The direct child handle has already been reaped. Termination remains
+        // safe because it addresses the original Job Object, not child.id().
+        guard
+            .terminate()
+            .expect("terminating an empty retained job is harmless");
     }
 
     #[cfg(windows)]
