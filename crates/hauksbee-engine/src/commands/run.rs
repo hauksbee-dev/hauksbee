@@ -127,112 +127,110 @@ fn valid_digest(digest: &str) -> Option<String> {
         .then(|| digest.to_string())
 }
 
-fn ci_check_selected(cfg: &RunConfig, finding: &crate::result::JsonFinding) -> bool {
-    if cfg.check
-        || (cfg.json
-            && !cfg.report
-            && !cfg.drc
-            && !cfg.ampacity
-            && !cfg.lint
-            && !cfg.resources
-            && !cfg.usb_c
-            && !cfg.si
-            && cfg.ac.is_none()
-            && !cfg.thermal
-            && !cfg.headless)
-    {
-        return matches!(finding.check.as_str(), "drc" | "lint" | "si" | "usb_c");
-    }
-    if cfg.drc {
-        return finding.check == "drc";
-    }
-    if cfg.lint {
-        return finding.check == "lint";
-    }
-    if cfg.resources {
-        return finding.check == "lint" && finding.kind == "mcu_resource_conflict";
-    }
-    if cfg.usb_c {
-        return finding.check == "usb_c";
-    }
-    if cfg.si {
-        return finding.check == "si";
-    }
-    false
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectedSurface {
+    Inventory,
+    Check,
+    Bind,
+    Drc,
+    Ampacity,
+    Lint,
+    Resources,
+    UsbC,
+    Si,
+    Ac,
+    Thermal,
+    Serial,
+    Headless,
+    BareJson,
+    Default,
 }
 
-fn ci_surface_is_model_dependent(cfg: &RunConfig) -> bool {
-    cfg.check
-        || cfg.lint
-        || cfg.resources
-        || cfg.usb_c
-        || cfg.si
-        || cfg.headless
-        || (cfg.json
-            && !cfg.report
-            && !cfg.drc
-            && !cfg.ampacity
-            && cfg.ac.is_none()
-            && !cfg.thermal)
-}
-
-fn ci_selected_suites(cfg: &RunConfig) -> Vec<String> {
-    let checks: &[&str] = if cfg.check
-        || (cfg.json
-            && !cfg.report
-            && !cfg.drc
-            && !cfg.ampacity
-            && !cfg.lint
-            && !cfg.resources
-            && !cfg.usb_c
-            && !cfg.si
-            && cfg.ac.is_none()
-            && !cfg.thermal
-            && !cfg.headless)
-    {
-        &["drc", "lint", "si", "usb_c"]
+/// Select once, in the same order the orchestrator executes. Every artifact,
+/// evidence gate and dispatch branch reads this value rather than independently
+/// reconstructing precedence from the raw flags.
+fn selected_surface(cfg: &RunConfig) -> SelectedSurface {
+    if cfg.list_nets {
+        SelectedSurface::Inventory
+    } else if cfg.check {
+        SelectedSurface::Check
     } else if cfg.report {
-        &["bind"]
+        SelectedSurface::Bind
     } else if cfg.drc {
-        &["drc"]
+        SelectedSurface::Drc
     } else if cfg.ampacity {
-        &["ampacity"]
-    } else if cfg.lint || cfg.resources {
-        &["lint"]
+        SelectedSurface::Ampacity
+    } else if cfg.lint {
+        SelectedSurface::Lint
+    } else if cfg.resources {
+        SelectedSurface::Resources
     } else if cfg.usb_c {
-        &["usb_c"]
+        SelectedSurface::UsbC
     } else if cfg.si {
-        &["si"]
+        SelectedSurface::Si
     } else if cfg.ac.is_some() {
-        &["ac"]
+        SelectedSurface::Ac
     } else if cfg.thermal {
-        &["thermal"]
+        SelectedSurface::Thermal
+    } else if cfg.serial_attach {
+        SelectedSurface::Serial
     } else if cfg.headless {
-        &["cosim"]
-    } else if cfg.list_nets {
-        &["inventory"]
+        SelectedSurface::Headless
+    } else if cfg.json {
+        SelectedSurface::BareJson
     } else {
-        &["run"]
+        SelectedSurface::Default
+    }
+}
+
+fn ci_check_selected(surface: SelectedSurface, finding: &crate::result::JsonFinding) -> bool {
+    match surface {
+        SelectedSurface::Check | SelectedSurface::BareJson => {
+            matches!(finding.check.as_str(), "drc" | "lint" | "si" | "usb_c")
+        }
+        SelectedSurface::Drc => finding.check == "drc",
+        SelectedSurface::Lint => finding.check == "lint",
+        SelectedSurface::Resources => {
+            finding.check == "lint" && finding.kind == "mcu_resource_conflict"
+        }
+        SelectedSurface::UsbC => finding.check == "usb_c",
+        SelectedSurface::Si => finding.check == "si",
+        _ => false,
+    }
+}
+
+fn ci_surface_is_model_dependent(surface: SelectedSurface) -> bool {
+    matches!(
+        surface,
+        SelectedSurface::Check
+            | SelectedSurface::Lint
+            | SelectedSurface::Resources
+            | SelectedSurface::UsbC
+            | SelectedSurface::Si
+            | SelectedSurface::Headless
+            | SelectedSurface::BareJson
+    )
+}
+
+fn ci_selected_suites(surface: SelectedSurface) -> Vec<String> {
+    let checks: &[&str] = match surface {
+        SelectedSurface::Check | SelectedSurface::BareJson => &["drc", "lint", "si", "usb_c"],
+        SelectedSurface::Bind => &["bind"],
+        SelectedSurface::Drc => &["drc"],
+        SelectedSurface::Ampacity => &["ampacity"],
+        SelectedSurface::Lint | SelectedSurface::Resources => &["lint"],
+        SelectedSurface::UsbC => &["usb_c"],
+        SelectedSurface::Si => &["si"],
+        SelectedSurface::Ac => &["ac"],
+        SelectedSurface::Thermal => &["thermal"],
+        SelectedSurface::Serial | SelectedSurface::Headless => &["cosim"],
+        SelectedSurface::Inventory => &["inventory"],
+        SelectedSurface::Default => &["run"],
     };
     checks.iter().map(|check| (*check).to_string()).collect()
 }
 
-fn begin_ci_artifact_run(cfg: &RunConfig) -> anyhow::Result<()> {
-    let cwd = std::env::current_dir()?;
-    let canonicalish = |path: &std::path::Path| {
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            cwd.join(path)
-        };
-        std::fs::canonicalize(&absolute).unwrap_or_else(|_| {
-            absolute
-                .parent()
-                .and_then(|parent| std::fs::canonicalize(parent).ok())
-                .and_then(|parent| absolute.file_name().map(|name| parent.join(name)))
-                .unwrap_or(absolute)
-        })
-    };
+fn begin_ci_artifact_run(cfg: &RunConfig, surface: SelectedSurface) -> anyhow::Result<()> {
     let protected = [
         Some(cfg.board.as_path()),
         cfg.bom.as_deref(),
@@ -248,7 +246,7 @@ fn begin_ci_artifact_run(cfg: &RunConfig) -> anyhow::Result<()> {
             protected
                 .iter()
                 .flatten()
-                .find(|input| canonicalish(input) == canonicalish(output))
+                .find(|input| crate::reports::ci_artifacts::paths_alias(input, output))
                 .copied()
         })
     };
@@ -258,7 +256,7 @@ fn begin_ci_artifact_run(cfg: &RunConfig) -> anyhow::Result<()> {
         .junit
         .as_deref()
         .zip(cfg.sarif.as_deref())
-        .is_some_and(|(junit, sarif)| canonicalish(junit) == canonicalish(sarif));
+        .is_some_and(|(junit, sarif)| crate::reports::ci_artifacts::paths_alias(junit, sarif));
     let mut errors = Vec::new();
     for (flag, input) in [("--junit", junit_alias), ("--sarif", sarif_alias)] {
         if let Some(input) = input {
@@ -276,14 +274,14 @@ fn begin_ci_artifact_run(cfg: &RunConfig) -> anyhow::Result<()> {
             &cfg.board,
             cfg.junit.as_deref(),
             cfg.sarif.as_deref(),
-            ci_selected_suites(cfg),
+            ci_selected_suites(surface),
         );
     }
 
     // Even when one requested path is unsafe, invalidate every other safe
     // output before returning the validation error. Otherwise CI can archive a
     // prior green file merely because its sibling flag aliased an input.
-    let safe_junit = (junit_alias.is_none())
+    let safe_junit = (junit_alias.is_none() && !same_output)
         .then_some(cfg.junit.as_deref())
         .flatten();
     let safe_sarif = (sarif_alias.is_none() && !same_output)
@@ -295,7 +293,7 @@ fn begin_ci_artifact_run(cfg: &RunConfig) -> anyhow::Result<()> {
             &cfg.board,
             safe_junit,
             safe_sarif,
-            ci_selected_suites(cfg),
+            ci_selected_suites(surface),
         )?;
         crate::reports::ci_artifacts::finish_error(&error, 1);
     }
@@ -315,25 +313,10 @@ fn run_error_exit_code(error: &anyhow::Error) -> i32 {
     1
 }
 
-pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
-    begin_ci_artifact_run(&cfg)?;
-    let result = run_inner(cfg, quiet);
-    match &result {
-        Ok(()) => crate::reports::ci_artifacts::finish_success()?,
-        Err(error) => {
-            crate::reports::ci_artifacts::finish_error(error, run_error_exit_code(error));
-        }
-    }
-    result
-}
-
-fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
-    // Bare `--plain` means "the prose report": imply --check rather than fall
-    // through to the TUI/non-TTY hint. Without this, a piped `run <board>
-    // --plain` printed a hint that itself listed --plain as the fix, a dead
-    // loop (U3). Only when no other mode was chosen, so `--drc --plain`,
-    // `--headless --plain`, `--tui`, `--serve`, `--ac`, `--list-nets` are all
-    // untouched.
+pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
+    // Bare --plain means the combined check surface. Normalize that convenience
+    // before selecting or initializing artifacts, so every consumer sees the
+    // same surface the execution branch will run.
     let any_report_flag = cfg.report
         || cfg.drc
         || cfg.ampacity
@@ -354,6 +337,34 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     {
         cfg.check = true;
     }
+    let surface = selected_surface(&cfg);
+    begin_ci_artifact_run(&cfg, surface)?;
+    let result = (|| {
+        if let Some(name) = cfg.example.as_deref() {
+            cfg.board = crate::commands::examples::board(name)?;
+            crate::reports::ci_artifacts::set_current_board_path(&cfg.board);
+        }
+        run_inner(cfg, quiet, surface)
+    })();
+    match &result {
+        Ok(()) => crate::reports::ci_artifacts::finish_success()?,
+        Err(error) => {
+            crate::reports::ci_artifacts::finish_error(error, run_error_exit_code(error));
+        }
+    }
+    result
+}
+
+fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyhow::Result<()> {
+    let any_report_flag = cfg.report
+        || cfg.drc
+        || cfg.ampacity
+        || cfg.lint
+        || cfg.si
+        || cfg.resources
+        || cfg.usb_c
+        || cfg.thermal
+        || cfg.check;
     // Validate `--firmware` up front, before any heavy work or the TUI takes over
     // the terminal. The native emulator loaders segfault (exit 139) on a missing
     // file instead of erroring; this turns a one-character typo into a clean,
@@ -517,18 +528,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // questions into an invalid input, and worse, turned a REAL SHORT on a
     // copper-only board into exit 3 instead of the gating exit 2: a build that
     // should have gone red went "cannot analyse" instead.
-    let geometry_only_request = (cfg.drc || cfg.ampacity)
-        && !(cfg.check
-            || cfg.report
-            || cfg.lint
-            || cfg.si
-            || cfg.resources
-            || cfg.usb_c
-            || cfg.thermal
-            || cfg.headless
-            || cfg.serve
-            || cfg.tui
-            || cfg.ac.is_some());
+    let geometry_only_request = matches!(surface, SelectedSurface::Drc | SelectedSurface::Ampacity);
     if board.components.is_empty() && !geometry_only_request {
         let msg = format!(
             "this board has no components ('{}' parsed, but is empty); \
@@ -559,7 +559,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --probe records live waveforms, which only exist during a co-sim; it is
     // meaningless for the static reports and the interactive server. Fail loudly
     // rather than silently ignore the flag.
-    if !cfg.probe.is_empty() && !cfg.headless {
+    if !cfg.probe.is_empty() && surface != SelectedSurface::Headless {
         anyhow::bail!("--probe records co-sim waveforms and needs --headless");
     }
 
@@ -673,7 +673,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let mut findings = crate::reports::check::gather_findings(
             &cfg.board, &board, &text, &raw, is_altium, &lib,
         )?;
-        findings.retain(|finding| ci_check_selected(&cfg, finding));
+        findings.retain(|finding| ci_check_selected(surface, finding));
         let bound = bind_board(&board, &lib);
         let evidence = crate::evidence::BoardEvidence::from_bound(
             &board,
@@ -695,8 +695,8 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             ("si", "Signal-integrity input coverage"),
         ] {
             if !(findings.iter().any(|finding| finding.check == check)
-                || (cfg.drc && check == "drc")
-                || (cfg.si && check == "si"))
+                || (surface == SelectedSurface::Drc && check == "drc")
+                || (surface == SelectedSurface::Si && check == "si"))
             {
                 continue;
             }
@@ -712,20 +712,16 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let blockers = crate::result::unmodelled_critical_refs(
             &crate::result::BindSummary::from_report(&bound.report),
         );
-        let blockers = if cfg.usb_c {
+        let blockers = if surface == SelectedSurface::UsbC {
             crate::reports::usb_c::scoped_blockers(&board, &blockers)
         } else {
             blockers
         };
-        if ci_surface_is_model_dependent(&cfg) && !blockers.is_empty() {
+        if ci_surface_is_model_dependent(surface) && !blockers.is_empty() {
             findings.push(crate::result::JsonFinding {
                 check: "evidence".into(),
                 kind: "undermined".into(),
                 severity: "serious".into(),
-                // Unbound verdict-critical parts ARE the exit-3 gate on the
-                // model-dependent-claim surfaces, so this synthetic blocker
-                // finding is gate-grade by definition.
-                gating: true,
                 nets: Vec::new(),
                 location_mm: None,
                 layer: None,
@@ -749,7 +745,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --serial-attach bridges a host serial port to the firmware's UART, so
     // without firmware there is nothing on the far end to answer. Refuse here,
     // before any binding work, rather than open a port onto silence.
-    if cfg.serial_attach && cfg.firmware.is_none() {
+    if surface == SelectedSurface::Serial && cfg.firmware.is_none() {
         anyhow::bail!(
             "--serial-attach connects your own software to the emulated MCU's UART, so it \
              needs firmware to talk to: add --firmware <FILE>"
@@ -759,7 +755,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --list-nets: print the board's net names so the user can pick one for
     // --ac-node / --ac-loop without grepping the layout. One net per line on
     // stdout (pipeable); a JSON array under --json.
-    if cfg.list_nets {
+    if surface == SelectedSurface::Inventory {
         let bound = match prebound.take() {
             Some(b) => b,
             None => bind_board(&board, &lib),
@@ -780,7 +776,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --check / --all: the whole static suite (bind + DRC + lint + SI) in ONE
     // report, so a person (or an AI) gets everything in a single command instead
     // of running one flag at a time. Honours --plain / --json / --strict.
-    if cfg.check {
+    if surface == SelectedSurface::Check {
         return crate::reports::check::emit(
             &cfg.board,
             &board,
@@ -797,7 +793,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         );
     }
 
-    if cfg.report {
+    if surface == SelectedSurface::Bind {
         return crate::reports::bind::emit(
             &board,
             &lib,
@@ -808,7 +804,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     }
 
     // --drc: run geometric short / clearance detection, print, exit.
-    if cfg.drc {
+    if surface == SelectedSurface::Drc {
         return crate::reports::drc::emit(
             &cfg.board,
             &board,
@@ -829,7 +825,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --ampacity: IPC-2221 capacity-only report. No current is fabricated here:
     // without a per-net current spec this tells the user the bottleneck capacity
     // and explicitly asks for a current before pass/fail.
-    if cfg.ampacity {
+    if surface == SelectedSurface::Ampacity {
         let bound = bind_board(&board, &lib);
         let evidence = crate::evidence::BoardEvidence::from_bound(
             &board,
@@ -844,7 +840,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --lint: run the connectivity lint-class checks, the boot strap-pin lint
     // (which needs the model db's per-part strap tables), and the MCU internal
     // resource-conflict check (a lint-class structural check too), print, exit.
-    if cfg.lint {
+    if surface == SelectedSurface::Lint {
         return crate::reports::lint::emit(
             &cfg.board,
             &board,
@@ -859,7 +855,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     }
 
     // --resources: run only the MCU internal resource-conflict check, print, exit.
-    if cfg.resources {
+    if surface == SelectedSurface::Resources {
         return crate::reports::lint::emit_resources(
             &cfg.board,
             &board,
@@ -876,7 +872,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --usb-c: run the USB-C CC attach classifier (the RPi 4 re-derivation) and
     // print the compliance report. The capability existed but was unreachable from
     // any user-facing surface; this is its CLI front door.
-    if cfg.usb_c {
+    if surface == SelectedSurface::UsbC {
         let bound = bind_board(&board, &lib);
         let evidence = crate::evidence::BoardEvidence::from_bound(
             &board,
@@ -901,7 +897,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --si: run the signal-integrity / physics static checks, print, exit. The
     // geometry-bearing checks (antenna keepout, USB length skew) need the raw
     // KiCad layout text, so it is passed through.
-    if cfg.si {
+    if surface == SelectedSurface::Si {
         return crate::reports::si::emit(
             &cfg.board,
             &board,
@@ -919,7 +915,8 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
 
     // --ac: small-signal AC sweep on the bound circuit, print Bode + (optional)
     // loop-stability margins, then exit. Informational like the other reports.
-    if let Some(ac_arg) = &cfg.ac {
+    if surface == SelectedSurface::Ac {
+        let ac_arg = cfg.ac.as_ref().expect("AC surface has an --ac value");
         // The overlay-applied bound board when --asbuilt was given, so the AC
         // sweep runs on the reworked circuit.
         let bound = match prebound.take() {
@@ -953,7 +950,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // `--thermal`/`--headless` are selectors handled further down with their OWN
     // JSON emitters (thermal coverage, co-sim notes); they must fall THROUGH this
     // combined branch or those JSON paths become unreachable dead code.
-    if cfg.json && !cfg.thermal && !cfg.headless {
+    if surface == SelectedSurface::BareJson {
         return crate::reports::check::emit_combined_json(
             &cfg.board,
             &board,
@@ -1130,7 +1127,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // Strict is the DEFAULT: a PARTIAL-coverage table escalates to exit 3
     // unless --no-strict-thermal opts out (--strict-thermal is accepted as a
     // quiet no-op so existing CI invocations keep working).
-    if cfg.thermal {
+    if surface == SelectedSurface::Thermal {
         return crate::reports::thermal::emit(
             &mut engine,
             &board_evidence,
@@ -1146,7 +1143,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // the headless report path because it IS a co-sim run, just one whose stimulus
     // comes from the user's own software instead of a report flag; it prints its
     // own endpoint narration and session summary.
-    if cfg.serial_attach {
+    if surface == SelectedSurface::Serial {
         let scfg = crate::commands::hostserial::SerialSessionConfig {
             transport: cfg.serial_transport,
             wait_secs: cfg.serial_wait,
@@ -1164,7 +1161,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if cfg.headless {
+    if surface == SelectedSurface::Headless {
         // --probe preconditions, checked before the run so a typo fails fast with
         // the same near-match style the rest of the net-facing CLI uses.
         let probes = crate::reports::cosim::dedup_probes(&cfg.probe);
@@ -1282,14 +1279,13 @@ fn run_inner(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // emits one finding per fault, so this is the same set the JUnit
         // `<failure>` count and the SARIF error levels are built from, and the
         // exit code cannot grade the run differently from the archived file.
-        let faults_gate = fault_findings.iter().any(|f| f.gating);
+        let faults_gate = fault_findings.iter().any(|f| f.gates());
         let mut run_findings = fault_findings.clone();
         if cfg.strict_boot {
             run_findings.extend(held_high_boot_nets.iter().map(|net| crate::result::JsonFinding {
                 check: "cosim".into(),
                 kind: "boot_control_net".into(),
                 severity: "warning".into(),
-                gating: true,
                 nets: vec![net.clone()],
                 location_mm: None,
                 layer: None,

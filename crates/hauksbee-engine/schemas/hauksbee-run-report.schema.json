@@ -1436,7 +1436,7 @@
           ]
         },
         "gating": {
-          "description": "Whether THIS finding is a reason the run fails its gate.\n\nNot a restatement of `severity`. Every `serious` finding gates, and so do\nfindings the severity word grades lower: a medium (`warning`) lint\nfinding, every real SI finding, every co-sim fault. It runs the other way\ntoo, so a `warning` is not a gate grade on its own: a copper short on a\nboard format the copper extraction was never validated against may be\nphantom and does not gate, a `note`-grade lint finding does not gate, and\nneither does a qualified or demoted evidence badge.\n\nA consumer asking \"which findings is the exit code about\" reads this, not\nthe severity word. The CI artifacts do exactly that, so a `--junit`\n`<failure>`, a SARIF `error` level and a GitHub `::error` mark the\nfindings the run failed on.\n\nSet where the finding is built, from the predicate that surface's gate\nasks. The gates in reports::mod (lint_fails, si_fails) and\nreports::check (drc_gate_fails) are DEFINED as \"any finding here is\ngating\", so the archived file and the exit code cannot disagree about a\nfinding in this array. A copper short is the one gate-grade item that is\nNOT in this array on any surface: it is rendered as `drc.shorts`, which\nhas no gating flag, and `serious_count` counts it separately.",
+          "description": "Whether THIS finding is a reason the run fails its gate.\n\nNot a restatement of `severity`. Every `serious` finding gates, and so do\nfindings the severity word grades lower: a medium (`warning`) lint\nfinding, every real SI finding, every co-sim fault. It runs the other way\ntoo, so a `warning` is not a gate grade on its own: a copper short on a\nboard format the copper extraction was never validated against may be\nphantom and does not gate, a `note`-grade lint finding does not gate, and\nneither does a qualified or demoted evidence badge.\n\nCurrent schema-v2 serializers always emit this additive field. It stays\noptional in the schema so documents emitted by earlier v2 binaries\nremain valid.",
           "type": "boolean"
         },
         "kind": {
@@ -1490,7 +1490,6 @@
         "check",
         "kind",
         "severity",
-        "gating",
         "nets",
         "refs",
         "actionable",

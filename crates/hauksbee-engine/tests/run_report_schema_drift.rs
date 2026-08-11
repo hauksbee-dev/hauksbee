@@ -117,3 +117,19 @@ fn emitted_document_carries_schema_version_and_rollup() {
         assert!(v.get(key).is_some(), "missing rollup/header key {key}");
     }
 }
+
+#[test]
+fn schema_v2_keeps_the_additive_gating_field_optional_for_older_v2_documents() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&generated_schema()).expect("generated schema parses");
+    let finding = &schema["definitions"]["JsonFinding"];
+    assert_eq!(finding["properties"]["gating"]["type"], "boolean");
+    assert!(
+        !finding["required"]
+            .as_array()
+            .expect("JsonFinding required list")
+            .iter()
+            .any(|field| field == "gating"),
+        "an additive field in schema v2 cannot invalidate earlier v2 documents"
+    );
+}

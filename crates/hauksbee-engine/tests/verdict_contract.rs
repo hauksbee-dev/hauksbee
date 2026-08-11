@@ -1824,6 +1824,91 @@ fn artifact_transaction_refuses_to_overwrite_its_board_input() {
 }
 
 #[test]
+fn artifact_transaction_refuses_a_hard_link_to_its_board_input() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("board.kicad_pcb");
+    let junit = dir.path().join("board-hard-link.xml");
+    let original = std::fs::read(fixture("verdict_fet_bound.kicad_pcb")).expect("fixture");
+    std::fs::write(&board, &original).expect("staged board");
+    std::fs::hard_link(&board, &junit).expect("hard link supported for staged files");
+
+    let out = run(&[
+        "run",
+        board.to_str().unwrap(),
+        "--check",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+
+    assert!(
+        !out.status.success(),
+        "a hard-linked output/input alias must be refused"
+    );
+    assert_eq!(
+        std::fs::read(&board).expect("board retained"),
+        original,
+        "artifact initialization must never write through a hard link to an input"
+    );
+}
+
+#[test]
+fn artifact_transaction_refuses_hard_linked_junit_and_sarif_outputs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("out.xml");
+    let sarif = dir.path().join("out.sarif");
+    let original = b"existing artifact bytes that must survive validation";
+    std::fs::write(&junit, original).expect("seed junit");
+    std::fs::hard_link(&junit, &sarif).expect("hard link supported for staged files");
+
+    let out = run(&[
+        "run",
+        fixture("verdict_fet_bound.kicad_pcb").to_str().unwrap(),
+        "--check",
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+    ]);
+
+    assert!(
+        !out.status.success(),
+        "hard-linked artifact outputs need different files"
+    );
+    assert_eq!(
+        std::fs::read(&junit).expect("seed retained"),
+        original,
+        "alias validation must happen before either output is written"
+    );
+}
+
+#[test]
+fn parse_error_never_writes_through_hard_linked_artifact_outputs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("usage.xml");
+    let sarif = dir.path().join("usage.sarif");
+    let original = b"existing linked artifact bytes";
+    std::fs::write(&junit, original).expect("seed junit");
+    std::fs::hard_link(&junit, &sarif).expect("hard link supported for staged files");
+
+    let out = run(&[
+        "run",
+        fixture("verdict_fet_bound.kicad_pcb").to_str().unwrap(),
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+        "--not-a-real-run-flag",
+    ]);
+
+    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
+    assert_eq!(
+        std::fs::read(&junit).expect("linked seed retained"),
+        original,
+        "parse-error invalidation must reject linked outputs before either write"
+    );
+}
+
+#[test]
 fn unsafe_artifact_alias_still_invalidates_every_other_safe_requested_surface() {
     let dir = tempfile::tempdir().expect("tempdir");
     let board = dir.path().join("board.kicad_pcb");
@@ -1917,6 +2002,99 @@ fn clap_usage_error_never_invalidates_over_a_declared_run_input() {
         std::fs::read(&firmware).expect("firmware retained"),
         original,
         "parse-error cleanup must not overwrite a declared run input"
+    );
+}
+
+#[test]
+fn clap_error_for_a_non_run_command_never_mutates_run_artifact_flags() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let alleged_junit = dir.path().join("not-a-run-artifact.xml");
+    let original = b"this file belongs to the caller, not to a run";
+    std::fs::write(&alleged_junit, original).expect("seed caller file");
+
+    // Here `run` is the positional BOARD argument to `to-code`, not the
+    // selected top-level subcommand. `--junit` is invalid for `to-code` and
+    // must not grant the parse-error path permission to mutate its value.
+    let out = run(&["to-code", "run", "--junit", alleged_junit.to_str().unwrap()]);
+
+    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
+    assert_eq!(
+        std::fs::read(&alleged_junit).expect("caller file retained"),
+        original,
+        "only a proven top-level `run` command may invalidate run artifacts"
+    );
+}
+
+#[test]
+fn unknown_embedded_example_replaces_seeded_artifacts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("unknown-example.xml");
+    let sarif = dir.path().join("unknown-example.sarif");
+    std::fs::write(&junit, "stale green junit").expect("seed junit");
+    std::fs::write(&sarif, "stale green sarif").expect("seed sarif");
+
+    let out = run(&[
+        "run",
+        "--example",
+        "definitely-not-an-example",
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+    ]);
+
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    let xml = std::fs::read_to_string(&junit).expect("junit replaced");
+    assert!(
+        junit_root(&xml).contains("errors=\"1\"") && xml.contains("definitely-not-an-example"),
+        "unknown-example resolution must finalize JUnit:\n{xml}"
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif replaced"))
+            .expect("valid replacement SARIF");
+    assert!(
+        doc["runs"][0]["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .any(|result| {
+                result["ruleId"] == "hauksbee/run-error"
+                    && result["properties"]["exit_code"] == 1
+                    && result["message"]["text"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("definitely-not-an-example"))
+            }),
+        "unknown-example resolution must finalize SARIF: {doc}"
+    );
+}
+
+#[test]
+fn static_report_and_headless_are_a_usage_error_without_surface_drift() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("conflicting-surface.xml");
+    std::fs::write(&junit, "stale green junit").expect("seed junit");
+
+    let out = run_in_actions(&[
+        "run",
+        fixture("verdict_fet_unbound.kicad_pcb").to_str().unwrap(),
+        "--drc",
+        "--headless",
+        "--json",
+        "--strict",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+
+    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("cannot be used with"),
+        "Clap must reject contradictory selected surfaces: {}",
+        stderr(&out)
+    );
+    let xml = std::fs::read_to_string(&junit).expect("junit invalidated");
+    assert!(
+        junit_root(&xml).contains("errors=\"1\"") && xml.contains("cannot be used with"),
+        "usage failure must replace the stale artifact:\n{xml}"
     );
 }
 

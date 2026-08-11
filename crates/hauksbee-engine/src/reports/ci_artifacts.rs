@@ -9,6 +9,42 @@ use std::path::Path;
 
 use crate::result::{JsonFinding, Refusal};
 
+/// Whether two paths resolve to the same underlying file.
+///
+/// Canonical paths catch spelling and symlink aliases. Existing hard links
+/// need file identity as well: writing either name changes the same file.
+/// Platforms without a stable file-id API fail closed when both paths already
+/// exist, because artifact validation must never guess that an input is safe to
+/// overwrite.
+pub fn paths_alias(left: &Path, right: &Path) -> bool {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let canonicalish = |path: &Path| {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        };
+        std::fs::canonicalize(&absolute).unwrap_or_else(|_| {
+            absolute
+                .parent()
+                .and_then(|parent| std::fs::canonicalize(parent).ok())
+                .and_then(|parent| absolute.file_name().map(|name| parent.join(name)))
+                .unwrap_or(absolute)
+        })
+    };
+    if canonicalish(left) == canonicalish(right) {
+        return true;
+    }
+
+    if !left.exists() || !right.exists() {
+        return false;
+    }
+
+    // If the platform cannot prove that these two existing paths are
+    // different, artifact safety fails closed rather than risking an input.
+    same_file::is_same_file(left, right).unwrap_or(true)
+}
+
 #[derive(Clone)]
 struct CurrentRunArtifacts {
     board_name: String,
@@ -124,6 +160,22 @@ pub fn set_current_findings(findings: Vec<JsonFinding>) {
     });
 }
 
+/// Replace the synthetic pre-resolution name used for an embedded example with
+/// the materialized board path. The transaction must start before example
+/// lookup, but successful artifacts should still identify the real input.
+pub fn set_current_board_path(board_path: &Path) {
+    CURRENT_RUN.with(|slot| {
+        if let Some(state) = slot.borrow_mut().as_mut() {
+            state.board_name = board_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("board")
+                .to_string();
+            state.board_path = board_path.to_path_buf();
+        }
+    });
+}
+
 pub fn set_current_refusal(refusal: Refusal) {
     CURRENT_RUN.with(|slot| {
         if let Some(state) = slot.borrow_mut().as_mut() {
@@ -223,20 +275,16 @@ pub fn evidence_findings_with_gate(
     use hauksbee_ir::evidence::EvidenceStatus;
     maps.iter()
         .filter_map(|map| {
-            let (severity, gating, prefix) = match map.status() {
+            let (severity, prefix) = match map.status() {
                 EvidenceStatus::Clean => return None,
-                EvidenceStatus::Qualified => ("warning", false, "QUALIFIED evidence"),
-                EvidenceStatus::Undermined if gates(map) => ("serious", true, "INVALID evidence"),
-                EvidenceStatus::Undermined => ("warning", false, "UNDERMINED evidence"),
+                EvidenceStatus::Qualified => ("warning", "QUALIFIED evidence"),
+                EvidenceStatus::Undermined if gates(map) => ("serious", "INVALID evidence"),
+                EvidenceStatus::Undermined => ("warning", "UNDERMINED evidence"),
             };
             Some(JsonFinding {
                 check: "evidence".into(),
                 kind: map.status().as_str().into(),
                 severity: severity.into(),
-                // `gates` IS the run-level split the JSON verdict makes, so the
-                // arm that reaches `invalid` is the arm that marks the finding
-                // gating; a demoted finding-backed map wears a badge instead.
-                gating,
                 nets: Vec::new(),
                 location_mm: None,
                 layer: None,
@@ -334,7 +382,7 @@ pub const SARIF_SCHEMA_URL: &str =
 pub const SARIF_VERSION: &str = "2.1.0";
 
 /// Whether a finding fails the JUnit testcase / escalates the SARIF level: the
-/// finding's own [`JsonFinding::gating`] flag, set where the finding was built
+/// finding's own [`JsonFinding::gates`] answer
 /// from the predicate its surface's gate asks.
 ///
 /// NOT the severity word. The check families gate wider than the shared
@@ -345,7 +393,7 @@ pub const SARIF_VERSION: &str = "2.1.0";
 /// a refusal is an `<error>`, not a `<failure>`, and the `invalid` route's
 /// blockers keep their "INVALID evidence" text.
 fn is_failure(f: &JsonFinding) -> bool {
-    f.gating
+    f.gates()
 }
 
 /// The `<check> <net/ref>` subject line shared with the strict-gate output.
@@ -619,7 +667,6 @@ mod tests {
             check: check.to_string(),
             kind: kind.to_string(),
             severity: severity.to_string(),
-            gating: severity == "serious",
             nets: vec![net.to_string()],
             location_mm: None,
             layer: None,
@@ -660,13 +707,7 @@ mod tests {
             "b",
             &[
                 finding("drc", "short", "serious", "GND", "GND shorted to +5V"),
-                finding(
-                    "si",
-                    "usb_diff_pair",
-                    "warning",
-                    "USB_DP",
-                    "pair mismatched",
-                ),
+                finding("drc", "clearance", "warning", "USB_DP", "pair mismatched"),
             ],
         );
         assert!(out.contains("<failure message=\"GND shorted to +5V\"/>"));
@@ -688,8 +729,7 @@ mod tests {
         // finding that gates (`warning`, gating) and a possibly-phantom copper
         // short that does not (`warning`, not gating). Grading on the severity
         // word made the first one green.
-        let mut gating = finding("lint", "placeholder_value", "warning", "+5V", "no value");
-        gating.gating = true;
+        let gating = finding("lint", "placeholder_value", "warning", "+5V", "no value");
         let phantom = finding("drc", "short", "warning", "GND", "may be phantom");
         let out = junit_xml("b", &[gating.clone(), phantom.clone()]);
         assert!(out.contains("failures=\"1\""), "{out}");

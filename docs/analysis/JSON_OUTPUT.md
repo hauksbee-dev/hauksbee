@@ -55,9 +55,12 @@ evidence:` text under the `evidence/undermined` rule. Under GitHub Actions a
 failing `--strict` gate also prints `::error` workflow annotations for each
 gate-grade finding. Requested paths first receive a fail-closed pending document
 and are finalized once with the terminal outcome, so early errors and interrupted
-runs cannot expose a stale green file from an earlier invocation. Usage/input
-errors use the SARIF `hauksbee/run-error` rule and preserve their process exit
-code; invalid analysis uses `hauksbee/invalid-for-analysis` and exit 3.
+runs cannot expose a stale green file from an earlier invocation. Before that
+first write, the CLI rejects any output that is the same underlying file as a
+run input or the other artifact (including symlinks and hard links). An unsafe
+path is never modified; choose distinct paths and rerun. Usage/input errors use
+the SARIF `hauksbee/run-error` rule and preserve their process exit code;
+invalid analysis uses `hauksbee/invalid-for-analysis` and exit 3.
 
 ## Top-level verdict
 
