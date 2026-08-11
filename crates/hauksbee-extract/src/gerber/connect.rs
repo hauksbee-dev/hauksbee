@@ -373,10 +373,10 @@ pub fn reconstruct(
                 }
             }
             let n_gridded = owned.len() + borrowed.len();
-            // Every gridded pour's grid is alive at once, and a 2048-a-side grid is
-            // 4.2 MB of cells, so a layer of many detailed pours has to share a
+            // Every gridded pour's grid is alive at once, and a 4096-a-side grid is
+            // 16.8 MB of cells, so a layer of many detailed pours has to share a
             // budget rather than each take the ceiling. 64 M cells is 64 MB for the
-            // layer; below about fifteen gridded pours nothing is given up.
+            // layer; up to four dense planes can take the ceiling.
             const CELL_BUDGET: usize = 64 << 20;
             let side_ceiling = {
                 let per_pour = CELL_BUDGET / n_gridded.max(1);
@@ -384,7 +384,7 @@ pub fn reconstruct(
                 // gridded pours the budget stops being a bound and each still takes
                 // 64 cells a side. That needs a film whose own geometry is orders
                 // larger than its grids.
-                ((per_pour as f64).sqrt() as usize).clamp(64, 2048)
+                ((per_pour as f64).sqrt() as usize).clamp(64, 4096)
             };
             let region_grids: HashMap<usize, super::geo::PolyGrid> = owned
                 .iter()
@@ -399,9 +399,13 @@ pub fn reconstruct(
                     // that isolates them, which at 512 cells over a 100 mm board
                     // (0.2 mm a cell) is one cell: every pad landed in the
                     // boundary band and paid the exact poly distance over the
-                    // pour's whole vertex count anyway. The grid is exact at any
-                    // resolution (scanline coverage plus an exact test on a boundary
-                    // cell), so this only moves work, never answers.
+                    // pour's whole vertex count anyway. A 4096 ceiling also keeps
+                    // an annular island's bounds clear of its surrounding hole's
+                    // boundary cells, so dense plane/island reconstruction stays
+                    // indexed instead of falling back to a whole-plane Boolean
+                    // comparison. The grid is exact at any resolution (scanline
+                    // coverage plus an exact test on a boundary cell), so this only
+                    // moves work, never answers.
                     //
                     // Whole-extraction times for a 100 mm plane with 6084
                     // rectangular antipads and a pad in each: 3.97 s with the
@@ -419,10 +423,15 @@ pub fn reconstruct(
                     )
                 })
                 .collect();
+            let region_witnesses: HashMap<usize, (f64, f64)> = regions
+                .iter()
+                .filter_map(|&rgi| {
+                    super::rs274x::filled_interior_witness(&prims[rgi].shape)
+                        .map(|point| (rgi, point))
+                })
+                .collect();
             for &gi in members {
-                if prims[gi].kind == PrimKind::Region {
-                    continue;
-                }
+                let gi_is_region = prims[gi].kind == PrimKind::Region;
                 let pb = prims[gi].bounds;
                 let near_regions: Vec<usize> = region_tree
                     .locate_in_envelope_intersecting(AABB::from_corners(
@@ -442,7 +451,19 @@ pub fn reconstruct(
                 // skirting the boundary also has none inside. Pure point-in-
                 // polygon (no poly-poly distance) keeps this near-linear in the
                 // pour's vertex count, so big copper pours stay cheap.
-                let mut test_pts = vec![prims[gi].shape.center()];
+                let mut test_pts = match &prims[gi].shape {
+                    // A region's vertex-average may sit in one of its holes. It is
+                    // not copper and using it as a containment witness joins the
+                    // island in an annular clearance straight back to the plane.
+                    Shape::Polygon { .. } | Shape::MultiPolygon { .. } => if gi_is_region {
+                        region_witnesses.get(&gi).copied()
+                    } else {
+                        super::rs274x::filled_interior_witness(&prims[gi].shape)
+                    }
+                    .into_iter()
+                    .collect(),
+                    Shape::Capsule(_) => vec![prims[gi].shape.center()],
+                };
                 if let Shape::Capsule(c) = &prims[gi].shape {
                     test_pts.push((c.ax, c.ay));
                     test_pts.push((c.bx, c.by));
@@ -454,6 +475,12 @@ pub fn reconstruct(
                     }
                 }
                 for &rgi in &near_regions {
+                    // Region/region joins are visited once. They matter after an
+                    // exact clear operation splits one painted object while a
+                    // different region still overlaps the surviving pieces.
+                    if gi_is_region && rgi <= gi {
+                        continue;
+                    }
                     let b = prims[rgi].bounds;
                     // Only polygonal regions participate: a capsule-shaped
                     // region primitive has no filled outline to contain into.
@@ -464,11 +491,12 @@ pub fn reconstruct(
                         // Either way containment uses the shape's signed coverage,
                         // so inside a pour's ring is in and inside a void is out.
                         let grid = region_grids.get(&rgi);
-                        let inside = test_pts.iter().any(|&(px, py)| {
+                        let contains = |px: f64, py: f64, region: usize| {
+                            let b = prims[region].bounds;
                             if px < b[0] || px > b[2] || py < b[1] || py > b[3] {
                                 return false;
                             }
-                            match (grid, &prims[rgi].shape) {
+                            match (region_grids.get(&region), &prims[region].shape) {
                                 (Some(g), _) => g.contains(px, py),
                                 (None, Shape::Polygon { pts, .. }) => {
                                     super::geo::point_in_polygon(px, py, pts)
@@ -480,35 +508,54 @@ pub fn reconstruct(
                                 }
                                 (None, Shape::Capsule(_)) => false,
                             }
-                        });
-                        // (b) Edge penetration: a pad/track whose finite-width
-                        // copper laps onto the pour but whose centre-line stays
-                        // just outside the outline (thermal-relief pads, pour
-                        // edge feathering). The pour boundary genuinely cuts
-                        // *through* the primitive's copper, so the signed gap is
-                        // clearly negative. An antipad-isolated pad keeps the
-                        // drawn clearance (~0.2 mm) to the boundary, so its gap
-                        // stays positive and it is NOT joined. We only pay this
-                        // poly distance when the cheap containment missed and the
-                        // bounding boxes actually overlap.
-                        // Only pads (flashes) pay this poly distance: a track
-                        // long enough to reach a pour lands a sample point inside
-                        // it (caught by containment), so the costly poly-poly is
-                        // confined to the comparatively few pad primitives, which
-                        // keeps board-sized pours from making this quadratic.
+                        };
+                        let inside = test_pts.iter().any(|&(px, py)| contains(px, py, rgi));
+                        let reverse_inside = gi_is_region
+                            && region_witnesses
+                                .get(&rgi)
+                                .is_some_and(|&(px, py)| contains(px, py, gi));
+                        // (b) Exact finite-width contact: a pad, track, or plated
+                        // barrel may lap onto the pour while every sampled centre
+                        // point stays just outside it (thermal spokes and edge
+                        // feathering do this routinely). A real zero-gap touch is
+                        // electrical contact; an antipad-isolated object retains a
+                        // positive geometric gap and is not joined. We only pay
+                        // this distance when containment missed and the bounding
+                        // boxes actually overlap.
                         // A gridded pour also answers "is there any boundary in
                         // this pad's bounds at all" in O(1). Without that guard a
                         // board-sized pour's bounds overlap EVERY pad, so every
                         // antipad-isolated pad paid an exact poly distance over
                         // the pour's whole vertex count, which is the quadratic
                         // the grid was introduced to remove.
-                        let penetrates = !inside && prims[gi].kind == PrimKind::Flash && {
-                            let bp = prims[gi].bounds;
-                            !(bp[2] < b[0] || bp[0] > b[2] || bp[3] < b[1] || bp[1] > b[3])
-                                && grid.is_none_or(|g| g.near_boundary(bp))
-                                && shape_gap(&prims[gi].shape, &prims[rgi].shape) < -0.04
-                        };
-                        if inside || penetrates {
+                        let penetrates = !inside
+                            && matches!(
+                                prims[gi].kind,
+                                PrimKind::Flash | PrimKind::Track | PrimKind::Via
+                            )
+                            && {
+                                let bp = prims[gi].bounds;
+                                !(bp[2] < b[0] || bp[0] > b[2] || bp[3] < b[1] || bp[1] > b[3])
+                                    && grid.is_none_or(|g| g.near_boundary(bp))
+                                    && shape_gap(&prims[gi].shape, &prims[rgi].shape) <= TOUCH_EPS
+                            };
+                        // Boolean painter replay emits valid region polygons, so
+                        // exact filled-area overlap between two regions is a real
+                        // electrical join. Containment handles the common case;
+                        // only crossing/touching boundaries pay the exact gap.
+                        let gi_boundary_may_cross =
+                            region_grids.get(&gi).is_none_or(|g| g.near_boundary(b));
+                        let rgi_boundary_may_cross = grid.is_none_or(|g| g.near_boundary(pb));
+                        let boundaries_may_cross = gi_boundary_may_cross && rgi_boundary_may_cross;
+                        let regions_overlap = gi_is_region
+                            && !inside
+                            && !reverse_inside
+                            && boundaries_may_cross
+                            && super::rs274x::filled_regions_touch(
+                                &prims[gi].shape,
+                                &prims[rgi].shape,
+                            );
+                        if inside || reverse_inside || penetrates || regions_overlap {
                             dsu.union(gi, rgi);
                         }
                     }
@@ -1351,6 +1398,7 @@ fn largest_dimension_hint(p: &str) -> Option<f64> {
 mod tests {
     use super::*;
     use crate::gerber::geo::Capsule;
+    use crate::gerber::{geo, rs274x};
 
     fn stats_with_flashes(total: usize, assigned: usize) -> ReconStats {
         ReconStats {
@@ -1481,6 +1529,80 @@ mod tests {
         ];
         let (_b, stats) = reconstruct("t", vec![layer], vec![], vec![]);
         assert_eq!(stats.n_nets, 2);
+    }
+
+    #[test]
+    fn region_witness_inside_a_hole_cannot_rejoin_its_island() {
+        let plane_shape = Shape::MultiPolygon {
+            contours: vec![
+                vec![(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)],
+                vec![(0.005, 0.005), (0.05, 0.005), (0.05, 0.05), (0.005, 0.05)],
+            ],
+            weights: vec![1, -1],
+        };
+        let island_shape = Shape::Polygon {
+            pts: vec![(0.01, 0.01), (0.04, 0.01), (0.04, 0.04), (0.01, 0.04)],
+            r: 0.0,
+        };
+        let plane_witness = rs274x::filled_interior_witness(&plane_shape).unwrap();
+        assert!(matches!(
+            &plane_shape,
+            Shape::MultiPolygon { contours, weights }
+                if geo::point_in_weighted_contours(
+                    plane_witness.0,
+                    plane_witness.1,
+                    contours,
+                    weights
+                )
+        ));
+        assert!(matches!(
+            &island_shape,
+            Shape::Polygon { pts, .. }
+                if !geo::point_in_polygon(plane_witness.0, plane_witness.1, pts)
+        ));
+        let plane = CopperPrim::bare(plane_shape, PrimKind::Region);
+        let island = CopperPrim::bare(island_shape, PrimKind::Region);
+
+        let (_board, stats) = reconstruct(
+            "holed-region-witness",
+            vec![vec![plane, island]],
+            vec![],
+            vec![],
+        );
+        assert_eq!(
+            stats.n_nets, 2,
+            "copper isolated inside a real hole must not union back to its surrounding plane"
+        );
+    }
+
+    #[test]
+    fn polygon_flash_inside_a_gridded_pour_keeps_its_containment_witness() {
+        let pour = CopperPrim::bare(
+            Shape::Polygon {
+                pts: (0..2048)
+                    .map(|index| {
+                        let angle = index as f64 * std::f64::consts::TAU / 2048.0;
+                        (10.0 * angle.cos(), 10.0 * angle.sin())
+                    })
+                    .collect(),
+                r: 0.0,
+            },
+            PrimKind::Region,
+        );
+        let pad = CopperPrim::bare(
+            Shape::Polygon {
+                pts: vec![(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)],
+                r: 0.0,
+            },
+            PrimKind::Flash,
+        );
+
+        let (_board, stats) =
+            reconstruct("polygon-pad-in-pour", vec![vec![pour, pad]], vec![], vec![]);
+        assert_eq!(
+            stats.n_nets, 1,
+            "a rectangular pad wholly flooded by a large pour is the same conductor"
+        );
     }
 
     #[test]
