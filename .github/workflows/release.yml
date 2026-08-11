@@ -471,9 +471,61 @@ jobs:
             hauksbee/dist/*.sha256
           if-no-files-found: error
 
+  # A nightly run on another commit is useful feedback, not release evidence.
+  # This job checks out the tag's exact SHA, verifies checksum-backed installed
+  # emulator artifacts, and retains the three named real firmware-through-
+  # hardware passes. The publish job both needs this job and re-checks the SHA
+  # inside its evidence artifact before creating the GitHub Release.
+  required-integrations:
+    name: required firmware integrations at release SHA
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: hauksbee
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache checksum-verified simulator installs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/renode-portable
+            ~/.espressif/tools/qemu-xtensa
+            ~/.espressif/tools/qemu-riscv32
+          key: release-required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hauksbee/scripts/install-sims.sh', 'hauksbee/scripts/required-simulator-versions.env', 'hauksbee/scripts/renode-checksums.txt', 'hauksbee/scripts/espressif-qemu-checksums.txt') }}
+
+      - name: Install pinned required simulator backends
+        shell: bash
+        run: |
+          cd hauksbee
+          chmod +x scripts/install-sims.sh
+          scripts/install-sims.sh --require-pinned
+
+      - name: Run and retain same-SHA required integration evidence
+        shell: bash
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          cd hauksbee
+          python3 scripts/run_required_integrations.py \
+            --expected-sha "$GITHUB_SHA" \
+            --evidence-out required-integrations.json
+
+      - name: Upload required integration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: required-integration-evidence
+          path: hauksbee/required-integrations.json
+          if-no-files-found: error
+
   release:
     name: publish release
-    needs: build
+    needs: [build, required-integrations]
     runs-on: ubuntu-latest
     # Only publish a Release for an actual tag push; workflow_dispatch just
     # produces downloadable build artifacts (above).
@@ -530,6 +582,15 @@ jobs:
             echo "checking $sum"
             sha256sum --check "$sum"
           done
+
+      - name: Verify same-SHA required integration evidence
+        shell: bash
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          python3 hauksbee/scripts/run_required_integrations.py \
+            --verify-evidence artifacts/required-integration-evidence/required-integrations.json \
+            --expected-sha "$GITHUB_SHA"
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
