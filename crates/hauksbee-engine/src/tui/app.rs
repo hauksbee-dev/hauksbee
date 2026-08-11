@@ -311,7 +311,7 @@ fn event_loop(
         // is treated as the Esc that was meant to close it, not the action.
         if state.any_overlay_open() {
             // The coverage overlay is the one overlay whose content can exceed
-            // the modal (ten classes of full sentence), so ↑/↓ scroll it while
+            // the modal (twelve classes of full sentence), so ↑/↓ scroll it while
             // it is open. Everything else stays modal-swallowed below.
             if state.coverage_open
                 && matches!(
@@ -371,12 +371,7 @@ fn event_loop(
                     // Start the co-sim worker. Drop any previous run's scope
                     // samples (sim time restarts at 0) but keep the probes, so
                     // an old trace never splices onto the new run's.
-                    state.scope.clear_samples();
-                    state.focus = Pane::Cosim;
-                    last_update = Some(CosimUpdate {
-                        chunk_ms,
-                        ..Default::default()
-                    });
+                    begin_cosim_ui_run(&mut state, &mut last_update, chunk_ms);
                     cosim = Some(cosim::spawn(
                         board_text.clone(),
                         firmware.clone(),
@@ -407,6 +402,19 @@ fn event_loop(
     // Stop any running co-sim before we tear down the terminal.
     drop(cosim);
     Ok(())
+}
+
+/// The complete UI-side transition behind the event loop's `r` action. Kept
+/// together so a new worker cannot briefly inherit any coverage/modal/scroll or
+/// scope samples from the previous run.
+fn begin_cosim_ui_run(state: &mut AppState, last_update: &mut Option<CosimUpdate>, chunk_ms: f64) {
+    state.begin_cosim_run();
+    state.scope.clear_samples();
+    state.focus = Pane::Cosim;
+    *last_update = Some(CosimUpdate {
+        chunk_ms,
+        ..Default::default()
+    });
 }
 
 #[cfg(test)]
@@ -480,5 +488,45 @@ mod tests {
         assert_eq!(u1, vec!["GND".to_string(), "VBUS".to_string()]);
         assert!(net_parts.contains_key("VBUS"));
         assert!(!net_parts.contains_key("unconnected-(U1-NC)"));
+    }
+
+    #[test]
+    fn real_begin_run_event_transition_clears_prior_coverage_ui() {
+        use crate::reports::coverage::CoverageInputs;
+        use crate::scheduler::AdcDrop;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let board_path = root.join("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb");
+        let board = std::fs::read_to_string(&board_path).expect("tracked board fixture reads");
+        let mut state = build_state(&board_path, &board, None).expect("real TUI state builds");
+        state.set_coverage(
+            CoverageInputs {
+                adc_dropped: vec![AdcDrop {
+                    mcu_ref: "U1".into(),
+                    channel: 4,
+                    net: "/VSENSE".into(),
+                    parts: Vec::new(),
+                }],
+                ..Default::default()
+            }
+            .caveats(),
+        );
+        state.toggle_coverage();
+        let mut update = Some(CosimUpdate {
+            done: true,
+            coverage: state.coverage().to_vec(),
+            ..Default::default()
+        });
+
+        begin_cosim_ui_run(&mut state, &mut update, 1.0);
+
+        assert!(state.coverage().is_empty());
+        assert!(!state.coverage_open);
+        assert_eq!(state.coverage_scroll, 0);
+        assert_eq!(state.focus, Pane::Cosim);
+        let fresh = update.expect("new run placeholder");
+        assert_eq!(fresh.chunk_ms, 1.0);
+        assert!(fresh.coverage.is_empty());
+        assert!(!fresh.done);
     }
 }

@@ -535,7 +535,7 @@ pub struct AppState {
     /// When true, the co-sim coverage overlay (`c`) is open.
     pub coverage_open: bool,
     /// First caveat row shown in the coverage overlay (it scrolls with ↑/↓,
-    /// because ten classes of full sentence do not fit one modal).
+    /// because twelve classes of full sentence do not fit one modal).
     pub coverage_scroll: usize,
 
     /// ref → connected net names (for the part detail view).
@@ -827,6 +827,15 @@ impl AppState {
         }
     }
 
+    /// Start a new co-sim run without retaining any coverage UI state from the
+    /// prior run. This is one transition so the banner, footer, modal and its
+    /// scroll cursor can never describe different runs between worker updates.
+    pub fn begin_cosim_run(&mut self) {
+        self.coverage.clear();
+        self.coverage_open = false;
+        self.coverage_scroll = 0;
+    }
+
     /// The caveats, in the shared enumeration's order.
     pub fn coverage(&self) -> &[crate::reports::coverage::CoverageCaveat] {
         &self.coverage
@@ -841,8 +850,25 @@ impl AppState {
     /// How many caveats are resolution statements rather than holes (the
     /// per-core timing-coverage class). Counted apart so a healthy run does not
     /// wear a red number for stating its own edge resolution.
-    pub fn coverage_note_count(&self) -> usize {
-        self.coverage.len() - self.coverage_hole_count()
+    pub fn coverage_bound_count(&self) -> usize {
+        crate::reports::coverage::disposition_count(
+            &self.coverage,
+            crate::reports::coverage::CoverageDisposition::TimingBound,
+        )
+    }
+
+    pub fn coverage_refusal_count(&self) -> usize {
+        crate::reports::coverage::disposition_count(
+            &self.coverage,
+            crate::reports::coverage::CoverageDisposition::StrictRefusal,
+        )
+    }
+
+    pub fn coverage_fallback_count(&self) -> usize {
+        crate::reports::coverage::disposition_count(
+            &self.coverage,
+            crate::reports::coverage::CoverageDisposition::FallbackQualification,
+        )
     }
 
     /// Toggle the coverage overlay. Available from any pane (the caveats are
@@ -1718,7 +1744,7 @@ mod tests {
             .caveats(),
         );
         assert_eq!(st.coverage_hole_count(), 1);
-        assert_eq!(st.coverage_note_count(), 0);
+        assert_eq!(st.coverage_bound_count(), 0);
         st.toggle_coverage();
         assert!(st.coverage_open);
         assert!(st.any_overlay_open());
@@ -1763,6 +1789,34 @@ mod tests {
             .caveats(),
         );
         assert_eq!(st.coverage_scroll, 0);
+    }
+
+    #[test]
+    fn begin_cosim_run_atomically_clears_previous_coverage_ui_state() {
+        use crate::reports::coverage::CoverageInputs;
+        use crate::scheduler::AdcDrop;
+
+        let mut st = sample_state();
+        st.set_coverage(
+            CoverageInputs {
+                adc_dropped: vec![AdcDrop {
+                    mcu_ref: "U1".to_string(),
+                    channel: 4,
+                    net: "/VSENSE".to_string(),
+                    parts: Vec::new(),
+                }],
+                ..Default::default()
+            }
+            .caveats(),
+        );
+        st.toggle_coverage();
+        assert!(st.coverage_open);
+
+        st.begin_cosim_run();
+
+        assert!(st.coverage().is_empty(), "the previous run is not this run");
+        assert!(!st.coverage_open, "a stale coverage modal must close");
+        assert_eq!(st.coverage_scroll, 0, "scroll belongs to the old list");
     }
 
     #[test]
