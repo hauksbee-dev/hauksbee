@@ -445,6 +445,25 @@ jobs:
           done
           exit "$fail"
 
+      # The documented KiCad install-from-file path is a release asset, not a
+      # maintainer-only local recipe. Build it once (all matrix legs share the
+      # same platform-independent Python sources), checksum it using the same
+      # basename-relative format as every other release artifact, and stage it
+      # beside the bundles for the existing verification and upload gates.
+      - name: Build KiCad PCM archive
+        if: matrix.label == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd hauksbee
+          bash integrations/kicad-plugin/build-pcm.sh
+          pcm="integrations/kicad-plugin/dist/hauksbee-ci-pcm-v${{ steps.ver.outputs.version }}.zip"
+          test -s "$pcm"
+          cp "$pcm" dist/
+          cd dist
+          sha256sum "$(basename "$pcm")" > "$(basename "$pcm").sha256"
+          sha256sum --check "$(basename "$pcm").sha256"
+
       # Every checksum next to every artifact must verify before anything is
       # uploaded, so a stale or half-rewritten .sha256 can never ride along.
       - name: Verify every dist checksum
@@ -467,7 +486,9 @@ jobs:
           name: hauksbee-${{ matrix.label }}
           path: |
             hauksbee/dist/*.tar.gz
-            hauksbee/dist/*.zip
+            hauksbee/dist/hauksbee-*-app.zip
+            hauksbee/dist/hauksbee-ci-pcm-v*.zip
+            hauksbee/dist/hauksbee-ci-pcm-v*.zip.sha256
             hauksbee/dist/*.sha256
           if-no-files-found: error
 
@@ -571,8 +592,11 @@ jobs:
       - name: Collect assets
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -exec cp {} dist/ \;
+          test "$(find dist -maxdepth 1 -name 'hauksbee-ci-pcm-v*.zip' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -name 'hauksbee-ci-pcm-v*.zip.sha256' | wc -l)" -eq 1
           ls -la dist
 
       - name: Verify every manifest before publishing
@@ -615,6 +639,8 @@ jobs:
 #   hauksbee-<ver>-<label>-permissive.tar.gz   + .sha256   permissive, Apache-2.0
 #   hauksbee-<ver>-<label>-app.zip             + .sha256   macOS legs only,
 #                                                          wraps the default shape
+#   hauksbee-ci-pcm-v<ver>.zip                  + .sha256   one platform-neutral
+#                                                          KiCad PCM archive
 #
 # The historical "OPTION A, not shipped" block that used to live here described
 # the GPL shape as a hypothetical to be enabled by hand. It is now the default

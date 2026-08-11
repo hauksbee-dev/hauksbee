@@ -34,6 +34,7 @@ steps:
       ref: v0.1.0
       path: .hauksbee-action
       token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
+      persist-credentials: false
   - uses: ./.hauksbee-action/integrations/github-action
     with:
       hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}

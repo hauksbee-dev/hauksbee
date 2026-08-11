@@ -88,7 +88,7 @@ def shipped_files(root: Path) -> list[Path]:
     return [path for path in root.rglob("*") if path.is_file()]
 
 
-def validate(root: Path) -> tuple[str, list[str]]:
+def validate(root: Path, scope: str = "development") -> tuple[str, list[str]]:
     manifest_file = root / MANIFEST_PATH
     if not manifest_file.is_file():
         return "", [f"{MANIFEST_PATH}: canonical surface manifest is missing"]
@@ -103,6 +103,7 @@ def validate(root: Path) -> tuple[str, list[str]]:
     needle = repository.encode()
 
     expected: dict[str, dict[str, object]] = {}
+    seen_paths: set[str] = set()
     errors: list[str] = []
     excluded_prefixes: list[str] = []
     for exclusion in manifest.get("excluded_prefixes", []):
@@ -126,6 +127,7 @@ def validate(root: Path) -> tuple[str, list[str]]:
         relative = entry.get("path", "")
         classification = entry.get("classification", "")
         occurrences = entry.get("occurrences")
+        scopes = entry.get("scopes", ["development", "mirror"])
         if (
             not isinstance(relative, str)
             or not relative
@@ -134,14 +136,28 @@ def validate(root: Path) -> tuple[str, list[str]]:
         ):
             errors.append(f"{MANIFEST_PATH}: invalid surface path {relative!r}")
             continue
-        if relative in expected:
+        if relative in seen_paths:
             errors.append(f"{MANIFEST_PATH}: duplicate surface path {relative}")
             continue
+        seen_paths.add(relative)
         if not isinstance(classification, str) or not classification.strip():
             errors.append(f"{MANIFEST_PATH}: {relative} has no classification")
         if not isinstance(occurrences, int) or occurrences < 1:
             errors.append(f"{MANIFEST_PATH}: {relative} has invalid occurrence count")
-        expected[relative] = entry
+        if (
+            not isinstance(scopes, list)
+            or not scopes
+            or any(item not in {"development", "mirror"} for item in scopes)
+            or len(scopes) != len(set(scopes))
+        ):
+            errors.append(f"{MANIFEST_PATH}: {relative} has invalid scopes")
+            continue
+        if "development" not in scopes:
+            errors.append(
+                f"{MANIFEST_PATH}: {relative} must remain classified in development"
+            )
+        if scope in scopes:
+            expected[relative] = entry
 
     observed: dict[str, int] = {}
     for path in shipped_files(root):
@@ -204,9 +220,15 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
     parser.add_argument("--print-repository", action="store_true")
+    parser.add_argument(
+        "--scope",
+        choices=("development", "mirror"),
+        default="development",
+        help="validate the development tree or the curated release mirror",
+    )
     args = parser.parse_args()
     root = args.root.resolve()
-    repository, errors = validate(root)
+    repository, errors = validate(root, args.scope)
     if errors:
         for error in errors:
             print(f"private release surface error: {error}", file=sys.stderr)
@@ -214,8 +236,15 @@ def main() -> int:
     if args.print_repository:
         print(repository)
     else:
-        count = len(json.loads((root / MANIFEST_PATH).read_text())["surfaces"])
-        print(f"private release surfaces: {count} classified files match")
+        manifest = json.loads((root / MANIFEST_PATH).read_text())
+        count = sum(
+            args.scope in entry.get("scopes", ["development", "mirror"])
+            for entry in manifest["surfaces"]
+        )
+        print(
+            f"private release surfaces ({args.scope}): "
+            f"{count} classified files match"
+        )
     return 0
 
 

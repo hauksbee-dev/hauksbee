@@ -64,6 +64,58 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         )
         self.assertTrue(all(entry["classification"] for entry in exclusions))
 
+    def test_mirror_scope_matches_the_curated_release_tree(self) -> None:
+        manifest = self.surface_manifest()
+        development_only = {
+            "docs/dev-plans/launch-checklist.md",
+            "docs/dev-plans/launch-gtm-strategy.md",
+            "docs/dev-plans/public-release-cleanup-plan.md",
+            "docs/dev-plans/tasks.md",
+            "frontend/capture/cards.ts",
+        }
+        for entry in manifest["surfaces"]:
+            path = entry["path"]
+            scopes = entry.get("scopes", ["development", "mirror"])
+            with self.subTest(path=path):
+                self.assertIn("development", scopes)
+                self.assertEqual("mirror" in scopes, path not in development_only)
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            mirror = Path(raw_tmp) / "mirror"
+            for entry in manifest["surfaces"]:
+                if "mirror" not in entry.get("scopes", ["development", "mirror"]):
+                    continue
+                relative = Path(entry["path"])
+                destination = mirror / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ROOT / relative, destination)
+            for policy_file in (SURFACE_MANIFEST, SURFACE_CHECKER):
+                destination = mirror / policy_file.relative_to(ROOT)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(policy_file, destination)
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(mirror / SURFACE_CHECKER.relative_to(ROOT)),
+                    str(mirror),
+                    "--scope",
+                    "mirror",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        builder = (ROOT / "scripts/build-public-mirror.sh").read_text()
+        self.assertIn(
+            "check-private-release-surfaces.py . --scope mirror",
+            builder,
+            "the real curated output, not only a synthetic fixture, must run the mirror policy",
+        )
+        self.assertIn("manifest['excluded_prefixes'] = []", builder)
+        self.assertIn("surface.get('scopes', ['development', 'mirror'])", builder)
+
     def private_installer_fixture(self) -> tuple[str, bytes, bytes]:
         system = subprocess.check_output(["uname", "-s"], text=True).strip()
         machine = subprocess.check_output(["uname", "-m"], text=True).strip()
@@ -195,6 +247,30 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         version = (ROOT / "frontend/src/lib/version.ts").read_text()
         self.assertIn("${{ secrets.HAUKSBEE_READ_TOKEN }}", version)
 
+        private_checkout_sources = {
+            "integrations/github-action/action.yml": 1,
+            "integrations/github-action/README.md": 1,
+            "integrations/github-action/example-workflow.yml": 2,
+            "docs/ci/DOCKER.md": 1,
+            # One generated line plus the unit assertion that pins it.
+            "crates/hauksbee-ci/src/integrate.rs": 2,
+            "frontend/src/lib/ci-workflow.ts": 1,
+        }
+        for relative, expected in private_checkout_sources.items():
+            text = (ROOT / relative).read_text()
+            with self.subTest(path=relative):
+                self.assertEqual(
+                    text.count("persist-credentials: false"),
+                    expected,
+                    "every private-token checkout must erase its credential after checkout",
+                )
+
+        registry_auth = (ROOT / "integrations/github-action/action.yml").read_text()
+        self.assertIn('mktemp -d "$RUNNER_TEMP/hauksbee-docker-auth.XXXXXX"', registry_auth)
+        self.assertIn("docker logout ghcr.io", registry_auth)
+        self.assertIn("Cleanup private registry credential", registry_auth)
+        self.assertIn("if: ${{ always()", registry_auth)
+
     def test_shipped_installer_examples_authenticate_the_private_script_fetch(self) -> None:
         for relative in (Path("README.md"), Path("docs/START_HERE.md")):
             text = (ROOT / relative).read_text()
@@ -216,13 +292,20 @@ class PrivateReleasePolicyTests(unittest.TestCase):
 
     def test_docker_publication_checks_private_repo_and_package_before_and_after(self) -> None:
         workflow = (ROOT / ".github/workflows/docker.yml").read_text()
+        probe = workflow.index("Probe private container publication")
+        bootstrap = workflow.index("Bootstrap private GHCR package")
         before = workflow.index("Check private container publication before push")
         slim = workflow.index("Build and push slim")
         full = workflow.index("Build and push full")
         after = workflow.index("Check private container publication after push")
+        self.assertLess(probe, bootstrap)
+        self.assertLess(bootstrap, before)
         self.assertLess(before, slim)
         self.assertLess(full, after)
-        self.assertEqual(workflow.count("check-private-container-publication.sh"), 2)
+        self.assertIn("if: always()", workflow[after : after + 300])
+        self.assertIn("FROM scratch", workflow[bootstrap:before])
+        self.assertNotIn("COPY", workflow[bootstrap:before])
+        self.assertEqual(workflow.count("check-private-container-publication.sh"), 3)
 
     def run_container_preflight(
         self,
@@ -251,6 +334,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                           ;;
                         orgs/hauksbee-dev/packages/container/hauksbee)
                           [ "$FAKE_PACKAGE_VISIBILITY" != inaccessible ] || exit 66
+                          [ "$FAKE_PACKAGE_VISIBILITY" != missing ] || exit 66
                           printf '%s\\n' "$FAKE_PACKAGE_VISIBILITY"
                           ;;
                         *) exit 64 ;;
@@ -284,6 +368,21 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 check=False,
             )
             return result, log.read_text() if log.exists() else ""
+
+    def test_container_probe_bootstraps_only_an_inert_missing_package(self) -> None:
+        existing, _calls = self.run_container_preflight(phase="probe")
+        self.assertEqual(existing.returncode, 0, existing.stdout + existing.stderr)
+        self.assertIn("bootstrap_required=false", existing.stdout)
+
+        missing, _calls = self.run_container_preflight(
+            phase="probe", package_visibility="missing"
+        )
+        self.assertEqual(missing.returncode, 0, missing.stdout + missing.stderr)
+        self.assertIn("bootstrap_required=true", missing.stdout)
+
+        docs = (ROOT / "docs/ci/DOCKER.md").read_text()
+        self.assertIn("privacy-bootstrap", docs)
+        self.assertIn("no Hauksbee binaries or source", docs)
 
     def test_container_publication_preflight_is_private_and_read_only(self) -> None:
         for phase in ("before", "after"):
@@ -323,6 +422,16 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         builder = (ROOT / "integrations/kicad-plugin/build-pcm.sh").read_text()
         self.assertNotIn("registry listing", builder)
         self.assertNotIn("download_url=", builder)
+
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        build = workflow.index("Build KiCad PCM archive")
+        upload = workflow.index("Upload build artifact")
+        publish = workflow.index("Create / update GitHub Release")
+        self.assertLess(build, upload)
+        self.assertIn("integrations/kicad-plugin/build-pcm.sh", workflow[build:upload])
+        self.assertIn("hauksbee-ci-pcm-v", workflow[build:upload])
+        self.assertIn("hauksbee-ci-pcm-v*.zip", workflow[upload:publish])
+        self.assertIn("hauksbee-ci-pcm-v*.zip.sha256", workflow[upload:publish])
 
     def test_all_named_private_consumers_authenticate_before_fetching(self) -> None:
         mcp = (ROOT / "crates/hauksbee-mcp/README.md").read_text()
