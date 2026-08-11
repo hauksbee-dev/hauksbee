@@ -222,6 +222,7 @@ pub(crate) fn is_esp_fork(bin: &std::path::Path) -> bool {
 /// A spawned, headless Espressif QEMU instance with a QMP socket.
 pub struct QemuProcess {
     child: Child,
+    _tree_guard: crate::children::ProcessTreeGuard,
     pub qmp_port: u16,
     /// QEMU's stderr, redirected to a temp file so that when the process dies
     /// (bad image, bad machine, bad drive size) the caller can surface QEMU's
@@ -308,13 +309,13 @@ impl QemuProcess {
             cmd.process_group(0);
         }
 
-        let child = cmd
-            .spawn()
-            .with_context(|| format!("spawning Espressif QEMU from {}", bin.display()))?;
+        let (child, tree_guard) = crate::children::spawn_owned(&mut cmd)
+            .with_context(|| format!("spawning owned Espressif QEMU from {}", bin.display()))?;
         crate::children::register(child.id());
 
         Ok(QemuProcess {
             child,
+            _tree_guard: tree_guard,
             qmp_port,
             stderr_log,
         })

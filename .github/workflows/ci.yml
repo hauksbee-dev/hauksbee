@@ -28,7 +28,7 @@ jobs:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # No toolchain pinned here on purpose: rust-toolchain.toml decides, so
       # CI and a laptop format with the same rustfmt and cannot disagree.
       - run: cargo fmt --all --check
@@ -37,8 +37,8 @@ jobs:
     name: cargo clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # The allow-list of known findings lives in Cargo.toml's
       # [workspace.lints.clippy]. Anything outside it fails here.
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -47,8 +47,8 @@ jobs:
     name: engine without default features
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Keep the core static-analysis build honest. This catches accidental
       # simulator-only dependencies and runs the same behavioral tests, including
       # the real watch-loop contract, in the smallest supported feature shape.
@@ -68,19 +68,101 @@ jobs:
         # while passing in the other.
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # No corpus here: these are the tests that run from the fixtures bundled
       # in testdata/. Corpus-dependent tests report as ignored, and the nightly
       # gate runs them for real with HAUKSBEE_REQUIRE_CORPUS=1.
       - name: cargo test --workspace
         run: cargo test --workspace
 
+  windows:
+    name: native Windows tests, release binary, and drag-and-drop front door
+    runs-on: windows-latest
+    env:
+      # A Windows-only unused variable or cfg arm is a portability defect, not
+      # a warning to scroll past. The local GNU cross-check runs with this too.
+      RUSTFLAGS: -D warnings
+      # The Windows artifact is permissive-only. If avr leaks into the feature
+      # graph, build.rs must fail rather than finding an accidental runner copy.
+      SIMAVR_INCLUDE_DIR: C:\nonexistent\simavr-must-not-be-linked
+      SIMAVR_LIB_DIR: C:\nonexistent\simavr-must-not-be-linked
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: offline Windows release-contract tests
+        run: python scripts/test-windows-port-contract.py
+      - name: install checksum-pinned Windows simulator backends
+        shell: pwsh
+        run: .\scripts\install-sims-windows.ps1
+      - name: native engine, CI, and emulator-lifecycle tests
+        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
+      - name: require three real firmware-through-emulator flows
+        shell: pwsh
+        run: |
+          .\scripts\run-required-integrations-windows.ps1 `
+            -ExpectedSha "${{ github.sha }}" `
+            -EvidenceOut "output\windows-frontdoor\required-integrations-windows-x86_64.json"
+      - name: build the embedded browser front door
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install chromium
+          bun run build
+      - name: build the exact permissive Windows release binaries
+        run: cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
+      - name: prove the release shape and real drag-and-drop journey
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $doctor = & target\release\hauksbee.exe doctor | Out-String
+          if ($doctor -notmatch '(?m)^avr\s+disabled\b') {
+            throw "Windows release unexpectedly contains the AVR backend:`n$doctor"
+          }
+          New-Item -ItemType Directory -Path output\windows-frontdoor -Force | Out-Null
+          $server = Start-Process -FilePath target\release\hauksbee.exe `
+            -ArgumentList @("serve", "--port", "8417", "--no-open") `
+            -PassThru `
+            -RedirectStandardOutput output\windows-frontdoor\server.stdout.log `
+            -RedirectStandardError output\windows-frontdoor\server.stderr.log
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              try {
+                Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8417/ | Out-Null
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $ready) { throw "the Windows release server never became ready" }
+            $board = (Resolve-Path examples\board-as-code\starter.board).Path
+            $env:HB_E2E_BASE = "http://127.0.0.1:8417"
+            $env:HB_BOARD_FILES = ConvertTo-Json -Compress @($board) # starter.board
+            $env:HB_RELEASE_COHORT = "smoke"
+            $env:HB_E2E_OUT = (Resolve-Path output\windows-frontdoor).Path
+            bun frontend/tests/e2e/drag-drop-release.ts
+          } finally {
+            if (-not $server.HasExited) {
+              taskkill /T /F /PID $server.Id | Out-Null
+            }
+            $server.WaitForExit()
+          }
+      - name: Windows front-door evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-frontdoor-evidence
+          path: output/windows-frontdoor
+          if-no-files-found: error
+
   diagrams:
     name: diagram geometry lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # draw.io renders overlapping boxes, spilling labels, and dangling edges
       # without complaint, and the export is what readers see. The linter
       # checks the .drawio sources geometrically so those defects fail here
@@ -91,7 +173,7 @@ jobs:
     name: integrations (KiCad plugin, pre-commit hook)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # These two ship to users and nothing here ran them, so a break in either
       # reached the person installing it before it reached us. Both suites are
       # pure Python with no pcbnew/wx import, so they run anywhere.
@@ -110,7 +192,7 @@ jobs:
     name: release evidence invariants (offline)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # Pure stdlib tests: no corpus fetch, browser, server, or network. These
       # prove that a renamed board cannot become unseen again, ledger prefix
       # edits are detected, archives stay inside their declared source, and a
@@ -130,8 +212,8 @@ jobs:
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # The //! module headers are rustdoc input, rendered by `cargo doc` and
       # published on docs.rs if the crates ever ship there. Broken intra-doc
       # links and malformed markdown rot silently unless something builds the
@@ -142,7 +224,7 @@ jobs:
     name: docs currency (no dead links, gravestones, or stale paths in shipped docs)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # Shipped docs must describe the present tense of the tree: every relative
       # link resolves, no gravestone or review-process language, no references
       # into internal-only paths, no em-dashes, no stale backticked repo paths.
@@ -152,8 +234,8 @@ jobs:
     name: frontend quality (lint, tests, browser flows, visual fit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # A layout defect is invisible to every other job here: tsc and eslint are
       # happy with a button hanging off its card, and cargo test never renders
       # anything. This measures the real thing in a real browser at five
@@ -199,7 +281,7 @@ jobs:
         run: bun run visual-lint
       - name: browser-test screenshots
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: frontend-browser-screenshots
           path: frontend/test-results
@@ -209,8 +291,8 @@ jobs:
     name: scenario QC (ten real-user sessions, end to end)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # No build job exists to borrow artifacts from, and the suite has to
       # measure a release build: the flows it times are sub-second in release
       # and slow enough in debug to trip its own wall-clock ceilings.
@@ -228,7 +310,7 @@ jobs:
       # code and stream, so a red here is diagnosable without a local repro.
       - name: scenario transcripts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: scenario-qc-report
           path: qc/results
@@ -242,8 +324,8 @@ jobs:
       SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
       SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # This is a licensing ASSERTION, not a compile check. simavr discovery is
       # pointed at a nonexistent path: if the renode+qemu shape is truly
       # avr-free, hauksbee-mcu/build.rs early-returns and ignores it. If `avr`
@@ -266,8 +348,8 @@ jobs:
     name: speed gate (faster-than-ngspice claim)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # The oracle. Without it the gate SKIPS, and a skipped gate defends
       # nothing, so HAUKSBEE_REQUIRE_NGSPICE below turns a missing or broken
       # install into a red build rather than a quiet green.
@@ -297,7 +379,7 @@ jobs:
       # read the actual numbers from the run that gated the commit.
       - name: upload the measured results table
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: speed-gate-results
           path: docs/about/speed-gate-results.md
