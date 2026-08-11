@@ -159,21 +159,13 @@ pub(crate) fn component_occurrence_subject(
     format!("{OCCURRENCE_PREFIX}{encoded}:{ordinal}")
 }
 
-fn occurrence_provenance_reference(component_subject: &str, reference: &str) -> String {
+fn provenance_display_reference(reference: &str) -> String {
     let reference = reference.trim();
-    if !component_subject.starts_with(OCCURRENCE_PREFIX) {
-        return reference.to_string();
-    }
-    let ordinal = component_subject
-        .rsplit_once(':')
-        .map(|(_, ordinal)| ordinal)
-        .unwrap_or("?");
-    let display = if reference.is_empty() {
-        "unnamed part"
+    if reference.is_empty() {
+        "unnamed part".to_string()
     } else {
-        reference
-    };
-    format!("{display} [occurrence {ordinal}]")
+        reference.to_string()
+    }
 }
 
 /// Give board components and bind rows the same injective causal identity.
@@ -469,10 +461,7 @@ impl BoardEvidence {
                     .entry(component_subject.to_string())
                     .or_default()
                     .push(DefaultFact {
-                        reference: occurrence_provenance_reference(
-                            component_subject,
-                            &row.reference,
-                        ),
+                        reference: provenance_display_reference(&row.reference),
                         parameter,
                         value,
                         assumption: assumption.id().clone(),
@@ -537,8 +526,7 @@ impl BoardEvidence {
             for reference in refs {
                 if let Some(row) = rows.get(reference.as_str()) {
                     if let Some(model_id) = row.model_id.as_deref() {
-                        let provenance_reference =
-                            occurrence_provenance_reference(reference, &row.reference);
+                        let provenance_reference = provenance_display_reference(&row.reference);
                         let confidence = match row.confidence {
                             Confidence::Exact => MatchConfidence::Exact,
                             Confidence::Family => MatchConfidence::High,
@@ -550,13 +538,15 @@ impl BoardEvidence {
                             .source
                             .clone()
                             .unwrap_or_else(|| unspecified_source(model_id));
-                        models.push(ModelOnPath::new(
+                        models.push(ModelOnPath::for_subject(
+                            reference,
                             &provenance_reference,
                             model_id,
                             source.clone(),
                             confidence,
                         )?);
-                        parameters.push(ParameterProvenance::new(
+                        parameters.push(ParameterProvenance::for_subject(
+                            reference,
                             format!("{provenance_reference}.model"),
                             model_id,
                             ValueOrigin::Model {
@@ -569,7 +559,8 @@ impl BoardEvidence {
                 }
                 if let Some(defaults) = defaults_by_ref.get(reference) {
                     for default in defaults {
-                        parameters.push(ParameterProvenance::new(
+                        parameters.push(ParameterProvenance::for_subject(
+                            reference,
                             format!("{}.{}", default.reference, default.parameter),
                             &default.value,
                             ValueOrigin::Default {
@@ -591,10 +582,7 @@ impl BoardEvidence {
                 Some((
                     (*component_subject).to_string(),
                     ModelFact {
-                        reference: occurrence_provenance_reference(
-                            component_subject,
-                            &row.reference,
-                        ),
+                        reference: provenance_display_reference(&row.reference),
                         model_id: model_id.clone(),
                         confidence: confidence(row.confidence),
                         source: row
@@ -1229,7 +1217,8 @@ impl BoardEvidence {
             let Some(fact) = self.model_by_ref.get(reference) else {
                 if let Some(defaults) = self.defaults_by_ref.get(reference) {
                     for default in defaults {
-                        parameters.push(ParameterProvenance::new(
+                        parameters.push(ParameterProvenance::for_subject(
+                            reference,
                             format!("{}.{}", default.reference, default.parameter),
                             &default.value,
                             ValueOrigin::Default {
@@ -1240,13 +1229,15 @@ impl BoardEvidence {
                 }
                 continue;
             };
-            models.push(ModelOnPath::new(
+            models.push(ModelOnPath::for_subject(
+                reference,
                 &fact.reference,
                 &fact.model_id,
                 fact.source.clone(),
                 fact.confidence,
             )?);
-            parameters.push(ParameterProvenance::new(
+            parameters.push(ParameterProvenance::for_subject(
+                reference,
                 format!("{}.model", fact.reference),
                 &fact.model_id,
                 ValueOrigin::Model {
@@ -1257,7 +1248,8 @@ impl BoardEvidence {
             )?);
             if let Some(defaults) = self.defaults_by_ref.get(reference) {
                 for default in defaults {
-                    parameters.push(ParameterProvenance::new(
+                    parameters.push(ParameterProvenance::for_subject(
+                        reference,
                         format!("{}.{}", default.reference, default.parameter),
                         &default.value,
                         ValueOrigin::Default {
@@ -2059,7 +2051,12 @@ mod duplicate_open_part_tests {
             .expect("a resolved unnamed component must not abort provenance");
         let model = &evidence.maps()[0].models()[0];
         assert_eq!(model.model_id(), "known-model");
-        assert_eq!(model.reference(), "unnamed part [occurrence 1]");
+        assert_eq!(model.reference(), "unnamed part");
+        assert!(model.subject().starts_with(OCCURRENCE_PREFIX));
+        assert_eq!(
+            evidence.maps()[0].parameters()[0].subject(),
+            Some(model.subject())
+        );
     }
 
     #[test]
@@ -2128,7 +2125,8 @@ mod duplicate_open_part_tests {
         assert_eq!(maps[1].status(), EvidenceStatus::Clean);
         assert_eq!(maps[1].models().len(), 1);
         assert_eq!(maps[1].models()[0].model_id(), "via_model_b");
-        assert_eq!(maps[1].models()[0].reference(), "Via [occurrence 2]");
+        assert_eq!(maps[1].models()[0].reference(), "Via");
+        assert!(maps[1].models()[0].subject().starts_with(OCCURRENCE_PREFIX));
 
         let by_display_reference = evidence
             .simulation_map("all Via occurrences", &[], &["Via".to_string()], None)

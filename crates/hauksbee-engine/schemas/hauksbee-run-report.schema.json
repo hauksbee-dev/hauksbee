@@ -1698,9 +1698,14 @@
             }
           ],
           "description": "The canonical source, validation and uncertainty record."
+        },
+        "subject": {
+          "description": "Injective causal identity of the exact component occurrence.",
+          "type": "string"
         }
       },
       "required": [
+        "subject",
         "reference",
         "model_id",
         "layer",
@@ -1895,6 +1900,10 @@
         },
         "parameter": {
           "description": "Reference-qualified, so an evidence map can select by part:\n\"R7.resistance\", \"U1.model\", \"Q2.beta\".",
+          "type": "string"
+        },
+        "subject": {
+          "description": "Injective causal identity of the component occurrence, when the\nproducer has one. Kept separate from human-readable `parameter` so a\nliteral reference cannot collide with generated display prose.",
           "type": "string"
         },
         "value": {
