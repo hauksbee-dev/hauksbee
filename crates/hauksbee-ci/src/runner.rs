@@ -1734,7 +1734,7 @@ fn run_one(
         production_assumptions.push(hauksbee_ir::evidence::Assumption::reduced_fidelity(
             hauksbee_ir::evidence::AssumptionSource::Solver,
             hauksbee_ir::evidence::Subject::new(
-                &format!("fallback/{method}/{start:.9}-{end:.9}"),
+                &format!("fallback/seed-{seed}/{method}/{start:.9}-{end:.9}"),
                 &format!("the analog solve over {start:.6}-{end:.6} s"),
             ),
             scope,
