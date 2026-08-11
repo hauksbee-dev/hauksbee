@@ -452,6 +452,27 @@ impl InputResponder for ParallelMemoryResponder {
             }
         }
 
+        if qualified {
+            // A qualified write edge owns this bus transition. In particular,
+            // do not immediately reinterpret /WE rising as a read while /OE
+            // still has its pre-transition value: emulators may report the
+            // equal-cycle /WE-rise and /OE-disable edges in either order. Doing
+            // so starts the EEPROM's internal program cycle after the first
+            // byte of a fresh page and inhibits the remaining byte loads. A
+            // later genuine read-control edge evaluates the gates below and
+            // starts data polling normally.
+            self.runtime
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .read_enabled = false;
+            return self
+                .data_out
+                .iter()
+                .copied()
+                .map(InputDrive::release)
+                .collect();
+        }
+
         let read_active = self.gates_active(&self.read_gates, volts);
         if !read_active {
             self.runtime
@@ -1483,6 +1504,110 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             value | (u8::from(update.level.expect("drive")) << bit)
         });
         assert_eq!(got, 0x5a, "CE-high write pulse must not overwrite memory");
+    }
+
+    #[test]
+    fn same_cycle_oe_release_after_write_does_not_close_fresh_eeprom_page() {
+        const SPEC: &str = r#"
+inputs = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "ce_n", "oe_n", "we_n"]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+[[memory]]
+name = "cell"
+words = 128
+bits = 8
+page_words = 64
+byte_load_timeout_s = 0.00015
+program_time_s = 0.010
+init = 0xff
+address = ["a0", "a1", "a2", "a3", "a4", "a5", "a6"]
+write = { pin = "we_n", edge = "rising" }
+write_gates = [{ pin = "ce_n", active = "low" }]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
+data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+"#;
+        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
+        let logic = crate::logic::LogicComponent::compile("at28c256", &spec).unwrap();
+        let port = logic.memory_ports().pop().expect("one memory");
+        let inspect = port.clone();
+
+        let address: Vec<(char, u8)> = (0..7).map(|bit| ('B', bit)).collect();
+        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
+        let ce = ('D', 0);
+        let oe = ('D', 1);
+        let we = ('D', 2);
+        let mut responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            1_000_000,
+            Arc::new(Mutex::new(vec![])),
+            address.iter().copied().map(ParallelSignal::Mcu).collect(),
+            vec![ParallelMemoryWrite::new(
+                ParallelSignal::Mcu(we),
+                Edge::Rising,
+                vec![(ParallelSignal::Mcu(ce), Level::Low)],
+            )],
+            vec![
+                (ParallelSignal::Mcu(ce), Level::Low),
+                (ParallelSignal::Mcu(oe), Level::Low),
+                (ParallelSignal::Mcu(we), Level::High),
+            ],
+            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+            data.clone(),
+            Vec::new(),
+            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
+        );
+
+        let set_bus = |responder: &mut ParallelMemoryResponder,
+                       address_value: usize,
+                       data_value: u8,
+                       cycle: u64| {
+            for (bit, &pin) in address.iter().enumerate() {
+                responder.on_edge_at(pin, address_value & (1 << bit) != 0, cycle);
+            }
+            for (bit, &pin) in data.iter().enumerate() {
+                responder.on_edge_at(pin, data_value & (1 << bit) != 0, cycle);
+            }
+        };
+
+        // The previous page's data poll left /OE asserted. At the next page's
+        // first write, firmware disables /OE at the same simulated cycle as
+        // /WE rises. An emulator can report those equal-cycle GPIO edges in
+        // either order; the transient intermediate state must not turn the
+        // just-loaded 0x40 byte into a one-byte program operation.
+        responder.on_edge_at(ce, true, 900);
+        responder.on_edge_at(we, true, 900);
+        responder.on_edge_at(oe, false, 900);
+        responder.on_edge_at(ce, false, 900);
+        set_bus(&mut responder, 0x40, 0x11, 950);
+        responder.on_edge_at(we, false, 1_000);
+        responder.on_edge_at(we, true, 1_001);
+        responder.on_edge_at(oe, true, 1_001);
+
+        set_bus(&mut responder, 0x41, 0x22, 1_050);
+        responder.on_edge_at(we, false, 1_100);
+        responder.on_edge_at(we, true, 1_101);
+
+        // A real read begins programming the two-byte page. Both bytes must be
+        // present after tWC; the historical bug swallowed 0x41 as busy data.
+        responder.on_edge_at(oe, false, 1_200);
+        assert_eq!(inspect.read_at(0x40, 11_101, 1_000_000), Some(0x11));
+        assert_eq!(
+            inspect.read_at(0x41, 11_101, 1_000_000),
+            Some(0x22),
+            "equal-cycle /WE and /OE edges must not close a fresh page after its first byte"
+        );
     }
 
     // ── Bit-banged SPI ───────────────────────────────────────────────────────

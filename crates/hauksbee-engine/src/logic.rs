@@ -295,9 +295,7 @@ impl ParallelMemoryStorage {
             return false;
         }
         // HAUKSBEE_EEPROM_DEBUG diagnostics: env-gated, silent by default. Kept
-        // for the documented residual positive-control flake (a page-load
-        // occasionally converts to a program cycle right after the previous
-        // page's poll completes; see the NEP acceptance test's module header).
+        // for release-acceptance diagnosis of page-load and data-poll timing.
         if std::env::var_os("HAUKSBEE_EEPROM_DEBUG").is_some() {
             eprintln!(
                 "EEPROM-DEBUG write ENTER addr {address:#06x} val {value:#04x} cycle {cycle} busy {:?} pending {:?}",
