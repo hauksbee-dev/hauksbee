@@ -2059,6 +2059,28 @@ impl ArtifactProvenance {
         self.cross_checks = cross_checks;
         self
     }
+
+    /// Replace a concise assumption id with that same claim's content-derived
+    /// collision id while preserving the artifact's other provenance.
+    pub fn rekey_colliding_assumption(
+        &mut self,
+        from: &Assumption,
+        to: &Assumption,
+    ) -> Result<(), EvidenceError> {
+        if from.clone().disambiguate_colliding_id() != *to {
+            return Err(EvidenceError::InvalidAssumption {
+                message:
+                    "an artifact assumption may only be re-keyed to the same claim's collision id"
+                        .to_string(),
+            });
+        }
+        for assumption in &mut self.assumptions {
+            if assumption == from.id() {
+                *assumption = to.id().clone();
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Where a bound parameter's value came from.
@@ -3514,6 +3536,35 @@ impl EvidenceMap {
     pub fn with_coverage(mut self, coverage: impl Into<String>) -> Self {
         self.coverage = Some(coverage.into());
         self
+    }
+
+    /// Replace a concise assumption id with that same claim's content-derived
+    /// collision id. The claim validation keeps derived status intact; every
+    /// documented-default parameter origin is updated with the map-level list.
+    pub fn rekey_colliding_assumption(
+        &mut self,
+        from: &Assumption,
+        to: &Assumption,
+    ) -> Result<(), EvidenceError> {
+        if from.clone().disambiguate_colliding_id() != *to {
+            return Err(EvidenceError::InvalidAssumption {
+                message: "an evidence-map assumption may only be re-keyed to the same claim's collision id"
+                    .to_string(),
+            });
+        }
+        for assumption in &mut self.assumptions {
+            if assumption == from.id() {
+                *assumption = to.id().clone();
+            }
+        }
+        for parameter in &mut self.parameters {
+            if let ValueOrigin::Default { assumption } = &mut parameter.origin {
+                if assumption == from.id() {
+                    *assumption = to.id().clone();
+                }
+            }
+        }
+        Ok(())
     }
 }
 

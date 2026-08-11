@@ -1749,7 +1749,15 @@ fn run_one(
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )
     .and_then(|evidence| evidence.with_input_artifact(board_path, input_raw, input_kind))
-    .and_then(|evidence| evidence.with_substitutions(engine.scheduler().substitutions()))
+    .and_then(|evidence| {
+        evidence.with_assumptions(
+            engine
+                .scheduler()
+                .substitution_assumptions()
+                .iter()
+                .cloned(),
+        )
+    })
     .and_then(|evidence| evidence.with_assumptions(production_assumptions))
     .map_err(|e| SpecError::Invalid(format!("building run evidence: {e}")))?;
     if let Some(path) = firmware.as_deref() {
