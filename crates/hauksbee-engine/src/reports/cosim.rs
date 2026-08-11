@@ -774,6 +774,7 @@ mod tests {
         // notes[] and the web report, which flag substitution board-wide.
         let sub = |r: &str| McuSubstitution {
             reference: r.to_string(),
+            evidence_subject: r.to_string(),
             backend: "renode:stm32f4".to_string(),
             requested_part: "STM32F411RET6".to_string(),
             modelled_core: "STM32F407".to_string(),

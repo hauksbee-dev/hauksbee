@@ -15,6 +15,7 @@ rust-version.workspace = true
 strum = { version = "0.27", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.11"
 # The evidence spine (`evidence.rs`) is the one vocabulary every producer and
 # renderer reads, and it reaches the published `--json` contract, which has a
 # schema drift test. Deriving the schema where the types live is what keeps that

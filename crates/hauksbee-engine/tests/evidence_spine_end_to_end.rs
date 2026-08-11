@@ -168,6 +168,7 @@ fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
             .unwrap()
             .with_substitutions(&[hauksbee_engine::scheduler::McuSubstitution {
                 reference: "R1".into(),
+                evidence_subject: "R1".into(),
                 backend: "renode:fixture".into(),
                 requested_part: "real-part".into(),
                 modelled_core: "stand-in-core".into(),
