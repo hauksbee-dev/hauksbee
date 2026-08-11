@@ -35,6 +35,10 @@ const LOCAL_HOOK: &str = "pre-commit.local";
 /// same one [`count_discoverable_specs`] mirrors at install time.
 const DEFAULT_SPEC_DIRS: &str = "ci:.";
 
+/// Secret expression written into generated GitHub workflows. It is an input
+/// reference, never the credential value itself.
+const PRIVATE_TOKEN_EXPR: &str = "${{ secrets.HAUKSBEE_READ_TOKEN }}";
+
 /// The exact string `hauksbee-ci --version` prints (name + crate version +
 /// git hash). Written into the hook as the `# installed by` line AND compared
 /// by the hook at run time against the live binary, so both sides of that
@@ -217,10 +221,20 @@ pub fn github_workflow_yaml() -> String {
          \x20   runs-on: ubuntu-latest\n\
          \x20   steps:\n\
          \x20     - uses: actions/checkout@v4\n\
-         \x20     - uses: hauksbee-dev/hauksbee/integrations/github-action@v{}\n\
+         \x20     - name: Fetch the private hauksbee Action\n\
+         \x20       uses: actions/checkout@v4\n\
          \x20       with:\n\
+         \x20         repository: hauksbee-dev/hauksbee\n\
+         \x20         ref: v{}\n\
+         \x20         path: .hauksbee-action\n\
+         \x20         token: {}\n\
+         \x20     - uses: ./.hauksbee-action/integrations/github-action\n\
+         \x20       with:\n\
+         \x20         hauksbee-token: {}\n\
          \x20         junit: hauksbee-ci-results.xml\n",
-        env!("CARGO_PKG_VERSION")
+        env!("CARGO_PKG_VERSION"),
+        PRIVATE_TOKEN_EXPR,
+        PRIVATE_TOKEN_EXPR
     )
 }
 
@@ -966,6 +980,26 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("not overwriting"), "{err}");
+    }
+
+    #[test]
+    fn generated_workflow_authenticates_private_action_and_repository() {
+        let yaml = github_workflow_yaml();
+        assert!(yaml.contains("repository: hauksbee-dev/hauksbee"), "{yaml}");
+        assert!(yaml.contains("path: .hauksbee-action"), "{yaml}");
+        assert!(
+            yaml.contains("token: ${{ secrets.HAUKSBEE_READ_TOKEN }}"),
+            "{yaml}"
+        );
+        assert!(
+            yaml.contains("uses: ./.hauksbee-action/integrations/github-action"),
+            "{yaml}"
+        );
+        assert!(
+            yaml.contains("hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}"),
+            "{yaml}"
+        );
+        assert!(!yaml.contains("uses: hauksbee-dev/hauksbee/integrations/github-action@"));
     }
 
     #[test]

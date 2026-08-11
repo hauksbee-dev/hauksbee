@@ -38,6 +38,9 @@ inputs:
     description: "owner/name of the hauksbee repo to download/build hauksbee-ci from."
     required: false
     default: "hauksbee-dev/hauksbee"
+  hauksbee-token:
+    description: "Credential authorized for the private hauksbee repository: a fine-grained PAT or GitHub App installation token with Contents: read. The calling repository's github.token is not sufficient across repositories."
+    required: true
   hauksbee-version:
     description: "Release version to download a prebuilt hauksbee-ci from (e.g. 0.1.0 or a vX.Y.Z tag). Empty: use the release named by hauksbee-ref if that is a tag, the newest release if hauksbee-ref is the default, and otherwise build the pinned ref from source."
     required: false
@@ -75,7 +78,29 @@ runs:
     # the "Run the hardware check (image)" step). The image already carries the
     # binaries, the model db, and (in the full image) the co-sim backends.
 
-    # 0. Work out what this run actually runs: which mode (spec or check),
+    # 0. Establish the private-distribution boundary before an API lookup,
+    # release download or fallback checkout can be mistaken for a missing asset.
+    - name: Verify private hauksbee access
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.hauksbee-token }}
+        REPO: ${{ inputs.hauksbee-repo }}
+      run: |
+        set -euo pipefail
+        if [ -z "$GH_TOKEN" ]; then
+          echo "::error::hauksbee-token is required for the private $REPO repository"
+          exit 1
+        fi
+        visibility="$(gh api "repos/$REPO" --jq .visibility)" || {
+          echo "::error::hauksbee-token cannot read the private $REPO repository"
+          exit 1
+        }
+        if [ "$visibility" != private ]; then
+          echo "::error::$REPO reports visibility '$visibility'; refusing the private-distribution path"
+          exit 1
+        fi
+
+    # 1. Work out what this run actually runs: which mode (spec or check),
     #    which specs (globs expanded), or which board. The logic lives in
     #    resolve-inputs.sh so it can be tested.
     - name: Resolve what to run
@@ -88,7 +113,7 @@ runs:
         IN_BOARD: ${{ inputs.board }}
       run: '"$GITHUB_ACTION_PATH/resolve-inputs.sh"'
 
-    # 1. Decide which release, if any, the prebuilt path downloads (see
+    # 2. Decide which release, if any, the prebuilt path downloads (see
     #    pick-release-tag.sh for why a pinned ref must not silently resolve to
     #    the latest release). LATEST is pinned here to the concrete tag it
     #    means right now, so the download cache below can key on it. If no
@@ -100,7 +125,7 @@ runs:
       if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ inputs.hauksbee-token }}
         REPO: ${{ inputs.hauksbee-repo }}
         REF: ${{ inputs.hauksbee-ref }}
         VERSION: ${{ inputs.hauksbee-version }}
@@ -126,7 +151,7 @@ runs:
         path: .hauksbee-prebuilt
         key: hauksbee-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.reltag.outputs.tag }}
 
-    # 2. Try to download a prebuilt bundle from a GitHub Release, so most
+    # 3. Try to download a prebuilt bundle from a GitHub Release, so most
     #    users never compile. Sets steps.prebuilt.outputs.bin (hauksbee-ci)
     #    and engine-bin (hauksbee) on success, and leaves them empty (without
     #    failing) when no matching asset exists.
@@ -135,7 +160,7 @@ runs:
       if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ inputs.hauksbee-token }}
         REPO: ${{ inputs.hauksbee-repo }}
         REF: ${{ inputs.hauksbee-ref }}
         CHOICE: ${{ steps.reltag.outputs.choice }}
@@ -193,7 +218,7 @@ runs:
         echo "engine-bin=$run_bin" >> "$GITHUB_OUTPUT"
         echo "Using prebuilt binaries from $dl"
 
-    # 3. Fallback: build from source only when no prebuilt bundle was obtained.
+    # 4. Fallback: build from source only when no prebuilt bundle was obtained.
     - name: Checkout hauksbee (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -201,6 +226,7 @@ runs:
         repository: ${{ inputs.hauksbee-repo }}
         ref: ${{ inputs.hauksbee-ref }}
         path: .hauksbee
+        token: ${{ inputs.hauksbee-token }}
 
     - name: Install Rust toolchain (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
@@ -241,7 +267,7 @@ runs:
           cargo build --release -p hauksbee-ci --manifest-path .hauksbee/Cargo.toml
         fi
 
-    # 4. Run the check. Spec mode fans every resolved spec into ONE
+    # 5. Run the check. Spec mode fans every resolved spec into ONE
     #    hauksbee-ci invocation, which writes one merged JUnit file (a
     #    <testsuite> per spec) and exits with the worst severity. Check mode
     #    runs the engine's --check gate; under GITHUB_ACTIONS with --strict it
@@ -282,13 +308,20 @@ runs:
         echo "junit=$JUNIT" >> "$GITHUB_OUTPUT"
         exit $code
 
-    # 5. Image path: the same two modes, inside the published Docker image.
+    # 6. Image path: the same two modes, inside the published Docker image.
     #    The calling repo's checkout (spec + board + firmware) is the runner
     #    workspace, mounted read-write at /work so the JUnit XML lands back in
     #    the workspace for the publish step. Run as the host user so that file
     #    is writable by the runner (the image's default user is uid 1000).
     #    GITHUB_ACTIONS is passed through so the binary still emits inline
     #    annotations.
+    - name: Authenticate to the private image registry
+      if: ${{ inputs.use-image == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.hauksbee-token }}
+      run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
     - name: Run the hardware check (image)
       id: run-image
       if: ${{ inputs.use-image == 'true' }}

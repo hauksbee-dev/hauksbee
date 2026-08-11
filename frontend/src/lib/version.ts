@@ -15,9 +15,7 @@ export const APP_VERSION: string = __APP_VERSION__
 export const RELEASE_TAG = `v${APP_VERSION}`
 
 /**
- * The published GitHub action, pinned to this build's release tag rather than
- * a moving branch: a workflow generated today must not change behavior when
- * main moves.
+ * The private GitHub repository that supplies Action code and release assets.
  *
  * The tag itself is created by the release workflow
  * (.github/workflows/release.yml) at launch, from the same version this
@@ -25,4 +23,7 @@ export const RELEASE_TAG = `v${APP_VERSION}`
  * resolve yet, which is why the generated YAML carries a line telling the
  * reader to match the hauksbee they actually have installed.
  */
-export const ACTION_REF = `hauksbee-dev/hauksbee/integrations/github-action@${RELEASE_TAG}`
+export const ACTION_REPOSITORY = 'hauksbee-dev/hauksbee'
+
+/** Secret reference emitted into generated workflows, never a secret value. */
+export const PRIVATE_TOKEN_SECRET = '${{ secrets.HAUKSBEE_READ_TOKEN }}'
