@@ -455,20 +455,31 @@ is handled by splitting count from wording: a persistent two-line banner directl
 under the pane's status lines gives separate limitation, timing-bound,
 strict-refusal, fallback-qualification, observed-event and electrical-fault
 counts plus the class names, and `c`
-opens an overlay carrying every disclosure's full sentence plus the
-input that would unlock it (scrolled with ↑/↓). The banner renders ABOVE the GPIO
+opens an overlay carrying every disclosure's full sentence plus its
+disposition-specific next action (scrolled with ↑/↓): missing coverage names an
+input or model that can unlock it, while a measured timing bound, observed event,
+fallback qualification or electrical fault tells you how to interpret or improve
+that result. The banner renders ABOVE the GPIO
 table and the UART tail, both of which grow during a run, because a caveat the
 user has to scroll to find has not been surfaced; `render.rs`'s
 `the_coverage_banner_sits_above_the_growing_panes` pins that ordering. The footer
-carries the hole count too, so it is on screen whichever pane has focus. The pane
+carries the total disclosure count, so it is on screen whichever pane has focus;
+the banner separately breaks that total into holes, timing bounds, refusals,
+fallback spans, events and faults. The pane
 also keeps its own analog-validity refusal, failed-chunk count, MCU-substitution
 caveat and firmware-ran signal, which are not in this count (see below). Its
 caveats are counted at the latest chunk boundary, which the overlay says out
 loud: a caveat that only becomes true later appears later, and the finished run's
 report is the record.
 
+The dashboard honors an explicit `hauksbee run --tui --chunk-us N` value all
+the way into the worker. Narrowing that value can improve a poll-boundary
+backend's edge resolution and strict replay capacity. It cannot improve a
+cycle-exact backend beyond one emulated core cycle; that disclosure instead
+points to a justified clock configuration or hardware measurement.
+
 **Reading the web column.** Per-core timing coverage rides the structural
-`WebCosimSection.timing_coverage` field rather than a finding, the same tier
+`cosim.timing_coverage` JSON field rather than a finding, the same tier
 `--json` gives it, because it is a resolution statement present on every run with
 a live core: as a finding it would demote every healthy report's headline through
 `cosim_caveat_headline` and stop being read. Heuristic SPI framing rides the
@@ -477,7 +488,8 @@ failures ride `timing_refusals` and populate the report's typed refusal; they
 must never be rendered as an ordinary warning or a pass. Fallback spans ride
 `fallback_windows`, retaining the method, fidelity note and optional measured
 error estimate so the browser and standalone HTML label them second-class.
-These optional fields preserve older JSON report consumers. Of the remaining
+These optional JSON fields preserve older report consumers without adding required
+fields to the public Rust `WebCosimSection` literal. Of the remaining
 eight, seven are note-level `WebFinding` cards (which do demote a bare "Looks
 healthy") and driver contention is a serious one, because two push-pull drivers
 fighting a net is a real electrical fault rather than a caveat about the run. Four

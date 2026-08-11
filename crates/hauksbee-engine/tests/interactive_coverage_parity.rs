@@ -26,7 +26,9 @@
 
 use std::path::PathBuf;
 
-use hauksbee_engine::frontdoor::{analyze_with_firmware, WebCosimSection, WebReport};
+use hauksbee_engine::frontdoor::{
+    analyze_with_firmware, analyze_with_firmware_json, WebCosimSection, WebReport,
+};
 
 fn repo(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -48,6 +50,21 @@ fn web_run(fw_rel: &str) -> WebReport {
     let fw_bytes = std::fs::read(&fw).expect("the firmware fixture reads");
     let fw_name = fw.file_name().unwrap().to_str().unwrap().to_string();
     analyze_with_firmware("blinky.kicad_pcb", &board, &fw_name, &fw_bytes)
+}
+
+fn web_run_json(fw_rel: &str) -> serde_json::Value {
+    let fw = repo(fw_rel);
+    assert!(fw.exists(), "tracked required fixture is absent: {fw_rel}");
+    let board = std::fs::read(avr_board()).expect("the AVR board fixture reads");
+    let fw_bytes = std::fs::read(&fw).expect("the firmware fixture reads");
+    let fw_name = fw.file_name().unwrap().to_str().unwrap();
+    serde_json::from_str(&analyze_with_firmware_json(
+        "blinky.kicad_pcb",
+        &board,
+        fw_name,
+        &fw_bytes,
+    ))
+    .expect("firmware web report is JSON")
 }
 
 fn cosim(report: &WebReport) -> &WebCosimSection {
@@ -119,38 +136,46 @@ fn a_watchdog_reboot_reaches_the_web_front_door_and_a_fed_watchdog_does_not() {
 
 #[test]
 fn per_core_timing_coverage_reaches_the_web_front_door_and_a_run_with_no_core_carries_none() {
-    let report = web_run("testdata/firmware/avr_watchdog/nowdt.elf");
-    let section = cosim(&report);
+    let report = web_run_json("testdata/firmware/avr_watchdog/nowdt.elf");
+    let section = &report["cosim"];
     // One row per live MCU, from the same accessor the CLI `--json`
     // `cosim.timing_coverage` field reads.
     assert_eq!(
-        section.timing_coverage.len(),
+        section["timing_coverage"].as_array().unwrap().len(),
         1,
         "one live MCU on this board: {:?}",
-        section.timing_coverage
+        section["timing_coverage"]
     );
-    let row = &section.timing_coverage[0];
-    assert_eq!(row.mcu_ref, "U1");
+    let row = &section["timing_coverage"][0];
+    assert_eq!(row["mcu_ref"], "U1");
     assert!(
-        row.backend.starts_with("simavr:"),
+        row["backend"].as_str().unwrap().starts_with("simavr:"),
         "backend: {}",
-        row.backend
+        row["backend"]
     );
     // A measurement, not a placeholder: the resolution numbers are finite and
     // positive, and the chunk is the one the run actually used.
     assert!(
-        row.timestamp_precision_s > 0.0 && row.timestamp_precision_s.is_finite(),
+        row["timestamp_precision_s"].as_f64().unwrap() > 0.0
+            && row["timestamp_precision_s"].as_f64().unwrap().is_finite(),
         "{row:?}"
     );
     assert!(
-        row.minimum_guaranteed_pulse_s > 0.0 && row.minimum_guaranteed_pulse_s.is_finite(),
+        row["minimum_guaranteed_pulse_s"].as_f64().unwrap() > 0.0
+            && row["minimum_guaranteed_pulse_s"]
+                .as_f64()
+                .unwrap()
+                .is_finite(),
         "{row:?}"
     );
-    assert!(row.chunk_s > 0.0 && row.chunk_s.is_finite(), "{row:?}");
+    assert!(
+        row["chunk_s"].as_f64().unwrap() > 0.0 && row["chunk_s"].as_f64().unwrap().is_finite(),
+        "{row:?}"
+    );
     // The in-process AVR core stamps edges from cycles, so this run is the
     // cycle-exact side of the tier split (a poll backend reports the other side,
     // covered in-crate in `reports::coverage`).
-    assert!(row.cycle_exact, "{row:?}");
+    assert_eq!(row["cycle_exact"], true, "{row:?}");
 
     // The other side: a board with no MCU runs no co-sim, so there is no core
     // whose resolution could be reported. The field is empty, never a fabricated
@@ -159,15 +184,18 @@ fn per_core_timing_coverage_reaches_the_web_front_door_and_a_run_with_no_core_ca
         "crates/hauksbee-ci/examples/boards/tolerance_divider.kicad_pcb",
     ))
     .expect("the MCU-less example board reads");
-    let quiet = analyze_with_firmware("no_mcu.kicad_pcb", &bytes, "nowdt.elf", &[0u8; 4]);
-    let quiet_cosim = quiet
-        .cosim
-        .as_ref()
-        .expect("a firmware upload always produces a co-sim section");
-    assert!(!quiet_cosim.ran, "no MCU, so no co-sim ran");
+    let quiet: serde_json::Value = serde_json::from_str(&analyze_with_firmware_json(
+        "no_mcu.kicad_pcb",
+        &bytes,
+        "nowdt.elf",
+        &[0u8; 4],
+    ))
+    .expect("MCU-less report is JSON");
+    let quiet_cosim = &quiet["cosim"];
+    assert_eq!(quiet_cosim["ran"], false, "no MCU, so no co-sim ran");
     assert!(
-        quiet_cosim.timing_coverage.is_empty(),
+        quiet_cosim.get("timing_coverage").is_none(),
         "no live core means no measured resolution: {:?}",
-        quiet_cosim.timing_coverage
+        quiet_cosim
     );
 }

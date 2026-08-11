@@ -37,13 +37,14 @@ pub fn run(
     board_text: &str,
     models_dir: Option<&Path>,
     firmware: Option<PathBuf>,
+    chunk_us: Option<f64>,
 ) -> anyhow::Result<()> {
     // Build the model on the SAME analysis path the --json/text surfaces use.
     let state = build_state(board_path, board_text, models_dir)?;
 
     // Firmware: explicit arg wins; otherwise auto-detect a sibling .elf.
     let firmware = firmware.or_else(|| cosim::autodetect_firmware(board_path));
-    let chunk_ms = cosim::default_chunk_ms(state.backend.as_deref());
+    let chunk_ms = cosim::configured_chunk_ms(state.backend.as_deref(), chunk_us)?;
     let board_text = board_text.to_string();
     let board_name = state.board_name.clone();
 
@@ -270,7 +271,7 @@ fn event_loop(
                 // batch surfaces' wording comes from. Held in AppState so the
                 // count banner, the footer hint and the `c` overlay all read one
                 // list, and so the caveats survive the run finishing.
-                state.set_coverage(u.coverage.clone());
+                state.set_coverage(h.latest_coverage());
                 // Feed the scope's ring buffers from the SAME stream (each drained
                 // update is one time sample). Only probed nets are buffered; this
                 // adds no second co-sim path.
@@ -514,7 +515,6 @@ mod tests {
         state.toggle_coverage();
         let mut update = Some(CosimUpdate {
             done: true,
-            coverage: state.coverage().to_vec(),
             ..Default::default()
         });
 
@@ -526,7 +526,6 @@ mod tests {
         assert_eq!(state.focus, Pane::Cosim);
         let fresh = update.expect("new run placeholder");
         assert_eq!(fresh.chunk_ms, 1.0);
-        assert!(fresh.coverage.is_empty());
         assert!(!fresh.done);
     }
 }

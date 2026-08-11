@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use hauksbee_server::engine::Engine;
@@ -63,17 +63,11 @@ pub struct CosimUpdate {
     /// `Default` is `false`, so build every real snapshot through
     /// `build_update` (which sets it) rather than relying on the derive.
     pub analog_valid: bool,
-    /// Every co-sim coverage caveat this run has accumulated so far, from the
-    /// one enumeration in [`crate::reports::coverage`] that the batch report
-    /// surfaces' wording comes from. The pane renders the WHOLE list (a count
-    /// banner plus the `c` overlay), so a class added to that enumeration
-    /// appears here without a second edit; the previous per-caveat fields were
-    /// how the pane came to carry only a subset while batch reports carried
-    /// more.
-    ///
-    /// Recomputed at every chunk boundary, so a caveat that only becomes true
-    /// mid-run (a watchdog reboot, a contended net) appears as it happens.
-    pub coverage: Vec<crate::reports::coverage::CoverageCaveat>,
+    /// SPI buses still framed by the chunk-boundary heuristic (no CS pin
+    /// resolved and the backend does not frame itself). Retained for source
+    /// compatibility with the planned 0.1 public type; the TUI's complete
+    /// caveat list travels through a private snapshot beside this update.
+    pub heuristic_spi_buses: Vec<String>,
     /// Count of chunks whose analog solve failed this run. `0` on a clean run;
     /// non-zero drives the loud invalid line in the pane. Kept alongside
     /// `analog_valid` so the pane can say HOW MANY chunks were held stale.
@@ -105,6 +99,7 @@ pub struct GpioNet {
 /// The handle the UI holds onto: a receiver for updates and a stop flag.
 pub struct CosimHandle {
     pub rx: Receiver<CosimUpdate>,
+    coverage: Arc<Mutex<Vec<crate::reports::coverage::CoverageCaveat>>>,
     stop: Arc<AtomicBool>,
     /// Kept so the thread is joined on drop (best-effort).
     join: Option<std::thread::JoinHandle<()>>,
@@ -114,6 +109,13 @@ impl CosimHandle {
     /// Ask the worker to stop at the next chunk boundary.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn latest_coverage(&self) -> Vec<crate::reports::coverage::CoverageCaveat> {
+        self.coverage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -143,6 +145,8 @@ pub fn spawn(
     let (tx, rx): (Sender<CosimUpdate>, Receiver<CosimUpdate>) = std::sync::mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_worker = stop.clone();
+    let coverage = Arc::new(Mutex::new(Vec::new()));
+    let coverage_worker = Arc::clone(&coverage);
 
     let join = std::thread::spawn(move || {
         run_worker(
@@ -152,12 +156,14 @@ pub fn spawn(
             seconds,
             chunk_ms,
             &tx,
+            &coverage_worker,
             &stop_worker,
         );
     });
 
     CosimHandle {
         rx,
+        coverage,
         stop,
         join: Some(join),
     }
@@ -170,8 +176,25 @@ fn run_worker(
     seconds: f64,
     chunk_ms: f64,
     tx: &Sender<CosimUpdate>,
+    coverage_state: &Mutex<Vec<crate::reports::coverage::CoverageCaveat>>,
     stop: &AtomicBool,
 ) {
+    if !(chunk_ms > 0.0 && chunk_ms.is_finite()) {
+        publish_update(
+            coverage_state,
+            Vec::new(),
+            tx,
+            CosimUpdate {
+                done: true,
+                error: Some(format!(
+                    "co-sim could not start: chunk must be positive and finite, got {chunk_ms} ms"
+                )),
+                chunk_ms,
+                ..Default::default()
+            },
+        );
+        return;
+    }
     // Build the engine on the worker thread. A failure here (bad firmware arch,
     // unbindable board) is surfaced as an error update, never a silent hang.
     let board_url = format!("/boards/{board_name}");
@@ -179,21 +202,27 @@ fn run_worker(
         match HauksbeeEngine::from_board_file(&board_text, firmware.as_deref(), &board_url) {
             Ok(e) => e,
             Err(e) => {
-                let _ = tx.send(CosimUpdate {
-                    done: true,
-                    error: Some(format!("co-sim could not start: {e}")),
-                    chunk_ms,
-                    ..Default::default()
-                });
+                publish_update(
+                    coverage_state,
+                    Vec::new(),
+                    tx,
+                    CosimUpdate {
+                        done: true,
+                        error: Some(format!("co-sim could not start: {e}")),
+                        chunk_ms,
+                        ..Default::default()
+                    },
+                );
                 return;
             }
         };
-    // Coarsen the scheduler chunk so QEMU/Renode backends step in viable jumps
-    // (the integration tests use 5 ms for exactly this reason; the 100 us
-    // default would make the run appear to hang). The same value drives both the
-    // scheduler field and the per-frame step below, derive it once.
-    let frame_dt = (chunk_ms / 1000.0).max(1e-4);
-    engine.scheduler_mut().chunk_s = frame_dt;
+    // The requested solver chunk is exact. Rendering need not emit one channel
+    // message per sub-100 us solve: `step(frame_dt)` subdivides internally at
+    // `chunk_s`, so cap only the UI sampling cadence, never the solver setting.
+    // This keeps a 1 us remediation from queuing two million snapshots during a
+    // two-second run while still delivering the requested edge resolution.
+    let (solver_chunk_s, frame_dt) = worker_durations(chunk_ms);
+    engine.scheduler_mut().chunk_s = solver_chunk_s;
     let target_s = seconds.max(0.0);
     let start = Instant::now();
     let mut uart: VecDeque<String> = VecDeque::new();
@@ -283,7 +312,7 @@ fn run_worker(
             net_voltages.clone(),
         );
         last_voltages = net_voltages;
-        if tx.send(update).is_err() {
+        if !publish_snapshot(coverage_state, tx, update) {
             return;
         }
     }
@@ -300,22 +329,51 @@ fn run_worker(
     let failed_chunk_count = engine.scheduler().failed_chunk_count();
     let coverage =
         crate::reports::coverage::CoverageInputs::from_scheduler(engine.scheduler()).caveats();
-    let _ = tx.send(build_update(
-        t,
-        &start,
-        chunk_ms,
-        &uart,
-        &uart_partial,
-        uart_seen,
-        &tracker,
-        gpio_driven,
-        substitution,
-        analog_valid,
-        failed_chunk_count,
-        coverage,
-        true,
-        last_voltages,
-    ));
+    let _ = publish_snapshot(
+        coverage_state,
+        tx,
+        build_update(
+            t,
+            &start,
+            chunk_ms,
+            &uart,
+            &uart_partial,
+            uart_seen,
+            &tracker,
+            gpio_driven,
+            substitution,
+            analog_valid,
+            failed_chunk_count,
+            coverage,
+            true,
+            last_voltages,
+        ),
+    );
+}
+
+struct WorkerSnapshot {
+    update: CosimUpdate,
+    coverage: Vec<crate::reports::coverage::CoverageCaveat>,
+}
+
+fn publish_update(
+    coverage_state: &Mutex<Vec<crate::reports::coverage::CoverageCaveat>>,
+    coverage: Vec<crate::reports::coverage::CoverageCaveat>,
+    tx: &Sender<CosimUpdate>,
+    update: CosimUpdate,
+) -> bool {
+    *coverage_state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = coverage;
+    tx.send(update).is_ok()
+}
+
+fn publish_snapshot(
+    coverage_state: &Mutex<Vec<crate::reports::coverage::CoverageCaveat>>,
+    tx: &Sender<CosimUpdate>,
+    snapshot: WorkerSnapshot,
+) -> bool {
+    publish_update(coverage_state, snapshot.coverage, tx, snapshot.update)
 }
 
 /// Build a [`CosimUpdate`] snapshot from the worker's live state. Both the
@@ -336,23 +394,33 @@ fn build_update(
     coverage: Vec<crate::reports::coverage::CoverageCaveat>,
     done: bool,
     net_voltages: HashMap<String, f64>,
-) -> CosimUpdate {
-    CosimUpdate {
-        sim_ms: t * 1000.0,
-        wall_s: start.elapsed().as_secs_f64(),
-        chunk_ms,
-        uart_lines: collect_lines(uart, uart_partial),
-        gpio_nets: tracker.snapshot(),
-        uart_seen,
-        gpio_active: tracker.any_driven(),
-        gpio_driven,
-        substitution,
-        analog_valid,
-        failed_chunk_count,
+) -> WorkerSnapshot {
+    let heuristic_spi_buses = coverage
+        .iter()
+        .filter(|caveat| {
+            caveat.class == crate::reports::coverage::CoverageClass::HeuristicSpiFraming
+        })
+        .map(|caveat| caveat.subject.clone())
+        .collect();
+    WorkerSnapshot {
+        update: CosimUpdate {
+            sim_ms: t * 1000.0,
+            wall_s: start.elapsed().as_secs_f64(),
+            chunk_ms,
+            uart_lines: collect_lines(uart, uart_partial),
+            gpio_nets: tracker.snapshot(),
+            uart_seen,
+            gpio_active: tracker.any_driven(),
+            gpio_driven,
+            substitution,
+            analog_valid,
+            failed_chunk_count,
+            heuristic_spi_buses,
+            done,
+            error: None,
+            net_voltages,
+        },
         coverage,
-        done,
-        error: None,
-        net_voltages,
     }
 }
 
@@ -490,6 +558,27 @@ pub fn default_chunk_ms(backend: Option<&str>) -> f64 {
     }
 }
 
+/// Resolve the interactive worker chunk from the same `--chunk-us` value the
+/// batch co-sim accepts. An explicit value always wins, including sub-100 us
+/// values; silently widening it would make the TUI's remediation ineffective.
+pub fn configured_chunk_ms(backend: Option<&str>, chunk_us: Option<f64>) -> anyhow::Result<f64> {
+    match chunk_us {
+        Some(us) => {
+            anyhow::ensure!(
+                us > 0.0 && us.is_finite(),
+                "--chunk-us must be a positive number of microseconds, got {us}"
+            );
+            Ok(us / 1000.0)
+        }
+        None => Ok(default_chunk_ms(backend)),
+    }
+}
+
+fn worker_durations(chunk_ms: f64) -> (f64, f64) {
+    let solver_chunk_s = chunk_ms / 1000.0;
+    (solver_chunk_s, solver_chunk_s.max(1e-4))
+}
+
 /// Auto-detect a sibling firmware ELF next to a board file: look for a `.elf` in
 /// the board's directory or common `build`/`Debug`/`Release` siblings.
 pub fn autodetect_firmware(board_path: &std::path::Path) -> Option<PathBuf> {
@@ -587,6 +676,32 @@ mod tests {
     }
 
     #[test]
+    fn explicit_cli_chunk_overrides_tui_default_without_a_hidden_floor() {
+        assert_eq!(
+            configured_chunk_ms(Some("renode:stm32f4"), Some(250.0)).unwrap(),
+            0.25
+        );
+        assert_eq!(
+            configured_chunk_ms(Some("simavr:atmega328p"), Some(25.0)).unwrap(),
+            0.025,
+            "a requested sub-100 us chunk must not be silently widened"
+        );
+        assert_eq!(
+            configured_chunk_ms(Some("renode:stm32f4"), None).unwrap(),
+            default_chunk_ms(Some("renode:stm32f4"))
+        );
+        assert!(configured_chunk_ms(None, Some(0.0)).is_err());
+        assert!(configured_chunk_ms(None, Some(f64::NAN)).is_err());
+
+        let (solver_chunk_s, ui_frame_s) = worker_durations(0.025);
+        assert!(
+            (solver_chunk_s - 25e-6).abs() < f64::EPSILON,
+            "the worker applies the exact solver chunk: {solver_chunk_s}"
+        );
+        assert_eq!(ui_frame_s, 1e-4, "only the UI sampling cadence is floored");
+    }
+
+    #[test]
     fn build_update_carries_analog_validity_flag() {
         // Finding 2 (05 §3b): a CosimUpdate must carry the analog-validity signal
         // the worker reads from the scheduler, so the pane can refuse rather than
@@ -614,8 +729,8 @@ mod tests {
             false,
             HashMap::new(),
         );
-        assert!(clean.analog_valid, "clean run stays analog-valid");
-        assert_eq!(clean.failed_chunk_count, 0);
+        assert!(clean.update.analog_valid, "clean run stays analog-valid");
+        assert_eq!(clean.update.failed_chunk_count, 0);
 
         // A diverged run: invalid, with the failed-chunk count carried through.
         let bad = build_update(
@@ -635,11 +750,11 @@ mod tests {
             HashMap::new(),
         );
         assert!(
-            !bad.analog_valid,
+            !bad.update.analog_valid,
             "a failed chunk makes the update analog-invalid"
         );
         assert_eq!(
-            bad.failed_chunk_count, 3,
+            bad.update.failed_chunk_count, 3,
             "the failed-chunk count reaches the UI snapshot"
         );
     }
@@ -682,12 +797,18 @@ mod tests {
                 net: "/VSENSE".to_string(),
                 parts: Vec::new(),
             }],
+            heuristic_spi_buses: vec!["SPI1".to_string()],
             ..Default::default()
         }
         .caveats();
         let carried = build(caveats.clone());
         assert_eq!(carried.coverage, caveats, "the caveat list reaches the UI");
         assert_eq!(carried.coverage[0].class, CoverageClass::AdcDropped);
+        assert_eq!(
+            carried.update.heuristic_spi_buses,
+            ["SPI1"],
+            "the compatible public field remains populated from the canonical caveat list"
+        );
 
         assert!(
             build(Vec::new()).coverage.is_empty(),
@@ -722,7 +843,7 @@ mod tests {
                     .unwrap_or_else(|error| panic!("worker {name} did not finish: {error}"));
                 assert!(update.error.is_none(), "worker {name}: {:?}", update.error);
                 if update.done {
-                    break update.coverage;
+                    break handle.latest_coverage();
                 }
             }
         };

@@ -296,6 +296,16 @@ impl CoverageInputs {
             });
         }
         for t in &self.timing_coverage {
+            let fix = if t.cycle_exact {
+                "This bound is one emulated core cycle; --chunk-us cannot improve it. If that \
+                 cycle-level bound is still too coarse, use a faster clock configuration whose \
+                 fidelity you can justify, or measure the pulse on hardware."
+                    .to_string()
+            } else {
+                "Narrow the solver chunk (--chunk-us) if you need finer edges; this is the \
+                 poll-boundary resolution the run actually delivered, not a defect."
+                    .to_string()
+            };
             out.push(CoverageCaveat {
                 class: CoverageClass::TimingCoverage,
                 subject: t.mcu_ref.clone(),
@@ -305,9 +315,7 @@ impl CoverageInputs {
                     t.minimum_guaranteed_pulse_s * 1e6
                 ),
                 message: timing_coverage_line(t),
-                fix: "Narrow the solver chunk (--chunk-us) if you need finer edges; \
-                      this is the resolution the run actually delivered, not a defect."
-                    .to_string(),
+                fix,
             });
         }
         for refusal in &self.timing_refusals {
@@ -622,6 +630,33 @@ mod tests {
         assert!(CoverageInputs::default().caveats().is_empty());
     }
 
+    #[test]
+    fn timing_resolution_remediation_distinguishes_polling_from_cycle_exact() {
+        let poll = CoverageInputs {
+            timing_coverage: vec![timing_row("U1", false)],
+            ..Default::default()
+        }
+        .caveats();
+        assert!(poll[0].fix.contains("--chunk-us"), "{:?}", poll[0]);
+
+        let exact = CoverageInputs {
+            timing_coverage: vec![timing_row("U1", true)],
+            ..Default::default()
+        }
+        .caveats();
+        assert!(
+            !exact[0].fix.contains("Narrow the solver chunk")
+                && exact[0].fix.contains("--chunk-us cannot improve"),
+            "a cycle-exact core must explicitly reject chunk narrowing as remediation: {:?}",
+            exact[0]
+        );
+        assert!(
+            exact[0].fix.contains("clock") || exact[0].fix.contains("hardware"),
+            "cycle-exact remediation must name a real way to improve the bound: {:?}",
+            exact[0]
+        );
+    }
+
     /// One SPI caveat per heuristic bus, each naming its own bus, so a
     /// two-bus board cannot report one bus's guess twice.
     #[test]
@@ -662,5 +697,29 @@ mod tests {
                 "the synchronous web front door returns before these scheduler signals exist: {row}"
             );
         }
+    }
+
+    #[test]
+    fn shipped_docs_describe_the_actual_interactive_contract() {
+        let mcu = include_str!("../../../../docs/cosim/MCU.md");
+        let mcu_words = mcu.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            mcu_words.contains("footer carries the total disclosure count"),
+            "the footer renders coverage.len(), not only hole_count()"
+        );
+        assert!(
+            mcu_words.contains("disposition-specific next action"),
+            "the overlay does not always present an input that unlocks coverage"
+        );
+
+        let extending = include_str!("../../../../docs/extending/add-a-microcontroller.md");
+        assert!(
+            extending.contains("batch reports and the interactive TUI"),
+            "the synchronous web front door refuses external backends before watchdog data exists"
+        );
+        assert!(
+            !extending.contains("batch report surfaces, interactive TUI/web front door"),
+            "do not claim the external-backend web refusal rendered scheduler limitations"
+        );
     }
 }
