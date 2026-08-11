@@ -102,10 +102,10 @@ jobs:
             ~/renode-portable
             ~/.espressif/tools/qemu-xtensa
             ~/.espressif/tools/qemu-riscv32
-          key: required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/renode-checksums.txt', 'scripts/espressif-qemu-checksums.txt') }}
+          key: required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/required-simulator-versions.env', 'scripts/renode-checksums.txt', 'scripts/espressif-qemu-checksums.txt') }}
 
       - name: Install pinned required simulator backends
-        run: scripts/install-sims.sh
+        run: scripts/install-sims.sh --require-pinned
 
       - name: Run release-required firmware integrations
         run: python3 scripts/run_required_integrations.py
