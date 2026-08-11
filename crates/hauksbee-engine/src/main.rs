@@ -658,14 +658,13 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "Co-simulation")]
     asbuilt: Option<PathBuf>,
 
-    /// Write the full static suite (bind + DRC + lint + SI + USB-C findings) as
-    /// a JUnit XML report to this path, alongside whatever report was asked
-    /// for. Serious findings become test failures.
+    /// Write this invocation's selected checks as JUnit XML. Gate-grade findings
+    /// become failures; whole-run refusals become errors.
     #[arg(long, value_name = "FILE", help_heading = "CI output")]
     junit: Option<PathBuf>,
 
-    /// Write the full static suite as a SARIF 2.1.0 report to this path
-    /// (GitHub code scanning et al). Serious findings become `error` results.
+    /// Write this invocation's selected checks as SARIF 2.1.0. Gate-grade
+    /// findings and invalid/refused outcomes become `error` results.
     #[arg(long, value_name = "FILE", help_heading = "CI output")]
     sarif: Option<PathBuf>,
 
@@ -1233,6 +1232,115 @@ struct CheckCodeArgs {
     json: bool,
 }
 
+fn artifact_flag_value(args: &[String], flag: &str) -> Option<PathBuf> {
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .enumerate()
+        .find_map(|(index, arg)| {
+            if arg == flag {
+                args.get(index + 1)
+                    .filter(|value| !value.starts_with('-'))
+                    .map(PathBuf::from)
+            } else {
+                arg.strip_prefix(&format!("{flag}="))
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from)
+            }
+        })
+}
+
+fn invalidate_run_artifacts_after_parse_error(args: &[String], error: &clap::Error) {
+    let Some(run_index) = args.iter().position(|arg| arg == "run") else {
+        return;
+    };
+    let protected: Vec<PathBuf> = args
+        .iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .enumerate()
+        .skip(run_index + 1)
+        .filter(|(index, arg)| {
+            !arg.starts_with('-')
+                && !matches!(
+                    args.get(index.saturating_sub(1)).map(String::as_str),
+                    Some("--junit" | "--sarif")
+                )
+        })
+        .map(|(_, arg)| PathBuf::from(arg))
+        .chain(
+            [
+                "--bom",
+                "--placement",
+                "--firmware",
+                "--asbuilt",
+                "--emit-manifest",
+                "--ac-csv",
+                "--probe-csv",
+            ]
+            .into_iter()
+            .filter_map(|flag| artifact_flag_value(args, flag)),
+        )
+        .collect();
+    let board = protected
+        .first()
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("unparsed-run-input"));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let canonicalish = |path: &std::path::Path| {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        };
+        std::fs::canonicalize(&absolute).unwrap_or_else(|_| {
+            absolute
+                .parent()
+                .and_then(|parent| std::fs::canonicalize(parent).ok())
+                .and_then(|parent| absolute.file_name().map(|name| parent.join(name)))
+                .unwrap_or(absolute)
+        })
+    };
+    let mut junit = artifact_flag_value(args, "--junit");
+    let mut sarif = artifact_flag_value(args, "--sarif");
+    if junit.as_ref().is_some_and(|path| {
+        protected
+            .iter()
+            .any(|input| canonicalish(path) == canonicalish(input))
+    }) {
+        junit = None;
+    }
+    if sarif.as_ref().is_some_and(|path| {
+        protected
+            .iter()
+            .any(|input| canonicalish(path) == canonicalish(input))
+    }) {
+        sarif = None;
+    }
+    if junit.is_some()
+        && junit
+            .as_ref()
+            .zip(sarif.as_ref())
+            .is_some_and(|(junit, sarif)| canonicalish(junit) == canonicalish(sarif))
+    {
+        sarif = None;
+    }
+    if junit.is_none() && sarif.is_none() {
+        return;
+    }
+    if let Err(write_error) = hauksbee_engine::reports::ci_artifacts::begin_run(
+        &board,
+        junit.as_deref(),
+        sarif.as_deref(),
+        vec!["run".into()],
+    ) {
+        eprintln!("error: could not invalidate requested CI artifact: {write_error}");
+        return;
+    }
+    hauksbee_engine::reports::ci_artifacts::finish_error(
+        &anyhow::anyhow!(error.to_string()),
+        error.exit_code(),
+    );
+}
+
 fn main() -> anyhow::Result<()> {
     // Before anything can spawn a co-sim emulator: make sure a SIGTERM/SIGINT
     // to this process (e.g. killing a long-lived `hauksbee serve`) reaps every
@@ -1249,7 +1357,19 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(2);
         }
     }
-    let cli = Cli::parse();
+    let raw_args: Vec<String> = std::env::args().collect();
+    let cli = match Cli::try_parse_from(&raw_args) {
+        Ok(cli) => cli,
+        Err(error) => {
+            if !matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) {
+                invalidate_run_artifacts_after_parse_error(&raw_args, &error);
+            }
+            error.exit()
+        }
+    };
     // Fix #3 (LOW): under `--json`, an AI/CI consumer expects parseable output on
     // EVERY path, including a hard error. Emit `{"ok": false, "error": "..."}`
     // instead of the plaintext `error:` line so the failure is still valid JSON.

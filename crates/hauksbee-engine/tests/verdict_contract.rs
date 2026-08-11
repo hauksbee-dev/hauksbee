@@ -29,14 +29,10 @@
 //!    The gate is per surface, so the bind gate that invalidates
 //!    `--lint`/`--si`/`--check`/`--usb-c` leaves the copper (`--drc`) and
 //!    descriptive (`--report`) surfaces alone, on both the exit code and the
-//!    verdict field. The CI artifacts follow as far as they can today: the
-//!    GitHub annotations agree on every run the bind-gate and co-sim-refusal
-//!    paths own (an analysis surface that refuses on its own validity, and an
-//!    exit 3 for undermined coverage alone, name no blockers and annotate
-//!    nothing; and with an artifact flag the whole-suite artifact writer
-//!    annotates regardless of the selected surface), and JUnit/SARIF agree on
-//!    the `invalid` route (whose blockers are gate-grade `serious` evidence
-//!    findings), through the co-sim rewrite and its refusal rewrite.
+//!    verdict field. JUnit/SARIF grade that same selected surface and a failing
+//!    gate/refusal reaches GitHub annotations too. Requested artifact paths are
+//!    invalidated before parsing and finalized once, so early errors and
+//!    refusals cannot leave a previous run's green file archiveable.
 //!
 //!    They agree on the widened `fail` route too: the artifacts grade a
 //!    testcase failure on the finding's own `gating` flag, not on the severity
@@ -46,12 +42,8 @@
 //!    possibly-phantom copper short is `warning` and does NOT gate, so it stays
 //!    a passing testcase carrying its text.
 //!
-//!    What the flag cannot close is a coverage question, not a grading one: a
-//!    non-zero exit whose reason never became a finding has nothing in the
-//!    artifact to mark. The boot advisory `--strict-boot` exits 2 on, the
-//!    placement and no-processor refusals, the timing-evidence refusal and the
-//!    `--ac`/`--thermal` validity refusals are all in that class.
-//!    docs/ci/CI.md lists the ones that have been checked.
+//!    Non-finding terminal outcomes use a typed refusal testcase/result;
+//!    `--strict-boot` is promoted to a typed co-sim finding when armed.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -911,9 +903,9 @@ fn junit_testcases(xml: &str) -> Vec<String> {
 
 #[test]
 fn junit_and_sarif_agree_with_a_specialist_surfaces_verdict() {
-    // --junit/--sarif are written from the full static suite whatever selector
-    // asked for them, so a specialist surface must not be able to hand CI a
-    // green artifact beside its own invalid JSON verdict.
+    // --junit/--sarif follow the selected specialist surface, including its
+    // model-dependent bind refusal, so it cannot hand CI a green artifact
+    // beside its own invalid JSON verdict.
     let dir = tempfile::tempdir().expect("tempdir");
     for (name, want_invalid) in [
         ("verdict_fet_unbound.kicad_pcb", true),
@@ -1217,26 +1209,25 @@ fn the_same_board_archives_all_green_once_a_waiver_takes_the_gate_away() {
 }
 
 #[test]
-fn the_artifact_grades_the_whole_suite_even_when_the_selector_is_narrower() {
-    // The artifact is written from the whole static suite whichever selector
-    // asked for it, so its gate is `--check`'s. On a narrower selector that is
-    // wider than the exit code, and this is the direction the widened grading
-    // makes visible: `--drc --strict` on this board exits 0 on the copper it was
-    // asked about, while the file it archives marks the lint finding that would
-    // have failed `--check --strict`. docs/ci/CI.md and
-    // docs/analysis/JSON_OUTPUT.md both promise this; without a test the promise
-    // is prose. It is the safe direction (a red file beside a green exit, never
-    // the reverse), and `--check --strict` is what makes the two agree.
+fn specialist_artifacts_and_annotations_grade_only_the_selected_surface() {
+    // A requested artifact describes THIS invocation. `--drc` did not run the
+    // lint gate, so a lint-only board must be green in JSON, exit status, JUnit,
+    // SARIF and GitHub annotations together. A hidden full-suite result would
+    // give CI mutually exclusive answers about one command.
     let b = fixture("verdict_medium_lint.kicad_pcb");
     let dir = tempfile::tempdir().expect("tempdir");
     let junit = dir.path().join("drc-selector.xml");
-    let out = run(&[
+    let sarif = dir.path().join("drc-selector.sarif");
+    let out = run_in_actions(&[
         "run",
         b.to_str().unwrap(),
         "--drc",
+        "--json",
         "--strict",
         "--junit",
         junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
     ]);
     assert_eq!(
         out.status.code(),
@@ -1244,26 +1235,51 @@ fn the_artifact_grades_the_whole_suite_even_when_the_selector_is_narrower() {
         "the copper surface has nothing to gate on here; stderr: {}",
         stderr(&out)
     );
+    assert_eq!(json_verdict(&out).0, "pass");
     let xml = std::fs::read_to_string(&junit).expect("junit written");
-    assert_eq!(
-        junit_failing_testcases(&xml),
-        vec!["placeholder_value R3".to_string()],
-        "the file still grades the whole suite:\n{xml}"
+    assert!(junit_all_green(&xml), "selected DRC artifact: {xml}");
+    assert!(
+        xml.contains("testsuite name=\"drc\"")
+            && !xml.contains("testsuite name=\"lint\"")
+            && !xml.contains("testsuite name=\"si\""),
+        "an unselected check must not appear as if it ran:\n{xml}"
     );
-    // The documented way to make them agree.
-    let junit = dir.path().join("check-selector.xml");
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
+            .expect("valid SARIF JSON");
+    assert!(
+        sarif_levels(&doc).iter().all(|(_, level)| level != "error"),
+        "selected DRC SARIF must not contain an unselected lint error: {doc}"
+    );
+    assert!(
+        !stderr(&out)
+            .lines()
+            .any(|line| line.starts_with("::error ")),
+        "a passing selected surface must not emit an error annotation:\n{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn usb_c_artifact_ignores_unrelated_bind_blockers_like_the_selected_report() {
+    let board = fixture("verdict_fet_unbound.kicad_pcb");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("usb-c.xml");
     let out = run(&[
         "run",
-        b.to_str().unwrap(),
-        "--check",
+        board.to_str().unwrap(),
+        "--usb-c",
+        "--json",
         "--strict",
         "--junit",
         junit.to_str().unwrap(),
     ]);
-    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
-    assert_eq!(
-        junit_failing_testcases(&std::fs::read_to_string(&junit).expect("junit written")),
-        vec!["placeholder_value R3".to_string()],
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    assert_eq!(json_verdict(&out).0, "pass");
+    let xml = std::fs::read_to_string(&junit).expect("junit");
+    assert!(
+        junit_all_green(&xml) && !xml.contains("Q1"),
+        "an unrelated open FET is outside the selected CC claim:\n{xml}"
     );
 }
 
@@ -1607,10 +1623,11 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
     let b = boot_gate_board();
     let fw = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/firmware/boot_gate_a/boot_gate.hex");
-    if !fw.exists() {
-        eprintln!("skipping: boot_gate_a firmware not built");
-        return;
-    }
+    assert!(
+        fw.exists(),
+        "required tracked firmware fixture: {}",
+        fw.display()
+    );
     let base = [
         "run",
         b.to_str().unwrap(),
@@ -1630,9 +1647,18 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
         "the boot advisory does not gate without --strict-boot"
     );
     // Escalated: exit 2 AND `fail` in the document that exit was printed beside.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("strict-boot.xml");
+    let sarif = dir.path().join("strict-boot.sarif");
     let mut args = base.to_vec();
-    args.push("--strict-boot");
-    let out = run(&args);
+    args.extend([
+        "--strict-boot",
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+    ]);
+    let out = run_in_actions(&args);
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -1643,6 +1669,254 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
         json_verdict(&out).0,
         "fail",
         "and the document must not read `pass` beside that exit 2"
+    );
+    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    assert!(
+        junit_failing_testcases(&xml)
+            .iter()
+            .any(|case| case.contains("boot_control_net") && case.contains("GATE_CTRL")),
+        "the strict-boot gate itself must be a failing testcase:\n{xml}"
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
+            .expect("valid SARIF JSON");
+    assert!(
+        sarif_levels(&doc).contains(&("cosim/boot_control_net".into(), "error".into())),
+        "strict-boot must be an error-level SARIF result: {doc}"
+    );
+    assert!(
+        stderr(&out).lines().any(|line| {
+            line.starts_with("::error ")
+                && line.contains("strict-boot")
+                && line.contains("GATE_CTRL")
+        }),
+        "strict-boot must annotate the GitHub surface:\n{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_pre_analysis_refusal_replaces_stale_requested_artifacts() {
+    const EMPTY_BOARD_DSL: &str = "# Board-as-Code (hauksbee board DSL v1)\n\
+board version 20241229\n\nfn main {\n}\n";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("empty.board");
+    let junit = dir.path().join("out.xml");
+    let sarif = dir.path().join("out.sarif");
+    std::fs::write(&board, EMPTY_BOARD_DSL).expect("empty board fixture");
+    std::fs::write(&junit, "stale green JUnit from a previous run").expect("stale junit");
+    std::fs::write(&sarif, "stale green SARIF from a previous run").expect("stale sarif");
+
+    let out = run_in_actions(&[
+        "run",
+        board.to_str().unwrap(),
+        "--check",
+        "--json",
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
+    let xml = std::fs::read_to_string(&junit).expect("junit replaced");
+    assert!(
+        junit_root(&xml).contains("errors=\"1\"") && xml.contains("no components"),
+        "the refusal must replace the stale artifact:\n{xml}"
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif replaced"))
+            .expect("valid replacement SARIF");
+    assert!(
+        sarif_levels(&doc).contains(&("hauksbee/invalid-for-analysis".into(), "error".into())),
+        "the refusal must replace stale SARIF: {doc}"
+    );
+    assert!(
+        stderr(&out)
+            .lines()
+            .any(|line| line.starts_with("::error ") && line.contains("no components")),
+        "the refusal must annotate GitHub:\n{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn missing_processor_refusal_finalizes_every_requested_surface() {
+    let board = fully_covered_board();
+    let firmware =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/firmware/demo/demo.hex");
+    assert!(
+        firmware.exists(),
+        "required tracked firmware fixture: {}",
+        firmware.display()
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("missing-processor.xml");
+    let sarif = dir.path().join("missing-processor.sarif");
+    let out = run_in_actions(&[
+        "run",
+        board.to_str().unwrap(),
+        "--firmware",
+        firmware.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.01",
+        "--json",
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
+    let xml = std::fs::read_to_string(&junit).expect("junit finalized");
+    assert!(
+        junit_root(&xml).contains("errors=\"1\"")
+            && xml.contains("supported MCU")
+            && !xml.contains("did not reach its final outcome"),
+        "the concrete missing-processor refusal must replace the pending marker:\n{xml}"
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif finalized"))
+            .expect("valid SARIF");
+    assert!(
+        doc["runs"][0]["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .any(|result| {
+                result["ruleId"] == "hauksbee/invalid-for-analysis"
+                    && result["message"]["text"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("supported MCU"))
+            }),
+        "SARIF carries the concrete refusal: {doc}"
+    );
+    assert!(
+        stderr(&out)
+            .lines()
+            .any(|line| line.starts_with("::error ") && line.contains("supported MCU")),
+        "GitHub carries the concrete refusal:\n{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn artifact_transaction_refuses_to_overwrite_its_board_input() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("board.kicad_pcb");
+    let original = std::fs::read(fixture("verdict_fet_bound.kicad_pcb")).expect("fixture");
+    std::fs::write(&board, &original).expect("staged board");
+    let out = run(&[
+        "run",
+        board.to_str().unwrap(),
+        "--check",
+        "--junit",
+        board.to_str().unwrap(),
+    ]);
+    assert!(
+        !out.status.success(),
+        "an output/input alias must be refused"
+    );
+    assert_eq!(
+        std::fs::read(&board).expect("board retained"),
+        original,
+        "artifact initialization must never clobber a run input"
+    );
+}
+
+#[test]
+fn unsafe_artifact_alias_still_invalidates_every_other_safe_requested_surface() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("board.kicad_pcb");
+    let sarif = dir.path().join("out.sarif");
+    let original = std::fs::read(fixture("verdict_fet_bound.kicad_pcb")).expect("fixture");
+    std::fs::write(&board, &original).expect("staged board");
+    std::fs::write(&sarif, "stale green sarif").expect("stale sarif");
+    let out = run(&[
+        "run",
+        board.to_str().unwrap(),
+        "--check",
+        "--junit",
+        board.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    assert_eq!(
+        std::fs::read(&board).expect("board retained"),
+        original,
+        "unsafe artifact path must never clobber the board"
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif replaced"))
+            .expect("valid replacement SARIF");
+    assert!(
+        doc["runs"][0]["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .any(|result| result["ruleId"] == "hauksbee/run-error"),
+        "the safe requested surface must not retain stale evidence: {doc}"
+    );
+}
+
+#[test]
+fn clap_usage_error_invalidates_requested_artifacts_before_exiting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("usage.xml");
+    let sarif = dir.path().join("usage.sarif");
+    std::fs::write(&junit, "stale green junit").expect("stale junit");
+    std::fs::write(&sarif, "stale green sarif").expect("stale sarif");
+    let out = run(&[
+        "run",
+        fixture("verdict_fet_bound.kicad_pcb").to_str().unwrap(),
+        "--junit",
+        junit.to_str().unwrap(),
+        "--sarif",
+        sarif.to_str().unwrap(),
+        "--not-a-real-run-flag",
+    ]);
+    assert!(!out.status.success());
+    let xml = std::fs::read_to_string(&junit).expect("junit replaced");
+    assert!(
+        junit_root(&xml).contains("errors=\"1\"") && xml.contains("not-a-real-run-flag"),
+        "clap failure must replace stale JUnit:\n{xml}"
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif replaced"))
+            .expect("valid SARIF");
+    assert!(
+        doc["runs"][0]["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .any(|result| {
+                result["ruleId"] == "hauksbee/run-error"
+                    && result["properties"]["exit_code"] == out.status.code().unwrap()
+            }),
+        "clap failure must replace stale SARIF: {doc}"
+    );
+}
+
+#[test]
+fn clap_usage_error_never_invalidates_over_a_declared_run_input() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let firmware = dir.path().join("firmware.hex");
+    let original = b":020000040000FA\n:00000001FF\n";
+    std::fs::write(&firmware, original).expect("firmware fixture");
+    let out = run(&[
+        "run",
+        fixture("verdict_fet_bound.kicad_pcb").to_str().unwrap(),
+        "--firmware",
+        firmware.to_str().unwrap(),
+        "--junit",
+        firmware.to_str().unwrap(),
+        "--not-a-real-run-flag",
+    ]);
+    assert!(!out.status.success());
+    assert_eq!(
+        std::fs::read(&firmware).expect("firmware retained"),
+        original,
+        "parse-error cleanup must not overwrite a declared run input"
     );
 }
 
