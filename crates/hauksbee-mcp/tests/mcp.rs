@@ -180,6 +180,60 @@ fn analyze_board_returns_the_front_door_report_structure() {
 }
 
 #[test]
+fn analyze_board_resolves_eagle_schematic_siblings_and_explicit_paths_like_the_cli() {
+    let board_bytes =
+        include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
+    let schematic_bytes =
+        include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sibling_board = dir.path().join("sibling.brd");
+    let sibling_schematic = dir.path().join("sibling.sch");
+    std::fs::write(&sibling_board, board_bytes).expect("write board");
+    std::fs::write(&sibling_schematic, schematic_bytes).expect("write schematic");
+
+    let mut c = McpClient::start();
+    let (sibling, is_error) = c.call_tool("analyze_board", json!({ "board_path": sibling_board }));
+    assert!(
+        !is_error,
+        "sibling resolution is not an input error: {sibling}"
+    );
+    assert_eq!(
+        sibling["serious"], 2,
+        "a sibling schematic adds context but cannot authorize either physical contact: {sibling}"
+    );
+    assert!(
+        sibling["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|section| section["findings"].as_array().into_iter().flatten())
+            .any(|finding| finding["fix"]
+                .as_str()
+                .is_some_and(|fix| fix.contains("cannot prove where the physical join belongs"))),
+        "MCP must surface the same contextual declaration and serious verdict as the CLI: {sibling}"
+    );
+
+    let board_dir = tempfile::tempdir().expect("board dir");
+    let schematic_dir = tempfile::tempdir().expect("schematic dir");
+    let explicit_board = board_dir.path().join("explicit.brd");
+    let explicit_schematic = schematic_dir.path().join("explicit.sch");
+    std::fs::write(&explicit_board, board_bytes).expect("write board");
+    std::fs::write(&explicit_schematic, schematic_bytes).expect("write schematic");
+    let (explicit, is_error) = c.call_tool(
+        "analyze_board",
+        json!({
+            "board_path": explicit_board,
+            "schematic_path": explicit_schematic,
+        }),
+    );
+    assert!(!is_error, "explicit schematic is accepted: {explicit}");
+    assert_eq!(
+        explicit["serious"], 2,
+        "an explicit schematic also adds context without physical authority: {explicit}"
+    );
+}
+
+#[test]
 fn run_checks_returns_per_assertion_results_and_verdict() {
     let mut c = McpClient::start();
     let spec = r#"
@@ -228,6 +282,48 @@ kind = "no_faults"
             .iter()
             .any(|r| r["kind"] == "voltage"),
         "the voltage assertion is reported by kind"
+    );
+}
+
+#[test]
+fn run_checks_retains_an_explicit_eagle_schematic() {
+    let mut c = McpClient::start();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../hauksbee-extract/tests/fixtures/eagle_ties");
+    let (verdict, is_error) = c.call_tool(
+        "run_checks",
+        json!({
+            "board_path": root.join("declared.brd"),
+            "schematic_path": root.join("declared.sch"),
+            "spec_toml": "duration_ms = 1\n\n[[assert]]\nkind = \"no_faults\"\n",
+        }),
+    );
+    assert!(!is_error, "explicit schematic check should run: {verdict}");
+    assert!(
+        verdict["inventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|artifact| {
+                artifact["role"] == "schematic"
+                    && artifact["format"] == "eagle_schematic"
+                    && artifact["sha256"]
+                        .as_str()
+                        .is_some_and(|hash| hash.len() == 64)
+            }),
+        "the exact schematic input must ride in CI provenance: {verdict}"
+    );
+    let schematic = verdict["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["role"] == "schematic")
+        .unwrap();
+    assert!(
+        schematic["contributed"][0]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("not used by CI assertions")),
+        "provenance must not imply an unmatched declaration affected a verdict: {schematic}"
     );
 }
 

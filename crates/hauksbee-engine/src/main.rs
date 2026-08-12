@@ -638,6 +638,14 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
     placement: Option<PathBuf>,
 
+    /// Eagle `.sch` companion to an Eagle `.brd`, read for declared net-pair
+    /// context. A schematic has no board coordinates, so it never authorizes a
+    /// physical join or downgrades a short; board-local layout evidence must do
+    /// that. A same-named valid sibling is used automatically. KiCad and Altium
+    /// layouts declare physical ties in the layout file itself.
+    #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
+    schematic: Option<PathBuf>,
+
     /// Run an embedded example board instead of a file (try `blinky`). The
     /// board is compiled into the binary and materialized under the temp
     /// directory, so this works with no checkout on disk.
@@ -1389,7 +1397,10 @@ fn main() -> anyhow::Result<()> {
         // The run orchestrator owns embedded-example lookup so it can open the
         // requested artifact transaction first. Its Result still flows through
         // the shared JSON/text error envelope below.
-        Command::Run(args) => hauksbee_engine::commands::run::run(run_config(args), quiet),
+        Command::Run(mut args) => {
+            let schematic = args.schematic.take();
+            hauksbee_engine::commands::run::run_with_schematic(run_config(args), quiet, schematic)
+        }
         Command::Reproduce(args) => hauksbee_engine::run_manifest::reproduce(&args.manifest),
         Command::ToCode(args) => {
             hauksbee_engine::commands::boardcode::to_code(&args.board, args.out.as_deref())

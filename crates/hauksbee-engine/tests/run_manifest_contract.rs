@@ -6,6 +6,26 @@ use hauksbee_engine::run_manifest::{
     ToolIdentity, MANIFEST_SCHEMA_VERSION,
 };
 
+#[test]
+fn retained_file_bytes_are_hashed_instead_of_a_second_filesystem_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let schematic = dir.path().join("design.sch");
+    std::fs::write(&schematic, b"first bytes").unwrap();
+    let retained = ManifestInput::retained_file("schematic", &schematic, b"first bytes".to_vec());
+    std::fs::write(&schematic, b"changed after resolution").unwrap();
+
+    let models = dir.path().join("models");
+    std::fs::create_dir(&models).unwrap();
+    let mut request = request(&schematic, &models);
+    request.inputs = vec![retained];
+    let manifest = RunManifest::capture(request).unwrap();
+    assert_eq!(manifest.inputs[0].size_bytes, b"first bytes".len() as u64);
+    assert!(
+        manifest.verify_inputs().is_err(),
+        "verification must compare retained capture bytes with the current file"
+    );
+}
+
 fn request(board: &std::path::Path, models: &std::path::Path) -> ManifestRequest {
     ManifestRequest {
         tool: ToolIdentity::new("hauksbee", "0.1.0", Some("0123456789ab")),

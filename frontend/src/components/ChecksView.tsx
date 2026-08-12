@@ -10,6 +10,7 @@ import { refusalLines, type RefusalContract } from '../lib/refusal-contract'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { assumptionsForEvidence, describeModelSource } from '../lib/evidence'
 import { summarizeErrorBudget } from '../lib/error-budget'
+import { buildCheckUpload, buildPortableCheckSpec } from '../lib/board-upload'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -482,6 +483,7 @@ export function ChecksView({
   report,
   boardFile,
   firmwareFile,
+  schematicFile,
   selectedNet,
   selectedComponent,
   pendingChecks,
@@ -492,6 +494,7 @@ export function ChecksView({
   report: WebReport
   boardFile: File | null
   firmwareFile: File | null
+  schematicFile: File | null
   /** Net last clicked on the board render, offered as a one-click check. */
   selectedNet: string | null
   /** Component last clicked on the board render, offered as ref checks. */
@@ -646,10 +649,7 @@ export function ChecksView({
     setRunning(true)
     const tomlAtRun = effectiveToml
     try {
-      const fd = new FormData()
-      fd.append('board', boardFile, boardFile.name)
-      if (firmwareFile) fd.append('firmware', firmwareFile, firmwareFile.name)
-      fd.append('spec', new Blob([tomlAtRun], { type: 'text/plain' }), 'spec.toml')
+      const fd = buildCheckUpload(boardFile, firmwareFile, schematicFile, tomlAtRun)
       const res = await fetch('/api/check', { method: 'POST', body: fd })
       const text = await res.text()
       try {
@@ -668,7 +668,7 @@ export function ChecksView({
     } finally {
       setRunning(false)
     }
-  }, [boardFile, firmwareFile, effectiveToml, rawMode, checks])
+  }, [boardFile, firmwareFile, schematicFile, effectiveToml, rawMode, checks])
 
   const specStem = specStemFor(report.file_name)
   // The runnable spec: the composed body with the board/firmware paths the
@@ -682,12 +682,13 @@ export function ChecksView({
   // Four readers of a function recomputed per render is four chances for them to
   // disagree about what the file is.
   const specText = useMemo(() => {
-    const hasKey = (key: string) => new RegExp(`^\\s*${key}\\s*=`, 'm').test(effectiveToml)
-    let head = ''
-    if (!hasKey('board')) head += `board = ${tomlString(`../hardware/${report.file_name}`)}\n`
-    if (firmwareFile && !hasKey('firmware')) head += `firmware = ${tomlString(`../firmware/${firmwareFile.name}`)}\n`
-    return head ? `${head}\n${effectiveToml}` : effectiveToml
-  }, [effectiveToml, firmwareFile, report.file_name])
+    return buildPortableCheckSpec(
+      report.file_name,
+      firmwareFile,
+      schematicFile,
+      effectiveToml,
+    )
+  }, [effectiveToml, firmwareFile, schematicFile, report.file_name])
 
   const specFileName = `${specStem}.toml`
 
@@ -1164,8 +1165,8 @@ export function ChecksView({
               {!rawMode && (
                 <div className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
                   This is the file the Download button writes. Running from here uses the
-                  board and firmware already uploaded in this session, so the two path lines
-                  are for the checked-in copy.
+                  design inputs already uploaded in this session, so the path lines are for
+                  the checked-in copy.
                 </div>
               )}
 

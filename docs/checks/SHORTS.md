@@ -242,7 +242,10 @@ footprint name by itself never waives copper:
   `SparkFun-Jumpers` closed-trace packages. A generic package/value named
   `JUMPER` is checked even when both fields match. New vendor conventions require
   a real-board fixture. The two-field dedicated-0R rule is the only zero-ohm
-  exception.
+  exception. A tie drawn as a **supply symbol** rather than a footprint is not
+  expressible in the `.brd` at all, and is read from the companion `.sch`
+  instead: see [Declared ties read from the schematic](#declared-ties-read-from-the-schematic)
+  below, which adds intent context without changing the physical verdict.
 - **Altium binary `.PcbDoc`:** only the native Components record
   `COMPONENTTYPE=Net Tie` or `Net Tie (In BOM)` is accepted. `PATTERN`, library,
   reference, and inferred 0R names are not substitutes. Component ownership
@@ -254,6 +257,118 @@ footprint name by itself never waives copper:
 Every accepted group is still owner-, layer-, net-group-, and contact-local.
 The reported contact point must land on that group's own copper. A legal A/B
 contact at one tie can never suppress another A/B collision elsewhere.
+
+### Declared ties read from the schematic
+
+The exemptions above are all **footprint** properties, and they all **waive** the
+finding: the copper never appears in the report. Eagle has a second way to declare
+a deliberate join that no footprint carries, and it needs the opposite treatment.
+
+A star ground in Eagle is drawn by placing one net's **supply symbol** on another
+net. `emonTx V3.4.5.sch` puts an `AGND` supply symbol (`AGND7`) on a segment of
+net `GND` alongside a `GND` one (`SUPPLY6`); the board then routes the two
+together on both layers. An Eagle `.brd` records no net ties of any kind, so the
+DRC, handed only the `.brd`, sees copper between two differently named nets and
+cannot tell this from a solder bridge.
+
+**The companion input.** Supply the schematic with `--schematic <FILE>`, or leave
+it beside the board under the board's own name (`<project>.brd` / `<project>.sch`)
+and it is found automatically, the same sibling convention the `.kicad_pro`
+clearance lookup uses. In `hauksbee serve`, choose the optional Eagle schematic
+companion beside the board/firmware inputs; the same uploaded bytes feed the
+report and live-launch paths. The parser (`hauksbee-extract/src/eagle_sch.rs`)
+extracts the declared net pairs plus the component/pin identity needed to prove
+the companion belongs to the same physical design. It does not replace the board
+extractor: the `.brd` remains authoritative for geometry and the physical netlist.
+A supply symbol is recognised by Eagle's own marker and two narrowing tests, and
+all three must hold:
+
+1. the library symbol has **exactly one pin**, and that pin carries
+   `direction="sup"`, whose **name** is the net it imposes;
+2. its deviceset has exactly one gate; and
+3. no `<device>` in that deviceset names a **package**, because a supply symbol is
+   a schematic-only marker with no physical part behind it.
+
+Tests 1 and 3 are not decoration, and dropping either one silences real shorts.
+Ordinary Eagle libraries mark a component's power pins `direction="sup"`: the
+`SD-MMC` symbol in `margay_logger/Hardware/Margay.sch` has 13 pins of which 4 are
+`sup`, and `XBEE` in `emonTx V3.2.sch` has 20 of which 2 are. An
+any-`sup`-pin rule made the SD socket and the radio module "declare" ground tied
+to every net they touch: 6 false declarations on Margay and 19 on emonTx V3.2,
+including `3.3V` to `GND`, each of which would attach false schematic context
+to a genuine rail-to-ground short. The historical twelve-pair
+exploratory sweep was not retained as a release artifact, so it is not used as
+completion evidence. The release regression uses two tracked board/schematic
+pairs (one declared, one undeclared) and focused parser cases for multi-pin,
+packaged and duplicate-library-URN false positives. A packaged testpoint whose
+symbol is a single `sup` pin is likewise not a supply symbol, which is what test
+3 is for.
+
+**Context, not physical authorization.** A matching finding keeps its net pair,
+layer, location, measured gap, `serious` severity, and `--strict` gate, and gains
+the schematic declaration. An Eagle schematic can name the two nets but cannot
+identify the board coordinate at which their physical join is intended. Treating
+a unique contact as authorization would turn an accidental one-off bridge into a
+false negative. Every surface therefore states both facts: the nets are joined in
+copper, and the schematic names the pair but does not locate or authorize this
+join. `DrcTieQualification::declaration_for` exposes that context;
+`undeclared_shorts` remains the physical-authority gating set.
+
+**No schematic, no invented context.** With none supplied, the finding stays
+`serious` and names the schematic as the input that may explain the net-pair
+intent. Supplying a schematic never downgrades the physical finding. A schematic
+that declares nothing adds no context at all. emonTx V3.4.0, the revision before
+the pair was drawn, declares none and its contacts remain serious; the tracked
+declared and undeclared fixtures pin both sides without requiring that external
+corpus.
+
+**Identity and physical scope fail closed.** An explicit companion must share the
+board basename, physical reference/value set, and canonical physical
+reference/package-pad/net incidence with the board. Empty designs and designs
+with no shared pin/net incidence are refused. Contact clustering is still
+measured so the report can scope declaration context to a unique observation,
+including through-layer via evidence; matching X/Y coordinates alone are not
+plating evidence. But cluster uniqueness is not treated as intent. Eagle
+schematic sheet coordinates are deliberately not projected onto board
+coordinates, so no schematic-only declaration downgrades a physical finding.
+
+**Eagle only, and enforced.** A `.kicad_pcb` declares its ties in the layout the
+DRC already has and a `.kicad_sch` has no construct for a deliberate two-net join
+to read (`docs/ingest/SCHEMATICS.md`); Altium carries the native
+`COMPONENTTYPE=Net Tie` field. A KiCad or Altium board is therefore never asked
+for a schematic and carries no hint, and no companion is looked for beside it. An
+explicit `--schematic` on a non-Eagle board is REFUSED rather than ignored:
+accepting it would let a schematic describing a different design annotate that
+board's shorts on a net-name coincidence, and ignoring it would leave the user
+believing their schematic had been read.
+Likewise a path that is not an Eagle `.sch` (a `.brd`, a KiCad legacy `.sch`, a
+pre-Eagle-6 binary drawing) is refused with the reason.
+
+The schematic enters the run's input inventory with `ArtifactRole::Schematic`,
+the existing `ArtifactKind::EagleBoard` Eagle-XML family token, its `.sch` path,
+SHA-256 and contribution. Reusing the existing kind keeps the planned first
+release's closed public enum source-compatible; role and path distinguish the
+schematic from the layout without a new enum case. Its connectivity is recorded
+as deliberately ignored. The DRC
+evidence map for a context-bearing short cites both artifacts, because its assertion
+text quotes the declaration.
+
+The `sch_ties` example is the diagnostic behind these tests, and reproduces the
+revision boundary the evidence file records:
+
+```
+cargo run -p hauksbee-extract --example sch_ties -- "<board>.brd" "<board>.sch"
+# declared ties: 1
+#   GND <-> AGND: AGND7 wired to SUPPLY6 in net GND
+# shorts: 2
+# qualified: 0
+# still gating: 2
+```
+
+The tracked declared fixture additionally asserts that both findings carry the
+declaration through `declaration_for`; the undeclared fixture proves the context
+is not invented. When the optional emonTx V3.4.0 files are provisioned, the
+example prints `declared ties: 0` and `still gating: 2`.
 
 ## Simulation (`hauksbee-engine/src/shorts.rs`)
 

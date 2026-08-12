@@ -618,6 +618,7 @@ docs/about/LIMITATIONS.md.
 """
 expect = [
   "hardware/V3.4.0/emonTx V3.4.brd",
+  "hardware/V3.4.0/emonTx V3.4.sch",
   "hardware/V3.4.0/emonTxV3.4_GERBERS.zip",
 ]
 
