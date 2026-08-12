@@ -313,6 +313,18 @@ fn run_checks_retains_an_explicit_eagle_schematic() {
             }),
         "the exact schematic input must ride in CI provenance: {verdict}"
     );
+    let schematic = verdict["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["role"] == "schematic")
+        .unwrap();
+    assert!(
+        schematic["contributed"][0]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("not used by CI assertions")),
+        "provenance must not imply an unmatched declaration affected a verdict: {schematic}"
+    );
 }
 
 #[test]

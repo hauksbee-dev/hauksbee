@@ -10,7 +10,7 @@ import { refusalLines, type RefusalContract } from '../lib/refusal-contract'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { assumptionsForEvidence, describeModelSource } from '../lib/evidence'
 import { summarizeErrorBudget } from '../lib/error-budget'
-import { buildCheckUpload } from '../lib/board-upload'
+import { buildCheckUpload, buildPortableCheckSpec } from '../lib/board-upload'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -682,12 +682,13 @@ export function ChecksView({
   // Four readers of a function recomputed per render is four chances for them to
   // disagree about what the file is.
   const specText = useMemo(() => {
-    const hasKey = (key: string) => new RegExp(`^\\s*${key}\\s*=`, 'm').test(effectiveToml)
-    let head = ''
-    if (!hasKey('board')) head += `board = ${tomlString(`../hardware/${report.file_name}`)}\n`
-    if (firmwareFile && !hasKey('firmware')) head += `firmware = ${tomlString(`../firmware/${firmwareFile.name}`)}\n`
-    return head ? `${head}\n${effectiveToml}` : effectiveToml
-  }, [effectiveToml, firmwareFile, report.file_name])
+    return buildPortableCheckSpec(
+      report.file_name,
+      firmwareFile,
+      schematicFile,
+      effectiveToml,
+    )
+  }, [effectiveToml, firmwareFile, schematicFile, report.file_name])
 
   const specFileName = `${specStem}.toml`
 

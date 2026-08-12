@@ -1773,7 +1773,7 @@ fn run_one(
                 &ties.path,
                 &ties.raw,
                 format!(
-                    "{} declared net tie{} retained as context only; the CI run uses the board as physical authority",
+                    "{} declared net tie{} read after design-identity validation; retained as input provenance but not used by CI assertions, which use the board as physical authority",
                     ties.ties.len(),
                     if ties.ties.len() == 1 { "" } else { "s" }
                 ),
