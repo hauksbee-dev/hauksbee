@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
+import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from '../lib/cosim-coverage'
 import { summarizeErrorBudget } from '../lib/error-budget'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { CheckIcon, WarningIcon } from './Icons'
@@ -18,6 +19,7 @@ import type { SpecSnapshot } from '../hooks/useSessions'
 import { groupFindings } from '../lib/findings'
 import type { FindingGroup } from '../lib/findings'
 import { summarizeEvidence } from '../lib/evidence'
+import { reportVerdictHeadline, reportVerdictPalette } from '../lib/report-verdict'
 import { refusalLines } from '../lib/refusal-contract'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
@@ -167,13 +169,9 @@ export function BoardView({
   }
 
   const bindOpen = !!(r.bind?.active_path_unresolved?.length)
-  const hasHeadsUp = (r.sections || []).some(s => s.heads_up?.length)
   const evidenceSummary = summarizeEvidence(r.evidence)
-  const hasEvidenceCaveat = evidenceSummary.caveated > 0
   const runCommand = `hauksbee run ${boardLabel ?? r.file_name} --serve`
-  let verdictBorder = 'var(--ok-border)', verdictBg = 'var(--ok-bg)'
-  if (r.serious > 0) { verdictBorder = 'var(--err-border)'; verdictBg = 'var(--err-bg)' }
-  else if (r.total > 0 || bindOpen || hasHeadsUp || hasEvidenceCaveat) { verdictBorder = 'var(--warn-border)'; verdictBg = 'var(--warn-bg)' }
+  const { border: verdictBorder, background: verdictBg } = reportVerdictPalette(r)
 
   return (
     <div className="h-full overflow-y-auto view-enter" data-testid="report">
@@ -231,7 +229,7 @@ export function BoardView({
           className="rounded-xl px-4 py-3.5"
           style={{ border: `1px solid ${verdictBorder}`, background: verdictBg, fontSize: 15.5 }}
         >
-          {r.headline}
+          {reportVerdictHeadline(r)}
           <div
             className="text-xs mt-1.5 tnum"
             data-testid="report-inventory"
@@ -542,6 +540,7 @@ export function BoardView({
         {r.cosim && (
           <CosimBlock
             cosim={r.cosim}
+            timingRefusals={uncoveredTimingRefusals(r.cosim.timing_refusals, r.refusal)}
             liveAvailable={liveMode !== 'none'}
             onDriveLive={onDriveLive}
             simMounted={simMounted}
@@ -726,8 +725,9 @@ function FindingCard({ finding: f, onLocate }: { finding: WebFinding; onLocate?:
   )
 }
 
-function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
+function CosimBlock({ cosim: c, timingRefusals, liveAvailable, onDriveLive, simMounted }: {
   cosim: WebCosimSection
+  timingRefusals: string[]
   liveAvailable: boolean
   onDriveLive: () => void
   simMounted: boolean
@@ -742,6 +742,24 @@ function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
           <div className="text-sm mb-2" style={{ color: 'var(--silk-dim)' }}>
             Ran the firmware for {(c.seconds_simulated || 0).toFixed(3)}s on the board's microcontroller.
           </div>
+          {(c.timing_coverage?.length ?? 0) > 0 && (
+            <details className="rounded-lg px-3 py-2 mb-2 text-xs" style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)', color: 'var(--silk-dim)' }}>
+              <summary className="cursor-pointer font-semibold" style={{ color: 'var(--silk)' }}>Timing coverage</summary>
+              <div className="mt-1.5">{c.timing_coverage!.map(row => <div key={`${row.mcu_ref}:${row.backend}`}>{timingCoverageLine(row)}</div>)}</div>
+            </details>
+          )}
+          {timingRefusals.length > 0 && (
+            <div className="rounded-lg px-4 py-2.5 mb-2" style={{ border: '1px solid var(--err-border)', borderLeft: '4px solid var(--err)', background: 'var(--err-bg)' }}>
+              <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--err-strong)' }}>TIMING INVALID</span>
+              {timingRefusals.map((line, i) => <div key={i} className="text-sm mt-1">{line}</div>)}
+            </div>
+          )}
+          {(c.fallback_windows?.length ?? 0) > 0 && (
+            <details className="rounded-lg px-3 py-2 mb-2 text-xs" style={{ border: '1px solid var(--warn-border)', background: 'var(--warn-bg)', color: 'var(--silk-dim)' }}>
+              <summary className="cursor-pointer font-semibold" style={{ color: 'var(--warn-strong)' }}>Fallback-qualified windows</summary>
+              <div className="mt-1.5">{c.fallback_windows!.map((window, i) => <div key={i}>{fallbackWindowLine(window)}</div>)}</div>
+            </details>
+          )}
           {c.error_budget && (
             <details className="rounded-lg px-3 py-2 mb-2 text-xs" style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)', color: 'var(--silk-dim)' }}>
               <summary className="cursor-pointer font-semibold" style={{ color: 'var(--silk)' }}>Numerical qualification</summary>

@@ -929,7 +929,7 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "Advanced / analyses")]
     probe_csv: Option<PathBuf>,
 
-    /// Solver chunk width for a `--headless` co-sim, in microseconds. The analog
+    /// Solver chunk width for a headless or interactive co-sim, in microseconds. The analog
     /// solve advances one chunk at a time and tick-evaluated parts are sampled
     /// once per chunk, so a firmware pulse narrower than a chunk can rise and
     /// fall unseen. Halve the chunk below the narrowest pulse you care about

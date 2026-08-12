@@ -310,6 +310,65 @@ pub struct WebCosimSection {
     pub error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
 }
 
+/// Additive JSON-only data for the synchronous firmware report. Keeping this
+/// out of [`WebCosimSection`] preserves source compatibility for downstream
+/// Rust code that constructs the planned 0.1 public struct with a literal;
+/// [`analyze_with_firmware_json`] inserts these optional keys into the nested
+/// `cosim` object for HTTP/MCP/frontend consumers.
+#[derive(Debug, Clone, Default, Serialize)]
+#[non_exhaustive]
+pub struct WebFirmwareCoverage {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timing_coverage: Vec<crate::scheduler::TimingCoverage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timing_refusals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_windows: Vec<crate::result::CosimFallbackWindow>,
+}
+
+type WebCosimCoverage = WebFirmwareCoverage;
+
+/// Source-compatible detailed result for embedded Rust consumers that need the
+/// typed coverage fields inserted by [`analyze_with_firmware_json`].
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct WebFirmwareAnalysis {
+    pub report: WebReport,
+    pub coverage: WebFirmwareCoverage,
+}
+
+impl WebFirmwareAnalysis {
+    /// Serialize the detailed result in the same nested shape as the HTTP/MCP
+    /// front door, including the additive coverage fields under `cosim`.
+    pub fn to_json_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+        let mut value = serde_json::to_value(&self.report)?;
+        if let Some(cosim) = value
+            .get_mut("cosim")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            if !self.coverage.timing_coverage.is_empty() {
+                cosim.insert(
+                    "timing_coverage".to_string(),
+                    serde_json::to_value(&self.coverage.timing_coverage)?,
+                );
+            }
+            if !self.coverage.timing_refusals.is_empty() {
+                cosim.insert(
+                    "timing_refusals".to_string(),
+                    serde_json::to_value(&self.coverage.timing_refusals)?,
+                );
+            }
+            if !self.coverage.fallback_windows.is_empty() {
+                cosim.insert(
+                    "fallback_windows".to_string(),
+                    serde_json::to_value(&self.coverage.fallback_windows)?,
+                );
+            }
+        }
+        Ok(value)
+    }
+}
+
 /// Evidence inputs captured before the co-sim scheduler is dropped. Keeping
 /// these beside (but out of) the public presentation type prevents the web
 /// path from trying to infer causal scope back from rendered prose.
@@ -318,6 +377,7 @@ struct WebCosimEvidence {
     activity_nets: Vec<String>,
     scoped_substitutions: Vec<crate::scheduler::ScopedMcuSubstitution>,
     error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
+    coverage: WebCosimCoverage,
 }
 
 /// One row of the web boot-state panel: a transistor gate control net and what
@@ -871,9 +931,10 @@ fn analyze_normalized_with_ties(
 /// corrupt an ELF. The co-sim is skipped (with a friendly `cosim.ran = false`
 /// note instead of an error) when:
 ///   * the board has no bound MCU (nothing to run firmware on), or
-///   * the only MCU(s) use an external emulator backend (Renode/QEMU): those
+///   * any selected MCU uses an external emulator backend (Renode/QEMU): those
 ///     advance over a TCP control socket and can take 5-30s, well past a
-///     browser/Axum request budget, so the web path stays in-process only, or
+///     browser/Axum request budget, and running only the in-process subset would
+///     be false whole-board evidence, so the web path refuses the complete run, or
 ///   * the firmware fails to load (wrong architecture, corrupt file).
 ///
 /// The static [`WebReport`] is always returned intact; only `cosim` reflects
@@ -884,7 +945,7 @@ pub fn analyze_with_firmware(
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> WebReport {
-    analyze_with_firmware_with_ties(file_name, contents, fw_name, fw_bytes, None)
+    analyze_with_firmware_detailed(file_name, contents, fw_name, fw_bytes).report
 }
 
 pub fn analyze_with_firmware_with_ties(
@@ -894,6 +955,38 @@ pub fn analyze_with_firmware_with_ties(
     fw_bytes: &[u8],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> WebReport {
+    analyze_with_firmware_detailed_with_ties(file_name, contents, fw_name, fw_bytes, schematic_ties)
+        .report
+}
+
+pub fn analyze_with_firmware_detailed(
+    file_name: &str,
+    contents: &[u8],
+    fw_name: &str,
+    fw_bytes: &[u8],
+) -> WebFirmwareAnalysis {
+    analyze_with_firmware_detailed_with_ties(file_name, contents, fw_name, fw_bytes, None)
+}
+
+pub fn analyze_with_firmware_detailed_with_ties(
+    file_name: &str,
+    contents: &[u8],
+    fw_name: &str,
+    fw_bytes: &[u8],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> WebFirmwareAnalysis {
+    let (report, coverage) =
+        analyze_with_firmware_parts(file_name, contents, fw_name, fw_bytes, schematic_ties);
+    WebFirmwareAnalysis { report, coverage }
+}
+
+fn analyze_with_firmware_parts(
+    file_name: &str,
+    contents: &[u8],
+    fw_name: &str,
+    fw_bytes: &[u8],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> (WebReport, WebCosimCoverage) {
     // Normalize ONCE; the static analysis and the co-sim share the same
     // extracted board. Re-reading the ORIGINAL bytes for co-sim with only the
     // text/binary sniffers fails with "could not re-read the board" on a
@@ -901,7 +994,12 @@ pub fn analyze_with_firmware_with_ties(
     let norm = match crate::board_input::from_bytes(file_name, contents) {
         Ok(n) => n,
         // No board to co-sim against; return the normalization error as-is.
-        Err(e) => return unreadable(file_name, e.web_message()),
+        Err(e) => {
+            return (
+                unreadable(file_name, e.web_message()),
+                WebCosimCoverage::default(),
+            )
+        }
     };
     let (mut report, drc) = analyze_normalized_with_ties(file_name, &norm, schematic_ties);
     let tie_qualification = schematic_ties.map(|ties| ties.qualify(&drc));
@@ -914,9 +1012,11 @@ pub fn analyze_with_firmware_with_ties(
         Ok(r) => r,
         Err(msg) => {
             let cosim = cosim_unavailable(msg);
-            report.refusal = refusal_for_cosim(&cosim);
+            let coverage = WebCosimCoverage::default();
+            report.refusal = refusal_for_cosim(&cosim, &coverage);
+            apply_refusal_headline(&mut report);
             report.cosim = Some(cosim);
-            return report;
+            return (report, coverage);
         }
     };
     let (mut cosim, cosim_evidence) = run_web_cosim(
@@ -927,6 +1027,10 @@ pub fn analyze_with_firmware_with_ties(
         &drc,
         tie_qualification.as_ref(),
     );
+    let coverage = cosim_evidence
+        .as_ref()
+        .map(|captured| captured.coverage.clone())
+        .unwrap_or_default();
     // Whether the evidence pass below parked the headline on run-level
     // invalidity; the fault fold must not demote that to a warning headline
     // (serious beats invalid beats warning).
@@ -1080,20 +1184,27 @@ pub fn analyze_with_firmware_with_ties(
     } else if report.total == 0 {
         // No fault escalation and the static board is clean, but a co-sim that
         // proved nothing must not leave a bare "Looks healthy" headline.
-        if let Some(demoted) = cosim_caveat_headline(&cosim, &report.headline) {
+        if let Some(demoted) = cosim_caveat_headline(&cosim, &coverage, &report.headline) {
             report.headline = demoted;
         }
     }
-    report.refusal = refusal_for_cosim(&cosim);
+    report.refusal = refusal_for_cosim(&cosim, &coverage);
+    apply_refusal_headline(&mut report);
     report.cosim = Some(cosim);
-    report
+    (report, coverage)
+}
+
+fn apply_refusal_headline(report: &mut WebReport) {
+    if report.refusal.is_some() && report.serious == 0 {
+        report.headline = "Analysis invalid for the requested firmware co-simulation. Static board findings remain valid.".to_string();
+    }
 }
 
 /// Translate a co-sim validity failure into the shared C5.3 refusal contract.
 /// A firmware run that merely carries a substitute/exercise caveat is not an
 /// exit-3-class refusal: only an unavailable run or invalid analog solve lands
 /// here, matching the MCP and strict CLI semantics.
-fn refusal_for_cosim(cosim: &WebCosimSection) -> Option<Refusal> {
+fn refusal_for_cosim(cosim: &WebCosimSection, coverage: &WebCosimCoverage) -> Option<Refusal> {
     if !cosim.ran {
         let finding = cosim.findings.first();
         let missing = finding
@@ -1138,6 +1249,18 @@ fn refusal_for_cosim(cosim: &WebCosimSection) -> Option<Refusal> {
                 "Firmware loading and reported digital observations outside failed analog windows remain available.",
             ],
             next,
+        ));
+    }
+
+    if let Some(diagnosis) = coverage.timing_refusals.first() {
+        return Some(Refusal::new(
+            "timing-sensitive firmware and electrical conclusions",
+            diagnosis.clone(),
+            vec![
+                "Static board analysis and its reported findings remain valid.",
+                "Non-timing-sensitive observations outside the refused replay remain available.",
+            ],
+            "reduce transitions per solver chunk (for example with a narrower --chunk-us), then rerun the same firmware",
         ));
     }
 
@@ -1195,14 +1318,23 @@ fn fold_cosim_faults(
 /// Returns `None` (keep the existing headline) when no caveat applies: the gate
 /// on `ran` keeps a not-run co-sim (no firmware / external backend) from
 /// demoting, and only a bare "Looks healthy" line is ever overwritten.
-fn cosim_caveat_headline(cosim: &WebCosimSection, current_headline: &str) -> Option<String> {
+fn cosim_caveat_headline(
+    cosim: &WebCosimSection,
+    coverage: &WebCosimCoverage,
+    current_headline: &str,
+) -> Option<String> {
     // A note-level co-sim finding (a boot held-high advisory, the analog-validity
     // caveat) is an actionable heads-up, not a counted fault: like the static
     // sections' `heads_up`, it must demote a bare "Looks healthy" to the heads-up
     // verdict without touching the serious/total badge.
     let has_note = cosim.findings.iter().any(|f| f.level == "note");
     let caveat = cosim.ran
-        && (!cosim.firmware_exercised || cosim.substituted || !cosim.analog_valid || has_note);
+        && (!cosim.firmware_exercised
+            || cosim.substituted
+            || !cosim.analog_valid
+            || !coverage.timing_refusals.is_empty()
+            || !coverage.fallback_windows.is_empty()
+            || has_note);
     if caveat && current_headline == overall_headline(0, 0, false, false) {
         Some(overall_headline(0, 0, true, false))
     } else {
@@ -1331,6 +1463,38 @@ fn cli_cosim_command(board_file: &str, fw_file: &str) -> String {
     format!("\"{exe}\" run \"{board_file}\" --firmware \"{fw_file}\" --headless")
 }
 
+/// Project ordinary coverage limitations/events onto the web finding cards.
+/// Strict timing refusal deliberately stays out: it already has the structural
+/// `timing_refusals` field and the typed [`Refusal`] contract, so projecting it
+/// here would render the same invalidity again as a lower-severity note.
+fn coverage_findings_for_web(
+    caveats: &[crate::reports::coverage::CoverageCaveat],
+) -> Vec<WebFinding> {
+    use crate::reports::coverage::CoverageClass;
+
+    caveats
+        .iter()
+        .filter(|c| {
+            matches!(
+                c.class,
+                CoverageClass::AdcDropped
+                    | CoverageClass::UnexercisedBus
+                    | CoverageClass::WatchdogLimitation
+                    | CoverageClass::WatchdogReboot
+                    | CoverageClass::TimingLimitation
+            )
+        })
+        .map(|c| WebFinding {
+            level: "note".to_string(),
+            what: c.headline.clone(),
+            why: c.message.clone(),
+            fix: c.fix.clone(),
+            x: None,
+            y: None,
+        })
+        .collect()
+}
+
 fn run_web_cosim(
     board: &ExtractedBoard,
     board_file_name: &str,
@@ -1366,23 +1530,26 @@ fn run_web_cosim(
     // note that names the working alternatives WITH the real file names (the
     // live sim runs these backends fine; only this synchronous quick report
     // cannot wait for them).
-    if bound
+    let external_mcus: Vec<_> = bound
         .mcus
         .iter()
-        .all(|m| m.backend.starts_with("renode:") || m.backend.starts_with("qemu:"))
-    {
-        let emulator = if bound.mcus.iter().any(|m| m.backend.starts_with("qemu:")) {
-            "Espressif QEMU"
-        } else {
-            "Renode"
-        };
+        .filter(|m| m.backend.starts_with("renode:") || m.backend.starts_with("qemu:"))
+        .collect();
+    if !external_mcus.is_empty() {
+        let selected = external_mcus
+            .iter()
+            .map(|m| format!("{} ({})", m.reference, m.backend))
+            .collect::<Vec<_>>()
+            .join(", ");
         let mut section = cosim_unavailable(format!(
-            "This board's MCU runs on an external emulator ({emulator}). This quick \
+            "This board selects at least one MCU that requires an external emulator: \
+             {selected}. The synchronous web run cannot execute only a subset of the \
+             selected cores and present it as whole-board firmware evidence. This quick \
              report simulates only a {SECONDS:.1} s window, and a chip like this one \
              spends several simulated seconds in its boot ROM before your code starts, \
              so the report would show a processor that has not booted yet. Running it \
              long enough is a job of tens of wall-clock seconds, which is why it is not \
-             done inside a page load. The co-sim itself works, two ways: open the live \
+             done inside a page load. The complete co-sim works, two ways: open the live \
              sim (\"Drive it live\") to boot this firmware here in the app, or run it \
              from a terminal, from the folder holding your files: {}",
             cli_cosim_command(board_file_name, fw_name)
@@ -1628,6 +1795,40 @@ fn run_web_cosim(
             },
         );
     }
+    // The co-sim coverage caveats this surface did not carry, on the same
+    // note-level `WebFinding` mechanism as the ones it already did (short
+    // pulses, driver contention, drive conflicts).
+    //
+    // Watchdog reboots were reachable here and silent: `simavr`'s watchdog does
+    // bite and `Mcu::watchdog_resets` counts the reboots, so a run whose
+    // firmware was rebooted mid-window read quiet on the web while `hauksbee
+    // run` warned about it. Behaviour after a reboot belongs to a rebooted core,
+    // so it demotes the headline like every other honesty caveat here.
+    //
+    // Dropped ADC injections, unexercised buses, watchdog limitations and timing
+    // limitations are structurally empty on this path, which co-sims AVR in
+    // process: `simavr` has an exact ADC injection map, decodes TWI and SPI
+    // natively, and reports neither limitation. They are wired anyway rather
+    // than skipped, so a backend added to this path later cannot make them
+    // silent again.
+    //
+    // Sourced from `reports::coverage`, the one enumeration the batch surfaces'
+    // wording comes from, so a sentence here is the sentence `--json` carries.
+    // Per-core timing coverage is deliberately NOT in this list: it is a
+    // resolution statement present on every run with a live core, so a finding
+    // would demote every healthy report's headline. It rides the structural
+    // `timing_coverage` field below instead, the tier `--json` gives it and the
+    // mechanism `spi_framing` already uses on this surface.
+    {
+        use crate::reports::coverage::CoverageInputs;
+        let caveats = CoverageInputs::from_scheduler(sched).caveats();
+        for finding in coverage_findings_for_web(&caveats) {
+            // Note-level for the same reason as the substitution and short-pulse
+            // caveats: these qualify what the run means rather than inventing a
+            // board defect. Strict-invalid timing refusals are not in this list.
+            findings.insert(0, finding);
+        }
+    }
     // Zero-activity refusal: a run that drove nothing proves nothing.
     if total_toggles == 0 && uart_empty && !any_gpio_driven {
         findings.insert(
@@ -1751,6 +1952,23 @@ fn run_web_cosim(
         })
         .collect();
 
+    // Per-core timing coverage, read from the same accessor the CLI `--json`
+    // field reads (see the field's doc comment for why it is a field and not a
+    // finding).
+    let timing_coverage = sched.timing_coverage();
+    let timing_refusals = sched.timing_refusals().to_vec();
+    let fallback_windows = sched
+        .fallback_windows()
+        .iter()
+        .map(|window| crate::result::CosimFallbackWindow {
+            start_s: window.start_s,
+            end_s: window.end_s,
+            method: window.method.as_str().to_string(),
+            fidelity_note: window.method.fidelity_note().to_string(),
+            error_estimate_v: window.error_estimate_v,
+        })
+        .collect();
+
     let error_budget = match sched.error_budget() {
         Ok(budget) => Some(budget),
         Err(error) => {
@@ -1774,6 +1992,11 @@ fn run_web_cosim(
         activity_nets: gpio_nets.iter().map(|net| net.name.clone()).collect(),
         scoped_substitutions: sched.scoped_substitutions().to_vec(),
         error_budget: error_budget.clone(),
+        coverage: WebCosimCoverage {
+            timing_coverage,
+            timing_refusals,
+            fallback_windows,
+        },
     };
     let substituted = !captured.scoped_substitutions.is_empty();
     (
@@ -1898,9 +2121,18 @@ pub fn analyze_with_firmware_json_with_ties(
     fw_bytes: &[u8],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> String {
-    let report =
-        analyze_with_firmware_with_ties(file_name, contents, fw_name, fw_bytes, schematic_ties);
-    serde_json::to_string(&report).unwrap_or_else(|e| {
+    let analysis = analyze_with_firmware_detailed_with_ties(
+        file_name,
+        contents,
+        fw_name,
+        fw_bytes,
+        schematic_ties,
+    );
+    let value = match analysis.to_json_value() {
+        Ok(value) => value,
+        Err(e) => return format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}"),
+    };
+    serde_json::to_string(&value).unwrap_or_else(|e| {
         format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}")
     })
 }
@@ -2734,6 +2966,11 @@ fn main {
             .refusal
             .expect("unavailable co-sim must carry a refusal contract");
         assert!(!refusal.claim.is_empty());
+        assert!(
+            !r.headline.contains("Looks healthy") && r.headline.contains("invalid"),
+            "a refusal cannot retain a healthy primary verdict: {}",
+            r.headline
+        );
         assert!(refusal
             .missing_prerequisite
             .to_lowercase()
@@ -2941,7 +3178,7 @@ fn main {
 
         // A clean, exercised run keeps the healthy headline.
         assert_eq!(
-            cosim_caveat_headline(&clean_ran_section(), &healthy),
+            cosim_caveat_headline(&clean_ran_section(), &WebCosimCoverage::default(), &healthy),
             None,
             "a real firmware run must not be demoted"
         );
@@ -2955,21 +3192,22 @@ fn main {
             let mut s = clean_ran_section();
             mutate(&mut s);
             assert_eq!(
-                cosim_caveat_headline(&s, &healthy),
+                cosim_caveat_headline(&s, &WebCosimCoverage::default(), &healthy),
                 Some(demoted.clone()),
                 "a co-sim that proved nothing must demote Looks healthy"
             );
         }
 
-        // A co-sim that did NOT run (no firmware / external backend) never demotes,
-        // even carrying caveat-shaped defaults.
+        // This helper handles caveats from completed runs. A co-sim that did not
+        // run is labeled invalid by `apply_refusal_headline` after its typed
+        // refusal is built, not by this note-level helper.
         let mut not_run = clean_ran_section();
         not_run.ran = false;
         not_run.firmware_exercised = false;
         assert_eq!(
-            cosim_caveat_headline(&not_run, &healthy),
+            cosim_caveat_headline(&not_run, &WebCosimCoverage::default(), &healthy),
             None,
-            "a not-run co-sim is not a refusal and must not demote"
+            "not-run handling belongs to the typed refusal path"
         );
 
         // Only the bare healthy line is overwritten; an already-demoted or
@@ -2977,9 +3215,151 @@ fn main {
         let mut caveated = clean_ran_section();
         caveated.substituted = true;
         assert_eq!(
-            cosim_caveat_headline(&caveated, &demoted),
+            cosim_caveat_headline(&caveated, &WebCosimCoverage::default(), &demoted),
             None,
             "an already-heads-up headline is not rewritten"
+        );
+    }
+
+    #[test]
+    fn timing_refusal_is_structured_and_refuses_while_fallback_is_qualified() {
+        let window = crate::result::CosimFallbackWindow {
+            start_s: 0.001,
+            end_s: 0.002,
+            method: "backward-euler".to_string(),
+            fidelity_note: "first-order and numerically dissipative".to_string(),
+            error_estimate_v: Some(0.012),
+        };
+        let fallback_only = clean_ran_section();
+        let mut coverage = WebCosimCoverage {
+            fallback_windows: vec![window.clone()],
+            ..Default::default()
+        };
+        assert!(
+            refusal_for_cosim(&fallback_only, &coverage).is_none(),
+            "a converged second-class span is qualified, not refused"
+        );
+        assert!(
+            cosim_caveat_headline(
+                &fallback_only,
+                &coverage,
+                &overall_headline(0, 0, false, false)
+            )
+            .is_some(),
+            "second-class evidence cannot leave a bare healthy headline"
+        );
+
+        let section = fallback_only;
+        coverage.timing_refusals =
+            vec!["PWL replay refused on net /CLK: transition budget exceeded".to_string()];
+
+        let json = serde_json::to_value(&coverage).unwrap();
+        assert_eq!(json["timing_refusals"][0], coverage.timing_refusals[0]);
+        assert_eq!(json["fallback_windows"][0]["method"], "backward-euler");
+        assert_eq!(json["fallback_windows"][0]["error_estimate_v"], 0.012);
+
+        let refusal = refusal_for_cosim(&section, &coverage).expect("timing collapse is invalid");
+        assert!(
+            refusal.missing_prerequisite.contains("PWL replay refused"),
+            "{refusal:?}"
+        );
+    }
+
+    #[test]
+    fn strict_timing_refusal_is_not_projected_as_an_ordinary_note_finding() {
+        use crate::reports::coverage::CoverageInputs;
+
+        let caveats = CoverageInputs {
+            watchdog_resets: vec![("U1".to_string(), 1)],
+            timing_refusals: vec![
+                "PWL replay refused on net /CLK: transition budget exceeded".to_string()
+            ],
+            ..Default::default()
+        }
+        .caveats();
+        let findings = coverage_findings_for_web(&caveats);
+
+        assert_eq!(findings.len(), 1, "only the reboot is an ordinary note");
+        assert!(findings[0].why.contains("watchdog rebooted"));
+        assert!(
+            findings
+                .iter()
+                .all(|finding| !finding.why.contains("TIMING INVALID")),
+            "strict invalidity belongs only in timing_refusals + Refusal: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn synchronous_web_cosim_refuses_when_any_selected_mcu_needs_an_external_backend() {
+        use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+
+        let pin = |number: &str, net: i64, function: &str| Pin {
+            number: number.to_string(),
+            net: Some(net),
+            function: function.to_string(),
+            kind: String::new(),
+            position: None,
+        };
+        let component = |reference: &str, value: &str, lib_id: &str, pins: Vec<Pin>| Component {
+            reference: reference.to_string(),
+            value: value.to_string(),
+            lib_id: lib_id.to_string(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins,
+        };
+        let board = ExtractedBoard {
+            name: "mixed-backend-board".to_string(),
+            nets: vec![
+                Net {
+                    id: 1,
+                    name: "+5V".to_string(),
+                },
+                Net {
+                    id: 2,
+                    name: "GND".to_string(),
+                },
+            ],
+            components: vec![
+                component(
+                    "U1",
+                    "ATmega328P",
+                    "MCU_Microchip_ATmega:ATmega328P-AU",
+                    vec![pin("7", 1, "VCC"), pin("8", 2, "GND")],
+                ),
+                component(
+                    "U2",
+                    "STM32F411CEU6",
+                    "MCU_ST_STM32F4:STM32F411CEUx",
+                    vec![pin("24", 1, "VDD"), pin("23", 2, "VSS")],
+                ),
+            ],
+        };
+
+        let (section, evidence) = run_web_cosim(
+            &board,
+            "mixed.kicad_pcb",
+            "firmware.elf",
+            &[0u8; 4],
+            &hauksbee_extract::DrcReport::default(),
+            None,
+        );
+        let reason = section
+            .findings
+            .first()
+            .map(|finding| finding.why.as_str())
+            .unwrap_or_default();
+        assert!(!section.ran, "mixed external/in-process runs must refuse");
+        assert!(
+            evidence.is_none(),
+            "a refused run produces no co-sim evidence"
+        );
+        assert!(
+            reason.contains("U2") && reason.contains("external emulator"),
+            "the refusal must name the selected external MCU, got: {reason}"
         );
     }
 
@@ -3070,7 +3450,7 @@ fn main {
         // (2) It demotes the bare healthy headline to the heads-up verdict.
         let healthy = overall_headline(0, 0, false, false);
         assert_eq!(
-            cosim_caveat_headline(&sect, &healthy),
+            cosim_caveat_headline(&sect, &WebCosimCoverage::default(), &healthy),
             Some(overall_headline(0, 0, true, false)),
             "a boot held-high advisory must demote Looks healthy, not escalate serious"
         );
@@ -3107,7 +3487,7 @@ fn main {
         // (2) It demotes the bare healthy headline to the heads-up verdict.
         let healthy = overall_headline(0, 0, false, false);
         assert_eq!(
-            cosim_caveat_headline(&diverged, &healthy),
+            cosim_caveat_headline(&diverged, &WebCosimCoverage::default(), &healthy),
             Some(overall_headline(0, 0, true, false)),
             "a diverged analog solve must demote Looks healthy, not escalate serious"
         );
@@ -3151,7 +3531,8 @@ fn main {
             json.contains("\"failed_windows\""),
             "invalid run lists failed_windows: {json}"
         );
-        let refusal = refusal_for_cosim(&section).expect("invalid analog run refuses");
+        let refusal = refusal_for_cosim(&section, &WebCosimCoverage::default())
+            .expect("invalid analog run refuses");
         assert!(
             refusal
                 .missing_prerequisite

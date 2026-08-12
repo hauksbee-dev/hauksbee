@@ -73,6 +73,23 @@ export interface WebSpiFraming {
   mode: string
 }
 
+export interface WebTimingCoverage {
+  mcu_ref: string
+  backend: string
+  cycle_exact: boolean
+  timestamp_precision_s: number
+  minimum_guaranteed_pulse_s: number
+  chunk_s: number
+}
+
+export interface WebFallbackWindow {
+  start_s: number
+  end_s: number
+  method: string
+  fidelity_note: string
+  error_estimate_v?: number
+}
+
 export interface WebCosimSection {
   ran: boolean
   seconds_simulated: number
@@ -82,6 +99,9 @@ export interface WebCosimSection {
   analog_valid: boolean
   failed_windows?: WebFailedWindow[]
   spi_framing?: WebSpiFraming[]
+  timing_coverage?: WebTimingCoverage[]
+  timing_refusals?: string[]
+  fallback_windows?: WebFallbackWindow[]
   error_budget?: ErrorBudget
 }
 

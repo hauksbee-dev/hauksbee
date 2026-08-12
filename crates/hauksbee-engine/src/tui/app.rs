@@ -18,7 +18,7 @@ use ratatui::Terminal;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
-use super::cosim::{self, CosimHandle, CosimUpdate};
+use super::cosim::{self, CosimUpdate, CosimWorkers};
 use super::render;
 use super::state::{AppState, Net, Pane};
 use crate::binder::bind_board;
@@ -40,7 +40,7 @@ pub fn run(
     models_dir: Option<&Path>,
     firmware: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    run_with_schematic(board_path, board_text, models_dir, firmware, None)
+    run_with_schematic_and_chunk(board_path, board_text, models_dir, firmware, None, None)
 }
 
 pub fn run_with_schematic(
@@ -50,18 +50,59 @@ pub fn run_with_schematic(
     firmware: Option<PathBuf>,
     schematic: Option<&Path>,
 ) -> anyhow::Result<()> {
+    run_with_schematic_and_chunk(
+        board_path, board_text, models_dir, firmware, schematic, None,
+    )
+}
+
+/// Launch the TUI with an optional exact solver chunk override. Kept separate
+/// so the planned 0.1 four-argument [`run`] entry point remains source-compatible.
+pub fn run_with_chunk(
+    board_path: &Path,
+    board_text: &str,
+    models_dir: Option<&Path>,
+    firmware: Option<PathBuf>,
+    chunk_us: Option<f64>,
+) -> anyhow::Result<()> {
+    run_with_schematic_and_chunk(board_path, board_text, models_dir, firmware, None, chunk_us)
+}
+
+/// Complete launch surface used by the CLI when both optional inputs are set.
+pub fn run_with_schematic_and_chunk(
+    board_path: &Path,
+    board_text: &str,
+    models_dir: Option<&Path>,
+    firmware: Option<PathBuf>,
+    schematic: Option<&Path>,
+    chunk_us: Option<f64>,
+) -> anyhow::Result<()> {
     // Build the model on the SAME analysis path the --json/text surfaces use.
     let state = build_state_with_schematic(board_path, board_text, models_dir, schematic)?;
 
     // Firmware: explicit arg wins; otherwise auto-detect a sibling .elf.
     let firmware = firmware.or_else(|| cosim::autodetect_firmware(board_path));
-    let chunk_ms = cosim::default_chunk_ms(state.backend.as_deref());
+    let chunk_ms = cosim::configured_chunk_ms(state.backend.as_deref(), chunk_us)?;
     let board_text = board_text.to_string();
     let board_name = state.board_name.clone();
 
     let mut term = setup_terminal()?;
-    let res = event_loop(&mut term, state, board_text, board_name, firmware, chunk_ms);
-    restore_terminal(&mut term)?;
+    let mut workers = CosimWorkers::default();
+    let res = event_loop(
+        &mut term,
+        state,
+        board_text,
+        board_name,
+        firmware,
+        chunk_ms,
+        &mut workers,
+    );
+    let restore = restore_terminal(&mut term);
+    // External-emulator construction/steps may not be interruptible, so wait
+    // only after the user's terminal is usable again. Retaining and joining the
+    // workers ensures their QEMU/Renode owners reap child processes on normal
+    // return instead of being abandoned by process exit.
+    workers.stop_and_join_all();
+    restore?;
     res
 }
 
@@ -287,34 +328,49 @@ fn event_loop(
     board_name: String,
     firmware: Option<PathBuf>,
     chunk_ms: f64,
+    workers: &mut CosimWorkers,
 ) -> anyhow::Result<()> {
-    let mut cosim: Option<CosimHandle> = None;
     let mut last_update: Option<CosimUpdate> = None;
 
     loop {
+        workers.reap_finished();
         // Drain any pending co-sim updates (non-blocking).
-        if let Some(h) = &cosim {
-            while let Ok(u) = h.rx.try_recv() {
+        if let Some(h) = workers.active() {
+            // The worker transport is capacity-one, but keep an explicit cap so
+            // this input-before-render invariant survives any future transport
+            // change: keyboard polling must never sit behind an unbounded drain.
+            for _ in 0..2 {
+                let Ok(u) = h.rx.try_recv() else {
+                    break;
+                };
                 let done = u.done;
                 // Surface the chip-substitution caveat in AppState so both the
                 // idle and live cosim views show it (parity with CLI/web).
                 if let Some(sub) = &u.substitution {
                     state.set_chip_substitution(sub.clone());
                 }
+                // Co-sim coverage caveats, from the shared enumeration the
+                // batch surfaces' wording comes from. Held in AppState so the
+                // count banner, the footer hint and the `c` overlay all read one
+                // list, and so the caveats survive the run finishing.
+                state.set_coverage(h.latest_coverage());
                 // Feed the scope's ring buffers from the SAME stream (each drained
                 // update is one time sample). Only probed nets are buffered; this
                 // adds no second co-sim path.
                 state.scope.record(u.sim_ms, &u.net_voltages);
                 last_update = Some(u);
                 if done {
-                    cosim = None;
+                    workers.finish_active();
                     break;
                 }
             }
         }
 
-        let running = cosim.is_some();
-        term.draw(|f| render::draw(f, &state, last_update.as_ref(), running))?;
+        let running = workers.is_running();
+        let stopping = workers.is_stopping();
+        term.draw(|f| {
+            render::draw_with_stopping(f, &state, last_update.as_ref(), running, stopping)
+        })?;
 
         // Poll for input with a short timeout so the co-sim stream animates.
         if !event::poll(Duration::from_millis(80))? {
@@ -340,6 +396,21 @@ fn event_loop(
         // (Esc as the meta prefix), so an Alt-modified key while a modal is open
         // is treated as the Esc that was meant to close it, not the action.
         if state.any_overlay_open() {
+            // The coverage overlay is the one overlay whose content can exceed
+            // the modal (twelve classes of full sentence), so ↑/↓ scroll it while
+            // it is open. Everything else stays modal-swallowed below.
+            if state.coverage_open
+                && matches!(
+                    key.code,
+                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k')
+                )
+            {
+                match key.code {
+                    KeyCode::Down | KeyCode::Char('j') => state.coverage_scroll_down(),
+                    _ => state.coverage_scroll_up(),
+                }
+                continue;
+            }
             // Two ways to close: an explicit close key (Esc/Enter/q), or an
             // Alt-modified key, many terminals encode a quick `Esc <key>` burst
             // as a single Alt+<key> event (Esc as the meta prefix), so an
@@ -379,26 +450,23 @@ fn event_loop(
                     // No firmware to co-simulate, `r` just surfaces the pane's
                     // static-analysis message rather than faking a run.
                     state.focus = Pane::Cosim;
-                } else if let Some(h) = &cosim {
-                    h.stop();
-                    cosim = None;
+                } else if workers.is_running() {
+                    workers.retire_active();
                 } else {
                     // Start the co-sim worker. Drop any previous run's scope
                     // samples (sim time restarts at 0) but keep the probes, so
                     // an old trace never splices onto the new run's.
-                    state.scope.clear_samples();
-                    state.focus = Pane::Cosim;
-                    last_update = Some(CosimUpdate {
-                        chunk_ms,
-                        ..Default::default()
-                    });
-                    cosim = Some(cosim::spawn(
-                        board_text.clone(),
-                        firmware.clone(),
-                        board_name.clone(),
-                        COSIM_SECONDS,
-                        chunk_ms,
-                    ));
+                    if workers.can_start() {
+                        begin_cosim_ui_run(&mut state, &mut last_update, chunk_ms);
+                        let started = workers.try_start(cosim::spawn(
+                            board_text.clone(),
+                            firmware.clone(),
+                            board_name.clone(),
+                            COSIM_SECONDS,
+                            chunk_ms,
+                        ));
+                        debug_assert!(started);
+                    }
                 }
             }
             // Probe: toggle the highlighted net onto/off the scope. Only fires
@@ -407,6 +475,11 @@ fn event_loop(
             KeyCode::Char('p') => {
                 let _ = state.toggle_probe_selected();
             }
+            // Co-sim coverage detail: the full sentence for every caveat the run
+            // has disclosed. The pane's count banner is the surfacing; this is
+            // where the wording lives, so a narrow pane never has to carry ten
+            // paragraphs. A no-op when there is nothing to disclose.
+            KeyCode::Char('c') => state.toggle_coverage(),
             _ => {}
         }
 
@@ -414,9 +487,22 @@ fn event_loop(
             break;
         }
     }
-    // Stop any running co-sim before we tear down the terminal.
-    drop(cosim);
+    // The caller restores the terminal before joining retained workers.
+    workers.retire_active();
     Ok(())
+}
+
+/// The complete UI-side transition behind the event loop's `r` action. Kept
+/// together so a new worker cannot briefly inherit any coverage/modal/scroll or
+/// scope samples from the previous run.
+fn begin_cosim_ui_run(state: &mut AppState, last_update: &mut Option<CosimUpdate>, chunk_ms: f64) {
+    state.begin_cosim_run();
+    state.scope.clear_samples();
+    state.focus = Pane::Cosim;
+    *last_update = Some(CosimUpdate {
+        chunk_ms,
+        ..Default::default()
+    });
 }
 
 #[cfg(test)]
@@ -490,5 +576,43 @@ mod tests {
         assert_eq!(u1, vec!["GND".to_string(), "VBUS".to_string()]);
         assert!(net_parts.contains_key("VBUS"));
         assert!(!net_parts.contains_key("unconnected-(U1-NC)"));
+    }
+
+    #[test]
+    fn real_begin_run_event_transition_clears_prior_coverage_ui() {
+        use crate::reports::coverage::CoverageInputs;
+        use crate::scheduler::AdcDrop;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let board_path = root.join("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb");
+        let board = std::fs::read_to_string(&board_path).expect("tracked board fixture reads");
+        let mut state = build_state(&board_path, &board, None).expect("real TUI state builds");
+        state.set_coverage(
+            CoverageInputs {
+                adc_dropped: vec![AdcDrop {
+                    mcu_ref: "U1".into(),
+                    channel: 4,
+                    net: "/VSENSE".into(),
+                    parts: Vec::new(),
+                }],
+                ..Default::default()
+            }
+            .caveats(),
+        );
+        state.toggle_coverage();
+        let mut update = Some(CosimUpdate {
+            done: true,
+            ..Default::default()
+        });
+
+        begin_cosim_ui_run(&mut state, &mut update, 1.0);
+
+        assert!(state.coverage().is_empty());
+        assert!(!state.coverage_open);
+        assert_eq!(state.coverage_scroll, 0);
+        assert_eq!(state.focus, Pane::Cosim);
+        let fresh = update.expect("new run placeholder");
+        assert_eq!(fresh.chunk_ms, 1.0);
+        assert!(!fresh.done);
     }
 }
