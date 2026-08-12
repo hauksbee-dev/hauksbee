@@ -1117,7 +1117,9 @@ pub struct DrcShort {
     pub layer: String,
     pub gap_mm: f64,
     pub loc_mm: [f64; 2],
-    /// Always "serious" for a short; carried for the uniform finding shape.
+    /// "serious" for a short, "note" only when the board format could not be
+    /// validated or board-local physical authority qualifies this location. A
+    /// companion Eagle schematic adds context but cannot change severity.
     pub severity: String,
     /// Human one-line description, mirroring `JsonFinding.plain` so every
     /// `--json` finding category reads uniformly (SI/lint already carry it).
@@ -1223,6 +1225,14 @@ pub struct DrcStructured {
 
 impl DrcStructured {
     pub fn from_report(report: &DrcReport) -> Self {
+        Self::from_report_with_ties(report, None, false)
+    }
+
+    pub fn from_report_with_ties(
+        report: &DrcReport,
+        qualification: Option<&hauksbee_extract::DrcTieQualification>,
+        missing_eagle_schematic: bool,
+    ) -> Self {
         let mut shorts = Vec::new();
         // Group clearance findings by (net_a, net_b, layer). Within a group we
         // split at_limit (gap >= rule, i.e. exactly at or, defensively, above)
@@ -1239,28 +1249,69 @@ impl DrcStructured {
         // On an unvalidated board format (KiCad 10+) the shorts may be phantom, so
         // they carry "note" severity, not "serious", every structured consumer
         // (JSON, TUI) inherits the downgrade from this single source.
-        let short_severity = if report.version_warning.is_some() {
-            "note"
-        } else {
-            "serious"
-        };
+        let phantom = report.version_warning.is_some();
 
         for f in &report.findings {
+            let authorized_tie = qualification.and_then(|ties| ties.tie_for(f));
+            let declared_tie = qualification.and_then(|ties| ties.declaration_for(f));
             match f.kind {
+                // A short is serious unless something specific says otherwise:
+                // the format was unvalidated, or board-local authority declares
+                // this exact pair of nets deliberately tied. Both are per-finding
+                // here rather than per-report, because board-local authority qualifies
+                // only the contacts it covers and every other short on the same
+                // board stays serious.
                 ViolationKind::Short => shorts.push(DrcShort {
                     net_a: f.net_a_name.clone(),
                     net_b: f.net_b_name.clone(),
                     layer: f.layer.clone(),
                     gap_mm: f.gap_mm,
                     loc_mm: [f.x, f.y],
-                    severity: short_severity.to_string(),
-                    plain: format!(
-                        "{} shorts {} on {} at ({:.2}, {:.2}) mm (gap {:.3} mm)",
-                        f.net_a_name, f.net_b_name, f.layer, f.x, f.y, f.gap_mm
-                    ),
-                    fix: "separate the two nets' copper: widen the gap or reroute so \
-                          the trace/pad spacing clears the clearance rule"
-                        .to_string(),
+                    severity: if phantom || authorized_tie.is_some() {
+                        "note".to_string()
+                    } else {
+                        "serious".to_string()
+                    },
+                    // The geometry sentence is identical either way: the nets DO
+                    // share copper, and a declared tie does not make that less
+                    // true. Only the clause after it changes.
+                    plain: match declared_tie {
+                        Some(tie) => format!(
+                            "{} and {} are joined in copper on {} at ({:.2}, {:.2}) mm \
+                             (gap {:.3} mm). The schematic names this net pair ({}; {}), but \
+                             does not identify or authorize this physical location",
+                            f.net_a_name,
+                            f.net_b_name,
+                            f.layer,
+                            f.x,
+                            f.y,
+                            f.gap_mm,
+                            tie.declaration,
+                            tie.source,
+                        ),
+                        None => format!(
+                            "{} shorts {} on {} at ({:.2}, {:.2}) mm (gap {:.3} mm)",
+                            f.net_a_name, f.net_b_name, f.layer, f.x, f.y, f.gap_mm
+                        ),
+                    },
+                    fix: match (declared_tie, missing_eagle_schematic) {
+                        (Some(_), _) => "verify this exact join against board-local layout intent \
+                             (for example a named net-tie footprint or reviewed coordinate), or \
+                             separate the nets. The Eagle schematic names only the net pair and \
+                             cannot prove where the physical join belongs."
+                            .to_string(),
+                        // No schematic was supplied and this format can declare
+                        // ties in one. Name that upload rather than leaving the
+                        // reader to guess what would settle it.
+                        (None, true) => "separate the two nets' copper: widen the gap or reroute \
+                             so the trace/pad spacing clears the clearance rule. If this contact \
+                             is deliberate, supply the same-named Eagle .sch companion for net-pair \
+                             context, then provide board-local layout authority for this location"
+                            .to_string(),
+                        (None, false) => "separate the two nets' copper: widen the gap or reroute \
+                             so the trace/pad spacing clears the clearance rule"
+                            .to_string(),
+                    },
                 }),
                 ViolationKind::Clearance => {
                     // A finding is "below" the rule when its gap is under it;
@@ -1370,6 +1421,10 @@ impl DrcStructured {
                 } else {
                     "NOTE"
                 };
+                // The measurement is printed identically whatever the severity:
+                // a declared tie is still copper touching, and hiding or
+                // softening the geometry would be the opposite dishonesty to
+                // calling it a defect. The declaration is appended to it.
                 let _ = writeln!(
                     s,
                     "  [{tag}] {} touches {} on {} (gap {:.4} mm) at x={:.1}, y={:.1}",
@@ -1687,7 +1742,8 @@ pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFind
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct JsonReport {
     /// Version of the `run --json` document contract. Bumped when a field
-    /// changes meaning or is removed; purely additive fields do not bump it.
+    /// changes meaning, is removed, or a closed enum gains a value; purely
+    /// additive optional fields do not bump it.
     /// The generated schema lives in `crates/hauksbee-engine/schemas/`.
     pub schema_version: u32,
     pub board: String,
@@ -2035,6 +2091,13 @@ impl JsonReport {
         if let Some(drc) = &self.drc {
             if drc.version_warning.is_none() {
                 for s in &drc.shorts {
+                    // A board-authorized contact or an unvalidated-format phantom
+                    // may be non-serious. Keep the aggregate verdict aligned with
+                    // the per-finding and artifact severities rather than
+                    // re-deriving intent here.
+                    if s.severity != "serious" {
+                        continue;
+                    }
                     let nets = vec![s.net_a.clone(), s.net_b.clone()];
                     let subject = format!("{} to {} on {}", s.net_a, s.net_b, s.layer);
                     if let Some(w) = waivers.take_waiver("drc", "short", &nets, &[], &subject) {
@@ -2584,6 +2647,109 @@ mod tests {
         let st = DrcStructured::from_report(&report);
         assert_eq!(st.shorts[0].severity, "serious");
         assert!(st.version_warning.is_none());
+    }
+
+    fn declared_qualification(report: &DrcReport) -> hauksbee_extract::DrcTieQualification {
+        report.qualify_with_declared_ties(
+            "emonTx V3.4.5.sch",
+            &[hauksbee_extract::DeclaredNetTie {
+                net: "GND".into(),
+                tied_net: "AGND".into(),
+                symbol: "AGND7".into(),
+                tied_to: vec!["SUPPLY6".into()],
+            }],
+        )
+    }
+
+    fn eagle_report(findings: Vec<DrcFinding>) -> DrcReport {
+        DrcReport {
+            clearance_mm: 0.2,
+            findings,
+            primitive_count: 2,
+            version_warning: None,
+            zone_pad_overlaps_suppressed: Some(0),
+        }
+    }
+
+    #[test]
+    fn a_schematic_only_tie_stays_serious_and_states_the_context() {
+        let report = eagle_report(vec![short("GND", "AGND")]);
+        let qualification = declared_qualification(&report);
+
+        let st = DrcStructured::from_report_with_ties(&report, Some(&qualification), false);
+        assert_eq!(st.shorts.len(), 1, "the finding is not deleted");
+        assert_eq!(st.shorts[0].severity, "serious");
+
+        // The geometry claim must survive into the text a user reads. Both nets
+        // named, and the word that says they are connected.
+        let plain = &st.shorts[0].plain;
+        assert!(plain.contains("GND") && plain.contains("AGND"), "{plain}");
+        assert!(
+            plain.contains("joined in copper"),
+            "the contact must still be stated: {plain}"
+        );
+        assert!(
+            plain.contains("AGND7 wired to SUPPLY6 in net GND"),
+            "and the declaration must name the symbols: {plain}"
+        );
+        assert!(
+            plain.contains("emonTx V3.4.5.sch"),
+            "and cite the file: {plain}"
+        );
+        // The schematic lacks a coordinate, so the fix must request board-local
+        // authority or separation rather than silently excusing the contact.
+        assert!(
+            st.shorts[0].fix.contains("separate"),
+            "a schematic-only declaration must retain an actionable fix: {}",
+            st.shorts[0].fix
+        );
+
+        // The rendered report keeps the measurement line verbatim and appends the
+        // declaration, so the copper is visible on the text surface too.
+        let rendered = st.render();
+        assert!(
+            rendered.contains("[SERIOUS] GND touches AGND on F.Cu"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[SERIOUS] GND touches AGND"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn without_a_schematic_the_short_stays_serious_and_names_the_upload() {
+        let report = eagle_report(vec![short("GND", "AGND")]);
+
+        let st = DrcStructured::from_report_with_ties(&report, None, true);
+        assert_eq!(st.shorts[0].severity, "serious");
+        // The abstention rule: a finding that cannot be settled from this input
+        // must name the input that settles it.
+        assert!(
+            st.shorts[0].fix.contains(".sch"),
+            "the fix must name the unlocking upload: {}",
+            st.shorts[0].fix
+        );
+
+        // And the plain-language surface carries it too.
+        let plain = crate::plain::plain_drc_structured(&st).render();
+        assert!(plain.contains(".sch"), "{plain}");
+    }
+
+    #[test]
+    fn schematic_context_does_not_downgrade_either_short() {
+        let report = eagle_report(vec![short("GND", "AGND"), short("+5V", "VBAT")]);
+        let qualification = declared_qualification(&report);
+
+        let st = DrcStructured::from_report_with_ties(&report, Some(&qualification), false);
+        assert_eq!(st.shorts.len(), 2);
+        let by_pair: std::collections::BTreeMap<&str, &str> = st
+            .shorts
+            .iter()
+            .map(|s| (s.net_b.as_str(), s.severity.as_str()))
+            .collect();
+        assert_eq!(by_pair["AGND"], "serious");
+        assert_eq!(by_pair["VBAT"], "serious");
     }
 
     use crate::report::{BindOutcome, BindRow};

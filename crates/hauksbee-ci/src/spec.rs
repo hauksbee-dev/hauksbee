@@ -168,6 +168,11 @@ pub struct Spec {
     /// hierarchy resolves; `.kicad_pcb` / `.net` / `.brd` / `.d356` are sniffed
     /// from content.
     pub board: PathBuf,
+    /// Optional companion Eagle schematic. CI identity-validates and inventories
+    /// it as exact input provenance; assertions still use the board alone as the
+    /// physical authority and do not consume its declarations.
+    #[serde(default)]
+    pub schematic: Option<PathBuf>,
     /// Optional firmware ELF/hex, relative to the spec file's directory.
     #[serde(default)]
     pub firmware: Option<PathBuf>,
@@ -1309,6 +1314,11 @@ impl Spec {
     /// The board file path, resolved against the spec's directory.
     pub fn board_path(&self) -> PathBuf {
         self.resolve(&self.board)
+    }
+
+    /// The optional Eagle companion path, resolved against the spec directory.
+    pub fn schematic_path(&self) -> Option<PathBuf> {
+        self.schematic.as_ref().map(|path| self.resolve(path))
     }
 
     /// The firmware path, resolved against the spec's directory.

@@ -80,6 +80,56 @@ fn drc_detects_then_simulation_applies_the_short() {
 }
 
 #[test]
+fn a_schematic_only_tie_is_bridged_and_remains_a_short_fault() {
+    let report = ExtractedBoard::drc(SHORTED_BOARD).expect("drc");
+    let qualification = report.qualify_with_declared_ties(
+        "board.sch",
+        &[hauksbee_extract::DeclaredNetTie {
+            net: "+5V".into(),
+            tied_net: "SIG".into(),
+            symbol: "SUPPLY1".into(),
+            tied_to: vec!["SUPPLY2".into()],
+        }],
+    );
+    assert_eq!(qualification.qualified_count(), 0);
+
+    let mut engine =
+        HauksbeeEngine::from_board_file(SHORTED_BOARD, None, "/b.kicad_pcb").expect("engine");
+    engine.apply_and_disclose_drc_shorts_with_qualification(&report, Some(&qualification));
+    let disclosure = engine
+        .board_info()
+        .shorts
+        .expect("the live wire contract discloses detected copper contacts");
+    assert_eq!(disclosure.detected, 1);
+    assert_eq!(
+        disclosure.bridged, 1,
+        "the measured physical connection is still stamped"
+    );
+    assert!(
+        disclosure.unapplied_reason.is_none(),
+        "a validated-format contact was applied, not refused"
+    );
+
+    let mut saw_short_fault = false;
+    let mut last_v5 = 0.0;
+    let mut last_sig = 0.0;
+    for _ in 0..20 {
+        let frame = engine.step(1e-4);
+        saw_short_fault |= frame.faults.iter().any(|fault| fault.kind == "short");
+        last_v5 = *frame.net_voltages.get("+5V").unwrap_or(&0.0);
+        last_sig = *frame.net_voltages.get("SIG").unwrap_or(&0.0);
+    }
+    assert!(
+        (last_v5 - last_sig).abs() < 0.05,
+        "measured contact must preserve the physical bridge: +5V={last_v5:.3}, SIG={last_sig:.3}"
+    );
+    assert!(
+        saw_short_fault,
+        "schematic net names cannot authorize this physical contact"
+    );
+}
+
+#[test]
 fn whatif_short_rail_to_ground_overdrives_series_resistor() {
     // A healthy board: a tiny 1 Ω 0402 resistor from +5V to a SENSE net, SENSE
     // bled to GND through 10k. Normal operation: SENSE sits near +5V (the 10k

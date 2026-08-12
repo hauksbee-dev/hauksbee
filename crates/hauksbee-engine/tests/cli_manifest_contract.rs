@@ -97,3 +97,37 @@ fn embedded_example_manifest_relies_on_the_pinned_tool_not_ephemeral_temp_files(
         .all(|input| !input.path.contains("hauksbee-example")));
     assert_eq!(doc.invocation.options["example"], "blinky");
 }
+
+#[test]
+fn invalid_explicit_schematic_aborts_before_manifest_creation() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = dir.path().join("design.brd");
+    let schematic = dir.path().join("design.sch");
+    let manifest = dir.path().join("run.manifest.json");
+    std::fs::write(
+        &board,
+        include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd"),
+    )
+    .unwrap();
+    std::fs::write(&schematic, b"<eagle><schematic>").unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hauksbee"))
+        .arg("run")
+        .arg(&board)
+        .args(["--drc", "--schematic"])
+        .arg(&schematic)
+        .arg("--emit-manifest")
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        !manifest.exists(),
+        "invalid companion must not produce replay evidence"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("not an Eagle .sch"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

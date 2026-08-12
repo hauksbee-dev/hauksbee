@@ -5462,6 +5462,13 @@ impl Scheduler {
     /// A short to ground (one net is GND) bridges the live net straight to the
     /// ground reference, exactly the destructive case worth simulating.
     pub fn short_nets(&mut self, net_a: &str, net_b: &str) -> bool {
+        self.short_nets_classified(net_a, net_b, true)
+    }
+
+    /// Stamp one physical bridge, optionally recording it as a defect. A
+    /// schematic-declared net tie needs the same milliohm bridge in the circuit
+    /// as any other copper contact, but must not manufacture a `short` fault.
+    fn short_nets_classified(&mut self, net_a: &str, net_b: &str, defect: bool) -> bool {
         let node_a = self.net_nodes.get(net_a).copied();
         let node_b = self.net_nodes.get(net_b).copied();
         let (Some(a), Some(b)) = (node_a, node_b) else {
@@ -5473,8 +5480,10 @@ impl Scheduler {
         // The new device may add a branch unknown; rebuild the MNA layout and
         // resize the branch-current buffer so subsequent solves are consistent.
         self.relayout();
-        self.faults_pending
-            .push(crate::shorts::short_fault(net_a, net_b, self.sim_time));
+        if defect {
+            self.faults_pending
+                .push(crate::shorts::short_fault(net_a, net_b, self.sim_time));
+        }
         true
     }
 
@@ -5482,10 +5491,28 @@ impl Scheduler {
     /// pair. Clearance-only violations are not applied (they are near-short
     /// risks, not actual shorts). Returns the number of bridges stamped.
     pub fn apply_drc_shorts(&mut self, report: &hauksbee_extract::DrcReport) -> usize {
+        self.apply_drc_shorts_with_qualification(report, None)
+    }
+
+    /// Apply every physical DRC contact while recording a `short` fault only
+    /// for net pairs that retain at least one unqualified contact. A net pair is
+    /// one electrical bridge even when the geometry reports it on several
+    /// layers; if any spatial contact remains undeclared, the pair remains a
+    /// defect.
+    pub fn apply_drc_shorts_with_qualification(
+        &mut self,
+        report: &hauksbee_extract::DrcReport,
+        qualification: Option<&hauksbee_extract::DrcTieQualification>,
+    ) -> usize {
         let pairs = crate::shorts::shorted_name_pairs(report);
         let mut applied = 0;
         for (a, b) in pairs {
-            if self.short_nets(&a, &b) {
+            let defect = report.shorts().any(|finding| {
+                let same_pair = (finding.net_a_name == a && finding.net_b_name == b)
+                    || (finding.net_a_name == b && finding.net_b_name == a);
+                same_pair && qualification.is_none_or(|ties| ties.tie_for(finding).is_none())
+            });
+            if self.short_nets_classified(&a, &b, defect) {
                 applied += 1;
             }
         }

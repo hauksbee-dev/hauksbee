@@ -71,12 +71,26 @@ pub type Analyzer = Arc<dyn Fn(&str, &[u8]) -> String + Send + Sync>;
 /// are untouched.
 pub type FirmwareAnalyzer = Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> String + Send + Sync>;
 
+/// Firmware-aware analysis with an optional companion Eagle schematic. This is
+/// a distinct callback instead of changing [`FirmwareAnalyzer`], preserving
+/// embedders while allowing the browser to supply the identity evidence needed
+/// to qualify declared Eagle net ties.
+pub type SchematicAnalyzer =
+    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>) -> String + Send + Sync>;
+
 /// Run the checks a web builder composed: `(board_name, board_bytes,
 /// Option<(firmware_name, firmware_bytes)>, spec_fragment) -> JSON string`.
 /// Boxed like [`FirmwareAnalyzer`] so the engine supplies its `hauksbee-ci`
 /// shell-out without the server crate depending on it.
 pub type CheckRunner =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, &str) -> String + Send + Sync>;
+
+/// Schematic-aware checks runner. Kept beside [`CheckRunner`] so existing
+/// embedders retain the four-argument callback while the shipped app can carry
+/// the same Eagle companion into analysis, live launch, and checks.
+pub type SchematicCheckRunner = Arc<
+    dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>, &str) -> String + Send + Sync,
+>;
 
 /// Everything a successful live-launch callback hands back: the engine to run,
 /// plus the session metadata the hub serves (identity for `/api/live/status`,
@@ -100,6 +114,13 @@ pub struct LiveLaunch {
 /// crate stays engine-free.
 pub type LiveLauncher =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> Result<LiveLaunch, String> + Send + Sync>;
+
+/// Live launcher which additionally receives an optional Eagle schematic.
+pub type SchematicLiveLauncher = Arc<
+    dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>) -> Result<LiveLaunch, String>
+        + Send
+        + Sync,
+>;
 
 /// Report the optional-dependency status: `() -> JSON string` (the engine's
 /// `deps::deps_json`, which runs the engine's OWN discovery). Boxed like the
@@ -228,6 +249,10 @@ struct FirmwareState {
     analyze: FirmwareAnalyzer,
 }
 
+struct SchematicState {
+    analyze: SchematicAnalyzer,
+}
+
 /// Build the analysis API routes the React landing page calls: board-only
 /// analysis at `/api/analyze` and the firmware co-sim at
 /// `/api/analyze-with-firmware` (multipart: `board` + optional `firmware`).
@@ -246,14 +271,34 @@ pub fn api_routes(analyze: FirmwareAnalyzer) -> Router {
         .with_state(state)
 }
 
+/// Analysis routes which additionally accept a `schematic` multipart part.
+/// The raw board endpoint remains available and supplies no companions.
+pub fn api_routes_with_schematic(analyze: SchematicAnalyzer) -> Router {
+    let state = Arc::new(SchematicState { analyze });
+    Router::new()
+        .route("/api/analyze", post(analyze_handler_schematic))
+        .route(
+            "/api/analyze-with-firmware",
+            post(analyze_schematic_handler),
+        )
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
+        .with_state(state)
+}
+
 /// Back-compat alias for [`api_routes`] (the firmware-aware analysis routes).
 /// No server-rendered page: the React bundle owns `/`.
 pub fn router_with_firmware(analyze: FirmwareAnalyzer) -> Router {
     api_routes(analyze)
 }
 
+enum CheckCallback {
+    Legacy(CheckRunner),
+    Schematic(SchematicCheckRunner),
+}
+
 struct CheckState {
-    check: CheckRunner,
+    check: CheckCallback,
 }
 
 /// The web checks route (`POST /api/check`, multipart: `board` + optional
@@ -262,7 +307,21 @@ struct CheckState {
 /// the uploaded parts. Merged into the unified router next to the analysis
 /// routes.
 pub fn check_route(check: CheckRunner) -> Router {
-    let state = Arc::new(CheckState { check });
+    let state = Arc::new(CheckState {
+        check: CheckCallback::Legacy(check),
+    });
+    Router::new()
+        .route("/api/check", post(check_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
+        .with_state(state)
+}
+
+/// Schematic-aware checks route used by the shipped standalone app.
+pub fn check_route_with_schematic(check: SchematicCheckRunner) -> Router {
+    let state = Arc::new(CheckState {
+        check: CheckCallback::Schematic(check),
+    });
     Router::new()
         .route("/api/check", post(check_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
@@ -273,6 +332,11 @@ pub fn check_route(check: CheckRunner) -> Router {
 struct LiveState {
     hub: Arc<crate::LiveHub>,
     launch: LiveLauncher,
+}
+
+struct SchematicLiveState {
+    hub: Arc<crate::LiveHub>,
+    launch: SchematicLiveLauncher,
 }
 
 /// The live-launch API: `POST /api/live/launch` (multipart `board` + optional
@@ -290,6 +354,77 @@ pub fn live_routes(hub: Arc<crate::LiveHub>, launch: LiveLauncher) -> Router {
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(axum::middleware::map_response(name_upload_limit_413))
         .with_state(state)
+}
+
+/// Live-launch routes which additionally accept a `schematic` multipart part.
+pub fn live_routes_with_schematic(
+    hub: Arc<crate::LiveHub>,
+    launch: SchematicLiveLauncher,
+) -> Router {
+    let state = Arc::new(SchematicLiveState { hub, launch });
+    Router::new()
+        .route("/api/live/launch", post(live_launch_schematic_handler))
+        .route("/api/live/status", get(live_status_schematic_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
+        .with_state(state)
+}
+
+async fn live_status_schematic_handler(
+    State(state): State<Arc<SchematicLiveState>>,
+) -> impl IntoResponse {
+    let body = match state.hub.active_board() {
+        Some(name) => serde_json::json!({ "active": true, "board_name": name }),
+        None => serde_json::json!({ "active": false }),
+    };
+    json_body(StatusCode::OK, body)
+}
+
+async fn live_launch_schematic_handler(
+    State(state): State<Arc<SchematicLiveState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    if let Some(response) = reject_cross_site(&headers) {
+        return response;
+    }
+    let parts = match parse_upload(&mut multipart).await {
+        Ok(parts) => parts,
+        Err(message) => return json_error(&message),
+    };
+    let Some(board_bytes) = parts.board_bytes else {
+        return json_error("no board file in the upload (expected a 'board' or 'file' part)");
+    };
+    let launch = state.launch.clone();
+    let built = tokio::task::spawn_blocking(move || {
+        let firmware = parts
+            .fw_bytes
+            .as_deref()
+            .map(|bytes| (parts.fw_name.as_str(), bytes));
+        let schematic = parts
+            .schematic_bytes
+            .as_deref()
+            .map(|bytes| (parts.schematic_name.as_str(), bytes));
+        (launch)(&parts.board_name, &board_bytes, firmware, schematic)
+    })
+    .await;
+    match built {
+        Ok(Ok(live)) => {
+            let board_name = live.board_name.clone();
+            let replaced = state.hub.launch(
+                live.engine,
+                live.board_name,
+                live.board_file,
+                live.keepalive,
+            );
+            json_body(
+                StatusCode::OK,
+                serde_json::json!({ "ok": true, "board_name": board_name, "replaced": replaced }),
+            )
+        }
+        Ok(Err(message)) => json_error(&message),
+        Err(_) => json_error("the live launch task panicked; see the server log"),
+    }
 }
 
 async fn live_status_handler(State(state): State<Arc<LiveState>>) -> impl IntoResponse {
@@ -724,6 +859,8 @@ struct UploadedParts {
     board_bytes: Option<Vec<u8>>,
     fw_name: String,
     fw_bytes: Option<Vec<u8>>,
+    schematic_name: String,
+    schematic_bytes: Option<Vec<u8>>,
     spec: Option<String>,
     /// The datasheet PDF and what to extract from it (`/api/models/extract`).
     datasheet_name: String,
@@ -777,6 +914,14 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
                     parts.fw_bytes = Some(data.to_vec());
                 }
             }
+            "schematic" => {
+                if let Some(f) = filename {
+                    parts.schematic_name = f;
+                }
+                if !data.is_empty() {
+                    parts.schematic_bytes = Some(data.to_vec());
+                }
+            }
             "spec" => parts.spec = Some(String::from_utf8_lossy(&data).into_owned()),
             "datasheet" => {
                 if let Some(f) = filename {
@@ -817,6 +962,7 @@ async fn check_handler(
         return json_error("the check request needs a 'board' part and a 'spec' part");
     };
     let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
+    let (schematic_name, schematic_bytes) = (parts.schematic_name, parts.schematic_bytes);
 
     // The runner returns a ready JSON string (its own {ok:...} shape); relay
     // it verbatim with the content-type header. It BLOCKS for the whole child
@@ -825,10 +971,21 @@ async fn check_handler(
     // active check, and a handful of concurrent checks could pin every worker
     // and stall all the other routes (the same reason datasheet_check_handler
     // uses spawn_blocking).
-    let check = state.check.clone();
-    let json = match tokio::task::spawn_blocking(move || match &fw_bytes {
-        Some(bytes) => (check)(&board_name, &board_bytes, Some((&fw_name, bytes)), &spec),
-        None => (check)(&board_name, &board_bytes, None, &spec),
+    let check = match &state.check {
+        CheckCallback::Legacy(check) => CheckCallback::Legacy(check.clone()),
+        CheckCallback::Schematic(check) => CheckCallback::Schematic(check.clone()),
+    };
+    let json = match tokio::task::spawn_blocking(move || {
+        let firmware = fw_bytes.as_deref().map(|bytes| (fw_name.as_str(), bytes));
+        let schematic = schematic_bytes
+            .as_deref()
+            .map(|bytes| (schematic_name.as_str(), bytes));
+        match check {
+            CheckCallback::Legacy(check) => check(&board_name, &board_bytes, firmware, &spec),
+            CheckCallback::Schematic(check) => {
+                check(&board_name, &board_bytes, firmware, schematic, &spec)
+            }
+        }
     })
     .await
     {
@@ -930,6 +1087,57 @@ async fn analyze_firmware_handler(
         None => (state.analyze)(&board_name, &board_bytes, None),
     };
 
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+}
+
+async fn analyze_handler_schematic(
+    State(state): State<Arc<SchematicState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let file_name = headers
+        .get("x-board-filename")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("board");
+    let json = (state.analyze)(file_name, &body, None, None);
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+}
+
+async fn analyze_schematic_handler(
+    State(state): State<Arc<SchematicState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let parts = match parse_upload(&mut multipart).await {
+        Ok(parts) => parts,
+        Err(message) => return json_error(&message),
+    };
+    let Some(board_bytes) = parts.board_bytes else {
+        return json_error("no board file in the upload (expected a 'board' or 'file' part)");
+    };
+    let firmware = parts
+        .fw_bytes
+        .as_deref()
+        .map(|bytes| (parts.fw_name.as_str(), bytes));
+    let schematic = parts
+        .schematic_bytes
+        .as_deref()
+        .map(|bytes| (parts.schematic_name.as_str(), bytes));
+    let json = (state.analyze)(&parts.board_name, &board_bytes, firmware, schematic);
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
