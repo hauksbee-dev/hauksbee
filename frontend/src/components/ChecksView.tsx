@@ -1165,8 +1165,8 @@ export function ChecksView({
               {!rawMode && (
                 <div className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
                   This is the file the Download button writes. Running from here uses the
-                  board and firmware already uploaded in this session, so the two path lines
-                  are for the checked-in copy.
+                  design inputs already uploaded in this session, so the path lines are for
+                  the checked-in copy.
                 </div>
               )}
 
