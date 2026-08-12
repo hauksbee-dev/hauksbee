@@ -1397,6 +1397,27 @@ impl LogicComponent {
             .collect()
     }
 
+    /// Whether `name` is the component's sole behavior and owns every output.
+    ///
+    /// The scheduler's edge-synchronous memory path skips the containing
+    /// component's ordinary tick entirely. It is therefore safe only when no
+    /// register, combinational expression, tri-state group, second memory, or
+    /// unrelated output also depends on that tick.
+    pub(crate) fn has_exclusive_memory_port(&self, name: &str) -> bool {
+        if self.memories.len() != 1
+            || self.memories[0].name != name
+            || !self.registers.is_empty()
+            || !self.comb.is_empty()
+            || !self.tristates.is_empty()
+        {
+            return false;
+        }
+        let memory_outputs: std::collections::HashSet<usize> =
+            self.memories[0].data_out.iter().copied().collect();
+        memory_outputs.len() == self.output_names.len()
+            && (0..self.output_names.len()).all(|output| memory_outputs.contains(&output))
+    }
+
     /// All outputs: `(name, level, enabled)`.
     pub fn outputs(&self) -> impl Iterator<Item = (&str, bool, bool)> {
         self.output_names

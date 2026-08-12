@@ -1399,6 +1399,34 @@ impl Scheduler {
                     .collect()
             },
         ));
+        let direction_registry = reg.clone();
+        self.mcus[mi].core.on_input_responder_direction(Box::new(
+            move |changes: &[(PinId, bool, bool)], cycle: u64| {
+                direction_registry
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .dispatch_direction_at(
+                        &changes
+                            .iter()
+                            .map(|&(pin, output, port_high)| {
+                                ((pin.port, pin.bit), output, port_high)
+                            })
+                            .collect::<Vec<_>>(),
+                        cycle,
+                    )
+                    .into_iter()
+                    .map(|update| match update.level {
+                        Some(high) => hauksbee_mcu::PinDrive::drive(
+                            PinId::new(update.pin.0, update.pin.1),
+                            high,
+                        ),
+                        None => {
+                            hauksbee_mcu::PinDrive::release(PinId::new(update.pin.0, update.pin.1))
+                        }
+                    })
+                    .collect()
+            },
+        ));
         self.responder_registries[mi] = Some(reg.clone());
         reg
     }
@@ -1499,16 +1527,17 @@ impl Scheduler {
         for component in 0..self.digital.len() {
             let ports = self.digital[component].memory_ports();
             for port in ports {
+                // Installing a responder suppresses this component's whole
+                // once-per-chunk tick. Refuse a partial takeover: unrelated
+                // combinational/register/output behavior must keep running.
+                if !self.digital[component].has_exclusive_memory_port(&port.name) {
+                    continue;
+                }
                 for (mcu, gpio) in gpio_maps.iter().enumerate() {
-                    // The synchronous responder requires both exact edge stamps
-                    // and an atomic hardware-port batch. Poll backends cannot
-                    // answer between guest instructions, while an existing push
-                    // backend using the source-compatible singleton fallback can
-                    // expose a transient /WE-/OE ordering and close an EEPROM
-                    // page early. Leave either case on the ordinary tick path
-                    // instead of claiming ownership the backend cannot honor.
+                    // Poll backends cannot answer between guest instructions;
+                    // leave the component on the ordinary tick path there.
                     if !self.mcus[mcu].core.cycle_exact()
-                        || !self.mcus[mcu].core.input_responder_batches_atomic()
+                        || !self.mcus[mcu].core.input_responder_synchronous()
                     {
                         continue;
                     }
@@ -1520,9 +1549,137 @@ impl Scheduler {
                         .map(|(chain, _)| chain.clone())
                         .collect();
 
-                    let signal_for_node = |node: NodeId| -> ParallelSignal {
+                    // Resolve physical provenance before choosing a fast-path
+                    // representation. A node does not become MCU-owned merely
+                    // because the candidate MCU has one pin on it: another MCU
+                    // pin or digital output on the same copper can change the
+                    // level inside the chunk and would be invisible to this
+                    // responder. Count every producer, including duplicate
+                    // pins on one MCU and 595 outputs. The memory component's
+                    // own bidirectional data drivers are excluded because the
+                    // responder is precisely the replacement for those.
+                    let mut producer_counts: HashMap<NodeId, usize> = HashMap::new();
+                    for live in &self.mcus {
+                        for driver in live.binding.gpio_drivers.values() {
+                            *producer_counts.entry(driver.net).or_default() += 1;
+                        }
+                    }
+                    for (digital_i, digital) in self.digital.iter().enumerate() {
+                        for role in digital.drivers.keys() {
+                            if digital_i == component && port.data_out.contains(role) {
+                                continue;
+                            }
+                            if let Some(&node) = digital.roles.get(role) {
+                                *producer_counts.entry(node).or_default() += 1;
+                            }
+                        }
+                    }
+                    let permitted_driver_resistors: std::collections::HashSet<DeviceId> = self.mcus
+                        [mcu]
+                        .binding
+                        .gpio_drivers
+                        .values()
+                        .map(|driver| driver.resistor)
+                        .chain(port.data_out.iter().filter_map(|role| {
+                            self.digital[component]
+                                .drivers
+                                .get(role)
+                                .map(|driver| driver.resistor)
+                        }))
+                        .chain(chains.iter().flat_map(|chain| {
+                            chain.order.iter().flat_map(|&digital_i| {
+                                self.digital[digital_i]
+                                    .drivers
+                                    .values()
+                                    .map(|driver| driver.resistor)
+                            })
+                        }))
+                        .collect();
+                    let levels = self.digital[component].levels;
+                    let mut fixed_volts = HashMap::from([(NodeId::GROUND, 0.0)]);
+                    for supply in &self.supplies {
+                        fixed_volts.insert(supply.net, supply.supply.nominal_volts());
+                    }
+                    for device in &self.circuit.devices {
+                        if let Device::Vsource {
+                            p,
+                            n,
+                            kind: hauksbee_ir::SourceKind::Dc(volts),
+                            ..
+                        } = device
+                        {
+                            if *n == NodeId::GROUND {
+                                fixed_volts.insert(*p, *volts);
+                            }
+                        }
+                    }
+                    let mut pull_candidates: HashMap<NodeId, Vec<(DeviceId, bool)>> =
+                        HashMap::new();
+                    for (index, device) in self.circuit.devices.iter().enumerate() {
+                        if permitted_driver_resistors.contains(&DeviceId(index as u32)) {
+                            continue;
+                        }
+                        let Device::Resistor { a, b, ohms, .. } = device else {
+                            continue;
+                        };
+                        if !ohms.is_finite() || *ohms < 1_000.0 {
+                            continue;
+                        }
+                        let pulled = fixed_volts
+                            .get(a)
+                            .map(|&volts| (*b, volts))
+                            .or_else(|| fixed_volts.get(b).map(|&volts| (*a, volts)));
+                        let pulled = pulled.and_then(|(node, volts)| {
+                            if volts >= levels.vih {
+                                Some((node, true))
+                            } else if volts <= levels.vil {
+                                Some((node, false))
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some((node, level)) = pulled {
+                            pull_candidates
+                                .entry(node)
+                                .or_default()
+                                .push((DeviceId(index as u32), level));
+                        }
+                    }
+                    let mut passive_pull_devices = std::collections::HashSet::new();
+                    let mut pulled_levels = HashMap::new();
+                    for (node, candidates) in pull_candidates {
+                        if let [(device, level)] = candidates.as_slice() {
+                            passive_pull_devices.insert(*device);
+                            pulled_levels.insert(node, *level);
+                        }
+                    }
+                    let externally_coupled_nodes: std::collections::HashSet<NodeId> = self
+                        .circuit
+                        .devices
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| {
+                            let id = DeviceId(*index as u32);
+                            !permitted_driver_resistors.contains(&id)
+                                && !passive_pull_devices.contains(&id)
+                        })
+                        .flat_map(|(_, device)| device.nodes())
+                        .filter(|node| *node != NodeId::GROUND)
+                        .collect();
+
+                    let signal_for_node = |node: NodeId| -> Option<ParallelSignal> {
+                        if node == NodeId::GROUND {
+                            return Some(ParallelSignal::Node(NodeId::GROUND));
+                        }
+                        let producers = producer_counts.get(&node).copied().unwrap_or(0);
+                        if producers > 1 {
+                            return None;
+                        }
+                        if externally_coupled_nodes.contains(&node) {
+                            return None;
+                        }
                         if let Some(&pin) = gpio.get(&(node.0 as i64)) {
-                            return ParallelSignal::Mcu(pin);
+                            return Some(ParallelSignal::Mcu(pin));
                         }
                         for (chain_i, chain) in chains.iter().enumerate() {
                             for (chip_i, &digital_i) in chain.order.iter().enumerate() {
@@ -1531,24 +1688,34 @@ impl Scheduler {
                                     .enumerate()
                                 {
                                     if self.digital[digital_i].roles.get(*role) == Some(&node) {
-                                        return ParallelSignal::Hc595 {
+                                        return Some(ParallelSignal::Hc595 {
                                             chain: chain_i,
                                             chip: chip_i,
                                             bit: bit as u8,
-                                        };
+                                        });
                                     }
                                 }
                             }
                         }
-                        ParallelSignal::Node(node)
+                        Some(ParallelSignal::Node(node))
                     };
                     let role_signal = |role: &str| {
-                        self.digital[component]
-                            .roles
-                            .get(role)
-                            .copied()
-                            .map(signal_for_node)
+                        let node = self.digital[component].roles.get(role).copied()?;
+                        signal_for_node(node)
                     };
+                    let initial_pin_levels: HashMap<(char, u8), bool> = gpio
+                        .iter()
+                        .filter_map(|(&node, &pin)| {
+                            pulled_levels
+                                .get(&NodeId(node as u32))
+                                .map(|&level| (pin, level))
+                        })
+                        .collect();
+                    if !initial_pin_levels.is_empty()
+                        && !self.mcus[mcu].core.input_responder_tracks_direction()
+                    {
+                        continue;
+                    }
 
                     let Some(address) = port
                         .address
@@ -1590,11 +1757,107 @@ impl Scheduler {
                     else {
                         continue;
                     };
+                    // A legacy singleton callback remains exact when one MCU
+                    // output is the only mutable input to this memory. With two
+                    // MCU inputs (or an MCU-clocked 595 feeding it), one hardware
+                    // port write can change a write edge and a gate/address/data
+                    // bit together; only an atomic batch exposes the final state.
+                    let mut mcu_inputs = std::collections::HashSet::new();
+                    let mut referenced_595_chains = std::collections::HashSet::new();
+                    let mut has_unproven_node = false;
+                    for signal in address
+                        .iter()
+                        .chain(writes.iter().flat_map(|write| {
+                            std::iter::once(&write.signal)
+                                .chain(write.gates.iter().map(|(signal, _)| signal))
+                        }))
+                        .chain(read_gates.iter().map(|(signal, _)| signal))
+                        .chain(data_in.iter())
+                    {
+                        match signal {
+                            ParallelSignal::Mcu(pin) => {
+                                mcu_inputs.insert(*pin);
+                            }
+                            ParallelSignal::Hc595 { chain, .. } => {
+                                referenced_595_chains.insert(*chain);
+                            }
+                            ParallelSignal::Node(node) => {
+                                // The responder runs before the first analogue
+                                // solve and therefore cannot trust a pulled or
+                                // supplied node's all-zero voltage snapshot.
+                                // Ground is the sole node whose LOW level is an
+                                // identity, independent of a solve. Everything
+                                // else stays on the ordinary tick path.
+                                has_unproven_node |= *node != NodeId::GROUND;
+                            }
+                        }
+                    }
+                    if has_unproven_node {
+                        continue;
+                    }
+                    let chain_controls = chains
+                        .iter()
+                        .map(|chain| {
+                            let mut pins = vec![chain.srclk, chain.rclk, chain.ser];
+                            pins.extend(chain.srclr_n);
+                            pins.extend(chain.oe_n);
+                            (chain.oe_n, pins)
+                        })
+                        .collect::<Vec<_>>();
+                    let pulled_pins = initial_pin_levels.keys().copied().collect();
+                    if !referenced_595_controls_are_proven(
+                        &referenced_595_chains,
+                        &chain_controls,
+                        &pulled_pins,
+                    ) {
+                        // ParallelSignal::Hc595 carries a stored bit, not
+                        // drive ownership or externally-biased control state.
+                        // A referenced chain with mutable OE can be Hi-Z, and
+                        // a pulled clock/data/clear control does not start at
+                        // Hc595Chain's built-in default. Both stay on the
+                        // analogue tick path; unrelated chains do not matter.
+                        continue;
+                    }
+                    let has_shifted_input = !referenced_595_chains.is_empty();
+                    let has_callback_trigger = !mcu_inputs.is_empty() || has_shifted_input;
+                    let initial_level = |signal: &ParallelSignal| match signal {
+                        ParallelSignal::Mcu(pin) => {
+                            initial_pin_levels.get(pin).copied().unwrap_or(false)
+                        }
+                        ParallelSignal::Hc595 { .. } | ParallelSignal::Node(NodeId::GROUND) => {
+                            false
+                        }
+                        ParallelSignal::Node(_) => false,
+                    };
+                    let power_on_read_is_inhibited = read_gates
+                        .iter()
+                        .any(|(signal, active)| !active.is_active(initial_level(signal)));
+                    // Responders have no trustworthy solved analogue snapshot
+                    // at construction and start with MCU/595 levels LOW. A
+                    // memory with no watched source never runs at all; one
+                    // whose read is already active would need an initial drive
+                    // before the first guest instruction. Keep both on the
+                    // ordinary tick path. At least one dynamic read gate must
+                    // be inactive under the proven initial MCU/595/pull state;
+                    // the enabling edge then synchronously establishes the drive.
+                    if !has_callback_trigger || !power_on_read_is_inhibited {
+                        continue;
+                    }
+                    let needs_atomic_batch = has_shifted_input || mcu_inputs.len() > 1;
+                    if needs_atomic_batch && !self.mcus[mcu].core.input_responder_batches_atomic() {
+                        continue;
+                    }
                     let Some(output_pins) = port
                         .data_out
                         .iter()
                         .map(|role| {
                             let node = self.digital[component].roles.get(role)?;
+                            if *node == NodeId::GROUND {
+                                return None;
+                            }
+                            if producer_counts.get(node).copied().unwrap_or(0) != 1 {
+                                return None;
+                            }
                             gpio.get(&(node.0 as i64)).copied()
                         })
                         .collect::<Option<Vec<_>>>()
@@ -1616,7 +1879,8 @@ impl Scheduler {
                         output_pins.clone(),
                         chains,
                         runtime.clone(),
-                    );
+                    )
+                    .with_initial_pin_levels(initial_pin_levels);
                     pending.push(Pending {
                         mcu,
                         component,
@@ -1821,15 +2085,28 @@ impl Scheduler {
         out
     }
 
-    /// Host serial bytes dropped on their way into each MCU's UART because
-    /// even the backend's pending buffer overflowed (a host flooding a
-    /// firmware that never drains). Zero everywhere on a healthy run; report
-    /// surfaces can mirror `adc_dropped` with it. Ordered by MCU reference.
+    /// Host serial bytes not delivered to each MCU's UART, whether due to a
+    /// pending-buffer overflow or an external backend transport/configuration
+    /// failure. Zero everywhere on a healthy run. Ordered by MCU reference.
     pub fn uart_rx_overflow(&self) -> Vec<(String, u64)> {
         let mut out: Vec<(String, u64)> = self
             .mcus
             .iter()
             .map(|m| (m.binding.reference.clone(), m.core.uart_rx_overflow()))
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Host serial bytes accepted by a backend but not yet presented to its
+    /// emulated UART. A non-empty result at session teardown is undelivered
+    /// input, even when the backend's overflow count is zero.
+    pub fn uart_rx_pending(&self) -> Vec<(String, usize)> {
+        let mut out: Vec<(String, usize)> = self
+            .mcus
+            .iter()
+            .map(|m| (m.binding.reference.clone(), m.core.uart_rx_pending()))
             .filter(|(_, n)| *n > 0)
             .collect();
         out.sort();
@@ -5747,6 +6024,24 @@ fn build_595_chains(
     (chains, chain_mcu, owned)
 }
 
+/// Whether every 595 chain whose parallel outputs feed a synchronous memory
+/// has a control state the responder can prove before the first analogue solve.
+/// Mutable OE can make the stored output byte electrically absent, and an
+/// externally pulled control pin invalidates the chain controller's built-in
+/// reset defaults. Chains not referenced by this memory are deliberately
+/// ignored.
+fn referenced_595_controls_are_proven(
+    referenced: &std::collections::HashSet<usize>,
+    controls: &[(Option<(char, u8)>, Vec<(char, u8)>)],
+    pulled_pins: &std::collections::HashSet<(char, u8)>,
+) -> bool {
+    referenced.iter().all(|&index| {
+        controls.get(index).is_some_and(|(oe_n, pins)| {
+            oe_n.is_none() && pins.iter().all(|pin| !pulled_pins.contains(pin))
+        })
+    })
+}
+
 /// Identify standalone GPIO-edge-driven digital components for the generalized
 /// replay (05 §1.2), and build each MCU's GPIO `(port,bit)` -> driven-net map.
 ///
@@ -5911,6 +6206,110 @@ fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unrelated_mutable_595_output_enable_does_not_disqualify_memory() {
+        let controls = [
+            (None, vec![('B', 0), ('B', 1), ('B', 2)]),
+            (Some(('C', 3)), vec![('C', 0), ('C', 1), ('C', 2), ('C', 3)]),
+        ];
+
+        assert!(referenced_595_controls_are_proven(
+            &std::collections::HashSet::from([0]),
+            &controls,
+            &std::collections::HashSet::new(),
+        ));
+        assert!(!referenced_595_controls_are_proven(
+            &std::collections::HashSet::from([1]),
+            &controls,
+            &std::collections::HashSet::new(),
+        ));
+    }
+
+    #[test]
+    fn pulled_control_on_referenced_595_is_not_assumed_low() {
+        let controls = [
+            (None, vec![('B', 0), ('B', 1), ('B', 2)]),
+            (None, vec![('C', 0), ('C', 1), ('C', 2)]),
+        ];
+
+        assert!(!referenced_595_controls_are_proven(
+            &std::collections::HashSet::from([0]),
+            &controls,
+            &std::collections::HashSet::from([('B', 1)]),
+        ));
+        assert!(referenced_595_controls_are_proven(
+            &std::collections::HashSet::from([0]),
+            &controls,
+            &std::collections::HashSet::from([('C', 1)]),
+        ));
+    }
+
+    #[cfg(feature = "avr")]
+    #[test]
+    #[ignore = "requires the private NEP board path"]
+    fn private_nep_topology_installs_edge_exact_parallel_memory() {
+        use sha2::{Digest, Sha256};
+
+        const BOARD_SHA256: &str =
+            "b7d2a7c3d7ea193bb394bcb3987cfb141230d3db0e294744a8a0b263f9b93673";
+        let path = std::env::var("HAUKSBEE_NEP_BOARD").expect("HAUKSBEE_NEP_BOARD");
+        let board_bytes = std::fs::read(path).expect("read private board");
+        let digest = Sha256::digest(&board_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            digest, BOARD_SHA256,
+            "the topology test must use the exact private release-evidence board"
+        );
+        let board_text = String::from_utf8(board_bytes).expect("private board is UTF-8");
+        let board = hauksbee_extract::ExtractedBoard::from_auto(&board_text).expect("parse board");
+        let library = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &library);
+        let scheduler = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        assert_eq!(
+            scheduler.parallel_memory_chips.len(),
+            1,
+            "the real 595-addressed, pull-up-controlled EEPROM topology must use the edge-exact responder"
+        );
+        let memory = *scheduler.parallel_memory_chips.iter().next().unwrap();
+        assert_eq!(scheduler.digital[memory].reference, "U1");
+        let chain_refs = scheduler
+            .chains
+            .iter()
+            .flat_map(|chain| {
+                chain
+                    .order
+                    .iter()
+                    .map(|&index| scheduler.digital[index].reference.as_str())
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(chain_refs, std::collections::BTreeSet::from(["U2", "U3"]));
+
+        let rail = scheduler
+            .supplies
+            .iter()
+            .find(|supply| supply.net_name == "+5V")
+            .expect("private +5V supply")
+            .net;
+        for role in ["we_n", "oe_n"] {
+            let node = scheduler.digital[memory].roles[role];
+            let pulls = scheduler
+                .circuit
+                .devices
+                .iter()
+                .filter(|device| {
+                    matches!(device, Device::Resistor { a, b, ohms, .. }
+                        if ((*a == node && *b == rail) || (*b == node && *a == rail))
+                            && (*ohms - 10_000.0).abs() < f64::EPSILON)
+                })
+                .count();
+            assert_eq!(pulls, 1, "{role} must retain its exact 10k pull-up");
+        }
+    }
+    use hauksbee_ir::SourceKind;
 
     #[test]
     fn public_mcu_binding_literal_remains_source_compatible() {
@@ -6588,8 +6987,19 @@ mod tests {
         }
     }
 
+    type LegacyResponder = Box<dyn FnMut(PinId, bool, u64) -> Vec<hauksbee_mcu::PinDrive> + Send>;
+    type DirectionResponder =
+        Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<hauksbee_mcu::PinDrive> + Send>;
+
     struct LegacySingletonResponderCore {
         responder_installs: Arc<std::sync::atomic::AtomicUsize>,
+        responder: Arc<Mutex<Option<LegacyResponder>>>,
+        direction_responder: Arc<Mutex<Option<DirectionResponder>>>,
+    }
+
+    struct LegacyResponderHandles {
+        edge: Arc<Mutex<Option<LegacyResponder>>>,
+        direction: Arc<Mutex<Option<DirectionResponder>>>,
     }
 
     impl Mcu for LegacySingletonResponderCore {
@@ -6608,12 +7018,22 @@ mod tests {
         fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
         fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
         fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
-        fn on_input_responder(
-            &mut self,
-            _responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<hauksbee_mcu::PinDrive> + Send>,
-        ) {
+        fn on_input_responder(&mut self, responder: LegacyResponder) {
             self.responder_installs
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.responder.lock().unwrap_or_else(|e| e.into_inner()) = Some(responder);
+        }
+        fn input_responder_synchronous(&self) -> bool {
+            true
+        }
+        fn input_responder_tracks_direction(&self) -> bool {
+            true
+        }
+        fn on_input_responder_direction(&mut self, responder: DirectionResponder) {
+            *self
+                .direction_responder
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(responder);
         }
         fn uart_write(&mut self, _bytes: &[u8]) {}
         fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
@@ -6630,8 +7050,165 @@ mod tests {
         }
     }
 
+    fn scheduler_with_legacy_memory(
+        spec: &str,
+        role_names: &[&str],
+        gpio_roles: &[&str],
+    ) -> (
+        Scheduler,
+        Arc<std::sync::atomic::AtomicUsize>,
+        LegacyResponderHandles,
+    ) {
+        let mut circuit = Circuit::new();
+        let mut roles = HashMap::new();
+        let mut gpio_drivers = HashMap::new();
+        for &role in role_names {
+            let node = circuit.node(role);
+            roles.insert(role.to_string(), node);
+            if let Some(index) = gpio_roles.iter().position(|candidate| *candidate == role) {
+                gpio_drivers.insert(
+                    ('B', index as u8),
+                    crate::drivers::PinDriver::stamp(&mut circuit, node, role, "legacy", 50.0),
+                );
+            }
+        }
+        if let Some(&vcc) = roles.get("vcc") {
+            circuit.add(Device::Vsource {
+                name: "VSTATIC".into(),
+                p: vcc,
+                n: NodeId::GROUND,
+                kind: SourceKind::Dc(5.0),
+            });
+        }
+        let parsed: hauksbee_models::logic_spec::Logic =
+            toml::from_str(spec).expect("parse memory");
+        let logic = crate::logic::LogicComponent::compile("legacy-memory", &parsed)
+            .expect("compile memory");
+        let digital = crate::digital::DigitalComponent {
+            reference: "U1".into(),
+            levels: crate::digital::LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            roles,
+            drivers: HashMap::new(),
+            logic: Some(logic),
+            supply: None,
+        };
+        let net_nodes = role_names
+            .iter()
+            .map(|name| ((*name).to_string(), circuit.node(name)))
+            .collect();
+        let bound = crate::binder::BoundBoard {
+            name: "legacy-memory".into(),
+            circuit,
+            net_nodes,
+            net_names: role_names.iter().map(|name| (*name).to_string()).collect(),
+            digital: vec![digital],
+            mcus: Vec::new(),
+            dnp_mcus: Vec::new(),
+            component_kinds: HashMap::new(),
+            input_sources: HashMap::new(),
+            supplies: Vec::new(),
+            behavioral: Vec::new(),
+            device_meta: Vec::new(),
+            dacs: Vec::new(),
+            report: crate::report::BindReport::default(),
+        };
+        let mut scheduler =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let installs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let responder = Arc::new(Mutex::new(None));
+        let direction_responder = Arc::new(Mutex::new(None));
+        let binding = McuBinding {
+            reference: "M1".into(),
+            backend: "legacy:test".into(),
+            requested_part: String::new(),
+            external_clock_present: false,
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers,
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+            max_supply_v: None,
+        };
+        scheduler.mcus.push(core_with_hooks(
+            Box::new(LegacySingletonResponderCore {
+                responder_installs: Arc::clone(&installs),
+                responder: Arc::clone(&responder),
+                direction_responder: Arc::clone(&direction_responder),
+            }),
+            binding,
+        ));
+        scheduler.responder_registries.push(None);
+        (
+            scheduler,
+            installs,
+            LegacyResponderHandles {
+                edge: responder,
+                direction: direction_responder,
+            },
+        )
+    }
+
     #[test]
-    fn legacy_singleton_responder_does_not_claim_parallel_memory() {
+    fn legacy_singleton_responder_keeps_unambiguous_parallel_memory_edge_exact() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+write_gates = []
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+
+        let (mut sched, responder_installs, responder) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "we_n", "io0"], &["we_n", "io0"]);
+
+        sched.build_and_install_parallel_memories();
+
+        assert_eq!(
+            responder_installs.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one mutable input pin has no cross-pin ordering ambiguity, so the legacy synchronous callback remains exact"
+        );
+        assert!(
+            sched.parallel_memory_chips.contains(&0),
+            "an unambiguous legacy memory must not be downgraded to pulse-collapsing chunk ticks"
+        );
+
+        let mut slot = responder
+            .edge
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let callback = slot.as_mut().expect("legacy singleton callback installed");
+        responder
+            .direction
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_mut()
+            .expect("direction callback installed")(&[(PinId::new('B', 0), true, false)], 9);
+        let _ = callback(PinId::new('B', 0), false, 10);
+        assert_eq!(
+            callback(PinId::new('B', 0), true, 11),
+            vec![hauksbee_mcu::PinDrive::drive(PinId::new('B', 1), false)],
+            "a sub-chunk pulse must synchronously write and return the new memory bit"
+        );
+    }
+
+    #[test]
+    fn legacy_singleton_responder_does_not_claim_cross_pin_memory() {
         const SPEC: &str = r#"
 inputs = ["a0", "ce_n", "oe_n", "we_n"]
 outputs = ["io0"]
@@ -6654,71 +7231,90 @@ read_gates = [
 data_in = ["io0"]
 data_out = ["io0"]
 "#;
+        let names = ["a0", "ce_n", "oe_n", "we_n", "io0"];
+        let (mut sched, responder_installs, responder) =
+            scheduler_with_legacy_memory(SPEC, &names, &names);
 
-        let mut circuit = Circuit::new();
-        let mut roles = HashMap::new();
+        sched.build_and_install_parallel_memories();
+
+        assert_eq!(
+            responder_installs.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "multi-pin controls require a real atomic callback"
+        );
+        assert!(sched.parallel_memory_chips.is_empty());
+        assert!(
+            responder
+                .edge
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_none(),
+            "an ambiguous legacy backend must not receive an unsafe memory responder"
+        );
+    }
+
+    #[test]
+    fn cycle_exact_backend_with_no_synchronous_responder_does_not_claim_memory() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "we_n", "io0"], &["we_n", "io0"]);
+        let binding = sched.mcus.pop().expect("legacy MCU").binding;
+        sched.responder_registries.pop();
+        sched.mcus.push(core_with_hooks(
+            Box::new(RecordingCore {
+                digital_ins: Arc::new(Mutex::new(Vec::new())),
+            }),
+            binding,
+        ));
+        sched.responder_registries.push(None);
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "cycle timestamps do not prove the backend implements the optional synchronous responder hook"
+        );
+    }
+
+    #[test]
+    fn memory_with_another_mcus_mutable_node_is_not_claimed_from_a_stale_snapshot() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "data", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["data"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "data", "we_n", "io0"], &["we_n", "io0"]);
+        let data_node = sched.net_nodes["data"];
+        let mut data_driver = sched.mcus[0].binding.gpio_drivers[&('B', 0)].clone();
+        data_driver.net = data_node;
         let mut gpio_drivers = HashMap::new();
-        for (index, role) in ["a0", "ce_n", "oe_n", "we_n", "io0"]
-            .into_iter()
-            .enumerate()
-        {
-            let node = circuit.node(role);
-            roles.insert(role.to_string(), node);
-            let pin = ('B', index as u8);
-            gpio_drivers.insert(
-                pin,
-                crate::drivers::PinDriver::stamp(&mut circuit, node, role, "legacy", 50.0),
-            );
-        }
-        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).expect("parse memory");
-        let logic =
-            crate::logic::LogicComponent::compile("legacy-memory", &spec).expect("compile memory");
-        let digital = crate::digital::DigitalComponent {
-            reference: "U1".into(),
-            levels: crate::digital::LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            roles,
-            drivers: HashMap::new(),
-            logic: Some(logic),
-            supply: None,
-        };
-        let net_nodes = ["a0", "ce_n", "oe_n", "we_n", "io0"]
-            .into_iter()
-            .map(|name| (name.to_string(), circuit.node(name)))
-            .collect();
-        let bound = crate::binder::BoundBoard {
-            name: "legacy-memory".into(),
-            circuit,
-            net_nodes,
-            net_names: ["a0", "ce_n", "oe_n", "we_n", "io0"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            digital: vec![digital],
-            mcus: Vec::new(),
-            dnp_mcus: Vec::new(),
-            component_kinds: HashMap::new(),
-            input_sources: HashMap::new(),
-            supplies: Vec::new(),
-            behavioral: Vec::new(),
-            device_meta: Vec::new(),
-            dacs: Vec::new(),
-            report: crate::report::BindReport::default(),
-        };
-        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
-        let responder_installs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let core = LegacySingletonResponderCore {
-            responder_installs: Arc::clone(&responder_installs),
-        };
-        assert!(core.cycle_exact(), "the legacy backend is cycle-exact");
+        gpio_drivers.insert(('C', 0), data_driver);
         let binding = McuBinding {
-            reference: "M1".into(),
-            backend: "legacy:test".into(),
+            reference: "M2".into(),
+            backend: "other:test".into(),
             requested_part: String::new(),
             external_clock_present: false,
             pad_roles: HashMap::new(),
@@ -6729,20 +7325,398 @@ data_out = ["io0"]
             module: false,
             max_supply_v: None,
         };
-        sched.mcus.push(core_with_hooks(Box::new(core), binding));
+        sched.mcus.push(core_with_hooks(
+            Box::new(RecordingCore {
+                digital_ins: Arc::new(Mutex::new(Vec::new())),
+            }),
+            binding,
+        ));
         sched.responder_registries.push(None);
 
         sched.build_and_install_parallel_memories();
 
-        assert_eq!(
-            responder_installs.load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "the default singleton fallback cannot promise atomic memory control batches"
-        );
         assert!(
             sched.parallel_memory_chips.is_empty(),
-            "legacy singleton callbacks must leave memory on the ordinary tick path"
+            "a node another MCU can change inside the chunk is not a static analogue input"
         );
+    }
+
+    #[test]
+    fn memory_node_shared_by_candidate_and_second_mcu_is_not_claimed() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "we_n", "io0"], &["we_n", "io0"]);
+        let we_node = sched.net_nodes["we_n"];
+        let mut second_driver = sched.mcus[0].binding.gpio_drivers[&('B', 0)].clone();
+        second_driver.net = we_node;
+        let binding = McuBinding {
+            reference: "M2".into(),
+            backend: "other:test".into(),
+            requested_part: String::new(),
+            external_clock_present: false,
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers: HashMap::from([(('C', 0), second_driver)]),
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+            max_supply_v: None,
+        };
+        sched.mcus.push(core_with_hooks(
+            Box::new(RecordingCore {
+                digital_ins: Arc::new(Mutex::new(Vec::new())),
+            }),
+            binding,
+        ));
+        sched.responder_registries.push(None);
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "a candidate pin does not make a multiply-driven physical node safe"
+        );
+    }
+
+    #[test]
+    fn memory_node_shared_by_candidate_and_595_output_is_not_claimed() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "we_n", "io0"], &["we_n", "io0"]);
+        let we_node = sched.net_nodes["we_n"];
+        let output =
+            crate::drivers::PinDriver::stamp(&mut sched.circuit, we_node, "qa", "U595", 50.0);
+        sched.digital.push(crate::digital::DigitalComponent {
+            reference: "U595".into(),
+            levels: sched.digital[0].levels,
+            roles: HashMap::from([("qa".to_string(), we_node)]),
+            drivers: HashMap::from([("qa".to_string(), output)]),
+            logic: None,
+            supply: None,
+        });
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "a candidate pin cannot hide a 595 output driving the same physical node"
+        );
+    }
+
+    #[test]
+    fn another_output_on_the_memory_component_is_not_hidden_from_provenance() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "we_n", "io0", "status"], &["we_n", "io0"]);
+        let we_n = sched.net_nodes["we_n"];
+        let status =
+            crate::drivers::PinDriver::stamp(&mut sched.circuit, we_n, "we_n", "U1_status", 50.0);
+        sched.digital[0].roles.insert("status".into(), we_n);
+        sched.digital[0].drivers.insert("status".into(), status);
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "only this memory port's bidirectional data drivers may be excluded from producer provenance"
+        );
+    }
+
+    #[test]
+    fn memory_fast_path_does_not_suppress_unrelated_logic_on_the_same_component() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0", "status"]
+comb = { status = "we_n" }
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "we_n", "io0", "status"], &["we_n", "io0"]);
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "claiming one memory port skips the component's whole tick, so components with unrelated logic must stay on the ordinary path"
+        );
+    }
+
+    #[test]
+    fn physically_grounded_memory_control_is_not_reclassified_as_mcu_mutable() {
+        const SPEC: &str = r#"
+inputs = ["gnd"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "gnd", edge = "rising" }
+read_gates = [{ pin = "gnd", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "io0"], &["gnd", "io0"]);
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "firmware cannot create edges on a pin physically shorted to ground"
+        );
+    }
+
+    #[test]
+    fn all_static_memory_is_not_claimed_without_any_responder_trigger() {
+        const SPEC: &str = r#"
+inputs = ["gnd"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "gnd", edge = "rising" }
+read_gates = [{ pin = "gnd", active = "low" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) = scheduler_with_legacy_memory(SPEC, &["gnd", "io0"], &["io0"]);
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "a responder with no watched output edge can never establish or refresh its drive state"
+        );
+    }
+
+    #[test]
+    fn power_on_active_read_is_not_claimed_before_a_trigger_can_seed_it() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "low" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "we_n", "io0"], &["we_n", "io0"]);
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "the responder starts with GPIO low and cannot drive a low-active read until an edge occurs"
+        );
+    }
+
+    #[test]
+    fn static_high_node_is_not_claimed_from_the_unsolved_zero_snapshot() {
+        const SPEC: &str = r#"
+inputs = ["vcc", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["vcc"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["vcc"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["vcc", "we_n", "io0"], &["we_n", "io0"]);
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "a real 5 V static node is still zero in the pre-solve snapshot and must not be responder-owned"
+        );
+    }
+
+    #[test]
+    fn pulled_high_candidate_gpio_seeds_the_synchronous_port_shadow() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [
+  { pin = "we_n", active = "high" },
+  { pin = "gnd", active = "high" },
+]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "vcc", "we_n", "io0"], &["we_n", "io0"]);
+        let vcc = sched.net_nodes["vcc"];
+        let we_n = sched.net_nodes["we_n"];
+        sched.circuit.add(Device::Resistor {
+            name: "Rpull".into(),
+            a: vcc,
+            b: we_n,
+            ohms: 10_000.0,
+            tc1: None,
+        });
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.contains(&0),
+            "a direct static pull is a trustworthy initial GPIO level and must not disable the NEP fast path"
+        );
+    }
+
+    #[test]
+    fn pulled_high_power_on_active_read_is_not_claimed() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        let (mut sched, _, _) =
+            scheduler_with_legacy_memory(SPEC, &["gnd", "vcc", "we_n", "io0"], &["we_n", "io0"]);
+        sched.circuit.add(Device::Resistor {
+            name: "Rpull".into(),
+            a: sched.net_nodes["vcc"],
+            b: sched.net_nodes["we_n"],
+            ohms: 10_000.0,
+            tc1: None,
+        });
+
+        sched.build_and_install_parallel_memories();
+
+        assert!(
+            sched.parallel_memory_chips.is_empty(),
+            "a seeded active read needs an initial bus drive that this responder does not provide"
+        );
+    }
+
+    #[test]
+    fn strong_or_conflicting_gpio_bias_is_not_treated_as_a_static_pull() {
+        const SPEC: &str = r#"
+inputs = ["gnd", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "we_n", edge = "rising" }
+read_gates = [{ pin = "we_n", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#;
+        for pulls in [
+            [(true, 100.0), (true, 0.0)],
+            [(true, 10_000.0), (false, 10_000.0)],
+        ] {
+            let (mut sched, _, _) = scheduler_with_legacy_memory(
+                SPEC,
+                &["gnd", "vcc", "we_n", "io0"],
+                &["we_n", "io0"],
+            );
+            for (index, (high, ohms)) in pulls
+                .into_iter()
+                .filter(|(_, ohms)| *ohms > 0.0)
+                .enumerate()
+            {
+                sched.circuit.add(Device::Resistor {
+                    name: format!("Rbias{index}"),
+                    a: if high {
+                        sched.net_nodes["vcc"]
+                    } else {
+                        NodeId::GROUND
+                    },
+                    b: sched.net_nodes["we_n"],
+                    ohms,
+                    tc1: None,
+                });
+            }
+            sched.build_and_install_parallel_memories();
+            assert!(
+                sched.parallel_memory_chips.is_empty(),
+                "only one unambiguous weak pull may seed a responder input"
+            );
+        }
     }
 
     /// A board with NO MCU module: two pulled nets (10 k to +5 V, 10 k to
