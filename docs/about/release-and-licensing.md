@@ -267,9 +267,13 @@ The platform differences are explicit:
   tests is the unlocking path for an AVR-enabled Windows artifact.
 - Renode and Espressif QEMU discovery includes their conventional Windows
   locations. The child is created suspended, assigned to a Win32 Job Object
-  with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and only then resumed; an early
-  descendant cannot escape between spawn and assignment. Native regressions
-  cover direct close and hard parent termination with an immediate grandchild.
+  with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and only then resumed; the child
+  cannot execute or create a descendant before assignment. Native regressions
+  cover direct close and hard parent termination after assignment with an
+  immediate grandchild. The stable Rust process API cannot assign the Job
+  atomically at creation: a hard kill in the narrow spawn-to-assignment window
+  can leave the suspended direct child, which has not executed or created
+  descendants. That bounded Windows limitation is explicit, not claimed away.
   Availability still comes from `hauksbee doctor`; a missing executable is
   named, never substituted.
 - Host serial uses loopback TCP. Windows has no Unix pseudo-terminal in this
