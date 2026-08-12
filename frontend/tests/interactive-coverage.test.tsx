@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { chromium } from 'playwright'
 import type { BoardSession } from '../src/hooks/useBoardSession'
 import type { WebReport } from '../src/types/report'
-import { reportVerdictTone } from '../src/lib/report-verdict'
+import { reportVerdictHeadline, reportVerdictTone } from '../src/lib/report-verdict'
 
 function realFrontdoorReport(): WebReport {
   const startup = JSON.parse(readFileSync(
@@ -111,6 +111,8 @@ test('typed co-sim invalidity and faults cannot retain a green verdict card', ()
   refused.sections = []
   refused.evidence = []
   expect(reportVerdictTone(refused)).toBe('warning')
+  expect(reportVerdictHeadline(refused)).toContain('Analysis invalid')
+  expect(reportVerdictHeadline(refused)).not.toContain('Looks healthy')
 
   const faulted: WebReport = {
     ...refused,

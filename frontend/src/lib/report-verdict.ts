@@ -37,3 +37,10 @@ export function reportVerdictPalette(report: WebReport): { border: string, backg
     case 'ok': return { border: 'var(--ok-border)', background: 'var(--ok-bg)' }
   }
 }
+
+export function reportVerdictHeadline(report: WebReport): string {
+  if (report.refusal && report.serious === 0 && report.headline.includes('Looks healthy')) {
+    return 'Analysis invalid for the requested firmware co-simulation. Static board findings remain valid.'
+  }
+  return report.headline
+}
