@@ -4,6 +4,7 @@
 //! repo layout works on every surface, including the GitHub Action, which
 //! shells `hauksbee-ci run`.
 
+#[cfg(feature = "avr")]
 use std::io::Write;
 use std::path::PathBuf;
 

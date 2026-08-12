@@ -222,6 +222,7 @@ pub(crate) fn is_esp_fork(bin: &std::path::Path) -> bool {
 /// A spawned, headless Espressif QEMU instance with a QMP socket.
 pub struct QemuProcess {
     child: Child,
+    _tree_guard: crate::children::ProcessTreeGuard,
     pub qmp_port: u16,
     /// QEMU's stderr, redirected to a temp file so that when the process dies
     /// (bad image, bad machine, bad drive size) the caller can surface QEMU's
@@ -308,13 +309,13 @@ impl QemuProcess {
             cmd.process_group(0);
         }
 
-        let child = cmd
-            .spawn()
-            .with_context(|| format!("spawning Espressif QEMU from {}", bin.display()))?;
-        crate::children::register(child.id());
+        let (child, tree_guard) = crate::children::spawn_owned(&mut cmd)
+            .with_context(|| format!("spawning owned Espressif QEMU from {}", bin.display()))?;
+        crate::children::register(child.id(), &tree_guard);
 
         Ok(QemuProcess {
             child,
+            _tree_guard: tree_guard,
             qmp_port,
             stderr_log,
         })
@@ -377,11 +378,12 @@ impl QemuProcess {
 
 impl Drop for QemuProcess {
     fn drop(&mut self) {
-        // Tree-kill first (the group on unix, taskkill /T on Windows), then
-        // the direct kill/wait to reap the child handle. Also drops the
-        // signal-reaper registration.
+        // Tree-kill first: process group on Unix, retained Job Object on
+        // Windows. Never target a reaped/recycled Windows numeric PID.
         crate::children::unregister(self.child.id());
+        #[cfg(unix)]
         crate::children::kill_tree(self.child.id());
+        let _ = self._tree_guard.terminate();
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

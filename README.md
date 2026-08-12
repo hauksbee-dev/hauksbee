@@ -50,7 +50,13 @@ Point it at any PCB design and it will:
 
 **Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/hauksbee-dev/hauksbee/releases), unzip, and double-click it. It opens your browser on the drop-zone. Drop a board file and read the report. No terminal at any point. No board of your own yet? The same page carries three one-click samples under "No board handy? Try a sample", so the app's first run needs no file either. Released apps are signed and notarised, so Gatekeeper accepts a plain double-click. The full signing story is under the installer below.
 
-This is macOS-only today. We are evaluating Windows but do not promise it yet. The GPL-free build cross-compiles clean, and a full run of the CLI and web surface passes under Wine, but no native Windows runner keeps it green. Status and what remains: [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md) section 5. Linux users, take the installer line below.
+Windows x86_64 ships the same browser front door as a native permissive zip. It
+does not include AVR/libsimavr; Renode and Espressif QEMU remain compiled in,
+and `hauksbee doctor` names whether their Windows executables are present. The
+native CI gate launches the release `hauksbee.exe`, drops a real board through
+Chromium, and retains the report and screenshot. Exact platform differences:
+[`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md)
+section 5.
 
 **One-line installer (terminal, macOS/Linux):**
 
@@ -71,6 +77,24 @@ the authorization header from stdin so the token is not placed in its argv or
 printed. The subshell drops the exported token as soon as installation ends.
 The installer also needs Python 3 to parse the authenticated release metadata
 before it requests either asset through GitHub's release-assets API.
+
+**Windows PowerShell installer (private release, x86_64):**
+
+```powershell
+try {
+  $env:HAUKSBEE_GITHUB_TOKEN = Get-Secret hauksbee-read -AsPlainText
+  $headers = @{ Authorization = "Bearer $env:HAUKSBEE_GITHUB_TOKEN" }
+  irm -Headers $headers https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
+} finally {
+  Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue
+}
+```
+
+The Windows installer verifies the zip's sha256 and installs `hauksbee.exe`,
+`hauksbee-ci.exe`, and `hauksbee-mcp.exe` under `%LOCALAPPDATA%\hauksbee\bin`.
+It always selects the Apache-2.0 permissive artifact and says that AVR is
+disabled before download. `Get-Secret` is illustrative; any secret manager
+that supplies a Contents:read token for the private repository works.
 
 **macOS signing, stated plainly.** Every macOS release binary is signed with a Developer ID identity. `Hauksbee.app` is signed and notarised with the ticket stapled, and the release workflow refuses to publish an app zip that is not, so the app opens on a double-click with no Gatekeeper warning. The tarball binaries are signed too, and notarised from launch onward; a bare command-line binary cannot carry a stapled ticket, so Gatekeeper confirms the notarisation online on first run, and a tarball fetched through a browser opens cleanly. Only a pre-release or locally built unsigned bundle still needs the one-time fallback `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci ~/.local/bin/hauksbee-mcp`, while a copy installed by the curl line above never carries the quarantine flag at all.
 

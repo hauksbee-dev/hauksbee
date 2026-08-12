@@ -76,6 +76,9 @@ fn sweep_stale_temp_files() {
 /// a terminal user's `nohup hauksbee serve &` legitimately outlives its shell
 /// and must never be tied to a parent this way.
 fn exit_when_parent_dies() {
+    #[cfg(not(unix))]
+    return;
+    #[cfg(unix)]
     let Some(parent) = std::env::var("HAUKSBEE_EXIT_WITH_PARENT")
         .ok()
         .and_then(|v| v.parse::<i32>().ok())

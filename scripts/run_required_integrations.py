@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 @dataclass(frozen=True)
@@ -176,7 +176,9 @@ def _process_has_run_token(pid: int, run_token: str) -> bool:
     return assignment in environment.split(b"\0")
 
 
-def _process_table(run_token: str | None = None) -> list[tuple[int, int, int, int, bool]]:
+def _process_table(
+    run_token: str | None = None,
+) -> list[tuple[int, int, int, int, bool]]:
     """Return a POSIX pid/ppid/pgid/session snapshot or fail closed."""
 
     if os.name != "posix":
@@ -209,9 +211,7 @@ def _process_table(run_token: str | None = None) -> list[tuple[int, int, int, in
             # ownership rather than weakening cleanup for our own children.
             session = -1
         tagged = bool(
-            run_token
-            and uid == os.geteuid()
-            and _process_has_run_token(pid, run_token)
+            run_token and uid == os.geteuid() and _process_has_run_token(pid, run_token)
         )
         rows.append((pid, parent, group, session, tagged))
     return rows
@@ -312,7 +312,9 @@ def _signal_process_groups(
             pass
 
 
-def _signal_known_root_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:
+def _signal_known_root_group(
+    process: subprocess.Popen[str], sig: signal.Signals
+) -> None:
     """Best-effort fallback that never depends on process enumeration."""
 
     try:
@@ -557,6 +559,36 @@ REQUIRED_BACKEND_KEYS = (
     "HAUKSBEE_QEMU_RISCV32",
 )
 
+WINDOWS_BACKEND_CONTRACT = {
+    "HAUKSBEE_RENODE": (
+        "renode-portable",
+        "Renode.exe",
+        ("d09b7934cfd560cd06bde8f131ef78f521f10d423d5aac6096f2a583224aeb3e",),
+        "895fddb36f65237af5a47928e49984cf1e1992e27e0d37546b3b8ea29ad57385",
+        "3b12f1dd7b613cd9b73994a985fcd77107f471c352c52b4f3f2ff1528d4e7e8d",
+    ),
+    "HAUKSBEE_QEMU_XTENSA": (
+        ".hauksbee-qemu-esp\\qemu\\bin",
+        "qemu-system-xtensa.exe",
+        (
+            "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a",
+            "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b",
+        ),
+        "7716f734130a20193ab45a4c14581918822e5ae684eb5cf3073b9429bee29825",
+        "4f02f4495f50ddf3baed71de29192932bd09053f0a1df498b854e0f5be0d8171",
+    ),
+    "HAUKSBEE_QEMU_RISCV32": (
+        ".hauksbee-qemu-esp\\qemu\\bin",
+        "qemu-system-riscv32.exe",
+        (
+            "3c483d77f5350a568df1faf4d8dbc82c95d6bc2b826d0d4be910485e0a68ca2a",
+            "697aa4800a1f52be0b1693b30e22a684f7ea93c46c489e619384cae7b0e9b87b",
+        ),
+        "ec900387a3f7b54800d4690db575b86162769add55aa3b09056a943b29ec6644",
+        "4f02f4495f50ddf3baed71de29192932bd09053f0a1df498b854e0f5be0d8171",
+    ),
+}
+
 
 def _verified_backend_paths(
     output: str, required_root: Path | None = None
@@ -609,10 +641,14 @@ def _verified_backend_paths(
     return paths, problems
 
 
-def _verify_evidence(path: Path, expected_sha: str) -> list[str]:
+def _verify_evidence(
+    path: Path, expected_sha: str, expected_platform: str | None = None
+) -> list[str]:
     problems: list[str] = []
     try:
-        document = json.loads(path.read_text())
+        # Windows PowerShell 5.1's `Set-Content -Encoding utf8` prepends a BOM;
+        # `utf-8-sig` accepts both that native artifact and BOM-less UTF-8.
+        document = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as error:
         return [f"cannot read required integration evidence {path}: {error}"]
     if document.get("schema_version") != 1:
@@ -622,6 +658,80 @@ def _verify_evidence(path: Path, expected_sha: str) -> list[str]:
             "required integration evidence commit SHA mismatch: "
             f"expected {expected_sha}, found {document.get('commit_sha')!r}"
         )
+    if expected_platform is not None and document.get("platform") != expected_platform:
+        problems.append(
+            "required integration evidence platform mismatch: "
+            f"expected {expected_platform}, found {document.get('platform')!r}"
+        )
+    if expected_platform == "windows-x86_64":
+        backends = document.get("backends")
+        if not isinstance(backends, dict) or set(backends) != set(
+            WINDOWS_BACKEND_CONTRACT
+        ):
+            problems.append(
+                "Windows required integration evidence does not contain the exact backend set"
+            )
+        else:
+            digest_pattern = re.compile(r"^[0-9a-f]{64}$")
+            for key, (
+                parent_fragment,
+                filename,
+                archive_sha256s,
+                expected_artifact_sha256,
+                expected_install_tree_sha256,
+            ) in WINDOWS_BACKEND_CONTRACT.items():
+                row = backends.get(key)
+                if not isinstance(row, dict):
+                    problems.append(
+                        f"Windows backend evidence for {key} is not an object"
+                    )
+                    continue
+                raw_path = row.get("path")
+                parsed = (
+                    PureWindowsPath(raw_path) if isinstance(raw_path, str) else None
+                )
+                path_parts = (
+                    tuple(part.lower() for part in parsed.parts) if parsed else ()
+                )
+                fragment_parts = tuple(
+                    part.lower() for part in PureWindowsPath(parent_fragment).parts
+                )
+                contains_fragment = any(
+                    path_parts[index : index + len(fragment_parts)] == fragment_parts
+                    for index in range(len(path_parts) - len(fragment_parts) + 1)
+                )
+                if (
+                    parsed is None
+                    or not parsed.is_absolute()
+                    or not re.fullmatch(r"[A-Za-z]:", parsed.drive)
+                    or parsed.name.lower() != filename.lower()
+                    or not contains_fragment
+                ):
+                    problems.append(
+                        f"Windows backend evidence for {key} has an invalid exact path"
+                    )
+                artifact_sha256 = row.get("artifact_sha256")
+                if (
+                    not isinstance(artifact_sha256, str)
+                    or not digest_pattern.fullmatch(artifact_sha256)
+                    or artifact_sha256 != expected_artifact_sha256
+                ):
+                    problems.append(
+                        f"Windows backend evidence for {key} has the wrong artifact SHA-256"
+                    )
+                install_tree_sha256 = row.get("install_tree_sha256")
+                if (
+                    not isinstance(install_tree_sha256, str)
+                    or not digest_pattern.fullmatch(install_tree_sha256)
+                    or install_tree_sha256 != expected_install_tree_sha256
+                ):
+                    problems.append(
+                        f"Windows backend evidence for {key} has the wrong install-tree SHA-256"
+                    )
+                if row.get("archive_sha256s") != list(archive_sha256s):
+                    problems.append(
+                        f"Windows backend evidence for {key} has the wrong pinned archive SHA-256 set"
+                    )
     expected_gates = [gate.name for gate in GATES]
     if document.get("gates") != expected_gates:
         problems.append(
@@ -705,12 +815,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-sha")
     parser.add_argument("--evidence-out", type=Path)
     parser.add_argument("--verify-evidence", type=Path)
+    parser.add_argument("--expected-platform")
     args = parser.parse_args(argv)
 
     if args.verify_evidence is not None:
         if not args.expected_sha:
             parser.error("--verify-evidence requires --expected-sha")
-        problems = _verify_evidence(args.verify_evidence, args.expected_sha)
+        problems = _verify_evidence(
+            args.verify_evidence, args.expected_sha, args.expected_platform
+        )
         if problems:
             for problem in problems:
                 print(problem, file=sys.stderr)
