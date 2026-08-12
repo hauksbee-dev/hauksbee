@@ -180,6 +180,18 @@ impl HauksbeeEngine {
         self.sched.apply_drc_shorts(report)
     }
 
+    /// Apply the measured copper topology, but emit a short fault only for
+    /// contacts that lack board-local physical authorization. A companion
+    /// schematic may add context without authorizing a location.
+    pub fn apply_drc_shorts_with_qualification(
+        &mut self,
+        report: &hauksbee_extract::DrcReport,
+        qualification: Option<&hauksbee_extract::DrcTieQualification>,
+    ) -> usize {
+        self.sched
+            .apply_drc_shorts_with_qualification(report, qualification)
+    }
+
     /// Record an already-computed shorts outcome for the wire `BoardInfo`
     /// (used when the caller bridged the shorts itself, e.g. `--apply-shorts`,
     /// and only the disclosure is left to do).
@@ -194,13 +206,26 @@ impl HauksbeeEngine {
     /// version (`version_warning`) leaves them un-bridged, with the reason
     /// disclosed instead of silently simulating the idealised board.
     pub fn apply_and_disclose_drc_shorts(&mut self, report: &hauksbee_extract::DrcReport) {
-        let detected = report.short_count();
+        self.apply_and_disclose_drc_shorts_with_qualification(report, None);
+    }
+
+    pub fn apply_and_disclose_drc_shorts_with_qualification(
+        &mut self,
+        report: &hauksbee_extract::DrcReport,
+        qualification: Option<&hauksbee_extract::DrcTieQualification>,
+    ) {
+        let detected = report
+            .shorts()
+            .filter(|finding| {
+                qualification.is_none_or(|qualified| qualified.tie_for(finding).is_none())
+            })
+            .count();
         if detected == 0 {
             self.shorts = None;
             return;
         }
         let bridged = if report.version_warning.is_none() {
-            self.apply_drc_shorts(report)
+            self.apply_drc_shorts_with_qualification(report, qualification)
         } else {
             0
         };

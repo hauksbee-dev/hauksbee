@@ -32,6 +32,41 @@ pub fn emit(
     verbose: bool,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
+    emit_with_schematic(
+        board_path,
+        board,
+        text,
+        raw,
+        input_kind,
+        altium_present,
+        lib,
+        reader_notes,
+        mode,
+        oracle,
+        strict,
+        verbose,
+        inputs,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn emit_with_schematic(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    altium_present: bool,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    oracle: bool,
+    strict: bool,
+    verbose: bool,
+    inputs: &[JsonInputEvidence],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> anyhow::Result<()> {
     let mut report = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
@@ -43,6 +78,9 @@ pub fn emit(
             kicad_pro_clearance_rules(board_path, board),
         )?
     };
+    // The companion schematic's declarations, applied before waivers and before
+    // anything reads the findings. Reclassifies, never deletes.
+    let qualification = schematic_ties.map(|ties| ties.qualify(&report));
     // Waivers, same semantics as `--check`: a short the board's owner overruled
     // for a stated reason must come out of THIS gate too, or the same board is
     // green under `--check --strict` and red under `--drc --strict`. The key
@@ -74,8 +112,23 @@ pub fn emit(
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
     .with_input_artifact(board_path, raw, input_kind)?;
-    let structured = DrcStructured::from_report(&report);
-    let mut maps = evidence.maps_for_drc(&structured)?;
+    // The schematic contributed to the verdict, so it enters the inventory with
+    // its own hash and what it did. A reader who sees a contact reported as a
+    // declared tie must be able to find the file that declared it.
+    let evidence = match (schematic_ties, &qualification) {
+        (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
+            &ties.path,
+            &ties.raw,
+            ties.contribution(qualification),
+        )?,
+        _ => evidence,
+    };
+    let structured = DrcStructured::from_report_with_ties(
+        &report,
+        qualification.as_ref(),
+        text.contains("<eagle") && schematic_ties.is_none(),
+    );
+    let mut maps = evidence.maps_for_drc_with_ties(&structured, qualification.as_ref())?;
     let coverage = evidence.check_coverage_map("drc", "DRC input coverage")?;
     let coverage_undermined =
         coverage.status() == hauksbee_ir::evidence::EvidenceStatus::Undermined;
@@ -138,10 +191,13 @@ pub fn emit(
     // does not gate (the printed caveat tells the user to cross-check). Asked of
     // the machine findings, so this exit code and the `--junit`/`--sarif` files
     // count the same shorts.
-    let would_gate = super::check::drc_gate_fails(&report);
+    let would_gate = super::check::drc_gate_fails(&report, qualification.as_ref());
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
-        super::strict_gate_exit(mode, &super::drc_gate_items(&report));
+        super::strict_gate_exit(
+            mode,
+            &super::drc_gate_items_with_ties(&report, qualification.as_ref()),
+        );
     }
     // Copper is model-free: only an undermined DRC coverage claim (the input
     // could not honestly be inspected) or an undermined shorts map exits 3;

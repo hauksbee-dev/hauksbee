@@ -46,6 +46,7 @@ pub mod responders;
 pub mod result;
 pub mod run_manifest;
 pub mod scheduler;
+pub mod schematic_ties;
 pub mod shorts;
 pub mod stress;
 pub mod tarski_decomp;

@@ -506,13 +506,35 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         } else {
             PlainLevel::Note
         };
+        // A schematic declaration adds context but does not authorize where the
+        // physical contact belongs.
+        // The headline still says the two connections are touching and still
+        // gives the location, so a reader who disagrees with the designer can
+        // see exactly what to go and look at.
+        if sh.severity != "serious" && sh.plain.contains("schematic declares the tie") {
+            out.push_at(
+                level,
+                format!(
+                    "\"{a}\" and \"{b}\" are joined in copper, {where_}, and your schematic says that is on purpose."
+                ),
+                format!(
+                    "The two are connected where they touch, so \"{a}\" and \"{b}\" are one node there. {}",
+                    sh.plain
+                ),
+                format!(
+                    "Nothing to change if that is what you meant. Worth a look at two things: that the join really happens where the schematic puts it (a star ground should meet at a single point, not in several places), and that the copper there is wide enough for the return current. If you did NOT mean to join \"{a}\" and \"{b}\", the schematic is what is wrong, not the layout."
+                ),
+                sh.loc_mm,
+            );
+            continue;
+        }
         out.push_at(
             level,
             format!("Two separate connections, \"{a}\" and \"{b}\", are touching, {where_}."),
             format!(
                 "These are meant to be electrically separate. Where they touch they become one connection (a short), so \"{a}\" and \"{b}\" will be forced to the same voltage. That usually means the board does the wrong thing, and if one is a power rail it can pull large current and overheat."
             ),
-            "Pull the two pieces of copper apart so there is a clear gap between them, or remove the bit of copper that bridges them. If they really are supposed to connect, give them the same net name.".to_string(),
+            sh.fix.clone(),
             sh.loc_mm,
         );
     }

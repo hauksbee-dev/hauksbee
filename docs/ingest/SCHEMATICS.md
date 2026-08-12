@@ -259,5 +259,10 @@ future work.
   vector buses**, so the same caveat applies.
 - **Net-tie footprints** (two pads tied only in copper) have no schematic
   counterpart; a board relying on them would show a split that is correct
-  for the schematic. None of the exactly-validated projects use them.
+  for the schematic. None of the exactly-validated projects use them. This is
+  also why the companion-schematic net-tie pathway is Eagle-only: KiCad has no
+  schematic construct declaring two named nets deliberately joined, and declares
+  its ties in the `.kicad_pcb` the DRC already reads. See
+  [`../checks/SHORTS.md`](../checks/SHORTS.md), "Declared ties read from the
+  schematic".
 - **Legacy KiCad 5 `.sch`** as above.

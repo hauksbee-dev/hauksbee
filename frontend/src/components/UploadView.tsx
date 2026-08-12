@@ -5,6 +5,7 @@ import { BoardTargetIcon, HistoryIcon } from './Icons'
 import { relTime } from '../lib/rel-time'
 import { hasDefaultName } from '../lib/session-store'
 import { FirmwareJack } from './FirmwareJack'
+import { SchematicJack } from './SchematicJack'
 import { BOARD_FORMATS, acceptedVendors } from '../lib/board-formats'
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
 import { motion, useReducedMotion } from 'motion/react'
@@ -90,8 +91,8 @@ export function UploadView({ session, onOpenLive, sessions, onResume }: {
   onResume?: (id: string) => void
 }) {
   const {
-    busy, uploadError, uploadNotice, dismissNotice, firmwareFile,
-    handleBoard, handleFirmware, clearFirmware, runSample,
+    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, schematicFile,
+    handleBoard, handleFirmware, clearFirmware, handleSchematic, clearSchematic, runSample,
   } = session
   const reduced = useReducedMotion()
 
@@ -317,6 +318,12 @@ export function UploadView({ session, onOpenLive, sessions, onResume }: {
             placement="intake"
             onFile={handleFirmware}
             onClear={clearFirmware}
+            locked={!!busy}
+          />
+          <SchematicJack
+            schematic={schematicFile}
+            onFile={handleSchematic}
+            onClear={clearSchematic}
             locked={!!busy}
           />
 

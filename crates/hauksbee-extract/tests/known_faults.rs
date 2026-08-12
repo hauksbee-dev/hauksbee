@@ -55,6 +55,14 @@ fn board(rel: &str) -> Option<PathBuf> {
     }
 }
 
+/// An opt-in external-corpus adjudication must fail, not silently pass, when
+/// someone explicitly runs the ignored test without provisioning its files.
+fn required_external_board(rel: &str) -> PathBuf {
+    hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel).unwrap_or_else(|| {
+        panic!("explicit external-corpus adjudication is missing required path: {rel}")
+    })
+}
+
 /// A required corpus file is missing: skip, unless HAUKSBEE_REQUIRE_CORPUS is set,
 /// in which case fail loudly so the calibration is genuinely CI-enforced.
 fn require_corpus(what: &str) {
@@ -376,6 +384,16 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
     let text = std::fs::read_to_string(&pcb).expect("read MWGEN-G1 board");
     let report = hauksbee_extract::ExtractedBoard::drc(&text).expect("drc runs");
 
+    // These six are real pad-on-pad overlaps and stay serious. The companion-
+    // schematic pathway must not touch them: it is Eagle-only, and a KiCad
+    // layout declares its ties in the `.kicad_pcb` itself, so there is no
+    // missing input to name here and nothing to qualify.
+    assert_eq!(
+        report.short_count(),
+        recorded.len(),
+        "every MWGEN-G1 short still gates"
+    );
+
     // Key each finding by (sorted net pair, layer, sorted footprint pair). All
     // six keys are distinct on this board, so a map loses nothing and lets the
     // gap and the location be checked PER finding: a sorted list of gaps would
@@ -676,22 +694,17 @@ fn eagle_signal_vias(brd: &str, net: &str) -> Vec<(f64, f64)> {
 }
 
 #[test]
+#[ignore = "optional external emonTx corpus adjudication; tracked eagle_tie_fixtures own the release contract"]
 fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
-    let Some(brd) = board("emontx3/hardware/V3.4.5/emonTx V3.4.5.brd") else {
-        return;
-    };
+    let brd = required_external_board("emontx3/hardware/V3.4.5/emonTx V3.4.5.brd");
     let gerber = |name: &str| {
-        board(&format!(
+        required_external_board(&format!(
             "emontx3/hardware/V3.4.5/GERBERS emonTx V3.4.5_2021-04-07\
              /CAMOutputs/GerberFiles/{name}"
         ))
     };
-    let Some(top) = gerber("copper_top.gbr") else {
-        return;
-    };
-    let Some(bottom) = gerber("copper_bottom.gbr") else {
-        return;
-    };
+    let top = gerber("copper_top.gbr");
+    let bottom = gerber("copper_bottom.gbr");
     hauksbee_testkit::scanned("emonTx V3.4.5 ground-tie row", 1);
 
     // The oracle: on each layer, at least one filled region holds vias of both
@@ -733,11 +746,9 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
         "both layers carry the tie and both are reported"
     );
 
-    // And the schematic declares the tie, which is why these are a net-tie class
-    // rather than a defect: an AGND supply symbol wired to a GND supply symbol.
-    let Some(sch) = board("emontx3/hardware/V3.4.5/emonTx V3.4.5.sch") else {
-        return;
-    };
+    // The schematic declares the net pair, which adds intent context but cannot
+    // decide whether either observed board contact is deliberate.
+    let sch = required_external_board("emontx3/hardware/V3.4.5/emonTx V3.4.5.sch");
     let sch_text = std::fs::read_to_string(&sch).expect("read emonTx schematic");
     let gnd_net = sch_text
         .split("<net name=\"GND\"")
@@ -752,6 +763,137 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
         "the GND net should carry the segment tying AGND7 to SUPPLY6, which is what \
          makes this a declared tie rather than an accident"
     );
+
+    // ── Without the schematic: SERIOUS, and it names the contextual upload ──
+    //
+    // The report above was produced from the `.brd` alone, which is what a user
+    // who supplies only a board gets. Both contacts stay unqualified and both
+    // still gate, and because an Eagle `.brd` cannot express a tie at all, the
+    // finding must name the schematic rather than leave the reader stuck.
+    assert_eq!(
+        report.short_count(),
+        2,
+        "board-only, both contacts are still claims of a defect"
+    );
+
+    // ── With the schematic: CONTEXT ADDED, copper remains gating ──
+    //
+    // Read through the same parser the product uses, so this asserts the shipped
+    // pathway rather than re-deriving the tie from the raw XML as above.
+    let ties = hauksbee_extract::declared_net_ties(&sch_text).expect("schematic parses");
+    assert_eq!(
+        ties.len(),
+        1,
+        "the whole schematic declares exactly one tie, got {ties:?}"
+    );
+    assert!(ties[0].covers("GND", "AGND"));
+    assert_eq!(ties[0].describe(), "AGND7 wired to SUPPLY6 in net GND");
+
+    // Snapshot the geometry, add declaration context, then prove the geometry
+    // and gate survive. The schematic has no board-coordinate authority.
+    let before: Vec<(String, String, String, f64, f64, f64)> = report
+        .shorts()
+        .map(|f| {
+            (
+                f.net_a_name.clone(),
+                f.net_b_name.clone(),
+                f.layer.clone(),
+                f.gap_mm,
+                f.x,
+                f.y,
+            )
+        })
+        .collect();
+    let qualified = report.qualify_with_declared_ties(&sch.to_string_lossy(), &ties);
+    assert_eq!(
+        qualified.qualified_count(),
+        0,
+        "the declaration cannot authorize either layer's contact"
+    );
+    let after: Vec<(String, String, String, f64, f64, f64)> = report
+        .shorts()
+        .map(|f| {
+            (
+                f.net_a_name.clone(),
+                f.net_b_name.clone(),
+                f.layer.clone(),
+                f.gap_mm,
+                f.x,
+                f.y,
+            )
+        })
+        .collect();
+    assert_eq!(
+        after, before,
+        "every finding keeps its nets, layer, measured gap and location"
+    );
+    assert_eq!(report.short_count(), 2, "nothing was deleted");
+    assert_eq!(
+        qualified.undeclared_shorts(&report).count(),
+        2,
+        "both contacts remain gate-grade"
+    );
+    for f in report.shorts() {
+        let declared = qualified
+            .declaration_for(f)
+            .unwrap_or_else(|| panic!("{} on {} lost its declaration", f.net_a_name, f.layer));
+        assert_eq!(declared.declaration, "AGND7 wired to SUPPLY6 in net GND");
+        assert!(
+            declared.source.ends_with("emonTx V3.4.5.sch"),
+            "the declaration must cite the file it came from: {}",
+            declared.source
+        );
+    }
+}
+
+/// The revision boundary, as a false-negative guard on a REAL board.
+///
+/// emonTx V3.4.0 is the revision BEFORE the tie was drawn: its schematic places
+/// every supply symbol on its own net. Supplying it must therefore qualify
+/// nothing, and V3.4.0's reported contacts must stay serious. This is the guard
+/// the reverted `isolate` narrowing failed, run against fabrication-era files
+/// rather than a fixture: a real schematic that declares nothing must not become
+/// a way to silence a short.
+#[test]
+#[ignore = "optional external emonTx corpus adjudication; tracked eagle_tie_fixtures own the release contract"]
+fn emontx_v340_schematic_declares_no_tie_so_its_shorts_stay_serious() {
+    // V3.4.0 is its own corpus entry (`emontx3_v340`, `dest = "emontx3_v340"`),
+    // NOT a sibling directory of the V3.4.5 one, so it resolves under that id.
+    // Pointing this at `emontx3/hardware/V3.4.0/...` made the whole guard skip
+    // silently on a corpus laid out from the manifest, which is the one way a
+    // false-negative guard can fail without anyone noticing.
+    let brd = required_external_board("emontx3_v340/hardware/V3.4.0/emonTx V3.4.brd");
+    let sch = required_external_board("emontx3_v340/hardware/V3.4.0/emonTx V3.4.sch");
+    hauksbee_testkit::scanned("emonTx V3.4.0 undeclared-tie row", 1);
+
+    let sch_text = std::fs::read_to_string(&sch).expect("read V3.4.0 schematic");
+    let ties = hauksbee_extract::declared_net_ties(&sch_text).expect("schematic parses");
+    assert!(
+        ties.is_empty(),
+        "V3.4.0 predates the AGND-to-GND tie, so it declares none: {ties:?}"
+    );
+
+    let brd_text = std::fs::read_to_string(&brd).expect("read V3.4.0 board");
+    let report = hauksbee_extract::ExtractedBoard::drc(&brd_text).expect("drc runs");
+    let shorts = report.short_count();
+    assert!(
+        shorts > 0,
+        "this revision is the one the pour rule reports on; it should not be silent"
+    );
+
+    let qualified = report.qualify_with_declared_ties(&sch.to_string_lossy(), &ties);
+    assert_eq!(
+        qualified.qualified_count(),
+        0,
+        "a schematic that declares nothing authorizes nothing"
+    );
+    assert_eq!(report.short_count(), shorts, "and removes nothing");
+    assert_eq!(
+        qualified.undeclared_shorts(&report).count(),
+        shorts,
+        "every contact still gates"
+    );
+    assert!(report.shorts().all(|f| qualified.tie_for(f).is_none()));
 }
 
 // ---------------------------------------------------------------------------

@@ -134,12 +134,20 @@ pub fn si_gate_items(report: &hauksbee_extract::SiReport) -> Vec<String> {
         .collect()
 }
 
-/// One label per true copper short (clearance-only findings do not gate).
+/// One label per GATING copper short: clearance-only findings do not gate, and
+/// neither does a contact backed by board-local physical authority. Schematic
+/// net names alone do not locate an intended join and therefore stay gating.
 pub fn drc_gate_items(report: &hauksbee_extract::DrcReport) -> Vec<String> {
+    drc_gate_items_with_ties(report, None)
+}
+
+pub fn drc_gate_items_with_ties(
+    report: &hauksbee_extract::DrcReport,
+    qualification: Option<&hauksbee_extract::DrcTieQualification>,
+) -> Vec<String> {
     report
-        .findings
-        .iter()
-        .filter(|f| matches!(f.kind, hauksbee_extract::ViolationKind::Short))
+        .shorts()
+        .filter(|finding| qualification.is_none_or(|ties| ties.tie_for(finding).is_none()))
         .map(|f| format!("drc-short {}/{}", f.net_a_name, f.net_b_name))
         .collect()
 }

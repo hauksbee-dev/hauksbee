@@ -82,6 +82,9 @@ pub struct BoardEvidence {
     maps: Vec<EvidenceMap>,
     board_artifact: Option<ArtifactId>,
     firmware_artifact: Option<ArtifactId>,
+    /// The companion schematic, when one was read. Cited by evidence maps whose
+    /// assertions quote its net-pair context.
+    schematic_artifact: Option<ArtifactId>,
     supporting_artifacts: Vec<ArtifactId>,
     defaults_by_ref: BTreeMap<String, Vec<DefaultFact>>,
     reader_contributions: Vec<Contribution>,
@@ -640,6 +643,7 @@ impl BoardEvidence {
             maps,
             board_artifact: None,
             firmware_artifact: None,
+            schematic_artifact: None,
             supporting_artifacts: Vec::new(),
             defaults_by_ref,
             reader_contributions,
@@ -711,6 +715,44 @@ impl BoardEvidence {
             detail: "instructions executed by the MCU co-simulation backend".into(),
         }]);
         self.firmware_artifact = Some(self.registry.add_artifact(artifact)?);
+        Ok(self)
+    }
+
+    /// Attach a companion Eagle `.sch` read for the net pairs it declares.
+    ///
+    /// The schematic contributed to the verdict, so it belongs in the inventory
+    /// with its own hash: a reader who sees schematic context on a serious
+    /// copper contact must be able to see which file carried the declaration
+    /// and check it. `contribution` says what it actually did, including when
+    /// it declared nothing.
+    pub fn with_schematic_artifact(
+        mut self,
+        path: impl AsRef<Path>,
+        raw: &[u8],
+        contribution: impl Into<String>,
+    ) -> Result<Self, EvidenceError> {
+        let path = path.as_ref();
+        let artifact = ArtifactProvenance::new(
+            path.to_string_lossy(),
+            // Preserve the closed public ArtifactKind enum for the planned
+            // first release while adding an exact additive wire discriminator.
+            ArtifactKind::EagleBoard,
+            ArtifactRole::Schematic,
+            hex_digest(&Sha256::digest(raw)),
+            Vec::new(),
+        )?
+        .with_format("eagle_schematic")
+        .with_contributions(vec![Contribution {
+            what: "declared_net_ties".into(),
+            detail: contribution.into(),
+        }])
+        .with_ignored(vec![IgnoredInput {
+            what: "schematic connectivity".into(),
+            why: "the .brd carries the full netlist, so nothing is bound or simulated from the \
+                  schematic; only its declared net ties are read"
+                .into(),
+        }]);
+        self.schematic_artifact = Some(self.registry.add_artifact(artifact)?);
         Ok(self)
     }
 
@@ -1024,12 +1066,37 @@ impl BoardEvidence {
         &self,
         drc: &crate::result::DrcStructured,
     ) -> Result<Vec<EvidenceMap>, EvidenceError> {
+        self.maps_for_drc_with_ties(drc, None)
+    }
+
+    pub fn maps_for_drc_with_ties(
+        &self,
+        drc: &crate::result::DrcStructured,
+        qualification: Option<&hauksbee_extract::DrcTieQualification>,
+    ) -> Result<Vec<EvidenceMap>, EvidenceError> {
         let mut maps = Vec::new();
         for short in &drc.shorts {
-            maps.push(self.geometry_map(
+            let mut map = self.geometry_map(
                 short.plain.clone(),
                 &[short.net_a.clone(), short.net_b.clone()],
-            )?);
+            )?;
+            if qualification.is_some_and(|ties| {
+                ties.declaration_at(
+                    &short.net_a,
+                    &short.net_b,
+                    &short.layer,
+                    short.loc_mm[0],
+                    short.loc_mm[1],
+                )
+                .is_some()
+            }) {
+                if let Some(schematic) = self.schematic_artifact {
+                    let mut artifacts = map.artifacts().to_vec();
+                    artifacts.push(schematic);
+                    map = map.with_artifacts(&self.registry, artifacts)?;
+                }
+            }
+            maps.push(map);
         }
         for group in drc.violations.iter().chain(&drc.at_limit) {
             maps.push(self.geometry_map(
@@ -1093,9 +1160,8 @@ impl BoardEvidence {
         let traversal = index.traverse_assertion(&scope, check, &assertion, &self.registry)?;
         let mut map =
             EvidenceMap::from_traversal(assertion, traversal, &self.registry, self.today)?;
-        if let Some(artifact) = self.board_artifact {
-            map = map.with_artifacts(&self.registry, [artifact])?;
-        }
+        let artifacts = self.board_artifact;
+        map = map.with_artifacts(&self.registry, artifacts)?;
         Ok(map)
     }
 

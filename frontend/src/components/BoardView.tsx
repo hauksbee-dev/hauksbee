@@ -6,6 +6,7 @@ import { CheckIcon, WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { SelectionCard } from './SelectionCard'
 import { FirmwareJack } from './FirmwareJack'
+import { SchematicJack } from './SchematicJack'
 import { DatasheetExtract } from './DatasheetExtract'
 import { WritePart } from './WritePart'
 import { displayNet } from '../lib/net-name'
@@ -93,8 +94,8 @@ export function BoardView({
   const r = session.report!
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
-    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, handleFirmware,
-    clearFirmware, boardFile, boardLabel, liveMode, onEmptyBoard, restoredFrom,
+    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, schematicFile, handleFirmware,
+    clearFirmware, handleSchematic, clearSchematic, boardFile, boardLabel, liveMode, onEmptyBoard, restoredFrom,
   } = session
 
   // Every hook in this component lives ABOVE the unreadable-file branch below.
@@ -558,6 +559,12 @@ export function BoardView({
               onClear={clearFirmware}
               locked={!!busy}
               cosimRan={r.cosim?.ran}
+            />
+            <SchematicJack
+              schematic={schematicFile}
+              onFile={handleSchematic}
+              onClear={clearSchematic}
+              locked={!!busy}
             />
           </div>
         )}

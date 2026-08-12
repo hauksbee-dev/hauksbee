@@ -20,7 +20,7 @@ pub mod cosim;
 pub mod render;
 pub mod state;
 
-pub use app::{build_state, run};
+pub use app::{build_state, build_state_with_schematic, run, run_with_schematic};
 pub use state::{
     AppState, Finding, Net, Pane, Part, PartStatus, ScopeSeries, ScopeState, ScopeView, Severity,
     Verdict,
