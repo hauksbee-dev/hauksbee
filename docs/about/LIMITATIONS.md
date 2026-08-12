@@ -390,21 +390,22 @@ foreign copper, which is not implemented.
 on that family are all a ground tie the designer DECLARED: `emonTx V3.4.5.sch`
 wires an AGND supply symbol to a GND supply symbol in one segment of net `GND`,
 from V3.4.1 onward (V3.4.0 does not, and the parser reports 0 ties there against 1
-from V3.4.1 on). So they are true about the copper and wrong to be SERIOUS. The
+from V3.4.1 on). They are true about the copper. The schematic establishes
+net-pair intent but carries no board coordinate that can prove either observed
+contact is deliberate, so both remain SERIOUS without board-local authority. The
 Eagle net-tie exemption keys on jumper libraries and package conventions
 ([`../checks/SHORTS.md`](../checks/SHORTS.md)), which cannot express that, and the
 declaration is in the `.sch` while the DRC is handed the `.brd`.
 
-That is now a supported upload rather than a limitation. Supply the schematic
-(`--schematic <FILE>`, or leave it beside the board under the board's own name)
-and the contact is RECLASSIFIED: it stays in the report, with the same layer,
-location and measured gap, as a note that names the symbols and the net
-(`AGND7 wired to SUPPLY6 in net GND`) instead of a serious short, and it stops
-failing `--strict`. The schematic enters the input inventory with its SHA-256 and
-what it contributed. With no schematic the finding stays SERIOUS and names the
-schematic as the unlocking upload, which is the honest state: an Eagle `.brd`
-records no net ties, so a `.brd`-only run genuinely cannot tell a star ground
-from a solder bridge.
+That is now a supported contextual upload rather than a limitation. Supply the
+schematic (`--schematic <FILE>`, or leave a matching valid sibling beside the
+board) and the contact keeps its layer, location, measured gap, SERIOUS severity
+and `--strict` gate, while gaining the exact declaration
+(`AGND7 wired to SUPPLY6 in net GND`) and schematic provenance. Board-local
+authority, such as a named net-tie footprint or reviewed coordinate, is still
+required to downgrade a physical finding. With no schematic, the report names
+it as an input that may explain net-pair intent, never as sufficient authority
+to clear the short.
 
 The recogniser is narrow, and it has to be. A declaration comes from Eagle's own
 supply-symbol construct, admitted only when the library symbol has exactly one pin
@@ -413,18 +414,18 @@ names a package: a supply symbol is a schematic-only marker, not a part. Ordinar
 libraries mark a real component's power pins `sup`, so an any-`sup`-pin rule turned
 an SD socket and an XBEE module into blanket ground exemptions, 6 false
 declarations on `margay_logger` and 19 on emonTx V3.2 including `3.3V` to `GND`,
-each able to reclassify a genuine rail-to-ground short. The historical twelve-pair
+each able to attach false context to a genuine rail-to-ground short. The historical twelve-pair
 exploratory sweep is not a retained release artifact and is not claimed as one.
 The always-run contract is the tracked declared/undeclared pair under
 `crates/hauksbee-extract/tests/fixtures/eagle_ties/`, plus focused parser tests for
 multi-pin, packaged, URN-collision and structural-scope false positives.
 
 An explicit companion must share the board basename and exactly match the board's
-physical reference/value set. One declaration qualifies a same-location contact
-cluster (all copper layers at that point) only when that net pair has no second
-spatial contact. The declaration carries no layout-location identity, so every
-cluster remains serious whenever multiple locations exist; relative cluster size
-is not treated as identity. See [`../checks/SHORTS.md`](../checks/SHORTS.md).
+physical reference/value set and package-pad/net incidence. One declaration may
+add context to a unique same-location contact cluster (all copper layers at that
+point), but never authorizes it. Multiple spatial contacts get no declaration
+context because the schematic cannot identify which one it describes. See
+[`../checks/SHORTS.md`](../checks/SHORTS.md).
 
 Scoped to Eagle. A `.kicad_pcb` declares its ties in the layout the DRC already
 has (`net_tie_pad_groups`, `(attr net_tie)`) and a `.kicad_sch` has no construct

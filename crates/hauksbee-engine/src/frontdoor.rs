@@ -2017,6 +2017,7 @@ mod tests {
             .find(|artifact| artifact["role"] == "schematic")
             .expect("successful firmware evidence retains schematic context");
         assert_eq!(schematic["kind"], "eagle_board");
+        assert_eq!(schematic["format"], "eagle_schematic");
         let firmware = inventory
             .iter()
             .find(|artifact| artifact["role"] == "firmware")
@@ -2042,21 +2043,22 @@ mod tests {
         let report: serde_json::Value =
             serde_json::from_str(&analyze_json_with_ties("declared.brd", BOARD, Some(&ties)))
                 .expect("web JSON");
-        let schematic = report["inventory"]
-            .as_array()
-            .expect("inventory")
+        let inventory = report["inventory"].as_array().expect("inventory");
+        let (schematic_id, schematic) = inventory
             .iter()
-            .find(|artifact| artifact["role"] == "schematic")
+            .enumerate()
+            .find(|(_, artifact)| artifact["role"] == "schematic")
             .expect("every supplied input belongs in the inventory");
         assert_eq!(schematic["kind"], "eagle_board");
+        assert_eq!(schematic["format"], "eagle_schematic");
         assert!(
-            report["evidence_maps"]
+            report["evidence"]
                 .as_array()
                 .expect("evidence maps")
                 .iter()
-                .all(|map| map["artifacts"]
-                    .as_array()
-                    .is_none_or(|ids| { ids.iter().all(|id| id != &schematic["id"]) })),
+                .all(|map| map["artifacts"].as_array().is_none_or(|ids| ids
+                    .iter()
+                    .all(|id| id.as_u64() != Some(schematic_id as u64)))),
             "an unused declaration is inventory, not causal evidence for an unrelated finding"
         );
     }

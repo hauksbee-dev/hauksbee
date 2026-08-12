@@ -1980,10 +1980,15 @@ pub struct ArtifactProvenance {
     /// Path as the user gave it, not canonicalized: the report must read back
     /// in the user's own vocabulary.
     path: String,
-    /// What the normalizer recognised it as: "kicad_pcb", "altium_pcbdoc",
-    /// "gerber_archive", "odbpp", "ipc2581", "board_code", "elf", "hex",
-    /// "toml", and so on.
+    /// Backward-compatible parser family. For the legacy Eagle XML family this
+    /// remains `eagle_board`; consumers needing the exact document form use
+    /// `format`, which distinguishes an Eagle schematic without expanding this
+    /// closed public enum before the planned first release.
     kind: ArtifactKind,
+    /// Exact normalized format when the parser-family token is not specific
+    /// enough. Omitted for all legacy rows whose `kind` is already exact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
     /// The role it played.
     role: ArtifactRole,
     /// SHA-256 of the bytes read (of the archive, for archives). Empty only
@@ -2034,6 +2039,7 @@ impl ArtifactProvenance {
         Ok(Self {
             path,
             kind,
+            format: None,
             role,
             sha256,
             contributed: Vec::new(),
@@ -2051,6 +2057,10 @@ impl ArtifactProvenance {
         self.kind
     }
 
+    pub fn format(&self) -> Option<&str> {
+        self.format.as_deref()
+    }
+
     pub fn role(&self) -> ArtifactRole {
         self.role
     }
@@ -2065,6 +2075,11 @@ impl ArtifactProvenance {
 
     pub fn with_contributions(mut self, contributions: Vec<Contribution>) -> Self {
         self.contributed = contributions;
+        self
+    }
+
+    pub fn with_format(mut self, format: impl Into<String>) -> Self {
+        self.format = Some(format.into());
         self
     }
 

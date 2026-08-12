@@ -1117,8 +1117,9 @@ pub struct DrcShort {
     pub layer: String,
     pub gap_mm: f64,
     pub loc_mm: [f64; 2],
-    /// "serious" for a short, "note" when the run could not validate the
-    /// board format or a companion schematic declares this tie deliberate.
+    /// "serious" for a short, "note" only when the board format could not be
+    /// validated or board-local physical authority qualifies this location. A
+    /// companion Eagle schematic adds context but cannot change severity.
     pub severity: String,
     /// Human one-line description, mirroring `JsonFinding.plain` so every
     /// `--json` finding category reads uniformly (SI/lint already carry it).

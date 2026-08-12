@@ -1043,6 +1043,7 @@ fn provenance_and_origin_shapes() {
     let art = ArtifactProvenance {
         path: "boards/blinky.kicad_pcb".into(),
         kind: ArtifactKind::KiCadPcb,
+        format: None,
         role: ArtifactRole::Layout,
         sha256: String::new(),
         contributed: vec![Contribution {

@@ -532,6 +532,7 @@ struct QualifiedFinding {
 pub struct DrcTieQualification {
     source: String,
     declaration_count: usize,
+    matched_declaration_count: usize,
     /// A unique measured contact whose net pair matches the schematic. This is
     /// useful explanatory context, but the Eagle schematic carries no board
     /// coordinate and therefore is not physical authorization for the contact.
@@ -614,6 +615,12 @@ impl DrcTieQualification {
 
     pub fn declaration_count(&self) -> usize {
         self.declaration_count
+    }
+
+    /// Distinct schematic declarations that matched exactly one measured
+    /// physical contact cluster. Layer rows are not double-counted.
+    pub fn matched_declaration_count(&self) -> usize {
+        self.matched_declaration_count
     }
 
     pub fn source(&self) -> &str {
@@ -814,6 +821,7 @@ impl DrcReport {
         let mut qualification = DrcTieQualification {
             source: source.to_string(),
             declaration_count: ties.len(),
+            matched_declaration_count: 0,
             declared: Vec::new(),
             qualified: Vec::new(),
         };
@@ -861,6 +869,7 @@ impl DrcReport {
                 .values()
                 .next()
                 .expect("one location checked above");
+            qualification.matched_declaration_count += 1;
             for &index in indices {
                 let finding = &self.findings[index];
                 qualification.declared.push(QualifiedFinding {
