@@ -10,7 +10,6 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
 use anyhow::{Context, Result};
-use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -29,7 +28,10 @@ impl UartSocket {
                 Ok(stream) => {
                     stream
                         .set_read_timeout(Some(Duration::from_millis(20)))
-                        .ok();
+                        .context("setting Renode UART read timeout")?;
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(2)))
+                        .context("setting Renode UART write timeout")?;
                     stream.set_nodelay(true).ok();
                     return Ok(UartSocket { stream });
                 }
@@ -44,31 +46,13 @@ impl UartSocket {
     }
 
     /// Inject bytes into the firmware's UART receiver.
-    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
-        self.stream
-            .write_all(bytes)
-            .context("writing to Renode UART socket")?;
-        self.stream.flush().ok();
-        Ok(())
+    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<usize> {
+        crate::traits::write_uart_bytes_counted(&mut self.stream, bytes)
+            .context("writing to Renode UART socket")
     }
 
     /// Drain any bytes the firmware has transmitted since the last call.
-    pub fn drain(&mut self) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut chunk = [0u8; 1024];
-        loop {
-            match self.stream.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => out.extend_from_slice(&chunk[..n]),
-                Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    break
-                }
-                Err(_) => break,
-            }
-        }
-        out
+    pub fn drain(&mut self) -> Result<Vec<u8>> {
+        crate::traits::drain_uart_bytes(&mut self.stream, "Renode")
     }
 }
