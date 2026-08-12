@@ -1,5 +1,5 @@
-//! Resolving the companion Eagle `.sch` whose net ties qualify a `.brd`'s
-//! copper shorts.
+//! Resolving the companion Eagle `.sch` whose net-pair declarations add
+//! context to a `.brd`'s copper shorts.
 //!
 //! An Eagle `.brd` carries no net-tie field of any kind, so on that format the
 //! geometric DRC genuinely cannot tell a deliberate star ground from a solder
@@ -45,8 +45,7 @@ pub struct SchematicTies {
 /// `explicit` is the `--schematic` path when the user gave one. An explicit path
 /// that cannot be read or is not an Eagle schematic is an ERROR: the user named
 /// a file and expects it to have been used, and silently ignoring it would let a
-/// serious short be presented as unqualified when the input that would qualify
-/// it was supplied and dropped.
+/// serious short omit the context the user explicitly supplied.
 ///
 /// `board_is_eagle` is the caller's content sniff of the layout, the same
 /// `<eagle>` test `ExtractedBoard::drc_with_clearance_rules` dispatches on.
@@ -64,9 +63,8 @@ pub fn resolve(
 ) -> anyhow::Result<Option<SchematicTies>> {
     // A companion is only meaningful for an Eagle `.brd`, the one format that
     // cannot declare a net tie itself. Without this, `--schematic eagle.sch`
-    // beside a `.kicad_pcb` would be accepted and could reclassify that board's
-    // shorts on a net-name coincidence, using a file that describes a different
-    // design entirely.
+    // beside a `.kicad_pcb` would attach context on a net-name coincidence using
+    // a file that describes a different design entirely.
     if !board_is_eagle {
         if let Some(path) = explicit {
             anyhow::bail!(
@@ -226,7 +224,7 @@ fn verify_design_identity(
     if board_parts != schematic_parts {
         anyhow::bail!(
             "--schematic {}: design identity does not match board {}: physical reference/value \
-             sets differ (board {}, schematic {}). Refusing to qualify any copper contact.",
+             sets differ (board {}, schematic {}). Refusing to use schematic context.",
             schematic_path.display(),
             board_path.display(),
             board_parts.len(),
@@ -291,13 +289,13 @@ impl SchematicTies {
     }
 
     pub fn contribution(&self, qualification: &hauksbee_extract::DrcTieQualification) -> String {
-        let qualified = qualification.qualified_count();
+        let matched = qualification.declaration_count().min(self.ties.len());
         format!(
-            "{} declared net tie{} read from the schematic's supply symbols; {qualified} copper \
-             contact{} reclassified from serious short to a declared tie",
+            "{} declared net tie{} read from the schematic's supply symbols; {matched} declaration{} \
+             retained as context only because the schematic has no board-coordinate authority",
             self.ties.len(),
             if self.ties.len() == 1 { "" } else { "s" },
-            if qualified == 1 { "" } else { "s" },
+            if matched == 1 { "" } else { "s" },
         )
     }
 }
@@ -334,7 +332,7 @@ mod tests {
         // Silently ignoring it would be worse: the user named a file and would
         // read an unqualified serious short believing the schematic had been
         // consulted. Accepting it would be worse still, since an Eagle schematic
-        // could reclassify a KiCad board's short on a net-name coincidence.
+        // could mis-annotate a KiCad board's short on a net-name coincidence.
         let err = resolve(
             Path::new("/nonexistent/board.kicad_pcb"),
             &empty_board(),

@@ -181,8 +181,8 @@ struct Segment {
 /// `margay_logger/Hardware/Margay.sch` has 13 pins of which 4 are `sup`, and the
 /// `XBEE` symbol in `emonTx V3.2.sch` has 20 pins of which 2 are. Registering
 /// those as supply symbols made the SD socket and the radio module "declare" a
-/// tie between ground and every net they touch, which would reclassify a genuine
-/// rail-to-ground short into a non-gating note. A real Eagle supply symbol is a
+/// tie between ground and every net they touch, which would attach false intent
+/// context to a genuine rail-to-ground short. A real Eagle supply symbol is a
 /// bare marker: one pin, and that pin is `sup`.
 #[derive(Default)]
 struct SymbolPins {
@@ -776,7 +776,7 @@ mod tests {
     fn a_multi_pin_component_with_supply_pins_declares_nothing() {
         // THE false-negative guard on the recogniser itself. An SD socket sitting
         // on a signal net must not "declare" that signal tied to GND: doing so
-        // would reclassify a genuine rail-to-ground short into a non-gating note.
+        // would attach false intent context to a genuine rail-to-ground short.
         // Measured on the real files this fixture is modelled on, the earlier
         // any-`sup`-pin rule invented 6 ties on Margay and 19 on emonTx V3.2,
         // including 3.3V/GND.
@@ -932,7 +932,7 @@ mod tests {
     fn malformed_xml_is_an_error_not_an_empty_answer() {
         // A companion the user explicitly supplied must never be silently
         // half-read: "no ties declared" and "could not read it" are different
-        // claims, and only one of them is safe to downgrade a short on.
+        // claims. Neither one authorizes a board location or downgrades a short.
         let err = declared_net_ties("<eagle><drawing><schematic><parts><part name=")
             .expect_err("a truncated attribute is an error");
         assert!(

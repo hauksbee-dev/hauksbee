@@ -168,7 +168,7 @@ fn schematic_provenance_is_causal_only_to_the_declared_contact() {
             .with_schematic_artifact(
                 "fixture.sch",
                 b"<eagle><schematic/></eagle>",
-                "one declared tie qualified one contact",
+                "one declared tie supplied context for one measured contact",
             )
             .unwrap();
     let tie_board = include_str!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");

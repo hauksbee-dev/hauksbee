@@ -1251,12 +1251,13 @@ impl DrcStructured {
         let phantom = report.version_warning.is_some();
 
         for f in &report.findings {
-            let declared_tie = qualification.and_then(|ties| ties.tie_for(f));
+            let authorized_tie = qualification.and_then(|ties| ties.tie_for(f));
+            let declared_tie = qualification.and_then(|ties| ties.declaration_for(f));
             match f.kind {
                 // A short is serious unless something specific says otherwise:
-                // the format was unvalidated, or a companion schematic declares
+                // the format was unvalidated, or board-local authority declares
                 // this exact pair of nets deliberately tied. Both are per-finding
-                // here rather than per-report, because a declared tie qualifies
+                // here rather than per-report, because board-local authority qualifies
                 // only the contacts it covers and every other short on the same
                 // board stays serious.
                 ViolationKind::Short => shorts.push(DrcShort {
@@ -1265,7 +1266,7 @@ impl DrcStructured {
                     layer: f.layer.clone(),
                     gap_mm: f.gap_mm,
                     loc_mm: [f.x, f.y],
-                    severity: if phantom || declared_tie.is_some() {
+                    severity: if phantom || authorized_tie.is_some() {
                         "note".to_string()
                     } else {
                         "serious".to_string()
@@ -1276,7 +1277,8 @@ impl DrcStructured {
                     plain: match declared_tie {
                         Some(tie) => format!(
                             "{} and {} are joined in copper on {} at ({:.2}, {:.2}) mm \
-                             (gap {:.3} mm), and the schematic declares the tie: {} ({})",
+                             (gap {:.3} mm). The schematic names this net pair ({}; {}), but \
+                             does not identify or authorize this physical location",
                             f.net_a_name,
                             f.net_b_name,
                             f.layer,
@@ -1292,17 +1294,18 @@ impl DrcStructured {
                         ),
                     },
                     fix: match (declared_tie, missing_eagle_schematic) {
-                        (Some(_), _) => "nothing to fix if the tie is intended: the schematic \
-                             declares it. Check the join is where the schematic puts it (a star \
-                             ground should meet at one point), and that the copper carries the \
-                             return current you expect."
+                        (Some(_), _) => "verify this exact join against board-local layout intent \
+                             (for example a named net-tie footprint or reviewed coordinate), or \
+                             separate the nets. The Eagle schematic names only the net pair and \
+                             cannot prove where the physical join belongs."
                             .to_string(),
                         // No schematic was supplied and this format can declare
                         // ties in one. Name that upload rather than leaving the
                         // reader to guess what would settle it.
                         (None, true) => "separate the two nets' copper: widen the gap or reroute \
                              so the trace/pad spacing clears the clearance rule. If this contact \
-                             is deliberate, supply the same-named Eagle .sch companion and rerun"
+                             is deliberate, supply the same-named Eagle .sch companion for net-pair \
+                             context, then provide board-local layout authority for this location"
                             .to_string(),
                         (None, false) => "separate the two nets' copper: widen the gap or reroute \
                              so the trace/pad spacing clears the clearance rule"
@@ -2087,14 +2090,10 @@ impl JsonReport {
         if let Some(drc) = &self.drc {
             if drc.version_warning.is_none() {
                 for s in &drc.shorts {
-                    // A contact a companion schematic declares deliberate is not a
-                    // serious finding and there is nothing to act on, so it must
-                    // not reach the run-level verdict either. This is the field a
-                    // CI consumer reads instead of re-deriving pass/fail from the
-                    // findings, so leaving it out of step would fail the build on
-                    // a declared star ground through `ok`/`verdict` while every
-                    // per-finding surface, the strict gate and the JUnit artifact
-                    // all call it a note.
+                    // A board-authorized contact or an unvalidated-format phantom
+                    // may be non-serious. Keep the aggregate verdict aligned with
+                    // the per-finding and artifact severities rather than
+                    // re-deriving intent here.
                     if s.severity != "serious" {
                         continue;
                     }
@@ -2672,16 +2671,13 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_tie_becomes_a_note_that_still_states_the_copper_contact() {
+    fn a_schematic_only_tie_stays_serious_and_states_the_context() {
         let report = eagle_report(vec![short("GND", "AGND")]);
         let qualification = declared_qualification(&report);
 
         let st = DrcStructured::from_report_with_ties(&report, Some(&qualification), false);
         assert_eq!(st.shorts.len(), 1, "the finding is not deleted");
-        assert_eq!(
-            st.shorts[0].severity, "note",
-            "a declared tie is not a defect"
-        );
+        assert_eq!(st.shorts[0].severity, "serious");
 
         // The geometry claim must survive into the text a user reads. Both nets
         // named, and the word that says they are connected.
@@ -2699,10 +2695,11 @@ mod tests {
             plain.contains("emonTx V3.4.5.sch"),
             "and cite the file: {plain}"
         );
-        // Nothing to fix, and the fix text must not tell the user to cut it.
+        // The schematic lacks a coordinate, so the fix must request board-local
+        // authority or separation rather than silently excusing the contact.
         assert!(
-            !st.shorts[0].fix.contains("separate"),
-            "a declared tie must not be told to separate its copper: {}",
+            st.shorts[0].fix.contains("separate"),
+            "a schematic-only declaration must retain an actionable fix: {}",
             st.shorts[0].fix
         );
 
@@ -2710,10 +2707,13 @@ mod tests {
         // declaration, so the copper is visible on the text surface too.
         let rendered = st.render();
         assert!(
-            rendered.contains("[NOTE] GND touches AGND on F.Cu"),
+            rendered.contains("[SERIOUS] GND touches AGND on F.Cu"),
             "{rendered}"
         );
-        assert!(rendered.contains("[NOTE] GND touches AGND"), "{rendered}");
+        assert!(
+            rendered.contains("[SERIOUS] GND touches AGND"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -2736,9 +2736,7 @@ mod tests {
     }
 
     #[test]
-    fn one_declared_tie_does_not_downgrade_an_undeclared_short_beside_it() {
-        // Severity is per finding. A board with a declared star ground and a real
-        // bridge elsewhere must report one note and one serious short.
+    fn schematic_context_does_not_downgrade_either_short() {
         let report = eagle_report(vec![short("GND", "AGND"), short("+5V", "VBAT")]);
         let qualification = declared_qualification(&report);
 
@@ -2749,7 +2747,7 @@ mod tests {
             .iter()
             .map(|s| (s.net_b.as_str(), s.severity.as_str()))
             .collect();
-        assert_eq!(by_pair["AGND"], "note");
+        assert_eq!(by_pair["AGND"], "serious");
         assert_eq!(by_pair["VBAT"], "serious");
     }
 

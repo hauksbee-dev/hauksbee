@@ -528,8 +528,8 @@ fn analyze_normalized(
 /// no filesystem beside it, so there is no companion to read and the report keeps
 /// the "supply the .sch" hint. A `--serve` run was pointed at a path, so the
 /// schematic may be sitting right next to the board, and reading it there is what
-/// keeps the browser report from calling a declared star ground a serious short
-/// while the CLI on the same board calls it a note.
+/// carries schematic declarations as context without letting them excuse a
+/// board location they cannot identify, matching the CLI contract.
 fn analyze_normalized_with_ties(
     file_name: &str,
     norm: &crate::board_input::NormalizedBoard,
@@ -660,9 +660,11 @@ fn analyze_normalized_with_ties(
         }
     };
     let evidence = match (schematic_ties, &qualification) {
-        (Some(ties), Some(qualification)) if qualification.qualified_count() > 0 => match evidence
-            .with_schematic_artifact(&ties.path, &ties.raw, ties.contribution(qualification))
-        {
+        (Some(ties), Some(qualification)) => match evidence.with_schematic_artifact(
+            &ties.path,
+            &ties.raw,
+            ties.contribution(qualification),
+        ) {
             Ok(evidence) => evidence,
             Err(error) => {
                 return (
@@ -943,8 +945,11 @@ pub fn analyze_with_firmware_with_ties(
         .and_then(|evidence| evidence.with_input_artifact(file_name, &norm.raw, norm.kind))
         .and_then(|evidence| evidence.with_firmware_artifact(&resolved.name, &resolved.bytes))
         .and_then(|evidence| match (schematic_ties, &tie_qualification) {
-            (Some(ties), Some(qualification)) if qualification.qualified_count() > 0 => evidence
-                .with_schematic_artifact(&ties.path, &ties.raw, ties.contribution(qualification)),
+            (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
+                &ties.path,
+                &ties.raw,
+                ties.contribution(qualification),
+            ),
             _ => Ok(evidence),
         });
         if let Ok(mut evidence) = evidence_result {
@@ -1534,13 +1539,13 @@ fn run_web_cosim(
                     "This co-sim ran WITH the board's {shorts_applied} physical copper {connection_word} \
                      bridged into the circuit."
                 ),
-                why: "The DRC section above distinguishes intended declared ties from serious \
-                      defects. The co-sim applies every validated physical connection before \
-                      simulating, so the rail and GPIO voltages reflect the board as built; only \
-                      undeclared contacts produce short faults."
+                why: "The DRC section above determines whether a contact has board-local physical \
+                      authorization. The co-sim applies every validated-format copper contact \
+                      before simulating, so the rail and GPIO voltages reflect the board as built; \
+                      schematic net names alone do not suppress short faults."
                     .to_string(),
-                fix: "Follow the DRC section: repair contacts marked serious, but do not remove \
-                      an intended connection merely because it is shown as a declared tie."
+                fix: "Follow the DRC section: repair serious contacts, or provide board-local \
+                      authority for the exact intended join."
                     .to_string(),
                 x: None,
                 y: None,
@@ -1941,7 +1946,7 @@ mod tests {
 
     #[cfg(feature = "avr")]
     #[test]
-    fn web_cosim_bridges_a_declared_contact_without_reporting_a_short_fault() {
+    fn web_cosim_keeps_a_schematic_only_contact_as_a_short_fault() {
         let board_text = r#"(kicad_pcb (version 20221018) (generator pcbnew)
   (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
   (net 0 "")
@@ -1967,7 +1972,7 @@ mod tests {
             tied_to: vec!["D13_TIE".into()],
         }];
         let qualification = drc.qualify_with_declared_ties("blinky.sch", &declarations);
-        assert_eq!(qualification.qualified_count(), 1);
+        assert_eq!(qualification.qualified_count(), 0);
 
         let (cosim, captured) = run_web_cosim(
             &board,
@@ -1978,30 +1983,16 @@ mod tests {
             Some(&qualification),
         );
         assert!(cosim.ran, "the tracked AVR firmware must execute");
-        assert!(
-            cosim.findings.iter().any(|finding| {
-                finding.level == "note" && finding.what.contains("physical copper connection")
-            }),
-            "web disclosure says the physical bridge was applied: {:?}",
-            cosim
-                .findings
-                .iter()
-                .map(|finding| (&finding.level, &finding.what))
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            !cosim.findings.iter().any(|finding| {
-                finding.level == "serious" && finding.what.to_ascii_lowercase().contains("short")
-            }),
-            "a declared tie must not render as a web short defect"
-        );
+        assert!(cosim.findings.iter().any(|finding| {
+            finding.level == "note" && finding.what.contains("physical copper connection")
+        }));
         assert!(
             captured
                 .expect("a successful run captures evidence")
                 .faults
                 .iter()
-                .all(|fault| fault.kind != crate::stress::FaultKind::Short),
-            "the qualified physical bridge must not enter the runtime fault stream"
+                .any(|fault| fault.kind == crate::stress::FaultKind::Short),
+            "the physical bridge remains in the runtime fault stream"
         );
 
         let ties = crate::schematic_ties::SchematicTies {
@@ -2018,14 +2009,19 @@ mod tests {
             Some(&ties),
         );
         let report_json = serde_json::to_value(&report).expect("web report serializes");
-        assert!(
-            report_json["inventory"]
-                .as_array()
-                .expect("successful firmware evidence inventory")
-                .iter()
-                .any(|artifact| artifact["role"] == "schematic"),
-            "successful firmware evidence must retain the causal schematic artifact"
-        );
+        let inventory = report_json["inventory"]
+            .as_array()
+            .expect("successful firmware evidence inventory");
+        let schematic = inventory
+            .iter()
+            .find(|artifact| artifact["role"] == "schematic")
+            .expect("successful firmware evidence retains schematic context");
+        assert_eq!(schematic["kind"], "eagle_board");
+        let firmware = inventory
+            .iter()
+            .find(|artifact| artifact["role"] == "firmware")
+            .expect("firmware inventory row");
+        assert_eq!(firmware["kind"], "elf");
     }
 
     #[test]
@@ -2046,13 +2042,22 @@ mod tests {
         let report: serde_json::Value =
             serde_json::from_str(&analyze_json_with_ties("declared.brd", BOARD, Some(&ties)))
                 .expect("web JSON");
+        let schematic = report["inventory"]
+            .as_array()
+            .expect("inventory")
+            .iter()
+            .find(|artifact| artifact["role"] == "schematic")
+            .expect("every supplied input belongs in the inventory");
+        assert_eq!(schematic["kind"], "eagle_board");
         assert!(
-            report["inventory"]
+            report["evidence_maps"]
                 .as_array()
-                .expect("inventory")
+                .expect("evidence maps")
                 .iter()
-                .all(|artifact| artifact["role"] != "schematic"),
-            "an unused declaration is an inspected input, not causal evidence for a finding"
+                .all(|map| map["artifacts"]
+                    .as_array()
+                    .is_none_or(|ids| { ids.iter().all(|id| id != &schematic["id"]) })),
+            "an unused declaration is inventory, not causal evidence for an unrelated finding"
         );
     }
 

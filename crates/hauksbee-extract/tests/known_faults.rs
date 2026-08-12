@@ -746,8 +746,8 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
         "both layers carry the tie and both are reported"
     );
 
-    // And the schematic declares the tie, which is why these are a net-tie class
-    // rather than a defect: an AGND supply symbol wired to a GND supply symbol.
+    // The schematic declares the net pair, which adds intent context but cannot
+    // decide whether either observed board contact is deliberate.
     let sch = required_external_board("emontx3/hardware/V3.4.5/emonTx V3.4.5.sch");
     let sch_text = std::fs::read_to_string(&sch).expect("read emonTx schematic");
     let gnd_net = sch_text
@@ -764,7 +764,7 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
          makes this a declared tie rather than an accident"
     );
 
-    // ── Without the schematic: SERIOUS, and it names the upload that settles it ──
+    // ── Without the schematic: SERIOUS, and it names the contextual upload ──
     //
     // The report above was produced from the `.brd` alone, which is what a user
     // who supplies only a board gets. Both contacts stay unqualified and both
@@ -776,7 +776,7 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
         "board-only, both contacts are still claims of a defect"
     );
 
-    // ── With the schematic: RECLASSIFIED, and the copper is still visible ──
+    // ── With the schematic: CONTEXT ADDED, copper remains gating ──
     //
     // Read through the same parser the product uses, so this asserts the shipped
     // pathway rather than re-deriving the tie from the raw XML as above.
@@ -789,9 +789,8 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
     assert!(ties[0].covers("GND", "AGND"));
     assert_eq!(ties[0].describe(), "AGND7 wired to SUPPLY6 in net GND");
 
-    // Snapshot the geometry, then qualify, then prove the geometry survived. The
-    // point of reclassifying rather than deleting is that a user can still see
-    // GND and AGND touching, on both layers, at the same places.
+    // Snapshot the geometry, add declaration context, then prove the geometry
+    // and gate survive. The schematic has no board-coordinate authority.
     let before: Vec<(String, String, String, f64, f64, f64)> = report
         .shorts()
         .map(|f| {
@@ -808,8 +807,8 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
     let qualified = report.qualify_with_declared_ties(&sch.to_string_lossy(), &ties);
     assert_eq!(
         qualified.qualified_count(),
-        2,
-        "the declaration covers both layers' contacts"
+        0,
+        "the declaration cannot authorize either layer's contact"
     );
     let after: Vec<(String, String, String, f64, f64, f64)> = report
         .shorts()
@@ -831,12 +830,12 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
     assert_eq!(report.short_count(), 2, "nothing was deleted");
     assert_eq!(
         qualified.undeclared_shorts(&report).count(),
-        0,
-        "and neither one gates any more"
+        2,
+        "both contacts remain gate-grade"
     );
     for f in report.shorts() {
         let declared = qualified
-            .tie_for(f)
+            .declaration_for(f)
             .unwrap_or_else(|| panic!("{} on {} lost its declaration", f.net_a_name, f.layer));
         assert_eq!(declared.declaration, "AGND7 wired to SUPPLY6 in net GND");
         assert!(
@@ -886,7 +885,7 @@ fn emontx_v340_schematic_declares_no_tie_so_its_shorts_stay_serious() {
     assert_eq!(
         qualified.qualified_count(),
         0,
-        "a schematic that declares nothing qualifies nothing"
+        "a schematic that declares nothing authorizes nothing"
     );
     assert_eq!(report.short_count(), shorts, "and removes nothing");
     assert_eq!(

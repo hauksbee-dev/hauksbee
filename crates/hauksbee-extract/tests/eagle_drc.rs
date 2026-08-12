@@ -1527,8 +1527,8 @@ fn divergent_design_rule_values_resolve_to_the_tightest() {
 // ground drawn as one net's supply symbol placed on another's) is copper between
 // two differently named nets and looks exactly like a solder bridge. The
 // declaration lives in the schematic. These fixtures pin BOTH directions: a
-// declared contact is reclassified and still reported, and an undeclared one
-// stays a serious short even when a schematic is supplied.
+// declared contact gains scoped context but stays serious, and an undeclared
+// one gains no invented context.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Two 0.5 mm wires of nets GND and AGND crossing on the top copper: a real,
@@ -1616,10 +1616,10 @@ fn schematic_declaring_nothing() -> String {
 }
 
 #[test]
-fn an_eagle_short_names_the_schematic_as_the_unlocking_upload() {
+fn an_eagle_short_names_the_schematic_as_context_not_authority() {
     // Side (b): the `.brd` alone. The contact is real and stays a short, and the
-    // report must say which input would settle whether it is deliberate rather
-    // than leaving the reader with an unresolvable finding.
+    // report may name the companion that explains net-pair intent, while the
+    // physical finding remains unresolved without board-local authority.
     let report = drc("", "", CROSSING_GND_AGND);
     assert_eq!(report.short_count(), 1);
     assert_eq!(report.short_count(), 1, "extraction never guesses intent");
@@ -1646,10 +1646,7 @@ fn a_clean_eagle_board_gains_no_unlocking_hint() {
 }
 
 #[test]
-fn a_declared_tie_reclassifies_the_short_without_removing_it() {
-    // Side (a): the schematic declares GND/AGND tied, so the contact stops being
-    // a defect. It must NOT stop being reported: the copper claim, its layer,
-    // its location and its measured gap all survive intact.
+fn a_declared_pair_adds_context_without_authorizing_the_contact() {
     let report = drc("", "", CROSSING_GND_AGND);
     let before = report.shorts().next().cloned().expect("one short");
     let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
@@ -1657,15 +1654,11 @@ fn a_declared_tie_reclassifies_the_short_without_removing_it() {
     assert_eq!(ties.len(), 1, "one declaration, got {ties:?}");
 
     let qualified = report.qualify_with_declared_ties("emonTx.sch", &ties);
-    assert_eq!(qualified.qualified_count(), 1);
+    assert_eq!(qualified.qualified_count(), 0);
 
-    // Still one short, still the same measurement. This is the reclassify-not-
-    // delete contract: a user must be able to see that GND and AGND touch.
-    assert_eq!(
-        report.short_count(),
-        1,
-        "the finding survives reclassification"
-    );
+    // Still one short, still the same measurement: schematic context cannot
+    // change the physical observation.
+    assert_eq!(report.short_count(), 1, "the measured finding survives");
     let after = report.shorts().next().expect("still one short");
     assert_eq!(after.net_a_name, before.net_a_name);
     assert_eq!(after.net_b_name, before.net_b_name);
@@ -1673,13 +1666,16 @@ fn a_declared_tie_reclassifies_the_short_without_removing_it() {
     assert_eq!(after.gap_mm, before.gap_mm);
     assert_eq!((after.x, after.y), (before.x, before.y));
 
-    // What changed: it no longer gates, and it carries the declaration.
+    // The schematic carries useful pair context but no board coordinate, so
+    // the finding still gates and the context uses the non-authorizing API.
     assert_eq!(
         qualified.undeclared_shorts(&report).count(),
-        0,
-        "a declared tie is not a build failure"
+        1,
+        "a coordinate-free declaration cannot excuse a physical contact"
     );
-    let tie = qualified.tie_for(after).expect("carries the declaration");
+    let tie = qualified
+        .declaration_for(after)
+        .expect("carries the schematic context");
     assert_eq!(tie.declaration, "AGND7 wired to SUPPLY6 in net GND");
     assert_eq!(tie.source, "emonTx.sch");
     // And the run records which file it read, replacing the "supply it" hint.
@@ -1713,7 +1709,7 @@ fn copper_the_schematic_does_not_declare_stays_a_serious_short() {
 }
 
 #[test]
-fn a_declared_tie_qualifies_only_the_pair_it_names() {
+fn a_declared_pair_adds_context_only_to_the_pair_it_names() {
     // A board with two contacts, one declared and one not. The declaration is
     // per net pair, so it must not spill onto the other: flattening it to "this
     // board has a tie, stop reporting" is exactly the over-reach that would turn
@@ -1733,14 +1729,19 @@ fn a_declared_tie_qualifies_only_the_pair_it_names() {
     let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
         .expect("schematic parses");
     let qualified = report.qualify_with_declared_ties("emonTx.sch", &ties);
-    assert_eq!(qualified.qualified_count(), 1);
+    assert_eq!(qualified.qualified_count(), 0);
 
     assert_eq!(report.short_count(), 2, "both contacts still reported");
     assert_eq!(
         qualified.undeclared_shorts(&report).count(),
-        1,
-        "the undeclared +5V/VBAT contact still gates"
+        2,
+        "both physical contacts still gate without board-coordinate authority"
     );
+    let declared = report
+        .shorts()
+        .find(|finding| finding.net_b_name == "AGND")
+        .expect("declared pair finding");
+    assert!(qualified.declaration_for(declared).is_some());
     let gating: Vec<_> = qualified
         .undeclared_shorts(&report)
         .map(|f| {
@@ -1749,7 +1750,7 @@ fn a_declared_tie_qualifies_only_the_pair_it_names() {
             format!("{}/{}", n[0], n[1])
         })
         .collect();
-    assert_eq!(gating, ["+5V/VBAT"]);
+    assert_eq!(gating, ["AGND/GND", "+5V/VBAT"]);
 }
 
 #[test]

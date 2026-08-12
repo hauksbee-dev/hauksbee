@@ -198,8 +198,8 @@ fn analyze_board_resolves_eagle_schematic_siblings_and_explicit_paths_like_the_c
         "sibling resolution is not an input error: {sibling}"
     );
     assert_eq!(
-        sibling["serious"], 0,
-        "sibling tie must qualify the contact: {sibling}"
+        sibling["serious"], 2,
+        "a sibling schematic adds context but cannot authorize either physical contact: {sibling}"
     );
     assert!(
         sibling["sections"]
@@ -207,10 +207,10 @@ fn analyze_board_resolves_eagle_schematic_siblings_and_explicit_paths_like_the_c
             .unwrap()
             .iter()
             .flat_map(|section| section["findings"].as_array().into_iter().flatten())
-            .any(|finding| finding["why"]
+            .any(|finding| finding["fix"]
                 .as_str()
-                .is_some_and(|why| why.contains("schematic declares the tie"))),
-        "MCP must surface the same declared-tie note as the CLI: {sibling}"
+                .is_some_and(|fix| fix.contains("cannot prove where the physical join belongs"))),
+        "MCP must surface the same contextual declaration and serious verdict as the CLI: {sibling}"
     );
 
     let board_dir = tempfile::tempdir().expect("board dir");
@@ -228,8 +228,8 @@ fn analyze_board_resolves_eagle_schematic_siblings_and_explicit_paths_like_the_c
     );
     assert!(!is_error, "explicit schematic is accepted: {explicit}");
     assert_eq!(
-        explicit["serious"], 0,
-        "explicit tie must qualify the contact: {explicit}"
+        explicit["serious"], 2,
+        "an explicit schematic also adds context without physical authority: {explicit}"
     );
 }
 

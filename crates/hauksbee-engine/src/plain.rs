@@ -506,7 +506,8 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         } else {
             PlainLevel::Note
         };
-        // A declared tie changes what the contact MEANS, not that it exists.
+        // A schematic declaration adds context but does not authorize where the
+        // physical contact belongs.
         // The headline still says the two connections are touching and still
         // gives the location, so a reader who disagrees with the designer can
         // see exactly what to go and look at.
