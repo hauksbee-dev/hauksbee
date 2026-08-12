@@ -316,6 +316,7 @@ pub struct WebCosimSection {
 /// [`analyze_with_firmware_json`] inserts these optional keys into the nested
 /// `cosim` object for HTTP/MCP/frontend consumers.
 #[derive(Debug, Clone, Default, Serialize)]
+#[non_exhaustive]
 pub struct WebFirmwareCoverage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timing_coverage: Vec<crate::scheduler::TimingCoverage>,
@@ -943,6 +944,7 @@ fn analyze_with_firmware_parts(
             let cosim = cosim_unavailable(msg);
             let coverage = WebCosimCoverage::default();
             report.refusal = refusal_for_cosim(&cosim, &coverage);
+            apply_refusal_headline(&mut report);
             report.cosim = Some(cosim);
             return (report, coverage);
         }
@@ -1108,8 +1110,15 @@ fn analyze_with_firmware_parts(
         }
     }
     report.refusal = refusal_for_cosim(&cosim, &coverage);
+    apply_refusal_headline(&mut report);
     report.cosim = Some(cosim);
     (report, coverage)
+}
+
+fn apply_refusal_headline(report: &mut WebReport) {
+    if report.refusal.is_some() && report.serious == 0 {
+        report.headline = "Analysis invalid for the requested firmware co-simulation. Static board findings remain valid.".to_string();
+    }
 }
 
 /// Translate a co-sim validity failure into the shared C5.3 refusal contract.
@@ -2728,6 +2737,11 @@ fn main {
             .refusal
             .expect("unavailable co-sim must carry a refusal contract");
         assert!(!refusal.claim.is_empty());
+        assert!(
+            !r.headline.contains("Looks healthy") && r.headline.contains("invalid"),
+            "a refusal cannot retain a healthy primary verdict: {}",
+            r.headline
+        );
         assert!(refusal
             .missing_prerequisite
             .to_lowercase()
@@ -2922,15 +2936,16 @@ fn main {
             );
         }
 
-        // A co-sim that did NOT run (no firmware / external backend) never demotes,
-        // even carrying caveat-shaped defaults.
+        // This helper handles caveats from completed runs. A co-sim that did not
+        // run is labeled invalid by `apply_refusal_headline` after its typed
+        // refusal is built, not by this note-level helper.
         let mut not_run = clean_ran_section();
         not_run.ran = false;
         not_run.firmware_exercised = false;
         assert_eq!(
             cosim_caveat_headline(&not_run, &WebCosimCoverage::default(), &healthy),
             None,
-            "a not-run co-sim is not a refusal and must not demote"
+            "not-run handling belongs to the typed refusal path"
         );
 
         // Only the bare healthy line is overwritten; an already-demoted or

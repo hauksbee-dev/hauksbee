@@ -16,7 +16,7 @@
 import type { WebReport, WebSection } from '../types/report'
 import { groupFindings } from './findings'
 import { refusalLines } from './refusal-contract'
-import { reportVerdictPalette } from './report-verdict'
+import { reportVerdictHeadline, reportVerdictPalette } from './report-verdict'
 import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from './cosim-coverage'
 
 export interface ReportExportInput {
@@ -456,7 +456,7 @@ footer code{font-family:var(--font-mono)}
   <p class="wordmark">HAUKSBEE</p>
   <h1>${esc(r.board_name || r.file_name)}</h1>
   <div class="verdict">
-    ${esc(r.headline)}
+    ${esc(reportVerdictHeadline(r))}
     <div class="counts">
       ${r.serious} serious &middot; ${r.total} ${r.total === 1 ? 'finding' : 'findings'} total
       ${checksLine ? `&middot; checks: ${esc(checksLine)}` : ''}
