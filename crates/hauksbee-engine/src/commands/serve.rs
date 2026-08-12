@@ -117,8 +117,13 @@ pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
         let analyze = crate::commands::common::schematic_analyzer();
         // The web checks panel's backend: stage the uploads, inject the path
         // keys, and run the sibling hauksbee-ci binary (--json).
-        let check: hauksbee_server::frontdoor::CheckRunner =
-            Arc::new(|name, contents, fw, spec| crate::webcheck::run_web_check(name, contents, fw, spec));
+        let check: hauksbee_server::frontdoor::SchematicCheckRunner = Arc::new(
+            |name, contents, fw, schematic, spec| {
+                crate::webcheck::run_web_check_with_schematic(
+                    name, contents, fw, schematic, spec,
+                )
+            },
+        );
         // The dependency panel's backend: status from the engine's own
         // discovery, installs through the engine's streaming installer.
         let deps = crate::commands::common::deps_hooks();
@@ -190,7 +195,7 @@ pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
             "version": env!("CARGO_PKG_VERSION"),
         })
         .to_string();
-        hauksbee_server::serve_frontdoor_on_with_schematic(
+        hauksbee_server::serve_frontdoor_on_with_schematic_checks(
             listener,
             dir.as_deref(),
             analyze,

@@ -80,7 +80,7 @@ fn drc_detects_then_simulation_applies_the_short() {
 }
 
 #[test]
-fn a_declared_tie_is_physically_bridged_without_becoming_a_short_fault() {
+fn a_schematic_only_tie_is_bridged_and_remains_a_short_fault() {
     let report = ExtractedBoard::drc(SHORTED_BOARD).expect("drc");
     let qualification = report.qualify_with_declared_ties(
         "board.sch",
@@ -91,7 +91,7 @@ fn a_declared_tie_is_physically_bridged_without_becoming_a_short_fault() {
             tied_to: vec!["SUPPLY2".into()],
         }],
     );
-    assert_eq!(qualification.qualified_count(), 1);
+    assert_eq!(qualification.qualified_count(), 0);
 
     let mut engine =
         HauksbeeEngine::from_board_file(SHORTED_BOARD, None, "/b.kicad_pcb").expect("engine");
@@ -103,11 +103,11 @@ fn a_declared_tie_is_physically_bridged_without_becoming_a_short_fault() {
     assert_eq!(disclosure.detected, 1);
     assert_eq!(
         disclosure.bridged, 1,
-        "the declared physical connection is still stamped"
+        "the measured physical connection is still stamped"
     );
     assert!(
         disclosure.unapplied_reason.is_none(),
-        "a qualified connection was applied, not refused"
+        "a validated-format contact was applied, not refused"
     );
 
     let mut saw_short_fault = false;
@@ -121,11 +121,11 @@ fn a_declared_tie_is_physically_bridged_without_becoming_a_short_fault() {
     }
     assert!(
         (last_v5 - last_sig).abs() < 0.05,
-        "declared tie must preserve the physical bridge: +5V={last_v5:.3}, SIG={last_sig:.3}"
+        "measured contact must preserve the physical bridge: +5V={last_v5:.3}, SIG={last_sig:.3}"
     );
     assert!(
-        !saw_short_fault,
-        "a declared physical tie is not a board defect"
+        saw_short_fault,
+        "schematic net names cannot authorize this physical contact"
     );
 }
 

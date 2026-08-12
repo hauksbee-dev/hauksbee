@@ -27,24 +27,25 @@ fn run_pair(
 }
 
 #[test]
-fn declared_and_undeclared_pairs_have_matching_json_exit_and_junit_outcomes() {
+fn schematic_context_never_downgrades_the_json_exit_or_junit_short() {
     let (declared, declared_junit) = run_pair(
         "declared",
         include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd"),
         include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch"),
     );
-    assert!(
-        declared.status.success(),
-        "{}",
-        String::from_utf8_lossy(&declared.stderr)
-    );
+    assert_eq!(declared.status.code(), Some(2));
     let json: serde_json::Value = serde_json::from_slice(&declared.stdout).unwrap();
-    assert_eq!(json["verdict"], "pass");
+    assert_eq!(json["verdict"], "fail");
     assert!(json["drc"]["shorts"]
         .as_array()
         .unwrap()
         .iter()
-        .all(|short| short["severity"] == "note"));
+        .all(|short| {
+            short["severity"] == "serious"
+                && short["plain"]
+                    .as_str()
+                    .is_some_and(|plain| plain.contains("does not identify or authorize"))
+        }));
     let schematic = include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch");
     let expected_sha = Sha256::digest(schematic)
         .iter()
@@ -59,10 +60,7 @@ fn declared_and_undeclared_pairs_have_matching_json_exit_and_junit_outcomes() {
     assert_eq!(input["format"], "eagle_schematic");
     assert_eq!(input["sha256"], expected_sha);
     assert!(input["path"].as_str().unwrap().ends_with("declared.sch"));
-    assert!(
-        declared_junit.contains("failures=\"0\""),
-        "{declared_junit}"
-    );
+    assert!(declared_junit.contains("<failure"), "{declared_junit}");
 
     let (undeclared, undeclared_junit) = run_pair(
         "undeclared",
@@ -78,4 +76,55 @@ fn declared_and_undeclared_pairs_have_matching_json_exit_and_junit_outcomes() {
         "{undeclared_junit}"
     );
     assert!(undeclared_junit.contains("<failure"), "{undeclared_junit}");
+}
+
+#[test]
+fn companion_identity_is_checked_before_placement_enriches_board_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = dir.path().join("design.brd");
+    let schematic = dir.path().join("design.sch");
+    let placement = dir.path().join("placement.csv");
+    let original_board =
+        include_str!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
+    let original_schematic =
+        include_str!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch");
+    std::fs::write(
+        &board,
+        original_board.replace("value=\"10k\"", "value=\"\""),
+    )
+    .unwrap();
+    std::fs::write(
+        &schematic,
+        original_schematic.replace("value=\"10k\"", "value=\"\""),
+    )
+    .unwrap();
+    std::fs::write(
+        &placement,
+        "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\nR1,10k,R0603,20,20,0,Top\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
+        .arg("run")
+        .arg(&board)
+        .args(["--drc", "--json", "--schematic"])
+        .arg(&schematic)
+        .arg("--placement")
+        .arg(&placement)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "report-only DRC keeps exit 0 while companion resolution succeeds: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["ok"], false, "{json}");
+    assert!(json["inputs"]
+        .as_array()
+        .expect("input inventory")
+        .iter()
+        .any(|input| input["format"] == "eagle_schematic"));
 }

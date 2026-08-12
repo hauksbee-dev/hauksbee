@@ -420,6 +420,11 @@ fn run_inner(
     let raw = norm.raw;
     let text = norm.layout_text.unwrap_or_default();
     let mut board = norm.board;
+    // Companion identity belongs to the design files, before BOM/PnP
+    // enrichment fills or normalizes values for binding. Keep that immutable
+    // identity snapshot so a correct .brd/.sch pair cannot be rejected merely
+    // because a later manufacturing input supplied a missing value.
+    let design_identity_board = board.clone();
     // Layered model library: builtin < ~/.hauksbee/models (datasheet-extracted)
     // < ~/.config/hauksbee/models (user) < --models-dir (highest). Identity
     // reconciliation needs the same library the subsequent bind uses, so build
@@ -676,7 +681,7 @@ fn run_inner(
     // board. Resolved ONCE here, where both the explicit option and board path
     // are in hand, and handed to every report surface: a copper contact the
     // schematic declares must read the same way under `--check`, `--drc`,
-    // `--json` and the CI artifacts, or the same board is a declared tie on one
+    // `--json` and the CI artifacts, or the same schematic context differs on one
     // surface and a serious short on another.
     // Same `<eagle>` head sniff the DRC dispatch uses, so "is this an Eagle board"
     // is decided identically in both places.
@@ -685,8 +690,12 @@ fn run_inner(
         .take(512)
         .collect::<String>()
         .contains("<eagle");
-    let schematic_ties =
-        crate::schematic_ties::resolve(&cfg.board, &board, schematic.as_deref(), board_is_eagle)?;
+    let schematic_ties = crate::schematic_ties::resolve(
+        &cfg.board,
+        &design_identity_board,
+        schematic.as_deref(),
+        board_is_eagle,
+    )?;
     if let Some(ties) = &schematic_ties {
         use sha2::{Digest, Sha256};
 
@@ -700,7 +709,7 @@ fn run_inner(
             format: "eagle_schematic".to_string(),
             sha256: Some(sha256),
             contributed: vec![format!(
-                "{} declared net tie(s) supplied to copper-contact qualification",
+                "{} declared net tie(s) supplied as copper-contact context",
                 ties.ties.len()
             )],
             ignored: vec![
@@ -2085,9 +2094,8 @@ fn capture_manifest(
         }
     }
     // The RESOLVED schematic, not just the explicit CLI option: an auto-discovered
-    // sibling contributes exactly as much as a named one (it can move a short
-    // from serious to a declared tie and flip the strict exit), so a manifest
-    // that omitted it would not replay the run it describes. This also keeps the
+    // sibling contributes exactly as much context as a named one, so a manifest
+    // that omitted it would not replay the report it describes. This also keeps the
     // manifest agreeing with the evidence inventory, which hashes the same file.
     //
     if let Some(ties) = schematic_ties {

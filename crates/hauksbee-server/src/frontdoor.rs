@@ -85,6 +85,12 @@ pub type SchematicAnalyzer =
 pub type CheckRunner =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, &str) -> String + Send + Sync>;
 
+/// Schematic-aware checks runner. Kept distinct from [`CheckRunner`] so
+/// existing embedders retain their source-compatible callback signature.
+pub type SchematicCheckRunner = Arc<
+    dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>, &str) -> String + Send + Sync,
+>;
+
 /// Everything a successful live-launch callback hands back: the engine to run,
 /// plus the session metadata the hub serves (identity for `/api/live/status`,
 /// the board's own layout text for the geometry viewer, and any staged temp
@@ -289,6 +295,10 @@ struct CheckState {
     check: CheckRunner,
 }
 
+struct SchematicCheckState {
+    check: SchematicCheckRunner,
+}
+
 /// The web checks route (`POST /api/check`, multipart: `board` + optional
 /// `firmware` + `spec`). The spec part is the TOML body the browser's builder
 /// composed, everything except the file paths, which the engine injects from
@@ -298,6 +308,16 @@ pub fn check_route(check: CheckRunner) -> Router {
     let state = Arc::new(CheckState { check });
     Router::new()
         .route("/api/check", post(check_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
+        .with_state(state)
+}
+
+/// Schematic-aware counterpart to [`check_route`].
+pub fn check_route_with_schematic(check: SchematicCheckRunner) -> Router {
+    let state = Arc::new(SchematicCheckState { check });
+    Router::new()
+        .route("/api/check", post(check_handler_with_schematic))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(axum::middleware::map_response(name_upload_limit_413))
         .with_state(state)
@@ -948,6 +968,45 @@ async fn check_handler(
     let json = match tokio::task::spawn_blocking(move || match &fw_bytes {
         Some(bytes) => (check)(&board_name, &board_bytes, Some((&fw_name, bytes)), &spec),
         None => (check)(&board_name, &board_bytes, None, &spec),
+    })
+    .await
+    {
+        Ok(json) => json,
+        Err(_) => return json_error("the check task panicked; see the server log"),
+    };
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+}
+
+async fn check_handler_with_schematic(
+    State(state): State<Arc<SchematicCheckState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let parts = match parse_upload(&mut multipart).await {
+        Ok(p) => p,
+        Err(msg) => return json_error(&msg),
+    };
+    let (Some(board_bytes), Some(spec)) = (parts.board_bytes, parts.spec) else {
+        return json_error("the check request needs a 'board' part and a 'spec' part");
+    };
+    let check = state.check.clone();
+    let json = match tokio::task::spawn_blocking(move || {
+        let firmware = parts
+            .fw_bytes
+            .as_deref()
+            .map(|bytes| (parts.fw_name.as_str(), bytes));
+        let schematic = parts
+            .schematic_bytes
+            .as_deref()
+            .map(|bytes| (parts.schematic_name.as_str(), bytes));
+        (check)(&parts.board_name, &board_bytes, firmware, schematic, &spec)
     })
     .await
     {

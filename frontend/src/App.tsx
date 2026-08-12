@@ -670,6 +670,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
                 report={report}
                 boardFile={session.boardFile}
                 firmwareFile={session.firmwareFile}
+                schematicFile={session.schematicFile}
                 selectedNet={session.selectedNet}
                 selectedComponent={session.selectedComponent}
                 pendingChecks={queuedChecks}
