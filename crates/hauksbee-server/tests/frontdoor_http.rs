@@ -277,6 +277,50 @@ async fn analyze_threads_optional_eagle_schematic_bytes_to_the_analyzer() {
 }
 
 #[tokio::test]
+async fn checks_thread_optional_eagle_schematic_bytes_to_the_runner() {
+    let check: frontdoor::SchematicCheckRunner = Arc::new(
+        |name, board, firmware, schematic, spec| {
+            let (schematic_name, schematic_len) = schematic
+                .map(|(name, bytes)| (name, bytes.len()))
+                .unwrap_or(("none", 0));
+            format!(
+                "{{\"ok\":true,\"board_name\":\"{name}\",\"board_len\":{},\"firmware\":{},\"schematic_name\":\"{schematic_name}\",\"schematic_len\":{schematic_len},\"spec_len\":{}}}",
+                board.len(), firmware.is_some(), spec.len()
+            )
+        },
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = frontdoor::check_route_with_schematic(check);
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+    let boundary = "----hauksbee-check-schematic-boundary";
+    let board = b"<eagle><drawing><board/></drawing></eagle>";
+    let schematic = b"<eagle><drawing><schematic/></drawing></eagle>";
+    let spec = b"duration_ms = 1";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("board", "design.brd", board),
+            ("schematic", "design.sch", schematic),
+            ("spec", "spec.toml", spec),
+        ],
+    );
+    let req = format!(
+        "POST /api/check HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let resp = http(addr, &req, &body).await;
+    assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
+    assert!(resp.contains("\"schematic_name\":\"design.sch\""), "{resp}");
+    assert!(
+        resp.contains(&format!("\"schematic_len\":{}", schematic.len())),
+        "schematic bytes were not threaded verbatim: {resp}"
+    );
+}
+
+#[tokio::test]
 async fn live_launch_threads_optional_eagle_schematic_to_the_launcher() {
     let launch: frontdoor::SchematicLiveLauncher =
         Arc::new(|_name, _board, _firmware, schematic| match schematic {

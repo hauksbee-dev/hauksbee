@@ -69,9 +69,10 @@ fn err_json(msg: &str) -> String {
 /// `spec_file`) or overwrite (a vcd_sink's `vcd_path` reaches `File::create`)
 /// paths outside the staging dir, because the CI resolver accepts absolute
 /// paths and `..` traversal.
-const PATH_KEYS: [&str; 6] = [
+const PATH_KEYS: [&str; 7] = [
     "board",
     "firmware",
+    "schematic",
     "asbuilt",
     "trace",
     "spec_file",
@@ -352,6 +353,17 @@ pub fn run_web_check(
     firmware: Option<(&str, &[u8])>,
     spec_fragment: &str,
 ) -> String {
+    run_web_check_with_schematic(board_name, board_bytes, firmware, None, spec_fragment)
+}
+
+/// Schematic-aware counterpart used by the shipped browser checks route.
+pub fn run_web_check_with_schematic(
+    board_name: &str,
+    board_bytes: &[u8],
+    firmware: Option<(&str, &[u8])>,
+    schematic: Option<(&str, &[u8])>,
+    spec_fragment: &str,
+) -> String {
     // Reserve a concurrency slot on entry. At the cap, refuse fast rather than
     // pile another emulator-spawning child onto a loaded box. `_slot` lives to
     // the end of the function, and its `Drop` releases the slot on every exit
@@ -405,6 +417,13 @@ pub fn run_web_check(
             return err_json(&format!("could not stage the firmware: {e}"));
         }
         spec.push_str(&format!("firmware = \"{fw_file}\"\n"));
+    }
+    if let Some((schematic_name, schematic_bytes)) = schematic {
+        let schematic_file = sanitize_name(schematic_name, "board.sch");
+        if let Err(e) = std::fs::write(dir.join(&schematic_file), schematic_bytes) {
+            return err_json(&format!("could not stage the schematic: {e}"));
+        }
+        spec.push_str(&format!("schematic = \"{schematic_file}\"\n"));
     }
     spec.push('\n');
     spec.push_str(spec_fragment);

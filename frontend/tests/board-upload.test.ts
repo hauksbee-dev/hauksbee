@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { buildBoardUpload } from '../src/lib/board-upload'
+import { buildBoardUpload, buildCheckUpload } from '../src/lib/board-upload'
 
 describe('browser board upload contract', () => {
   test('threads the optional Eagle schematic through analysis and live forms', () => {
@@ -21,6 +21,18 @@ describe('browser board upload contract', () => {
     const form = buildBoardUpload(new File(['board'], 'design.brd'), null, null)
     expect(form.has('firmware')).toBeFalse()
     expect(form.has('schematic')).toBeFalse()
+  })
+
+  test('threads the same companion inputs through checks', () => {
+    const board = new File(['board'], 'design.brd')
+    const firmware = new File(['firmware'], 'app.elf')
+    const schematic = new File(['schematic'], 'design.sch')
+    const form = buildCheckUpload(board, firmware, schematic, 'duration_ms = 1')
+
+    expect((form.get('board') as File).name).toBe('design.brd')
+    expect((form.get('firmware') as File).name).toBe('app.elf')
+    expect((form.get('schematic') as File).name).toBe('design.sch')
+    expect((form.get('spec') as File).name).toBe('spec.toml')
   })
 
 })
