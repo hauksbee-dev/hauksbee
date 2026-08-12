@@ -32,7 +32,8 @@ const COSIM_SECONDS: f64 = 2.0;
 /// (so we reuse the exact bytes the caller validated); `models_dir` layers an
 /// extra model directory exactly as the CLI does; `firmware` is an optional
 /// explicit ELF/HEX for co-sim; `schematic` is an optional companion Eagle `.sch`
-/// (the `--schematic` flag), whose declared net ties qualify the DRC's shorts.
+/// (the `--schematic` flag), whose declared net pairs add DRC context without
+/// authorizing a board location.
 pub fn run(
     board_path: &Path,
     board_text: &str,
@@ -96,8 +97,8 @@ pub fn build_state_with_schematic(
     // DRC reads copper geometry from the board text (same as --drc / frontdoor).
     let drc = ExtractedBoard::drc(board_text).unwrap_or_default();
     // And the same companion schematic the report surfaces read, so the dashboard
-    // cannot call a declared star ground a serious short while `--json` on the
-    // same board calls it a note. This module's own doc promises that parity.
+    // must preserve the same schematic-context and physical-authority boundary
+    // as the JSON, text, CI, and web surfaces.
     let board_is_eagle = board_text
         .chars()
         .take(512)

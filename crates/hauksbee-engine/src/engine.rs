@@ -181,7 +181,8 @@ impl HauksbeeEngine {
     }
 
     /// Apply the measured copper topology, but emit a short fault only for
-    /// contacts the companion schematic did not qualify as intentional.
+    /// contacts that lack board-local physical authorization. A companion
+    /// schematic may add context without authorizing a location.
     pub fn apply_drc_shorts_with_qualification(
         &mut self,
         report: &hauksbee_extract::DrcReport,

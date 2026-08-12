@@ -297,9 +297,9 @@ pub fn serve(
         let analyze = schematic_analyzer();
         // Same checks backend as `hauksbee serve`, so the web checks panel works
         // in the preloaded (`run --serve`) flow too.
-        let check: hauksbee_server::frontdoor::CheckRunner =
-            Arc::new(|name, contents, fw, spec| {
-                crate::webcheck::run_web_check(name, contents, fw, spec)
+        let check: hauksbee_server::frontdoor::SchematicCheckRunner =
+            Arc::new(|name, contents, fw, schematic, spec| {
+                crate::webcheck::run_web_check_with_schematic(name, contents, fw, schematic, spec)
             });
 
         // Bind FIRST, then print. The requested port may be busy, in which case
@@ -338,7 +338,7 @@ pub fn serve(
             println!("      hauksbee run <board> --headless     # co-sim summary\n");
         }
         server
-            .serve_app_on_with_schematic(
+            .serve_app_on_with_schematic_checks(
                 listener,
                 dir.as_deref(),
                 board_file,
@@ -415,7 +415,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn shipped_web_analyzer_applies_uploaded_eagle_schematic_evidence() {
+    fn shipped_web_analyzer_keeps_uploaded_eagle_schematic_as_context() {
         let analyze = schematic_analyzer();
         let board =
             include_bytes!("../../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
@@ -428,10 +428,10 @@ mod tests {
             Some(("declared.sch", schematic)),
         ))
         .expect("production web analyzer returns JSON");
-        assert_eq!(report["ok"], true, "{report}");
+        assert_eq!(report["ok"], true, "transport/analysis completed: {report}");
         assert_eq!(
-            report["serious"], 0,
-            "declared tie must not stay serious: {report}"
+            report["serious"], 2,
+            "both layer contacts remain serious: {report}"
         );
         assert!(
             report["inventory"]
@@ -442,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn shipped_live_launcher_does_not_disclose_declared_tie_as_a_short() {
+    fn shipped_live_launcher_discloses_schematic_only_tie_as_a_short() {
         let launch = schematic_live_launcher();
         let board =
             include_bytes!("../../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
@@ -455,10 +455,10 @@ mod tests {
             Some(("declared.sch", schematic)),
         )
         .expect("declared Eagle tie launches");
-        assert!(
-            live.engine.board_info().shorts.is_none(),
-            "a fully qualified declared tie is not a live copper-short fault"
-        );
+        let board_info = live.engine.board_info();
+        let shorts = board_info.shorts.as_ref().expect("short disclosure");
+        assert_eq!(shorts.detected, 2);
+        assert_eq!(shorts.bridged, 1, "one electrical pair is stamped once");
     }
 
     /// The staleness advisory fires when a source file is newer than the built

@@ -352,6 +352,20 @@ pub fn run_web_check(
     firmware: Option<(&str, &[u8])>,
     spec_fragment: &str,
 ) -> String {
+    run_web_check_with_schematic(board_name, board_bytes, firmware, None, spec_fragment)
+}
+
+/// Schematic-aware Checks entry point. The additional file is staged beside
+/// the board under its supplied name, preserving the same companion input the
+/// analysis and live paths received while retaining [`run_web_check`] for old
+/// embedders.
+pub fn run_web_check_with_schematic(
+    board_name: &str,
+    board_bytes: &[u8],
+    firmware: Option<(&str, &[u8])>,
+    schematic: Option<(&str, &[u8])>,
+    spec_fragment: &str,
+) -> String {
     // Reserve a concurrency slot on entry. At the cap, refuse fast rather than
     // pile another emulator-spawning child onto a loaded box. `_slot` lives to
     // the end of the function, and its `Drop` releases the slot on every exit
@@ -397,6 +411,12 @@ pub fn run_web_check(
     let board_file = sanitize_name(board_name, "board.kicad_pcb");
     if let Err(e) = std::fs::write(dir.join(&board_file), board_bytes) {
         return err_json(&format!("could not stage the board: {e}"));
+    }
+    if let Some((schematic_name, schematic_bytes)) = schematic {
+        let schematic_file = sanitize_name(schematic_name, "board.sch");
+        if let Err(e) = std::fs::write(dir.join(&schematic_file), schematic_bytes) {
+            return err_json(&format!("could not stage the schematic: {e}"));
+        }
     }
     let mut spec = format!("board = \"{board_file}\"\n");
     if let Some((fw_name, fw_bytes)) = firmware {

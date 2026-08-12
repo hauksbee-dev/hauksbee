@@ -539,14 +539,12 @@ pub(crate) fn drc_short_findings(
     let phantom = drc.version_warning.is_some();
     drc.shorts()
         .map(|f| {
-            let declared_tie = qualification.and_then(|ties| ties.tie_for(f));
-            // A contact a companion schematic declares deliberate is a note here too.
-            // These findings become the JUnit/SARIF artifacts a CI job reads, and
-            // those must agree with the human, `--json` and TUI surfaces: emitting a
-            // `<failure>` for a declared star ground that `--strict` deliberately does
-            // not gate on would fail the build through the artifact instead, which is
-            // the same wrong answer by a different route.
-            let severity = match (declared_tie, phantom) {
+            let authorized_tie = qualification.and_then(|ties| ties.tie_for(f));
+            let declared_tie = qualification.and_then(|ties| ties.declaration_for(f));
+            // Only board-local physical authority can downgrade a short. A
+            // companion Eagle schematic names a net pair but cannot locate
+            // the intended join, so it remains actionable/gating context.
+            let severity = match (authorized_tie, phantom) {
                 (Some(_), _) => "note",
                 (None, true) => "warning",
                 (None, false) => "serious",
@@ -559,15 +557,15 @@ pub(crate) fn drc_short_findings(
                 location_mm: None,
                 layer: Some(f.layer.clone()),
                 refs: Vec::new(),
-                // Not actionable when the design asks for it: there is nothing for
-                // the reader to go and change.
-                actionable: declared_tie.is_none(),
+                // A board-authorized join is not actionable; a schematic-only
+                // declaration remains actionable because its location is unknown.
+                actionable: authorized_tie.is_none(),
                 message: match declared_tie {
                     Some(tie) => format!(
-                    "declared net tie: {} and {} are joined in copper on {}, and the schematic \
-                     declares it ({})",
-                    f.net_a_name, f.net_b_name, f.layer, tie.declaration
-                ),
+                        "copper short: {} touches {} on {}; the schematic names this pair but \
+                     does not authorize the physical location ({})",
+                        f.net_a_name, f.net_b_name, f.layer, tie.declaration
+                    ),
                     None => format!(
                         "copper short: {} touches {} on {}",
                         f.net_a_name, f.net_b_name, f.layer
@@ -575,8 +573,8 @@ pub(crate) fn drc_short_findings(
                 },
                 plain: match declared_tie {
                     Some(tie) => format!(
-                        "two different nets ({} and {}) are touching on layer {}, which the \
-                     schematic declares on purpose ({})",
+                        "two different nets ({} and {}) are touching on layer {}; the schematic \
+                     names this pair without locating the intended join ({})",
                         f.net_a_name, f.net_b_name, f.layer, tie.declaration
                     ),
                     None => format!(

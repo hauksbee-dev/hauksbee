@@ -135,9 +135,8 @@ pub fn si_gate_items(report: &hauksbee_extract::SiReport) -> Vec<String> {
 }
 
 /// One label per GATING copper short: clearance-only findings do not gate, and
-/// nor does a contact a companion schematic declares deliberate. The gate line
-/// names what failed the build, so a declared tie listed here would send the
-/// reader after copper that is doing exactly what the design asks.
+/// neither does a contact backed by board-local physical authority. Schematic
+/// net names alone do not locate an intended join and therefore stay gating.
 pub fn drc_gate_items(report: &hauksbee_extract::DrcReport) -> Vec<String> {
     drc_gate_items_with_ties(report, None)
 }

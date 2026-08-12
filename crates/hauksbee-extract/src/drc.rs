@@ -526,12 +526,18 @@ struct QualifiedFinding {
     tie: DeclaredTie,
 }
 
-/// Non-breaking side data describing which measured copper contacts a
-/// companion schematic qualified. The DRC geometry remains untouched.
+/// Non-breaking side data describing schematic context and any separately
+/// board-authorized copper contacts. The DRC geometry remains untouched.
 #[derive(Debug, Clone, Default)]
 pub struct DrcTieQualification {
     source: String,
     declaration_count: usize,
+    /// A unique measured contact whose net pair matches the schematic. This is
+    /// useful explanatory context, but the Eagle schematic carries no board
+    /// coordinate and therefore is not physical authorization for the contact.
+    declared: Vec<QualifiedFinding>,
+    /// Contacts backed by board-local location authority. Eagle schematic
+    /// declarations alone never enter this set.
     qualified: Vec<QualifiedFinding>,
 }
 
@@ -572,6 +578,40 @@ impl DrcTieQualification {
         self.qualified.len()
     }
 
+    /// Schematic context for a unique measured contact, without implying that
+    /// the declaration authorizes this physical location.
+    pub fn declaration_for<'a>(&'a self, finding: &DrcFinding) -> Option<&'a DeclaredTie> {
+        self.declaration_at(
+            &finding.net_a_name,
+            &finding.net_b_name,
+            &finding.layer,
+            finding.x,
+            finding.y,
+        )
+    }
+
+    pub fn declaration_at(
+        &self,
+        net_a: &str,
+        net_b: &str,
+        layer: &str,
+        x: f64,
+        y: f64,
+    ) -> Option<&DeclaredTie> {
+        let x_nm = (x * 1_000_000.0).round() as i64;
+        let y_nm = (y * 1_000_000.0).round() as i64;
+        self.declared
+            .iter()
+            .find(|candidate| {
+                candidate.net_a_name == net_a
+                    && candidate.net_b_name == net_b
+                    && candidate.layer == layer
+                    && candidate.x_nm == x_nm
+                    && candidate.y_nm == y_nm
+            })
+            .map(|candidate| &candidate.tie)
+    }
+
     pub fn declaration_count(&self) -> usize {
         self.declaration_count
     }
@@ -581,13 +621,13 @@ impl DrcTieQualification {
     }
 
     pub fn source_summary(&self) -> String {
-        let qualified = self.qualified_count();
+        let declared = self.declared.len();
         format!(
-            "{} ({} declared net tie{}, {qualified} copper contact{} qualified)",
+            "{} ({} declared net tie{}, {declared} matching copper observation{}; no physical location authorized)",
             self.source,
             self.declaration_count,
             if self.declaration_count == 1 { "" } else { "s" },
-            if qualified == 1 { "" } else { "s" },
+            if declared == 1 { "" } else { "s" },
         )
     }
 
@@ -763,7 +803,9 @@ impl DrcReport {
     /// Clearance findings are untouched: they are near-misses, not contacts, so
     /// there is nothing about them a tie could excuse.
     ///
-    /// Returns how many shorts were qualified.
+    /// Records matching schematic declarations as context. A schematic net
+    /// pair has no board-coordinate authority, so this does not populate the
+    /// physically authorized set or change which shorts gate.
     pub fn qualify_with_declared_ties(
         &self,
         source: &str,
@@ -772,6 +814,7 @@ impl DrcReport {
         let mut qualification = DrcTieQualification {
             source: source.to_string(),
             declaration_count: ties.len(),
+            declared: Vec::new(),
             qualified: Vec::new(),
         };
         for tie in ties {
@@ -820,7 +863,7 @@ impl DrcReport {
                 .expect("one location checked above");
             for &index in indices {
                 let finding = &self.findings[index];
-                qualification.qualified.push(QualifiedFinding {
+                qualification.declared.push(QualifiedFinding {
                     net_a_name: finding.net_a_name.clone(),
                     net_b_name: finding.net_b_name.clone(),
                     layer: finding.layer.clone(),

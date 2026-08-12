@@ -3,7 +3,7 @@
 use hauksbee_extract::ExtractedBoard;
 
 #[test]
-fn tracked_declared_pair_qualifies_one_physical_multilayer_contact() {
+fn tracked_declared_pair_is_context_for_one_physical_multilayer_contact() {
     let board = include_str!("fixtures/eagle_ties/declared.brd");
     let schematic = include_str!("fixtures/eagle_ties/declared.sch");
     let report = ExtractedBoard::drc(board).expect("tracked board parses");
@@ -14,8 +14,15 @@ fn tracked_declared_pair_qualifies_one_physical_multilayer_contact() {
         2,
         "one contact appears on two copper layers"
     );
-    assert_eq!(qualified.qualified_count(), 2);
-    assert_eq!(qualified.undeclared_shorts(&report).count(), 0);
+    assert_eq!(
+        qualified.qualified_count(),
+        0,
+        "a schematic pair has no board-coordinate identity and must not excuse a unique short"
+    );
+    assert_eq!(qualified.undeclared_shorts(&report).count(), 2);
+    assert!(report
+        .shorts()
+        .all(|finding| qualified.declaration_for(finding).is_some()));
 }
 
 #[test]

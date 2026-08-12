@@ -82,8 +82,8 @@ pub struct BoardEvidence {
     maps: Vec<EvidenceMap>,
     board_artifact: Option<ArtifactId>,
     firmware_artifact: Option<ArtifactId>,
-    /// The companion schematic, when one was read. Cited by every evidence map
-    /// so a reclassified short traces back to the file that declared the tie.
+    /// The companion schematic, when one was read. Cited by evidence maps whose
+    /// assertions quote its net-pair context.
     schematic_artifact: Option<ArtifactId>,
     supporting_artifacts: Vec<ArtifactId>,
     defaults_by_ref: BTreeMap<String, Vec<DefaultFact>>,
@@ -718,13 +718,13 @@ impl BoardEvidence {
         Ok(self)
     }
 
-    /// Attach a companion Eagle `.sch` read for the net ties it declares.
+    /// Attach a companion Eagle `.sch` read for the net pairs it declares.
     ///
     /// The schematic contributed to the verdict, so it belongs in the inventory
-    /// with its own hash: a reader who sees a copper contact reported as a
-    /// declared tie rather than a serious short must be able to see which file
-    /// carried the declaration, and check it. `contribution` says what it
-    /// actually did, including when it declared nothing.
+    /// with its own hash: a reader who sees schematic context on a serious
+    /// copper contact must be able to see which file carried the declaration
+    /// and check it. `contribution` says what it actually did, including when
+    /// it declared nothing.
     pub fn with_schematic_artifact(
         mut self,
         path: impl AsRef<Path>,
@@ -1082,7 +1082,7 @@ impl BoardEvidence {
                 &[short.net_a.clone(), short.net_b.clone()],
             )?;
             if qualification.is_some_and(|ties| {
-                ties.tie_at(
+                ties.declaration_at(
                     &short.net_a,
                     &short.net_b,
                     &short.layer,
