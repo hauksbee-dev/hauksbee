@@ -96,7 +96,7 @@ impl Server {
                     "title": "hauksbee: the verifier for AI-designed hardware",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
-                "instructions": "hauksbee analyzes PCB design files with real device physics and co-simulates firmware on emulated MCUs. Honesty contract: a result with status \"invalid_for_analysis\" is a structured refusal, the run declined to vouch for itself; never read it as pass or fail, and never retry expecting a different answer. Coverage holes arrive as data fields; surface them alongside any verdict. Which holes reach which tool differs: substituted cores reach both `analyze_board` and `run_checks`, while dropped ADC channels, unexercised buses, watchdog reboots and per-core timing coverage reach `run_checks` (its `coverage_warnings`) and NOT `analyze_board`, whose front-door report does not carry those four.",
+                "instructions": "hauksbee analyzes PCB design files with real device physics and co-simulates firmware on emulated MCUs. Honesty contract: a result with status \"invalid_for_analysis\" is a structured refusal; never read it as pass or fail. Surface every populated coverage field alongside the verdict. In `analyze_board`'s front-door `cosim`, `timing_coverage` is a measured non-hole bound, `timing_refusals` contains strict-invalid replay refusals, and `fallback_windows` identifies numerically second-class spans with retained method, fidelity note, and measured error estimate when available. Ordinary limitations and faults remain in findings or existing structured fields. `run_checks` additionally gates the assertions selected by its spec and returns its own `coverage_warnings`.",
             }),
         )
     }
@@ -167,6 +167,28 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["result"]["protocolVersion"], PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn initialize_describes_the_complete_frontdoor_timing_contract() {
+        let mut server = Server::new();
+        let response = server
+            .handle_line(
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            )
+            .unwrap();
+        let value: Value = serde_json::from_str(&response).unwrap();
+        let instructions = value["result"]["instructions"].as_str().unwrap();
+        for field in ["timing_coverage", "timing_refusals", "fallback_windows"] {
+            assert!(
+                instructions.contains(field),
+                "missing {field}: {instructions}"
+            );
+        }
+        assert!(
+            !instructions.contains("NOT `analyze_board`"),
+            "{instructions}"
+        );
     }
 
     #[test]

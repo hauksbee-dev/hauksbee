@@ -71,6 +71,16 @@ const hostile: WebReport = {
     findings: [],
     analog_valid: true,
     gpio_nets: [{ name: '<net>', volts: 3.3, driven: true }],
+    timing_coverage: [{
+      mcu_ref: 'U1', backend: 'simavr:atmega328p', cycle_exact: true,
+      timestamp_precision_s: 0.000001, minimum_guaranteed_pulse_s: 0.000002,
+      chunk_s: 0.001,
+    }],
+    timing_refusals: ['PWL replay refused on net /CLK: transition budget exceeded'],
+    fallback_windows: [{
+      start_s: 0.001, end_s: 0.002, method: 'backward-euler',
+      fidelity_note: 'first-order and numerically dissipative', error_estimate_v: 0.012,
+    }],
   },
 }
 
@@ -145,6 +155,37 @@ test('it still carries the report it is an export of', () => {
   expect(html).toContain('fix the named net, then rerun &lt;exactly&gt;')
   // A note that duplicates the bind section is dropped, as it is on screen.
   expect(html).toContain('a note &lt;script&gt;')
+  expect(html).toContain('Timing coverage')
+  expect(html).toContain('pulses &gt;= 2.000 us guaranteed')
+  expect(html).toContain('TIMING INVALID')
+  expect(html).toContain('PWL replay refused on net /CLK')
+  expect(html).toContain('Fallback-qualified windows')
+  expect(html).toContain('0.012 V')
+})
+
+test('a typed timing refusal is rendered once while the wire keeps both fields', () => {
+  const diagnosis = 'PWL replay refused on net /CLK: transition budget exceeded'
+  const report: WebReport = {
+    ...hostile,
+    serious: 0,
+    total: 0,
+    sections: [],
+    evidence: [],
+    bind: undefined,
+    refusal: {
+      claim: 'timing-sensitive firmware and electrical conclusions',
+      missing_prerequisite: diagnosis,
+      valid_partial_conclusions: ['Static board analysis remains valid.'],
+      next_action: 'reduce transitions per solver chunk, then rerun',
+    },
+    cosim: { ...hostile.cosim!, timing_refusals: [diagnosis] },
+  }
+  const html = buildReportHtml({ ...input, report })
+  expect(html).toContain('border:1px solid var(--warn-border)')
+  expect(html.match(/PWL replay refused on net \/CLK/g)?.length).toBe(1)
+  expect(html).not.toContain('TIMING INVALID')
+  expect(report.cosim?.timing_refusals).toEqual([diagnosis])
+  expect(report.refusal?.missing_prerequisite).toBe(diagnosis)
 })
 
 test('the provenance block does not repeat one name three times', () => {

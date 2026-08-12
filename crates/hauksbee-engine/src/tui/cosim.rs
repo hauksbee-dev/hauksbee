@@ -12,16 +12,46 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use hauksbee_server::engine::Engine;
 
 use crate::engine::HauksbeeEngine;
 
+/// Coverage fields change as firmware runs, but source-conflict discovery walks
+/// the immutable circuit topology. Cache that part once per worker instead of
+/// repeating the scan for every UI frame.
+struct CoverageSampler {
+    drive_conflicts: Vec<String>,
+}
+
+impl CoverageSampler {
+    fn new(scheduler: &crate::scheduler::Scheduler) -> Self {
+        Self::from_scan(|| scheduler.drive_conflicts())
+    }
+
+    fn from_scan(scan: impl FnOnce() -> Vec<String>) -> Self {
+        Self {
+            drive_conflicts: scan(),
+        }
+    }
+
+    fn capture(
+        &self,
+        scheduler: &crate::scheduler::Scheduler,
+    ) -> crate::reports::coverage::CoverageInputs {
+        crate::reports::coverage::CoverageInputs::from_scheduler_with_drive_conflicts(
+            scheduler,
+            self.drive_conflicts.clone(),
+        )
+    }
+}
+
 /// How many UART lines to keep in the rolling buffer shown in the pane.
 const UART_TAIL_LINES: usize = 200;
+const MAX_INTERACTIVE_CHUNK_MS: f64 = 100.0;
 
 /// An incremental snapshot streamed from the worker to the UI.
 #[derive(Debug, Clone, Default)]
@@ -62,21 +92,11 @@ pub struct CosimUpdate {
     /// report surface, so a diverged co-sim no longer looks quiet HERE.
     /// `Default` is `false`, so build every real snapshot through
     /// `build_update` (which sets it) rather than relying on the derive.
-    ///
-    /// It closed one hole, not the class. Of the ten co-sim coverage caveats the
-    /// batch surfaces carry between them (nine of them printed by
-    /// `reports::cosim::run_headless`; drive conflicts ride `--json`/`--plain`
-    /// only), this pane carries exactly one, heuristic SPI framing, alongside
-    /// this flag, the failed-chunk count and the substitution caveat. Dropped
-    /// ADC injections, unexercised buses, watchdog limitations, watchdog
-    /// reboots, timing limitations, per-core timing coverage, short pulses,
-    /// driver contentions and drive conflicts are still silent here and loud
-    /// elsewhere; the matrix is in `docs/cosim/MCU.md`. Adding a caveat to the
-    /// batch surfaces does not add it here.
     pub analog_valid: bool,
     /// SPI buses still framed by the chunk-boundary heuristic (no CS pin
-    /// resolved and the backend does not frame itself): their transaction
-    /// boundaries are guessed, which the pane says out loud.
+    /// resolved and the backend does not frame itself). Retained for source
+    /// compatibility with the planned 0.1 public type; the TUI's complete
+    /// caveat list travels through a private snapshot beside this update.
     pub heuristic_spi_buses: Vec<String>,
     /// Count of chunks whose analog solve failed this run. `0` on a clean run;
     /// non-zero drives the loud invalid line in the pane. Kept alongside
@@ -109,8 +129,12 @@ pub struct GpioNet {
 /// The handle the UI holds onto: a receiver for updates and a stop flag.
 pub struct CosimHandle {
     pub rx: Receiver<CosimUpdate>,
+    coverage: Arc<Mutex<Vec<crate::reports::coverage::CoverageCaveat>>>,
     stop: Arc<AtomicBool>,
-    /// Kept so the thread is joined on drop (best-effort).
+    /// Owned until the terminal has been restored. Engine construction and an
+    /// external-emulator step are not interruptible wall-time operations, so
+    /// the UI thread retires this handle nonblocking and joins it only after
+    /// leaving raw/alternate-screen mode.
     join: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -119,14 +143,117 @@ impl CosimHandle {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
     }
+
+    pub(crate) fn latest_coverage(&self) -> Vec<crate::reports::coverage::CoverageCaveat> {
+        self.coverage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl Drop for CosimHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
+        // Disconnect publication before joining. Otherwise a worker stopped
+        // while a normal snapshot fills the capacity-one channel can block
+        // forever trying to send its final update.
+        let (_dummy_tx, dummy_rx) = std::sync::mpsc::sync_channel(1);
+        let connected_rx = std::mem::replace(&mut self.rx, dummy_rx);
+        drop(connected_rx);
+        // A bare public handle owns cleanup too. The TUI avoids doing this while
+        // raw mode is active by transferring its join handle into
+        // `CosimWorkers::retired`; external callers still get safe teardown.
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
         }
+    }
+}
+
+/// Owns the active and stopping workers across UI restarts. Retiring is
+/// nonblocking, but a replacement cannot start until the old worker has exited,
+/// and normal TUI shutdown joins every retained worker after terminal restore.
+#[derive(Default)]
+pub(crate) struct CosimWorkers {
+    active: Option<CosimHandle>,
+    retired: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl CosimWorkers {
+    pub(crate) fn active(&self) -> Option<&CosimHandle> {
+        self.active.as_ref()
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        self.active.is_some()
+    }
+
+    pub(crate) fn is_stopping(&self) -> bool {
+        !self.retired.is_empty()
+    }
+
+    pub(crate) fn reap_finished(&mut self) {
+        let mut pending = Vec::new();
+        for join in self.retired.drain(..) {
+            if join.is_finished() {
+                let _ = join.join();
+            } else {
+                pending.push(join);
+            }
+        }
+        self.retired = pending;
+    }
+
+    pub(crate) fn can_start(&mut self) -> bool {
+        self.reap_finished();
+        self.active.is_none() && self.retired.is_empty()
+    }
+
+    pub(crate) fn try_start(&mut self, handle: CosimHandle) -> bool {
+        if !self.can_start() {
+            return false;
+        }
+        self.active = Some(handle);
+        true
+    }
+
+    pub(crate) fn retire_active(&mut self) {
+        if let Some(mut handle) = self.active.take() {
+            handle.stop();
+            if let Some(join) = handle.join.take() {
+                self.retired.push(join);
+            }
+            // Drop the receiver now. A worker trying to publish a terminal
+            // update to a full capacity-one channel gets Disconnected instead
+            // of blocking the eventual shutdown join forever.
+            drop(handle);
+        }
+    }
+
+    pub(crate) fn finish_active(&mut self) {
+        if let Some(mut handle) = self.active.take() {
+            if let Some(join) = handle.join.take() {
+                self.retired.push(join);
+            }
+            drop(handle);
+        }
+        self.reap_finished();
+    }
+
+    pub(crate) fn stop_and_join_all(&mut self) {
+        self.retire_active();
+        for join in self.retired.drain(..) {
+            let _ = join.join();
+        }
+    }
+}
+
+impl Drop for CosimWorkers {
+    fn drop(&mut self) {
+        // Covers panic unwind and any future early-return path. The terminal's
+        // panic hook restores raw mode first; this owner then keeps the process
+        // alive until every external-emulator owner has run cleanup.
+        self.stop_and_join_all();
     }
 }
 
@@ -135,8 +262,8 @@ impl Drop for CosimHandle {
 ///
 /// `board_text` is the board file's text (so the engine binds the same board the
 /// static panes analysed); `firmware` is the optional ELF/HEX to co-sim;
-/// `seconds` is the target simulated duration; `chunk_ms` is the scheduler chunk
-/// (coarsened for QEMU backends so the run doesn't appear to hang).
+/// `seconds` is the target simulated duration; `chunk_ms` is the exact scheduler
+/// chunk selected by the caller.
 pub fn spawn(
     board_text: String,
     firmware: Option<PathBuf>,
@@ -144,9 +271,16 @@ pub fn spawn(
     seconds: f64,
     chunk_ms: f64,
 ) -> CosimHandle {
-    let (tx, rx): (Sender<CosimUpdate>, Receiver<CosimUpdate>) = std::sync::mpsc::channel();
+    // At most one full snapshot may wait behind the renderer. Intermediate
+    // updates coalesce by being dropped while this slot is occupied; the final
+    // done/error update waits only for that one slot to drain. This bounds both
+    // memory and the amount the UI can drain before polling the keyboard.
+    let (tx, rx): (SyncSender<CosimUpdate>, Receiver<CosimUpdate>) =
+        std::sync::mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
     let stop_worker = stop.clone();
+    let coverage = Arc::new(Mutex::new(Vec::new()));
+    let coverage_worker = Arc::clone(&coverage);
 
     let join = std::thread::spawn(move || {
         run_worker(
@@ -156,12 +290,14 @@ pub fn spawn(
             seconds,
             chunk_ms,
             &tx,
+            &coverage_worker,
             &stop_worker,
         );
     });
 
     CosimHandle {
         rx,
+        coverage,
         stop,
         join: Some(join),
     }
@@ -173,9 +309,26 @@ fn run_worker(
     board_name: &str,
     seconds: f64,
     chunk_ms: f64,
-    tx: &Sender<CosimUpdate>,
+    tx: &SyncSender<CosimUpdate>,
+    coverage_state: &Mutex<Vec<crate::reports::coverage::CoverageCaveat>>,
     stop: &AtomicBool,
 ) {
+    if !(chunk_ms > 0.0 && chunk_ms.is_finite()) {
+        publish_update(
+            coverage_state,
+            Vec::new(),
+            tx,
+            CosimUpdate {
+                done: true,
+                error: Some(format!(
+                    "co-sim could not start: chunk must be positive and finite, got {chunk_ms} ms"
+                )),
+                chunk_ms,
+                ..Default::default()
+            },
+        );
+        return;
+    }
     // Build the engine on the worker thread. A failure here (bad firmware arch,
     // unbindable board) is surfaced as an error update, never a silent hang.
     let board_url = format!("/boards/{board_name}");
@@ -183,21 +336,27 @@ fn run_worker(
         match HauksbeeEngine::from_board_file(&board_text, firmware.as_deref(), &board_url) {
             Ok(e) => e,
             Err(e) => {
-                let _ = tx.send(CosimUpdate {
-                    done: true,
-                    error: Some(format!("co-sim could not start: {e}")),
-                    chunk_ms,
-                    ..Default::default()
-                });
+                publish_update(
+                    coverage_state,
+                    Vec::new(),
+                    tx,
+                    CosimUpdate {
+                        done: true,
+                        error: Some(format!("co-sim could not start: {e}")),
+                        chunk_ms,
+                        ..Default::default()
+                    },
+                );
                 return;
             }
         };
-    // Coarsen the scheduler chunk so QEMU/Renode backends step in viable jumps
-    // (the integration tests use 5 ms for exactly this reason; the 100 us
-    // default would make the run appear to hang). The same value drives both the
-    // scheduler field and the per-frame step below, derive it once.
-    let frame_dt = (chunk_ms / 1000.0).max(1e-4);
-    engine.scheduler_mut().chunk_s = frame_dt;
+    // The requested solver chunk is exact. Rendering need not emit one channel
+    // message per sub-100 us solve: `step(frame_dt)` subdivides internally at
+    // `chunk_s`, so cap only the UI sampling cadence, never the solver setting.
+    // This keeps a 1 us remediation from queuing two million snapshots during a
+    // two-second run while still delivering the requested edge resolution.
+    let (solver_chunk_s, frame_dt) = worker_durations(chunk_ms);
+    engine.scheduler_mut().chunk_s = solver_chunk_s;
     let target_s = seconds.max(0.0);
     let start = Instant::now();
     let mut uart: VecDeque<String> = VecDeque::new();
@@ -213,13 +372,15 @@ fn run_worker(
     // is (or was) actively driving, that's the live observability the pane is
     // for, and it's also how we tell "stalled" from "running but quiet".
     let mut tracker = NetActivity::default();
+    let coverage_sampler = CoverageSampler::new(engine.scheduler());
 
     loop {
         if stop.load(Ordering::Relaxed) || t >= target_s {
             break;
         }
-        let frame = engine.step(frame_dt);
-        t += frame_dt;
+        let step_dt = bounded_step_dt(frame_dt, target_s, t);
+        let frame = engine.step(step_dt);
+        t += step_dt;
 
         // Accumulate UART, split into lines. Iterate in sorted-by-MCU-key order
         // so a multi-MCU board's merged UART is deterministic run-to-run, not
@@ -260,13 +421,10 @@ fn run_worker(
         // so the pane can refuse rather than present them as trustworthy.
         let analog_valid = engine.scheduler().analog_valid();
         let failed_chunk_count = engine.scheduler().failed_chunk_count();
-        let heuristic_spi_buses: Vec<String> = engine
-            .scheduler()
-            .spi_framing_modes()
-            .into_iter()
-            .filter(|(_, m)| matches!(m, crate::peripherals::spi::SpiFramingMode::Heuristic))
-            .map(|(b, _)| b)
-            .collect();
+        // Coverage caveats through the shared enumeration, never a local rule:
+        // the pane says what `hauksbee run --json` says because it reads the
+        // same list.
+        let coverage = coverage_sampler.capture(engine.scheduler()).caveats();
 
         // Move the frame's net voltages into the snapshot; keep a copy so the
         // final `done` update can carry the last frame's voltages too.
@@ -284,12 +442,12 @@ fn run_worker(
             substitution,
             analog_valid,
             failed_chunk_count,
-            heuristic_spi_buses,
+            coverage,
             false,
             net_voltages.clone(),
         );
         last_voltages = net_voltages;
-        if tx.send(update).is_err() {
+        if !publish_snapshot(coverage_state, tx, update) {
             return;
         }
     }
@@ -304,29 +462,59 @@ fn run_worker(
         .map(|s| s.message());
     let analog_valid = engine.scheduler().analog_valid();
     let failed_chunk_count = engine.scheduler().failed_chunk_count();
-    let heuristic_spi_buses: Vec<String> = engine
-        .scheduler()
-        .spi_framing_modes()
-        .into_iter()
-        .filter(|(_, m)| matches!(m, crate::peripherals::spi::SpiFramingMode::Heuristic))
-        .map(|(b, _)| b)
-        .collect();
-    let _ = tx.send(build_update(
-        t,
-        &start,
-        chunk_ms,
-        &uart,
-        &uart_partial,
-        uart_seen,
-        &tracker,
-        gpio_driven,
-        substitution,
-        analog_valid,
-        failed_chunk_count,
-        heuristic_spi_buses,
-        true,
-        last_voltages,
-    ));
+    let coverage = coverage_sampler.capture(engine.scheduler()).caveats();
+    let _ = publish_snapshot(
+        coverage_state,
+        tx,
+        build_update(
+            t,
+            &start,
+            chunk_ms,
+            &uart,
+            &uart_partial,
+            uart_seen,
+            &tracker,
+            gpio_driven,
+            substitution,
+            analog_valid,
+            failed_chunk_count,
+            coverage,
+            true,
+            last_voltages,
+        ),
+    );
+}
+
+struct WorkerSnapshot {
+    update: CosimUpdate,
+    coverage: Vec<crate::reports::coverage::CoverageCaveat>,
+}
+
+fn publish_update(
+    coverage_state: &Mutex<Vec<crate::reports::coverage::CoverageCaveat>>,
+    coverage: Vec<crate::reports::coverage::CoverageCaveat>,
+    tx: &SyncSender<CosimUpdate>,
+    update: CosimUpdate,
+) -> bool {
+    *coverage_state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = coverage;
+    if update.done || update.error.is_some() {
+        tx.send(update).is_ok()
+    } else {
+        match tx.try_send(update) {
+            Ok(()) | Err(TrySendError::Full(_)) => true,
+            Err(TrySendError::Disconnected(_)) => false,
+        }
+    }
+}
+
+fn publish_snapshot(
+    coverage_state: &Mutex<Vec<crate::reports::coverage::CoverageCaveat>>,
+    tx: &SyncSender<CosimUpdate>,
+    snapshot: WorkerSnapshot,
+) -> bool {
+    publish_update(coverage_state, snapshot.coverage, tx, snapshot.update)
 }
 
 /// Build a [`CosimUpdate`] snapshot from the worker's live state. Both the
@@ -344,26 +532,36 @@ fn build_update(
     substitution: Option<String>,
     analog_valid: bool,
     failed_chunk_count: u64,
-    heuristic_spi_buses: Vec<String>,
+    coverage: Vec<crate::reports::coverage::CoverageCaveat>,
     done: bool,
     net_voltages: HashMap<String, f64>,
-) -> CosimUpdate {
-    CosimUpdate {
-        sim_ms: t * 1000.0,
-        wall_s: start.elapsed().as_secs_f64(),
-        chunk_ms,
-        uart_lines: collect_lines(uart, uart_partial),
-        gpio_nets: tracker.snapshot(),
-        uart_seen,
-        gpio_active: tracker.any_driven(),
-        gpio_driven,
-        substitution,
-        analog_valid,
-        failed_chunk_count,
-        heuristic_spi_buses,
-        done,
-        error: None,
-        net_voltages,
+) -> WorkerSnapshot {
+    let heuristic_spi_buses = coverage
+        .iter()
+        .filter(|caveat| {
+            caveat.class == crate::reports::coverage::CoverageClass::HeuristicSpiFraming
+        })
+        .map(|caveat| caveat.subject.clone())
+        .collect();
+    WorkerSnapshot {
+        update: CosimUpdate {
+            sim_ms: t * 1000.0,
+            wall_s: start.elapsed().as_secs_f64(),
+            chunk_ms,
+            uart_lines: collect_lines(uart, uart_partial),
+            gpio_nets: tracker.snapshot(),
+            uart_seen,
+            gpio_active: tracker.any_driven(),
+            gpio_driven,
+            substitution,
+            analog_valid,
+            failed_chunk_count,
+            heuristic_spi_buses,
+            done,
+            error: None,
+            net_voltages,
+        },
+        coverage,
     }
 }
 
@@ -501,6 +699,36 @@ pub fn default_chunk_ms(backend: Option<&str>) -> f64 {
     }
 }
 
+/// Resolve the interactive worker chunk from the same `--chunk-us` value the
+/// batch co-sim accepts. An explicit value always wins, including sub-100 us
+/// values; silently widening it would make the TUI's remediation ineffective.
+pub fn configured_chunk_ms(backend: Option<&str>, chunk_us: Option<f64>) -> anyhow::Result<f64> {
+    match chunk_us {
+        Some(us) => {
+            anyhow::ensure!(
+                us > 0.0 && us.is_finite(),
+                "--chunk-us must be a positive number of microseconds, got {us}"
+            );
+            anyhow::ensure!(
+                us <= MAX_INTERACTIVE_CHUNK_MS * 1000.0,
+                "--chunk-us {us} is too coarse for the interactive dashboard; use at most {} us so stop/restart stays responsive, or use --headless for a coarser batch run",
+                MAX_INTERACTIVE_CHUNK_MS * 1000.0
+            );
+            Ok(us / 1000.0)
+        }
+        None => Ok(default_chunk_ms(backend)),
+    }
+}
+
+fn worker_durations(chunk_ms: f64) -> (f64, f64) {
+    let solver_chunk_s = chunk_ms / 1000.0;
+    (solver_chunk_s, solver_chunk_s.max(1e-4))
+}
+
+fn bounded_step_dt(frame_dt: f64, target_s: f64, elapsed_s: f64) -> f64 {
+    frame_dt.min((target_s - elapsed_s).max(0.0))
+}
+
 /// Auto-detect a sibling firmware ELF next to a board file: look for a `.elf` in
 /// the board's directory or common `build`/`Debug`/`Release` siblings.
 pub fn autodetect_firmware(board_path: &std::path::Path) -> Option<PathBuf> {
@@ -528,6 +756,126 @@ pub fn autodetect_firmware(board_path: &std::path::Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn retiring_a_worker_is_nonblocking_but_shutdown_joins_it() {
+        use std::time::Duration;
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(CosimUpdate::default()).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+        let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_worker = Arc::clone(&stop);
+        let join = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            while !stop_worker.load(Ordering::Relaxed) {
+                std::thread::yield_now();
+            }
+            // The normal snapshot already fills this capacity-one channel. A
+            // retained receiver would make this terminal publication block
+            // forever; retirement must disconnect it before the shutdown join.
+            assert!(tx
+                .send(CosimUpdate {
+                    done: true,
+                    ..Default::default()
+                })
+                .is_err());
+            release_rx.recv().unwrap();
+            finished_tx.send(()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let handle = CosimHandle {
+            rx,
+            coverage: Arc::new(Mutex::new(Vec::new())),
+            stop,
+            join: Some(join),
+        };
+
+        let mut workers = CosimWorkers::default();
+        assert!(workers.try_start(handle));
+
+        let started = Instant::now();
+        workers.retire_active();
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "terminal teardown waited for the worker: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            !workers.can_start(),
+            "a replacement worker must not overlap one still shutting down"
+        );
+        release_tx.send(()).unwrap();
+        workers.stop_and_join_all();
+        finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("post-terminal shutdown joins the worker before returning");
+    }
+
+    #[test]
+    fn bare_public_handle_drop_waits_for_owned_worker_cleanup() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(CosimUpdate::default()).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_worker = Arc::clone(&stop);
+        let (clean_tx, clean_rx) = std::sync::mpsc::sync_channel(1);
+        let join = std::thread::spawn(move || {
+            while !stop_worker.load(Ordering::Relaxed) {
+                std::thread::yield_now();
+            }
+            assert!(tx
+                .send(CosimUpdate {
+                    done: true,
+                    ..Default::default()
+                })
+                .is_err());
+            clean_tx.send(()).unwrap();
+        });
+        let handle = CosimHandle {
+            rx,
+            coverage: Arc::new(Mutex::new(Vec::new())),
+            stop,
+            join: Some(join),
+        };
+
+        drop(handle);
+        clean_rx
+            .try_recv()
+            .expect("public Drop returns only after worker-owned cleanup ran");
+    }
+
+    #[test]
+    fn snapshot_transport_is_capacity_one_and_terminal_updates_are_retained() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let coverage = Mutex::new(Vec::new());
+        let first = CosimUpdate {
+            sim_ms: 1.0,
+            ..Default::default()
+        };
+        let coalesced = CosimUpdate {
+            sim_ms: 2.0,
+            ..Default::default()
+        };
+        assert!(publish_update(&coverage, Vec::new(), &tx, first));
+        assert!(
+            publish_update(&coverage, Vec::new(), &tx, coalesced),
+            "a full snapshot slot coalesces without stopping the worker"
+        );
+        assert_eq!(rx.try_iter().count(), 1, "the backlog is strictly bounded");
+
+        let done = CosimUpdate {
+            sim_ms: 3.0,
+            done: true,
+            ..Default::default()
+        };
+        assert!(publish_update(&coverage, Vec::new(), &tx, done));
+        assert!(
+            rx.recv().unwrap().done,
+            "the terminal update is never coalesced away"
+        );
+    }
 
     #[test]
     fn watch_net_matches_led_boot_gpio_and_pins() {
@@ -598,6 +946,39 @@ mod tests {
     }
 
     #[test]
+    fn explicit_cli_chunk_overrides_tui_default_without_a_hidden_floor() {
+        assert_eq!(
+            configured_chunk_ms(Some("renode:stm32f4"), Some(250.0)).unwrap(),
+            0.25
+        );
+        assert_eq!(
+            configured_chunk_ms(Some("simavr:atmega328p"), Some(25.0)).unwrap(),
+            0.025,
+            "a requested sub-100 us chunk must not be silently widened"
+        );
+        assert_eq!(
+            configured_chunk_ms(Some("renode:stm32f4"), None).unwrap(),
+            default_chunk_ms(Some("renode:stm32f4"))
+        );
+        assert!(configured_chunk_ms(None, Some(0.0)).is_err());
+        assert!(configured_chunk_ms(None, Some(f64::NAN)).is_err());
+        assert!(configured_chunk_ms(None, Some(100_001.0)).is_err());
+
+        let (solver_chunk_s, ui_frame_s) = worker_durations(0.025);
+        assert!(
+            (solver_chunk_s - 25e-6).abs() < f64::EPSILON,
+            "the worker applies the exact solver chunk: {solver_chunk_s}"
+        );
+        assert_eq!(ui_frame_s, 1e-4, "only the UI sampling cadence is floored");
+    }
+
+    #[test]
+    fn final_worker_step_never_overshoots_the_requested_window() {
+        assert!((bounded_step_dt(0.3, 2.0, 1.9) - 0.1).abs() < 1e-12);
+        assert_eq!(bounded_step_dt(0.3, 2.0, 2.0), 0.0);
+    }
+
+    #[test]
     fn build_update_carries_analog_validity_flag() {
         // Finding 2 (05 §3b): a CosimUpdate must carry the analog-validity signal
         // the worker reads from the scheduler, so the pane can refuse rather than
@@ -625,8 +1006,8 @@ mod tests {
             false,
             HashMap::new(),
         );
-        assert!(clean.analog_valid, "clean run stays analog-valid");
-        assert_eq!(clean.failed_chunk_count, 0);
+        assert!(clean.update.analog_valid, "clean run stays analog-valid");
+        assert_eq!(clean.update.failed_chunk_count, 0);
 
         // A diverged run: invalid, with the failed-chunk count carried through.
         let bad = build_update(
@@ -646,12 +1027,135 @@ mod tests {
             HashMap::new(),
         );
         assert!(
-            !bad.analog_valid,
+            !bad.update.analog_valid,
             "a failed chunk makes the update analog-invalid"
         );
         assert_eq!(
-            bad.failed_chunk_count, 3,
+            bad.update.failed_chunk_count, 3,
             "the failed-chunk count reaches the UI snapshot"
         );
+    }
+
+    #[test]
+    fn build_update_carries_the_coverage_caveats() {
+        // The worker reads the caveats off the scheduler through the shared
+        // enumeration; this is the transport check, that the list survives into
+        // the snapshot the UI thread renders. Both sides: a run with a caveat
+        // carries it, a clean run carries an empty list rather than a stale one.
+        use crate::reports::coverage::{CoverageClass, CoverageInputs};
+        use crate::scheduler::AdcDrop;
+
+        let start = Instant::now();
+        let uart: VecDeque<String> = VecDeque::new();
+        let tracker = NetActivity::default();
+        let build = |coverage: Vec<crate::reports::coverage::CoverageCaveat>| {
+            build_update(
+                0.1,
+                &start,
+                1.0,
+                &uart,
+                "",
+                false,
+                &tracker,
+                false,
+                None,
+                true,
+                0,
+                coverage,
+                false,
+                HashMap::new(),
+            )
+        };
+
+        let caveats = CoverageInputs {
+            adc_dropped: vec![AdcDrop {
+                mcu_ref: "U1".to_string(),
+                channel: 4,
+                net: "/VSENSE".to_string(),
+                parts: Vec::new(),
+            }],
+            heuristic_spi_buses: vec!["SPI1".to_string()],
+            ..Default::default()
+        }
+        .caveats();
+        let carried = build(caveats.clone());
+        assert_eq!(carried.coverage, caveats, "the caveat list reaches the UI");
+        assert_eq!(carried.coverage[0].class, CoverageClass::AdcDropped);
+        assert_eq!(
+            carried.update.heuristic_spi_buses,
+            ["SPI1"],
+            "the compatible public field remains populated from the canonical caveat list"
+        );
+
+        assert!(
+            build(Vec::new()).coverage.is_empty(),
+            "a run with nothing to disclose carries an empty list"
+        );
+    }
+
+    #[cfg(feature = "avr")]
+    #[test]
+    fn real_worker_rerun_replaces_watchdog_coverage_with_the_control_run() {
+        use crate::reports::coverage::CoverageClass;
+        use std::time::Duration;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let board_path = root.join("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb");
+        let board = std::fs::read_to_string(&board_path)
+            .unwrap_or_else(|error| panic!("tracked board fixture {board_path:?}: {error}"));
+        let run = |name: &str| {
+            let firmware = root.join(format!("testdata/firmware/avr_watchdog/{name}.elf"));
+            assert!(firmware.exists(), "tracked required fixture {firmware:?}");
+            let handle = spawn(
+                board.clone(),
+                Some(firmware),
+                "blinky.kicad_pcb".into(),
+                0.05,
+                1.0,
+            );
+            loop {
+                let update = handle
+                    .rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap_or_else(|error| panic!("worker {name} did not finish: {error}"));
+                assert!(update.error.is_none(), "worker {name}: {:?}", update.error);
+                if update.done {
+                    break handle.latest_coverage();
+                }
+            }
+        };
+
+        let watchdog = run("wdt");
+        assert!(
+            watchdog
+                .iter()
+                .any(|caveat| caveat.class == CoverageClass::WatchdogReboot),
+            "the real worker must carry the scheduler's reboot disclosure: {watchdog:?}"
+        );
+        let control = run("nowdt");
+        assert!(
+            control
+                .iter()
+                .all(|caveat| caveat.class != CoverageClass::WatchdogReboot),
+            "a rerun must carry only its own coverage, never the prior worker's: {control:?}"
+        );
+    }
+
+    #[test]
+    fn worker_coverage_sampler_caches_topology_conflicts_across_frames() {
+        use std::cell::Cell;
+        let scans = Cell::new(0);
+        let sampler = CoverageSampler::from_scan(|| {
+            scans.set(scans.get() + 1);
+            vec!["V1 and V2 contest /RAIL".to_string()]
+        });
+        assert_eq!(scans.get(), 1);
+        assert_eq!(sampler.drive_conflicts, ["V1 and V2 contest /RAIL"]);
+        // Reading the cached value for many frames cannot invoke the topology
+        // closure again; live fields are captured separately by `capture`.
+        for _ in 0..20_000 {
+            assert_eq!(sampler.drive_conflicts.len(), 1);
+        }
+        assert_eq!(scans.get(), 1);
     }
 }

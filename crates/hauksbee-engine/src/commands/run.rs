@@ -1063,8 +1063,9 @@ fn run_inner(
     // scripts and tests are unaffected.
     //
     // `--firmware`/`--apply-shorts` only matter for the simulating paths; the TUI
-    // honours `--firmware` for its co-sim pane. We branch to the TUI before
-    // building the websocket engine so we never spin up tokio for the TUI path.
+    // honours `--firmware` and `--chunk-us` for its co-sim pane. We branch to the
+    // TUI before building the websocket engine so we never spin up tokio for the
+    // TUI path.
     let stdout_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
     // Altium boards reach here with an empty `text` (binary parsed from bytes);
     // the TUI's text-based build path can't analyse those, so they keep the
@@ -1097,12 +1098,13 @@ fn run_inner(
                  for a report, --json for machine output, or --serve for the browser UI"
             );
         }
-        return crate::tui::run_with_schematic(
+        return crate::tui::run_with_schematic_and_chunk(
             &cfg.board,
             &text,
             cfg.models_dir.as_deref(),
             cfg.firmware.clone(),
             schematic.as_deref(),
+            cfg.chunk_us,
         );
     }
 

@@ -15,8 +15,9 @@
 
 import type { WebReport, WebSection } from '../types/report'
 import { groupFindings } from './findings'
-import { summarizeEvidence } from './evidence'
 import { refusalLines } from './refusal-contract'
+import { reportVerdictHeadline, reportVerdictPalette } from './report-verdict'
+import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from './cosim-coverage'
 
 export interface ReportExportInput {
   report: WebReport
@@ -277,6 +278,11 @@ function cosimHtml(report: WebReport): string {
       <td class="mono num">${(g.volts || 0).toFixed(3)}</td>
       <td>${g.driven ? 'driven' : 'idle'}</td>
     </tr>`).join('')
+  const timingCoverage = (c.timing_coverage ?? []).map(row => `<div>${esc(timingCoverageLine(row))}</div>`).join('')
+  const timingRefusals = uncoveredTimingRefusals(c.timing_refusals, report.refusal)
+    .map(line => `<div>${esc(line)}</div>`)
+    .join('')
+  const fallbackWindows = (c.fallback_windows ?? []).map(window => `<div>${esc(fallbackWindowLine(window))}</div>`).join('')
   return `<section>
     <h2>Firmware co-sim</h2>
     <p class="verdict-line">
@@ -284,6 +290,9 @@ function cosimHtml(report: WebReport): string {
       ${c.analog_valid ? '' : ' The analog solve did not stay valid for the whole run.'}
     </p>
     ${findings}
+    ${timingCoverage ? `<h3>Timing coverage</h3><div class="card">${timingCoverage}</div>` : ''}
+    ${timingRefusals ? `<h3>TIMING INVALID</h3><div class="card" style="border-left-color:var(--err)">${timingRefusals}</div>` : ''}
+    ${fallbackWindows ? `<h3>Fallback-qualified windows</h3><div class="card" style="border-left-color:var(--warn)">${fallbackWindows}</div>` : ''}
     ${c.uart_output ? `<h3>UART output</h3><pre class="instrument">${esc(c.uart_output)}</pre>` : ''}
     ${gpio
       ? `<h3>GPIO nets</h3><div class="scroll-x"><table>
@@ -313,12 +322,8 @@ export function buildReportHtml(input: ReportExportInput): string {
   const t = resolveTokens()
   const light = (t.canvas || '').toLowerCase().startsWith('#f')
 
-  let verdictBorder = 'var(--ok-border)', verdictBg = 'var(--ok-bg)'
+  const { border: verdictBorder, background: verdictBg } = reportVerdictPalette(r)
   const bindOpen = !!r.bind?.active_path_unresolved?.length
-  const hasHeadsUp = (r.sections ?? []).some(s => s.heads_up?.length)
-  const evidenceSummary = summarizeEvidence(r.evidence)
-  if (r.serious > 0) { verdictBorder = 'var(--err-border)'; verdictBg = 'var(--err-bg)' }
-  else if (r.total > 0 || bindOpen || hasHeadsUp || evidenceSummary.caveated > 0) { verdictBorder = 'var(--warn-border)'; verdictBg = 'var(--warn-bg)' }
 
   const version = input.engineVersion ?? input.appVersion
   const title = `hauksbee report: ${r.board_name || r.file_name}`
@@ -451,7 +456,7 @@ footer code{font-family:var(--font-mono)}
   <p class="wordmark">HAUKSBEE</p>
   <h1>${esc(r.board_name || r.file_name)}</h1>
   <div class="verdict">
-    ${esc(r.headline)}
+    ${esc(reportVerdictHeadline(r))}
     <div class="counts">
       ${r.serious} serious &middot; ${r.total} ${r.total === 1 ? 'finding' : 'findings'} total
       ${checksLine ? `&middot; checks: ${esc(checksLine)}` : ''}
