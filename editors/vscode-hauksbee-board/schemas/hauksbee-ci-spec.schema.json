@@ -173,7 +173,7 @@
       }
     },
     "schematic": {
-      "description": "Optional companion Eagle schematic. It contributes declared-net-tie\ncontext and exact provenance; the board remains the physical authority.",
+      "description": "Optional companion Eagle schematic. CI identity-validates and inventories\nit as exact input provenance; assertions still use the board alone as the\nphysical authority and do not consume its declarations.",
       "type": [
         "string",
         "null"
