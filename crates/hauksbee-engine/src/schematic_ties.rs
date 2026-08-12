@@ -136,7 +136,13 @@ pub fn resolve(
     let Ok(ties) = hauksbee_extract::declared_net_ties(&text) else {
         return Ok(None);
     };
-    verify_design_identity(board_path, board, &sibling, &text)?;
+    // Auto-discovery is optional convenience, not user-selected input. A stale
+    // or copied same-named sibling must not make unrelated Eagle commands fail;
+    // ignore it unless the physical design identity matches. An explicit
+    // --schematic remains fail-closed in the branch above.
+    if verify_design_identity(board_path, board, &sibling, &text).is_err() {
+        return Ok(None);
+    }
     Ok(Some(SchematicTies {
         path: sibling,
         raw,
@@ -289,7 +295,7 @@ impl SchematicTies {
     }
 
     pub fn contribution(&self, qualification: &hauksbee_extract::DrcTieQualification) -> String {
-        let matched = qualification.declaration_count().min(self.ties.len());
+        let matched = qualification.matched_declaration_count();
         format!(
             "{} declared net tie{} read from the schematic's supply symbols; {matched} declaration{} \
              retained as context only because the schematic has no board-coordinate authority",
@@ -454,6 +460,36 @@ mod tests {
             error.to_string().contains("reference/value sets differ"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_stale_auto_discovered_sibling_is_ignored_not_run_fatal() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let schematic = dir.path().join("design.sch");
+        std::fs::write(
+            &schematic,
+            r#"<?xml version="1.0"?><eagle><drawing><schematic><libraries/><parts><part name="R1" library="device" deviceset="R" value="10k"/></parts><sheets/></schematic></drawing></eagle>"#,
+        )
+        .expect("write stale sibling");
+        let board = hauksbee_extract::ExtractedBoard {
+            name: "design".into(),
+            nets: Vec::new(),
+            components: vec![hauksbee_extract::Component {
+                reference: "U1".into(),
+                value: "MCU".into(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: String::new(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: Vec::new(),
+            }],
+        };
+
+        let resolved = resolve(&dir.path().join("design.brd"), &board, None, true)
+            .expect("an optional stale sibling cannot break the board run");
+        assert!(resolved.is_none());
     }
 
     #[test]

@@ -638,12 +638,11 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
     placement: Option<PathBuf>,
 
-    /// Eagle `.sch` companion to an Eagle `.brd`, read for the net ties it
-    /// declares. A `.brd` records none, so a deliberate join (a star ground
-    /// drawn as one net's supply symbol placed on another's) is otherwise
-    /// reported as a serious short. Found automatically beside the board when it
-    /// shares the board's name. KiCad and Altium layouts declare their ties in
-    /// the layout file itself and need no companion here.
+    /// Eagle `.sch` companion to an Eagle `.brd`, read for declared net-pair
+    /// context. A schematic has no board coordinates, so it never authorizes a
+    /// physical join or downgrades a short; board-local layout evidence must do
+    /// that. A same-named valid sibling is used automatically. KiCad and Altium
+    /// layouts declare physical ties in the layout file itself.
     #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
     schematic: Option<PathBuf>,
 

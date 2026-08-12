@@ -10,7 +10,6 @@ import { refusalLines, type RefusalContract } from '../lib/refusal-contract'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { assumptionsForEvidence, describeModelSource } from '../lib/evidence'
 import { summarizeErrorBudget } from '../lib/error-budget'
-import { buildCheckUpload } from '../lib/board-upload'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -483,7 +482,6 @@ export function ChecksView({
   report,
   boardFile,
   firmwareFile,
-  schematicFile,
   selectedNet,
   selectedComponent,
   pendingChecks,
@@ -494,7 +492,6 @@ export function ChecksView({
   report: WebReport
   boardFile: File | null
   firmwareFile: File | null
-  schematicFile: File | null
   /** Net last clicked on the board render, offered as a one-click check. */
   selectedNet: string | null
   /** Component last clicked on the board render, offered as ref checks. */
@@ -649,7 +646,10 @@ export function ChecksView({
     setRunning(true)
     const tomlAtRun = effectiveToml
     try {
-      const fd = buildCheckUpload(boardFile, firmwareFile, schematicFile, tomlAtRun)
+      const fd = new FormData()
+      fd.append('board', boardFile, boardFile.name)
+      if (firmwareFile) fd.append('firmware', firmwareFile, firmwareFile.name)
+      fd.append('spec', new Blob([tomlAtRun], { type: 'text/plain' }), 'spec.toml')
       const res = await fetch('/api/check', { method: 'POST', body: fd })
       const text = await res.text()
       try {
@@ -668,7 +668,7 @@ export function ChecksView({
     } finally {
       setRunning(false)
     }
-  }, [boardFile, firmwareFile, schematicFile, effectiveToml, rawMode, checks])
+  }, [boardFile, firmwareFile, effectiveToml, rawMode, checks])
 
   const specStem = specStemFor(report.file_name)
   // The runnable spec: the composed body with the board/firmware paths the

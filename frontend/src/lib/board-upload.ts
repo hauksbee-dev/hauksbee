@@ -10,16 +10,3 @@ export function buildBoardUpload(
   if (schematic) form.append('schematic', schematic, schematic.name)
   return form
 }
-
-/** Build the Checks multipart without allowing that surface to drift from the
- * analysis/live companion-input contract. */
-export function buildCheckUpload(
-  board: File,
-  firmware: File | null,
-  schematic: File | null,
-  spec: string,
-): FormData {
-  const form = buildBoardUpload(board, firmware, schematic)
-  form.append('spec', new Blob([spec], { type: 'text/plain' }), 'spec.toml')
-  return form
-}
