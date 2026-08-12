@@ -51,6 +51,7 @@ impl CoverageSampler {
 
 /// How many UART lines to keep in the rolling buffer shown in the pane.
 const UART_TAIL_LINES: usize = 200;
+const MAX_INTERACTIVE_CHUNK_MS: f64 = 100.0;
 
 /// An incremental snapshot streamed from the worker to the UI.
 #[derive(Debug, Clone, Default)]
@@ -273,8 +274,9 @@ fn run_worker(
         if stop.load(Ordering::Relaxed) || t >= target_s {
             break;
         }
-        let frame = engine.step(frame_dt);
-        t += frame_dt;
+        let step_dt = bounded_step_dt(frame_dt, target_s, t);
+        let frame = engine.step(step_dt);
+        t += step_dt;
 
         // Accumulate UART, split into lines. Iterate in sorted-by-MCU-key order
         // so a multi-MCU board's merged UART is deterministic run-to-run, not
@@ -596,6 +598,11 @@ pub fn configured_chunk_ms(backend: Option<&str>, chunk_us: Option<f64>) -> anyh
                 us > 0.0 && us.is_finite(),
                 "--chunk-us must be a positive number of microseconds, got {us}"
             );
+            anyhow::ensure!(
+                us <= MAX_INTERACTIVE_CHUNK_MS * 1000.0,
+                "--chunk-us {us} is too coarse for the interactive dashboard; use at most {} us so stop/restart stays responsive, or use --headless for a coarser batch run",
+                MAX_INTERACTIVE_CHUNK_MS * 1000.0
+            );
             Ok(us / 1000.0)
         }
         None => Ok(default_chunk_ms(backend)),
@@ -605,6 +612,10 @@ pub fn configured_chunk_ms(backend: Option<&str>, chunk_us: Option<f64>) -> anyh
 fn worker_durations(chunk_ms: f64) -> (f64, f64) {
     let solver_chunk_s = chunk_ms / 1000.0;
     (solver_chunk_s, solver_chunk_s.max(1e-4))
+}
+
+fn bounded_step_dt(frame_dt: f64, target_s: f64, elapsed_s: f64) -> f64 {
+    frame_dt.min((target_s - elapsed_s).max(0.0))
 }
 
 /// Auto-detect a sibling firmware ELF next to a board file: look for a `.elf` in
@@ -720,6 +731,7 @@ mod tests {
         );
         assert!(configured_chunk_ms(None, Some(0.0)).is_err());
         assert!(configured_chunk_ms(None, Some(f64::NAN)).is_err());
+        assert!(configured_chunk_ms(None, Some(100_001.0)).is_err());
 
         let (solver_chunk_s, ui_frame_s) = worker_durations(0.025);
         assert!(
@@ -727,6 +739,12 @@ mod tests {
             "the worker applies the exact solver chunk: {solver_chunk_s}"
         );
         assert_eq!(ui_frame_s, 1e-4, "only the UI sampling cadence is floored");
+    }
+
+    #[test]
+    fn final_worker_step_never_overshoots_the_requested_window() {
+        assert!((bounded_step_dt(0.3, 2.0, 1.9) - 0.1).abs() < 1e-12);
+        assert_eq!(bounded_step_dt(0.3, 2.0, 2.0), 0.0);
     }
 
     #[test]

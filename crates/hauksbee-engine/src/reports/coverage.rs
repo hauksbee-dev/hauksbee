@@ -35,6 +35,7 @@ use crate::scheduler::{
 /// bounded limitation, while a measured timing floor and a fallback-method
 /// qualification are evidence about resolution rather than missing coverage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CoverageDisposition {
     Limitation,
     TimingBound,
@@ -52,6 +53,7 @@ pub enum CoverageDisposition {
 /// [`CoverageClass::ALL`] is the list and `class_count_matches_the_matrix`
 /// counts it rather than asserting it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CoverageClass {
     /// An ADC channel the analog solve drove whose injections the backend threw
     /// away: the firmware never received a sample.

@@ -18,7 +18,7 @@ import type { SpecSnapshot } from '../hooks/useSessions'
 import { groupFindings } from '../lib/findings'
 import type { FindingGroup } from '../lib/findings'
 import { summarizeEvidence } from '../lib/evidence'
-import { reportVerdictPalette } from '../lib/report-verdict'
+import { reportVerdictHeadline, reportVerdictPalette } from '../lib/report-verdict'
 import { refusalLines } from '../lib/refusal-contract'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
@@ -228,7 +228,7 @@ export function BoardView({
           className="rounded-xl px-4 py-3.5"
           style={{ border: `1px solid ${verdictBorder}`, background: verdictBg, fontSize: 15.5 }}
         >
-          {r.headline}
+          {reportVerdictHeadline(r)}
           <div
             className="text-xs mt-1.5 tnum"
             data-testid="report-inventory"
