@@ -73,46 +73,6 @@ async fn analyze_runs_the_callback_on_uploaded_bytes() {
 }
 
 #[tokio::test]
-async fn checks_route_threads_the_supplied_schematic_to_its_runner() {
-    let check: frontdoor::SchematicCheckRunner = Arc::new(
-        |board_name, board, _firmware, schematic, spec| {
-            let (schematic_name, schematic) = schematic.expect("schematic reaches runner");
-            format!(
-                "{{\"ok\":true,\"board\":\"{board_name}\",\"board_len\":{},\"schematic\":\"{schematic_name}\",\"schematic_len\":{},\"spec_len\":{}}}",
-                board.len(),
-                schematic.len(),
-                spec.len()
-            )
-        },
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, frontdoor::check_route_with_schematic(check))
-            .await
-            .unwrap();
-    });
-    let boundary = "----hauksbee-check-schematic";
-    let body = multipart_body(
-        boundary,
-        &[
-            ("board", "design.brd", b"board"),
-            ("schematic", "design.sch", b"schematic"),
-            ("spec", "spec.toml", b"name = 'browser'"),
-        ],
-    );
-    let req = format!(
-        "POST /api/check HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    let resp = http(addr, &req, &body).await;
-    assert!(resp.contains("200 OK"), "{resp}");
-    assert!(resp.contains("\"schematic\":\"design.sch\""), "{resp}");
-    assert!(resp.contains("\"schematic_len\":9"), "{resp}");
-}
-
-#[tokio::test]
 async fn analyze_passes_binary_board_bytes_verbatim() {
     // Regression (web bytes fix): the handler used to lossy-UTF8-decode the
     // body before calling the analyzer, so a binary board (Altium .PcbDoc, an

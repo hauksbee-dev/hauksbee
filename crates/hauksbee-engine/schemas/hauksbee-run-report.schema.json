@@ -141,6 +141,13 @@
           },
           "type": "array"
         },
+        "format": {
+          "description": "Exact normalized format when the parser-family token is not specific\nenough. Omitted for all legacy rows whose `kind` is already exact.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ignored": {
           "description": "What in it was deliberately not used.",
           "items": {
@@ -154,7 +161,7 @@
               "$ref": "#/definitions/ArtifactKind"
             }
           ],
-          "description": "What the normalizer recognised it as: \"kicad_pcb\", \"altium_pcbdoc\",\n\"gerber_archive\", \"odbpp\", \"ipc2581\", \"board_code\", \"elf\", \"hex\",\n\"toml\", and so on."
+          "description": "Backward-compatible parser family. For the legacy Eagle XML family this\nremains `eagle_board`; consumers needing the exact document form use\n`format`, which distinguishes an Eagle schematic without expanding this\nclosed public enum before the planned first release."
         },
         "path": {
           "description": "Path as the user gave it, not canonicalized: the report must read back\nin the user's own vocabulary.",
@@ -1081,7 +1088,7 @@
           "type": "string"
         },
         "severity": {
-          "description": "\"serious\" for a short, \"note\" when the run could not validate the\nboard format or a companion schematic declares this tie deliberate.",
+          "description": "\"serious\" for a short, \"note\" only when the board format could not be\nvalidated or board-local physical authority qualifies this location. A\ncompanion Eagle schematic adds context but cannot change severity.",
           "type": "string"
         }
       },

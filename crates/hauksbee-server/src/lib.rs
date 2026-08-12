@@ -17,8 +17,8 @@ use axum::routing::get;
 use axum::Router;
 use engine::Engine;
 use frontdoor::{
-    CheckRunner, FirmwareAnalyzer, LiveLauncher, SchematicAnalyzer, SchematicCheckRunner,
-    SchematicLiveLauncher, ToolHooks,
+    CheckRunner, FirmwareAnalyzer, LiveLauncher, SchematicAnalyzer, SchematicLiveLauncher,
+    ToolHooks,
 };
 use protocol::{ClientMessage, ServerMessage, SessionBacklog, SimFrame, Status};
 use std::path::Path;
@@ -452,39 +452,6 @@ impl Server {
         axum::serve(listener, router).await?;
         Ok(())
     }
-
-    /// Schematic-aware analysis, live launch, and Checks upload. This additive
-    /// entry point leaves [`Self::serve_app_on_with_schematic`] source-compatible.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn serve_app_on_with_schematic_checks(
-        &self,
-        listener: tokio::net::TcpListener,
-        static_dir: Option<&Path>,
-        board_file: Option<(String, String)>,
-        analyze: SchematicAnalyzer,
-        check: Option<SchematicCheckRunner>,
-        tools: Option<ToolHooks>,
-        launch: Option<SchematicLiveLauncher>,
-        startup_json: String,
-    ) -> anyhow::Result<()> {
-        let mut router = unified_router(
-            Some(self.hub.clone()),
-            static_dir,
-            board_file,
-            None,
-            Some(analyze),
-            None,
-            tools,
-            None,
-            launch,
-            startup_json,
-        );
-        if let Some(check) = check {
-            router = router.merge(frontdoor::check_route_with_schematic(check));
-        }
-        axum::serve(listener, router).await?;
-        Ok(())
-    }
 }
 
 /// Assemble the unified router from its optional parts. `hub` is the live-sim
@@ -702,37 +669,6 @@ pub async fn serve_frontdoor_on_with_schematic(
         launch,
         startup_json,
     );
-    axum::serve(listener, router).await?;
-    Ok(())
-}
-
-/// Additive full schematic-aware front door, including `/api/check`.
-#[allow(clippy::too_many_arguments)]
-pub async fn serve_frontdoor_on_with_schematic_checks(
-    listener: tokio::net::TcpListener,
-    static_dir: Option<&Path>,
-    analyze: SchematicAnalyzer,
-    check: Option<SchematicCheckRunner>,
-    tools: Option<ToolHooks>,
-    launch: Option<SchematicLiveLauncher>,
-    startup_json: String,
-) -> anyhow::Result<()> {
-    let hub = LiveHub::new();
-    let mut router = unified_router(
-        Some(hub),
-        static_dir,
-        None,
-        None,
-        Some(analyze),
-        None,
-        tools,
-        None,
-        launch,
-        startup_json,
-    );
-    if let Some(check) = check {
-        router = router.merge(frontdoor::check_route_with_schematic(check));
-    }
     axum::serve(listener, router).await?;
     Ok(())
 }

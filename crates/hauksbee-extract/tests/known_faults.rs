@@ -390,7 +390,7 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
     // missing input to name here and nothing to qualify.
     assert_eq!(
         report.short_count(),
-        report.short_count(),
+        recorded.len(),
         "every MWGEN-G1 short still gates"
     );
 

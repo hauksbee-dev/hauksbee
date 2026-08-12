@@ -1655,6 +1655,7 @@ fn a_declared_pair_adds_context_without_authorizing_the_contact() {
 
     let qualified = report.qualify_with_declared_ties("emonTx.sch", &ties);
     assert_eq!(qualified.qualified_count(), 0);
+    assert_eq!(qualified.matched_declaration_count(), 1);
 
     // Still one short, still the same measurement: schematic context cannot
     // change the physical observation.
@@ -1695,6 +1696,7 @@ fn copper_the_schematic_does_not_declare_stays_a_serious_short() {
 
     let qualified = report.qualify_with_declared_ties("separate-grounds.sch", &ties);
     assert_eq!(qualified.qualified_count(), 0, "nothing to qualify");
+    assert_eq!(qualified.matched_declaration_count(), 0);
     assert_eq!(report.short_count(), 1);
     assert_eq!(
         qualified.undeclared_shorts(&report).count(),

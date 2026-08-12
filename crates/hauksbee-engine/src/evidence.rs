@@ -735,14 +735,13 @@ impl BoardEvidence {
         let artifact = ArtifactProvenance::new(
             path.to_string_lossy(),
             // Preserve the closed public ArtifactKind enum for the planned
-            // first release. ArtifactRole::Schematic and the `.sch` path make
-            // the role exact; EagleBoard remains the existing Eagle XML family
-            // token rather than adding a source-breaking enum variant.
+            // first release while adding an exact additive wire discriminator.
             ArtifactKind::EagleBoard,
             ArtifactRole::Schematic,
             hex_digest(&Sha256::digest(raw)),
             Vec::new(),
         )?
+        .with_format("eagle_schematic")
         .with_contributions(vec![Contribution {
             what: "declared_net_ties".into(),
             detail: contribution.into(),
