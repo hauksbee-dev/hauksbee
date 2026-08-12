@@ -168,8 +168,9 @@ pub struct Spec {
     /// hierarchy resolves; `.kicad_pcb` / `.net` / `.brd` / `.d356` are sniffed
     /// from content.
     pub board: PathBuf,
-    /// Optional companion Eagle schematic. It contributes declared-net-tie
-    /// context and exact provenance; the board remains the physical authority.
+    /// Optional companion Eagle schematic. CI identity-validates and inventories
+    /// it as exact input provenance; assertions still use the board alone as the
+    /// physical authority and do not consume its declarations.
     #[serde(default)]
     pub schematic: Option<PathBuf>,
     /// Optional firmware ELF/hex, relative to the spec file's directory.

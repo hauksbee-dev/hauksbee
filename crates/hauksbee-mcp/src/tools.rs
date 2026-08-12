@@ -68,7 +68,7 @@ pub fn definitions() -> Value {
         },
         {
             "name": "run_checks",
-            "description": "Run a hauksbee-ci check spec against a board: boots optional firmware on the emulated MCU, runs the analog co-sim, and evaluates the spec's assertions (voltage, rail_window, uart, toggle, no_faults, max_current, max_temp, boot-coverage, peripheral, hwtrace; plus tolerance ensembles and transient scenarios). `spec_toml` is the spec BODY as TOML text WITHOUT `board`/`firmware`/`schematic` keys; those are injected from the path arguments. An optional Eagle schematic contributes declared-net-tie context and exact provenance, matching analyze_board. Returns {passed, assertions_passed, run_valid, exit_code, analog_abort, seeds, coverage, substitutions, coverage_warnings, results[]} where each result is {label, kind, passed, invalid, detail, failing_seed, failing_seeds, seeds_total}. Exit-code semantics: 0 all green, 1 an assertion failed (results say which and on which seed), 3 invalid-for-analysis. HONESTY CONTRACT: exit 3 comes back as {\"status\":\"invalid_for_analysis\",\"reason\":...,\"result\":...}; never average it into a pass rate. `passed` is the process verdict (false on exit 3); read it only alongside `run_valid`.",
+            "description": "Run a hauksbee-ci check spec against a board: boots optional firmware on the emulated MCU, runs the analog co-sim, and evaluates the spec's assertions (voltage, rail_window, uart, toggle, no_faults, max_current, max_temp, boot-coverage, peripheral, hwtrace; plus tolerance ensembles and transient scenarios). `spec_toml` is the spec BODY as TOML text WITHOUT `board`/`firmware`/`schematic` keys; those are injected from the path arguments. An optional Eagle schematic is identity-validated and retained as exact input provenance, but CI assertions continue to use the board alone and do not consume its declarations. Returns {passed, assertions_passed, run_valid, exit_code, analog_abort, seeds, coverage, substitutions, coverage_warnings, results[]} where each result is {label, kind, passed, invalid, detail, failing_seed, failing_seeds, seeds_total}. Exit-code semantics: 0 all green, 1 an assertion failed (results say which and on which seed), 3 invalid-for-analysis. HONESTY CONTRACT: exit 3 comes back as {\"status\":\"invalid_for_analysis\",\"reason\":...,\"result\":...}; never average it into a pass rate. `passed` is the process verdict (false on exit 3); read it only alongside `run_valid`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -78,7 +78,7 @@ pub fn definitions() -> Value {
                     },
                     "spec_toml": {
                         "type": "string",
-                        "description": format!("The hauksbee-ci spec as TOML text, WITHOUT `board` or `firmware` keys (they are injected from the path arguments). Format: {}. Minimal example: duration_ms = 10 plus one [[assert]] block.", hauksbee_ir::docs_url("docs/ci/CI.md"))
+                        "description": format!("The hauksbee-ci spec as TOML text, WITHOUT `board`, `firmware`, or `schematic` keys (they are injected from the path arguments). Format: {}. Minimal example: duration_ms = 10 plus one [[assert]] block.", hauksbee_ir::docs_url("docs/ci/CI.md"))
                     },
                     "firmware_path": {
                         "type": "string",
@@ -86,7 +86,7 @@ pub fn definitions() -> Value {
                     },
                     "schematic_path": {
                         "type": "string",
-                        "description": "Optional companion Eagle .sch path, injected as the spec's `schematic` key."
+                        "description": "Optional companion Eagle .sch path, identity-validated and inventoried as provenance. CI assertions do not consume its declarations."
                     }
                 },
                 "required": ["board_path", "spec_toml"]
