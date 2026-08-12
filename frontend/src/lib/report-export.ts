@@ -15,8 +15,8 @@
 
 import type { WebReport, WebSection } from '../types/report'
 import { groupFindings } from './findings'
-import { summarizeEvidence } from './evidence'
 import { refusalLines } from './refusal-contract'
+import { reportVerdictPalette } from './report-verdict'
 import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from './cosim-coverage'
 
 export interface ReportExportInput {
@@ -322,12 +322,8 @@ export function buildReportHtml(input: ReportExportInput): string {
   const t = resolveTokens()
   const light = (t.canvas || '').toLowerCase().startsWith('#f')
 
-  let verdictBorder = 'var(--ok-border)', verdictBg = 'var(--ok-bg)'
+  const { border: verdictBorder, background: verdictBg } = reportVerdictPalette(r)
   const bindOpen = !!r.bind?.active_path_unresolved?.length
-  const hasHeadsUp = (r.sections ?? []).some(s => s.heads_up?.length)
-  const evidenceSummary = summarizeEvidence(r.evidence)
-  if (r.serious > 0) { verdictBorder = 'var(--err-border)'; verdictBg = 'var(--err-bg)' }
-  else if (r.total > 0 || bindOpen || hasHeadsUp || evidenceSummary.caveated > 0) { verdictBorder = 'var(--warn-border)'; verdictBg = 'var(--warn-bg)' }
 
   const version = input.engineVersion ?? input.appVersion
   const title = `hauksbee report: ${r.board_name || r.file_name}`

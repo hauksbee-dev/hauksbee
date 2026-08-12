@@ -194,6 +194,16 @@ impl CoverageInputs {
     /// scheduler. Any surface that wants coverage caveats comes through here,
     /// so a surface cannot read four of the ten accessors and call it coverage.
     pub fn from_scheduler(sched: &Scheduler) -> Self {
+        Self::from_scheduler_with_drive_conflicts(sched, sched.drive_conflicts())
+    }
+
+    /// Extract live coverage while reusing a topology-derived conflict list.
+    /// Interactive frame loops use this after scanning the immutable circuit
+    /// once; one-shot report surfaces keep calling [`Self::from_scheduler`].
+    pub(crate) fn from_scheduler_with_drive_conflicts(
+        sched: &Scheduler,
+        drive_conflicts: Vec<String>,
+    ) -> Self {
         Self {
             adc_dropped: sched.adc_dropped(),
             unexercised_buses: sched.unexercised_buses().to_vec(),
@@ -215,7 +225,7 @@ impl CoverageInputs {
                 .collect(),
             short_pulses: sched.short_pulses().to_vec(),
             driver_contentions: sched.driver_contentions().to_vec(),
-            drive_conflicts: sched.drive_conflicts(),
+            drive_conflicts,
             heuristic_spi_buses: sched
                 .spi_framing_modes()
                 .into_iter()
@@ -720,6 +730,12 @@ mod tests {
         assert!(
             !extending.contains("batch report surfaces, interactive TUI/web front door"),
             "do not claim the external-backend web refusal rendered scheduler limitations"
+        );
+
+        let changelog = include_str!("../../../../CHANGELOG.md");
+        assert!(
+            changelog.contains("headless or interactive co-simulation"),
+            "--chunk-us is honored by both run modes"
         );
     }
 }

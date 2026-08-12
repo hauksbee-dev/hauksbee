@@ -316,13 +316,56 @@ pub struct WebCosimSection {
 /// [`analyze_with_firmware_json`] inserts these optional keys into the nested
 /// `cosim` object for HTTP/MCP/frontend consumers.
 #[derive(Debug, Clone, Default, Serialize)]
-struct WebCosimCoverage {
+pub struct WebFirmwareCoverage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    timing_coverage: Vec<crate::scheduler::TimingCoverage>,
+    pub timing_coverage: Vec<crate::scheduler::TimingCoverage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    timing_refusals: Vec<String>,
+    pub timing_refusals: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    fallback_windows: Vec<crate::result::CosimFallbackWindow>,
+    pub fallback_windows: Vec<crate::result::CosimFallbackWindow>,
+}
+
+type WebCosimCoverage = WebFirmwareCoverage;
+
+/// Source-compatible detailed result for embedded Rust consumers that need the
+/// typed coverage fields inserted by [`analyze_with_firmware_json`].
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct WebFirmwareAnalysis {
+    pub report: WebReport,
+    pub coverage: WebFirmwareCoverage,
+}
+
+impl WebFirmwareAnalysis {
+    /// Serialize the detailed result in the same nested shape as the HTTP/MCP
+    /// front door, including the additive coverage fields under `cosim`.
+    pub fn to_json_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+        let mut value = serde_json::to_value(&self.report)?;
+        if let Some(cosim) = value
+            .get_mut("cosim")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            if !self.coverage.timing_coverage.is_empty() {
+                cosim.insert(
+                    "timing_coverage".to_string(),
+                    serde_json::to_value(&self.coverage.timing_coverage)?,
+                );
+            }
+            if !self.coverage.timing_refusals.is_empty() {
+                cosim.insert(
+                    "timing_refusals".to_string(),
+                    serde_json::to_value(&self.coverage.timing_refusals)?,
+                );
+            }
+            if !self.coverage.fallback_windows.is_empty() {
+                cosim.insert(
+                    "fallback_windows".to_string(),
+                    serde_json::to_value(&self.coverage.fallback_windows)?,
+                );
+            }
+        }
+        Ok(value)
+    }
 }
 
 /// Evidence inputs captured before the co-sim scheduler is dropped. Keeping
@@ -855,10 +898,20 @@ pub fn analyze_with_firmware(
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> WebReport {
-    analyze_with_firmware_detailed(file_name, contents, fw_name, fw_bytes).0
+    analyze_with_firmware_detailed(file_name, contents, fw_name, fw_bytes).report
 }
 
-fn analyze_with_firmware_detailed(
+pub fn analyze_with_firmware_detailed(
+    file_name: &str,
+    contents: &[u8],
+    fw_name: &str,
+    fw_bytes: &[u8],
+) -> WebFirmwareAnalysis {
+    let (report, coverage) = analyze_with_firmware_parts(file_name, contents, fw_name, fw_bytes);
+    WebFirmwareAnalysis { report, coverage }
+}
+
+fn analyze_with_firmware_parts(
     file_name: &str,
     contents: &[u8],
     fw_name: &str,
@@ -1955,34 +2008,11 @@ pub fn analyze_with_firmware_json(
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> String {
-    let (report, coverage) = analyze_with_firmware_detailed(file_name, contents, fw_name, fw_bytes);
-    let mut value = match serde_json::to_value(&report) {
+    let analysis = analyze_with_firmware_detailed(file_name, contents, fw_name, fw_bytes);
+    let value = match analysis.to_json_value() {
         Ok(value) => value,
         Err(e) => return format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}"),
     };
-    if let Some(cosim) = value
-        .get_mut("cosim")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        if !coverage.timing_coverage.is_empty() {
-            cosim.insert(
-                "timing_coverage".to_string(),
-                serde_json::to_value(&coverage.timing_coverage).unwrap_or_default(),
-            );
-        }
-        if !coverage.timing_refusals.is_empty() {
-            cosim.insert(
-                "timing_refusals".to_string(),
-                serde_json::to_value(&coverage.timing_refusals).unwrap_or_default(),
-            );
-        }
-        if !coverage.fallback_windows.is_empty() {
-            cosim.insert(
-                "fallback_windows".to_string(),
-                serde_json::to_value(&coverage.fallback_windows).unwrap_or_default(),
-            );
-        }
-    }
     serde_json::to_string(&value).unwrap_or_else(|e| {
         format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}")
     })

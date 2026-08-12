@@ -6,6 +6,7 @@
 
 use hauksbee_engine::frontdoor::WebCosimSection;
 use hauksbee_engine::tui::cosim::CosimUpdate;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn unchanged_main_era_web_cosim_literal_still_compiles() {
@@ -55,4 +56,24 @@ fn unchanged_main_era_tui_update_literal_still_compiles() {
     };
 
     assert_eq!(update.heuristic_spi_buses, ["SPI1"]);
+}
+
+#[test]
+fn unchanged_main_era_tui_entrypoint_signature_still_compiles() {
+    let _run: fn(&Path, &str, Option<&Path>, Option<PathBuf>) -> anyhow::Result<()> =
+        hauksbee_engine::tui::run;
+}
+
+#[test]
+fn public_firmware_analysis_exposes_the_same_typed_coverage_as_json() {
+    let _detailed: fn(&str, &[u8], &str, &[u8]) -> hauksbee_engine::WebFirmwareAnalysis =
+        hauksbee_engine::analyze_with_firmware_detailed;
+
+    fn consume(result: hauksbee_engine::WebFirmwareAnalysis) {
+        let _report = result.report;
+        let _timing = result.coverage.timing_coverage;
+        let _refusals = result.coverage.timing_refusals;
+        let _fallbacks = result.coverage.fallback_windows;
+    }
+    let _ = consume;
 }

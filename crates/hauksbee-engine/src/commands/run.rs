@@ -1008,7 +1008,7 @@ fn run_inner(mut cfg: RunConfig, quiet: bool, surface: SelectedSurface) -> anyho
                  for a report, --json for machine output, or --serve for the browser UI"
             );
         }
-        return crate::tui::run(
+        return crate::tui::run_with_chunk(
             &cfg.board,
             &text,
             cfg.models_dir.as_deref(),

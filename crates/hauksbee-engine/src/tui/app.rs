@@ -37,6 +37,17 @@ pub fn run(
     board_text: &str,
     models_dir: Option<&Path>,
     firmware: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    run_with_chunk(board_path, board_text, models_dir, firmware, None)
+}
+
+/// Launch the TUI with an optional exact solver chunk override. Kept separate
+/// so the planned 0.1 four-argument [`run`] entry point remains source-compatible.
+pub fn run_with_chunk(
+    board_path: &Path,
+    board_text: &str,
+    models_dir: Option<&Path>,
+    firmware: Option<PathBuf>,
     chunk_us: Option<f64>,
 ) -> anyhow::Result<()> {
     // Build the model on the SAME analysis path the --json/text surfaces use.
