@@ -1,0 +1,14 @@
+G04 The bottom side of the same net: a pad under the plated hole, a track,*
+G04 and a second pad. Nothing here touches the plane.*
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L2,Bot*%
+%ADD10C,1.500000*%
+%ADD11C,0.250000*%
+D10*
+X10000000Y10000000D03*
+X16000000Y10000000D03*
+D11*
+X10000000Y10000000D02*
+X16000000Y10000000D01*
+M02*

@@ -100,16 +100,13 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
     // Connectivity reconstructs from copper alone; a dominant ground net exists.
     assert!(s.gnd_detected, "a GND-class net should be labelled");
 
-    // Per-net copper is available (the gerber trace-current surface), and it
-    // pins a genuine honest limit: Altium's gerber export for this board draws
-    // ALL copper - traces included - as G36/G37 filled REGIONS, not as draw-
-    // aperture tracks. So every net reconstructs as `Poured` (or `None` for a
-    // net with only pad flashes), and the discrete-track-width check has no
-    // discrete width to measure on this board. That is the SAFE failure
-    // direction (a Poured net is never flagged, so there is no false positive),
-    // and it is the documented reason the trace-current surface is inert here
-    // while it runs on the Allegro uConsole (whose traces are draw-aperture
-    // tracks). Asserted so the characteristic is on the record, not a surprise.
+    // Per-net copper is available, and the trace-current surface has real
+    // widths to work with here: this Altium export draws its planes as G36/G37
+    // filled regions and routes its signals with draw apertures, so `Poured`
+    // and discrete-`Traces` nets both exist. (Both counts read differently
+    // while the negative-pour bug stood: the board-sized dark region was on
+    // every net, so every net came back `Poured` and none had a discrete width
+    // to measure. That reading was a symptom, not a property of the export.)
     let gnd = s
         .net_copper
         .iter()
@@ -125,9 +122,19 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
         .iter()
         .filter(|c| c.kind == GerberCopperKind::Traces)
         .count();
-    assert_eq!(
-        traces, 0,
-        "this Altium export draws traces as regions, so no net is discrete-Traces"
+    let poured = s
+        .net_copper
+        .iter()
+        .filter(|c| c.kind == GerberCopperKind::Poured)
+        .count();
+    assert!(
+        traces > 50,
+        "the routed nets carry a measurable discrete width, got {traces}"
+    );
+    assert!(
+        (2..traces).contains(&poured),
+        "a handful of planes are poured and the rest are routed, got {poured} poured \
+         against {traces} routed"
     );
 
     // No P&P in the published set, so no components are bound. This is the
@@ -138,46 +145,67 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
     );
 }
 
-/// The net count this board should reconstruct to, which it currently does not.
+/// The net count this exact film set currently reconstructs to.
 ///
-/// Reverse extraction collapses the Inkplate to 18 connected components where a
-/// board with 634 plated holes and 492 filled regions on the top layer alone
-/// should yield well over a hundred. Copper that should stay apart is being
-/// unioned.
-///
-/// Ruled out by measurement, so nobody repeats the work: the layer count (2),
-/// the plated-hole count (634) and the hole positions are all correct, and
-/// units are handled (both readers scale inches to mm, and the drill's
-/// coordinate range, X 0.000 to 5.835 in, sits inside the copper's X 0.000 to
-/// 5.945 in). Clear-polarity handling exists and this file carries only one
-/// LPC/LPD pair. The 18 is the true union-find component count, not a filtered
-/// view of it.
-///
-/// Ignored rather than loosened: lowering the threshold to 18 would assert that
-/// the current wrong answer is the right one. The assertion stays at what the
-/// board actually has, so fixing the extraction turns this green on its own.
+/// This was a standing known gap: the Inkplate collapsed to 18 connected
+/// components because its Altium films draw negative planes and the reader
+/// discarded their clear-polarity geometry. Applying those painter operations
+/// restores the intended plane-segmentation class. The exact hand-auditable
+/// mechanism tests live in `tests/gerber_negative_pour.rs`; this row deliberately
+/// makes no claim about the board's true final net count because the published
+/// manufacturing set provides no native netlist oracle.
 #[test]
-#[ignore = "known gap: copper over-merges to 18 nets, see the doc comment"]
-fn inkplate6_net_count_matches_the_board() {
+fn inkplate6_reconstruction_count_is_stable_not_an_oracle() {
     let Some(dir) = inkplate_dir() else {
         return;
     };
     let g = from_gerber_dir(&dir).expect("Inkplate gerbers must reverse-extract");
-    assert!(
-        g.stats.n_nets > 100,
-        "nets reconstructed: {}",
-        g.stats.n_nets
+    // This is a deterministic regression pin, not a native-net correctness
+    // oracle: the published manufacturing set has no netlist or placement file.
+    // True Boolean painter replay plus exact finite-width contact currently yields
+    // 179 (the earlier signed/enclosure implementation yielded 181). Neither is a
+    // correctness measurement without the missing native netlist; this row only
+    // catches an unreviewed whole-film drift.
+    assert_eq!(
+        g.stats.n_nets, 179,
+        "the exact film-set regression pin moved"
     );
-    // Downstream of the same gap: at most one Poured row exists per net, so a
-    // board collapsed to 18 nets cannot show more than 18 of them.
-    let poured = g
-        .stats
-        .net_copper
-        .iter()
-        .filter(|c| c.kind == GerberCopperKind::Poured)
-        .count();
-    assert!(
-        poured > 100,
-        "copper should be region-dominated, got {poured} poured"
+}
+
+/// The SparkFun RP2040 Thing Plus panel, an Eagle export whose films draw copper as
+/// filled regions and ring every off-net pad with clearance.
+///
+/// It is the second board the negative-pour cut moved. Eagle's clearance rings
+/// are exactly the clear painter operations that were being dropped, but this
+/// published set has no drill and no placement map, so its total cannot serve as
+/// a native connectivity oracle. The exact output is retained only as a
+/// deterministic whole-board regression pin.
+///
+/// This board also ships `RP2040_Thing_Plus-Panel.brd` beside its gerbers, and this
+/// crate reads Eagle binaries, so a pin-to-net partition comparison against the
+/// native layout is the gate that would settle the count outright. It needs the
+/// per-net copper GEOMETRY to be reachable from `ReconStats` (the published set has
+/// no pick-and-place, so no pads bind and there is nothing to compare pad-wise), and
+/// that API does not exist yet. Left as the highest-value test to add in this area.
+#[test]
+fn sparkfun_rp2040_panel_count_is_stable_not_an_oracle() {
+    let Some(dir) = hauksbee_testkit::corpus_board(
+        env!("CARGO_MANIFEST_DIR"),
+        "sparkfun_thingplus_rp2040/Hardware/Production",
+    ) else {
+        return;
+    };
+    let g = from_gerber_dir(&dir).expect("SparkFun panel gerbers must reverse-extract");
+    assert_eq!(g.stats.n_layers, 2, "the published set is GTL plus GBL");
+    assert_eq!(
+        g.stats.n_holes, 0,
+        "no drill ships with it, so the two layers cannot stitch"
+    );
+    // The earlier signed/enclosure implementation yielded 3,438. The exact
+    // painter/contact implementation yields 3,378; without drill, placement, or
+    // native partition data neither number is an accuracy claim.
+    assert_eq!(
+        g.stats.n_nets, 3378,
+        "the exact published-film regression pin moved"
     );
 }

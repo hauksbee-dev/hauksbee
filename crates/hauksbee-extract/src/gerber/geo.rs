@@ -27,15 +27,24 @@ pub enum Shape {
     /// the outline (corner radius of a roundrect carried as polygon + radius).
     Polygon { pts: Vec<(f64, f64)>, r: f64 },
     /// One connected piece of pour copper with holes: the first contour is the
-    /// outer boundary, the rest are holes cut out of it (RS-274X 4.10.4 lets a
-    /// single G36/G37 region carry several contours). Containment is even-odd,
-    /// a point is copper iff it lies inside an odd number of contours, so the
-    /// ring reads as copper and a hole's interior reads as empty. Disjoint
-    /// islands of one region are split into separate shapes upstream (one shape
-    /// = one conductor for the union-find), so a `MultiPolygon` is always a
-    /// single electrically-connected piece. No inflation radius: pours are
-    /// drawn at their true outline.
-    MultiPolygon { contours: Vec<Vec<(f64, f64)>> },
+    /// outer boundary, the rest carry signed coverage weights. Ordinary region
+    /// holes have weight -1. Clear images applied to a dark region also have
+    /// weight -1, while an island inside an annular clear has weight +1.
+    /// Containment is the positive-coverage rule: a point is copper iff the sum
+    /// of the weights of contours enclosing it is greater than zero. Unlike raw
+    /// even-odd parity, two overlapping clear images therefore remain a void in
+    /// their overlap instead of flipping that lens back to copper. Disjoint
+    /// islands of one region are split into separate shapes upstream, so a
+    /// `MultiPolygon` built by the region reader is a single electrically-connected
+    /// piece. Exact clear-polarity difference emits each disconnected exterior as a
+    /// separate shape, while the qualified dense-plane path removes each freed
+    /// annular island into its own primitive. The union-find therefore may rely on
+    /// one shape describing one connected filled area. No inflation radius: pours
+    /// are drawn at their true outline.
+    MultiPolygon {
+        contours: Vec<Vec<(f64, f64)>>,
+        weights: Vec<i16>,
+    },
 }
 
 impl Shape {
@@ -64,11 +73,12 @@ impl Shape {
                 pts: pts.iter().map(|(x, y)| (x + dx, y + dy)).collect(),
                 r: *r,
             },
-            Shape::MultiPolygon { contours } => Shape::MultiPolygon {
+            Shape::MultiPolygon { contours, weights } => Shape::MultiPolygon {
                 contours: contours
                     .iter()
                     .map(|c| c.iter().map(|(x, y)| (x + dx, y + dy)).collect())
                     .collect(),
+                weights: weights.clone(),
             },
         }
     }
@@ -97,7 +107,7 @@ impl Shape {
                 }
                 [b[0] - r, b[1] - r, b[2] + r, b[3] + r]
             }
-            Shape::MultiPolygon { contours } => {
+            Shape::MultiPolygon { contours, .. } => {
                 let mut b = [
                     f64::INFINITY,
                     f64::INFINITY,
@@ -131,7 +141,7 @@ impl Shape {
             // The outer boundary's vertex average. For a ring this may fall in
             // a hole, but the centre is only a *representative* point for
             // pad/flash matching, and pours never anchor pads.
-            Shape::MultiPolygon { contours } => {
+            Shape::MultiPolygon { contours, .. } => {
                 let pts = contours.first().map(|c| c.as_slice()).unwrap_or(&[]);
                 let n = pts.len().max(1) as f64;
                 (
@@ -169,12 +179,7 @@ fn on_seg(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> bool {
     q.0 <= p.0.max(r.0) && q.0 >= p.0.min(r.0) && q.1 <= p.1.max(r.1) && q.1 >= p.1.min(r.1)
 }
 
-pub(crate) fn segments_intersect(
-    p1: (f64, f64),
-    p2: (f64, f64),
-    p3: (f64, f64),
-    p4: (f64, f64),
-) -> bool {
+pub fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f64, f64)) -> bool {
     let d1 = orient(p3, p4, p1);
     let d2 = orient(p3, p4, p2);
     let d3 = orient(p1, p2, p3);
@@ -200,13 +205,33 @@ fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f64)) 
 }
 
 /// Even-odd containment over a set of closed contours: inside iff enclosed by
-/// an odd number of them. For a pour-with-holes (outer + holes) the ring reads
-/// inside and a hole's interior reads outside; this is the containment rule a
-/// [`Shape::MultiPolygon`] carries.
+/// an odd number of them. This remains useful for one self-contained aperture
+/// image (outer + holes); painted [`Shape::MultiPolygon`] values use signed
+/// coverage instead.
 pub fn point_in_contours(px: f64, py: f64, contours: &[Vec<(f64, f64)>]) -> bool {
     contours
         .iter()
         .fold(false, |inside, c| inside ^ point_in_polygon(px, py, c))
+}
+
+/// Signed containment for a painted region. Each contour contributes its
+/// weight when it encloses the point; strictly positive coverage is copper.
+/// The length mismatch is a construction defect, so fail closed as no copper
+/// instead of silently reverting to parity.
+pub fn point_in_weighted_contours(
+    px: f64,
+    py: f64,
+    contours: &[Vec<(f64, f64)>],
+    weights: &[i16],
+) -> bool {
+    contours.len() == weights.len()
+        && contours
+            .iter()
+            .zip(weights)
+            .filter(|(contour, _)| point_in_polygon(px, py, contour))
+            .map(|(_, weight)| i32::from(*weight))
+            .sum::<i32>()
+            > 0
 }
 
 pub fn point_in_polygon(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
@@ -252,6 +277,196 @@ fn poly_poly_edge_dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
     best
 }
 
+fn closest_point_on_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    if len2 == 0.0 {
+        return a;
+    }
+    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0);
+    (a.0 + t * dx, a.1 + t * dy)
+}
+
+/// Closest points on `a` and `b`, with the first witness always lying on `a`.
+fn closest_segment_points(
+    a1: (f64, f64),
+    a2: (f64, f64),
+    b1: (f64, f64),
+    b2: (f64, f64),
+) -> ((f64, f64), (f64, f64), f64) {
+    if segments_intersect(a1, a2, b1, b2) {
+        let r = (a2.0 - a1.0, a2.1 - a1.1);
+        let s = (b2.0 - b1.0, b2.1 - b1.1);
+        let denom = r.0 * s.1 - r.1 * s.0;
+        if denom.abs() > 1e-15 {
+            let q = (b1.0 - a1.0, b1.1 - a1.1);
+            let t = (q.0 * s.1 - q.1 * s.0) / denom;
+            let p = (a1.0 + t * r.0, a1.1 + t * r.1);
+            return (p, p, 0.0);
+        }
+        for p in [a1, a2] {
+            if on_seg(b1, p, b2) {
+                return (p, p, 0.0);
+            }
+        }
+        for p in [b1, b2] {
+            if on_seg(a1, p, a2) {
+                return (p, p, 0.0);
+            }
+        }
+    }
+
+    let mut candidates = [
+        (a1, closest_point_on_segment(a1, b1, b2)),
+        (a2, closest_point_on_segment(a2, b1, b2)),
+        (closest_point_on_segment(b1, a1, a2), b1),
+        (closest_point_on_segment(b2, a1, a2), b2),
+    ];
+    candidates.sort_by(|(pa, pb), (qa, qb)| {
+        (pa.0 - pb.0)
+            .hypot(pa.1 - pb.1)
+            .partial_cmp(&(qa.0 - qb.0).hypot(qa.1 - qb.1))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let (pa, pb) = candidates[0];
+    (pa, pb, (pa.0 - pb.0).hypot(pa.1 - pb.1))
+}
+
+/// Is there painted copper arbitrarily close to this stored contour point?
+/// A clear contour can be buried inside another clear image, in which case it
+/// is bookkeeping rather than a physical copper edge.
+fn weighted_copper_near(p: (f64, f64), contours: &[Vec<(f64, f64)>], weights: &[i16]) -> bool {
+    const E: f64 = 1e-7;
+    [
+        (E, 0.0),
+        (-E, 0.0),
+        (0.0, E),
+        (0.0, -E),
+        (E, E),
+        (E, -E),
+        (-E, E),
+        (-E, -E),
+    ]
+    .into_iter()
+    .any(|(dx, dy)| point_in_weighted_contours(p.0 + dx, p.1 + dy, contours, weights))
+}
+
+fn contour_edges(contour: &[(f64, f64)]) -> impl Iterator<Item = ((f64, f64), (f64, f64))> + '_ {
+    let n = contour.len();
+    (0..n).filter_map(move |i| (n >= 2).then_some((contour[(i + n - 1) % n], contour[i])))
+}
+
+fn point_reaches_polygon(p: (f64, f64), polygon: &[(f64, f64)], radius: f64) -> bool {
+    point_in_polygon(p.0, p.1, polygon)
+        || contour_edges(polygon)
+            .any(|(a, b)| point_seg_dist2(p.0, p.1, a.0, a.1, b.0, b.1) <= radius * radius)
+}
+
+fn nearest_exposed_gap(
+    mut candidates: Vec<(f64, (f64, f64))>,
+    contours: &[Vec<(f64, f64)>],
+    weights: &[i16],
+) -> f64 {
+    candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    candidates
+        .into_iter()
+        .find_map(|(gap, point)| weighted_copper_near(point, contours, weights).then_some(gap))
+        .unwrap_or(f64::INFINITY)
+}
+
+fn capsule_weighted_gap(c: &Capsule, contours: &[Vec<(f64, f64)>], weights: &[i16]) -> f64 {
+    if [
+        (c.ax, c.ay),
+        (c.bx, c.by),
+        ((c.ax + c.bx) * 0.5, (c.ay + c.by) * 0.5),
+    ]
+    .into_iter()
+    .any(|p| point_in_weighted_contours(p.0, p.1, contours, weights))
+    {
+        return -c.r.max(0.0) - 1e-6;
+    }
+    let candidates = contours
+        .iter()
+        .flat_map(|contour| contour_edges(contour))
+        .map(|(a, b)| {
+            let (q, _, distance) = closest_segment_points(a, b, (c.ax, c.ay), (c.bx, c.by));
+            (distance - c.r, q)
+        })
+        .collect();
+    nearest_exposed_gap(candidates, contours, weights)
+}
+
+fn polygon_weighted_gap(
+    polygon: &[(f64, f64)],
+    radius: f64,
+    contours: &[Vec<(f64, f64)>],
+    weights: &[i16],
+) -> f64 {
+    let contained = polygon
+        .iter()
+        .any(|&(x, y)| point_in_weighted_contours(x, y, contours, weights));
+    if contained {
+        return -radius.max(0.0) - 1e-6;
+    }
+    let mut candidates = Vec::new();
+    for contour in contours {
+        if let Some(&(x, y)) = contour
+            .iter()
+            .find(|&&(x, y)| point_reaches_polygon((x, y), polygon, radius))
+        {
+            candidates.push((-1e-6, (x, y)));
+        }
+        for (a, b) in contour_edges(contour) {
+            let mut nearest = (f64::INFINITY, a);
+            for (pa, pb) in contour_edges(polygon) {
+                let (q, _, distance) = closest_segment_points(a, b, pa, pb);
+                if distance < nearest.0 {
+                    nearest = (distance, q);
+                }
+            }
+            candidates.push((nearest.0 - radius, nearest.1));
+        }
+    }
+    nearest_exposed_gap(candidates, contours, weights)
+}
+
+fn weighted_regions_gap(
+    ca: &[Vec<(f64, f64)>],
+    wa: &[i16],
+    cb: &[Vec<(f64, f64)>],
+    wb: &[i16],
+) -> f64 {
+    for contour in ca {
+        for &p in contour {
+            if point_in_weighted_contours(p.0, p.1, cb, wb) && weighted_copper_near(p, ca, wa) {
+                return -1e-6;
+            }
+        }
+        for (a, b) in contour_edges(contour) {
+            for other in cb {
+                for (c, d) in contour_edges(other) {
+                    let (q, r, distance) = closest_segment_points(a, b, c, d);
+                    if distance == 0.0
+                        && weighted_copper_near(q, ca, wa)
+                        && weighted_copper_near(r, cb, wb)
+                    {
+                        return 0.0;
+                    }
+                }
+            }
+        }
+    }
+    if cb
+        .iter()
+        .flatten()
+        .any(|&p| point_in_weighted_contours(p.0, p.1, ca, wa) && weighted_copper_near(p, cb, wb))
+    {
+        -1e-6
+    } else {
+        f64::INFINITY
+    }
+}
+
 /// Signed copper-edge gap between two shapes. `<= 0` means the copper overlaps
 /// (they are the same conductor); positive is the clear gap. Mirrors
 /// `drc::shape_gap` but returns only the scalar (callers here don't need the
@@ -287,65 +502,28 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
                 edge
             }
         }
-        // The multi-contour arms mirror the polygon arms above: the copper edge
-        // is the nearest of ALL contour boundaries (a hole's rim is copper edge
-        // just like the outer rim), and containment is even-odd (a capsule
-        // endpoint sitting in a hole is NOT contained; the hole is empty).
-        (Shape::Capsule(c), Shape::MultiPolygon { contours })
-        | (Shape::MultiPolygon { contours }, Shape::Capsule(c)) => {
-            let best = contours
-                .iter()
-                .map(|pts| seg_contour_dist((c.ax, c.ay), (c.bx, c.by), pts))
-                .fold(f64::INFINITY, f64::min);
-            let contained =
-                point_in_contours(c.ax, c.ay, contours) || point_in_contours(c.bx, c.by, contours);
-            if contained {
-                -c.r.max(0.0) - 1e-6
-            } else {
-                best - c.r
-            }
+        // The multi-contour arms mirror the polygon arms above, but only an
+        // EXPOSED contour is a copper edge. A clear contour buried under another
+        // clear is bookkeeping, not copper. Containment uses signed coverage (a
+        // capsule endpoint sitting in a hole is NOT contained; the hole is empty).
+        (Shape::Capsule(c), Shape::MultiPolygon { contours, weights })
+        | (Shape::MultiPolygon { contours, weights }, Shape::Capsule(c)) => {
+            capsule_weighted_gap(c, contours, weights)
         }
-        (Shape::Polygon { pts, r }, Shape::MultiPolygon { contours })
-        | (Shape::MultiPolygon { contours }, Shape::Polygon { pts, r }) => {
-            let edge = contours
-                .iter()
-                .map(|c| poly_poly_edge_dist(pts, c))
-                .fold(f64::INFINITY, f64::min)
-                - r;
-            // Contained when a polygon vertex sits in the region's copper
-            // (even-odd), or any contour rim vertex sits inside the polygon
-            // (the polygon laps over that piece of boundary copper).
-            let contained = pts
-                .first()
-                .is_some_and(|&(x, y)| point_in_contours(x, y, contours))
-                || contours
-                    .iter()
-                    .any(|c| c.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pts)));
-            if contained {
-                edge.min(0.0) - 1e-6
-            } else {
-                edge
-            }
+        (Shape::Polygon { pts, r }, Shape::MultiPolygon { contours, weights })
+        | (Shape::MultiPolygon { contours, weights }, Shape::Polygon { pts, r }) => {
+            polygon_weighted_gap(pts, *r, contours, weights)
         }
-        (Shape::MultiPolygon { contours: ca }, Shape::MultiPolygon { contours: cb }) => {
-            let edge = ca
-                .iter()
-                .flat_map(|a| cb.iter().map(move |b| poly_poly_edge_dist(a, b)))
-                .fold(f64::INFINITY, f64::min);
-            let contained = ca
-                .first()
-                .and_then(|c| c.first())
-                .is_some_and(|&(x, y)| point_in_contours(x, y, cb))
-                || cb
-                    .first()
-                    .and_then(|c| c.first())
-                    .is_some_and(|&(x, y)| point_in_contours(x, y, ca));
-            if contained {
-                edge.min(0.0) - 1e-6
-            } else {
-                edge
-            }
-        }
+        (
+            Shape::MultiPolygon {
+                contours: ca,
+                weights: wa,
+            },
+            Shape::MultiPolygon {
+                contours: cb,
+                weights: wb,
+            },
+        ) => weighted_regions_gap(ca, wa, cb, wb),
     }
 }
 
@@ -371,10 +549,15 @@ fn seg_contour_dist(a: (f64, f64), b: (f64, f64), pts: &[(f64, f64)]) -> f64 {
 /// tens of thousands of vertices and is tested against every primitive, so the
 /// naive cost is quadratic. This rasterises the polygon's bounding box into a
 /// coarse grid once: each cell is tagged fully-inside, fully-outside, or
-/// boundary. A query is then an O(1) grid lookup, falling back to the exact
-/// even-odd test only for the few points that land in a boundary cell.
+/// boundary. A query is then an O(1) grid lookup, falling back to the selected
+/// exact containment rule only for points in a boundary cell.
 pub struct PolyGrid<'a> {
-    pts: &'a [(f64, f64)],
+    /// The contours the grid classifies. `weights == None` selects even-odd;
+    /// otherwise the grid uses the same positive signed-coverage rule as a
+    /// painted [`Shape::MultiPolygon`]. A negative-drawn plane is board-sized;
+    /// leaving it to the exact test made every primitive pay its whole vertex count.
+    contours: &'a [Vec<(f64, f64)>],
+    weights: Option<&'a [i16]>,
     minx: f64,
     miny: f64,
     inv_cell: f64,
@@ -385,14 +568,33 @@ pub struct PolyGrid<'a> {
 }
 
 impl<'a> PolyGrid<'a> {
-    /// Build a grid for `pts`. `target_cells` is the rough number of cells along
-    /// the longer axis (more = finer = fewer exact fallbacks, more build cost).
-    pub fn new(pts: &'a [(f64, f64)], target_cells: usize) -> Self {
+    /// Build a grid for `contours`. `target_cells` is the rough number of cells
+    /// along the longer axis (more = finer = fewer exact fallbacks, more build
+    /// cost).
+    pub fn new(contours: &'a [Vec<(f64, f64)>], target_cells: usize) -> Self {
+        Self::build(contours, None, target_cells)
+    }
+
+    /// Build a grid for a signed painted region. A mismatched weight vector is
+    /// represented as entirely outside, matching [`point_in_weighted_contours`].
+    pub fn new_weighted(
+        contours: &'a [Vec<(f64, f64)>],
+        weights: &'a [i16],
+        target_cells: usize,
+    ) -> Self {
+        Self::build(contours, Some(weights), target_cells)
+    }
+
+    fn build(
+        contours: &'a [Vec<(f64, f64)>],
+        weights: Option<&'a [i16]>,
+        target_cells: usize,
+    ) -> Self {
         let mut minx = f64::INFINITY;
         let mut miny = f64::INFINITY;
         let mut maxx = f64::NEG_INFINITY;
         let mut maxy = f64::NEG_INFINITY;
-        for &(x, y) in pts {
+        for &(x, y) in contours.iter().flatten() {
             minx = minx.min(x);
             miny = miny.min(y);
             maxx = maxx.max(x);
@@ -404,44 +606,77 @@ impl<'a> PolyGrid<'a> {
         let nx = (((maxx - minx) * inv_cell).ceil() as usize + 1).max(1);
         let ny = (((maxy - miny) * inv_cell).ceil() as usize + 1).max(1);
 
-        // Mark cells the polygon boundary passes through as boundary (2): a
-        // query landing here falls back to the exact even-odd test.
+        // Mark cells any contour's boundary passes through as boundary (2): a
+        // query landing here falls back to the selected exact containment rule.
         let mut cells = vec![0u8; nx * ny];
-        let n = pts.len();
-        if n >= 2 {
+        for pts in contours {
+            let n = pts.len();
+            if n < 2 {
+                continue;
+            }
             let mut j = n - 1;
             for i in 0..n {
                 Self::stamp_edge(&mut cells, nx, ny, minx, miny, inv_cell, pts[j], pts[i]);
                 j = i;
             }
         }
-        // Classify the non-boundary cells exactly, by *scanline parity* rather
-        // than by per-cell even-odd (which would be O(cells x vertices)). For
-        // each grid row we intersect the polygon edges with the row's centre
-        // line once (O(vertices)), sort the crossing x's, and fill the spans
-        // between consecutive crossings as inside. This is exact (no flood-fill
-        // leakage) and costs O(rows x vertices) total. Cells already marked
-        // boundary keep their exact-test flag.
-        if n >= 3 {
-            let mut xs: Vec<f64> = Vec::new();
-            for gy in 0..ny {
-                let yc = miny + (gy as f64 + 0.5) / inv_cell;
-                xs.clear();
+        // Classify the non-boundary cells exactly by a scanline sweep rather than
+        // per-cell polygon tests (which would be O(cells x vertices)). For each
+        // grid row we intersect the edges crossing that row's centre line with it,
+        // sort the crossing x's, and fill the inside spans. The unweighted path
+        // uses parity. The weighted path pairs each contour's crossings into
+        // intervals and sweeps signed enter/leave events, filling only positive
+        // coverage. This is exact (no flood-fill leakage). Boundary cells retain
+        // their exact-test flag.
+        //
+        // The edges are bucketed by the rows they span first. Walking every edge
+        // for every row is O(rows x vertices), and rows scale with the vertex
+        // count, so a plane with 6084 annular antipads (each a 64-gon plus a 32-gon
+        // rim, ~600k vertices over 2048 rows) spent 3.2 s here. Bucketing makes it
+        // O(vertices + rows swept + cells): each EDGE of an antipad's outline spans
+        // two or three rows, which is the quantity the cost sums over.
+        if contours.iter().any(|c| c.len() >= 3) {
+            let row_of = |y: f64| -> isize { ((y - miny) * inv_cell).floor() as isize };
+            // One copy of each non-horizontal edge, plus the row it becomes active
+            // in and the row it expires after: an active-edge sweep. Pushing a copy
+            // of an edge into every row it spans is O(vertices x rows) MEMORY, and
+            // rows scale with the vertex count, so a comb-shaped pour whose fingers
+            // each span the board height (2048 fingers, 8192 vertices) took 396 MB
+            // here. An edge is now stored once.
+            let mut edges: Vec<(f64, f64, f64, f64, usize)> = Vec::new();
+            let mut expires: Vec<usize> = Vec::new();
+            let mut starts: Vec<Vec<usize>> = vec![Vec::new(); ny];
+            for (contour_index, pts) in contours.iter().enumerate() {
+                let n = pts.len();
+                if n < 3 {
+                    continue;
+                }
                 let mut j = n - 1;
                 for i in 0..n {
-                    let (xi, yi) = pts[i];
-                    let (xj, yj) = pts[j];
-                    if (yi > yc) != (yj > yc) {
-                        let x = (xj - xi) * (yc - yi) / (yj - yi) + xi;
-                        xs.push(x);
-                    }
+                    let (a, b) = (pts[j], pts[i]);
                     j = i;
+                    if a.1 == b.1 {
+                        continue; // horizontal: crosses no row centre line
+                    }
+                    let (lo, hi) = if a.1 < b.1 { (a.1, b.1) } else { (b.1, a.1) };
+                    let r0 = row_of(lo).clamp(0, ny as isize - 1) as usize;
+                    let r1 = row_of(hi).clamp(0, ny as isize - 1) as usize;
+                    starts[r0].push(edges.len());
+                    edges.push((a.0, a.1, b.0, b.1, contour_index));
+                    expires.push(r1);
                 }
-                xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                // Inside the spans [xs[0],xs[1]], [xs[2],xs[3]], ...
-                let mut k = 0;
-                while k + 1 < xs.len() {
-                    let (x0, x1) = (xs[k], xs[k + 1]);
+            }
+            let mut active: Vec<usize> = Vec::new();
+            let mut xs: Vec<f64> = Vec::new();
+            for gy in 0..ny {
+                active.extend(starts[gy].iter().copied());
+                active.retain(|&e| expires[e] >= gy);
+                if active.is_empty() {
+                    continue;
+                }
+                let yc = miny + (gy as f64 + 0.5) / inv_cell;
+                xs.clear();
+                let mut fill_span = |x0: f64, x1: f64| {
                     let g0 = (((x0 - minx) * inv_cell).floor() as isize).max(0);
                     let g1 = (((x1 - minx) * inv_cell).ceil() as isize).min(nx as isize - 1);
                     for gx in g0..=g1 {
@@ -451,13 +686,78 @@ impl<'a> PolyGrid<'a> {
                             cells[idx] = 1;
                         }
                     }
-                    k += 2;
+                };
+                if let Some(weights) = weights.filter(|weights| weights.len() == contours.len()) {
+                    let mut crossings: Vec<(usize, f64)> = Vec::with_capacity(active.len());
+                    for &e in &active {
+                        let (ax, ay, bx, by, contour_index) = edges[e];
+                        if (ay > yc) != (by > yc) {
+                            crossings.push((contour_index, (bx - ax) * (yc - ay) / (by - ay) + ax));
+                        }
+                    }
+                    crossings.sort_by(|a, b| {
+                        a.0.cmp(&b.0).then_with(|| {
+                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                    });
+                    let mut events: Vec<(f64, i32)> = Vec::with_capacity(crossings.len());
+                    let mut k = 0;
+                    while k < crossings.len() {
+                        let contour_index = crossings[k].0;
+                        let mut end = k + 1;
+                        while end < crossings.len() && crossings[end].0 == contour_index {
+                            end += 1;
+                        }
+                        let mut pair = k;
+                        while pair + 1 < end {
+                            let weight = i32::from(weights[contour_index]);
+                            events.push((crossings[pair].1, weight));
+                            events.push((crossings[pair + 1].1, -weight));
+                            pair += 2;
+                        }
+                        k = end;
+                    }
+                    events
+                        .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                    let mut coverage = 0i32;
+                    let mut previous: Option<f64> = None;
+                    let mut event = 0;
+                    while event < events.len() {
+                        let x = events[event].0;
+                        if coverage > 0 {
+                            if let Some(x0) = previous {
+                                fill_span(x0, x);
+                            }
+                        }
+                        let mut delta = 0;
+                        while event < events.len() && events[event].0 == x {
+                            delta += events[event].1;
+                            event += 1;
+                        }
+                        coverage += delta;
+                        previous = Some(x);
+                    }
+                } else if weights.is_none() {
+                    for &e in &active {
+                        let (ax, ay, bx, by, _) = edges[e];
+                        if (ay > yc) != (by > yc) {
+                            xs.push((bx - ax) * (yc - ay) / (by - ay) + ax);
+                        }
+                    }
+                    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    // Inside the spans [xs[0],xs[1]], [xs[2],xs[3]], ...
+                    let mut k = 0;
+                    while k + 1 < xs.len() {
+                        fill_span(xs[k], xs[k + 1]);
+                        k += 2;
+                    }
                 }
             }
         }
 
         PolyGrid {
-            pts,
+            contours,
+            weights,
             minx,
             miny,
             inv_cell,
@@ -467,6 +767,18 @@ impl<'a> PolyGrid<'a> {
         }
     }
 
+    /// Mark every cell the segment `a..b` passes through.
+    ///
+    /// A supercover traversal (Amanatides-Woo): step from the cell holding `a` to
+    /// the cell holding `b`, always crossing whichever of the next vertical or
+    /// horizontal cell boundary the segment reaches first. Point-sampling the
+    /// segment at one-cell spacing does NOT do this: whenever a step advances
+    /// both cell coordinates, the cell the segment crossed in between is never
+    /// visited. Those missed cells then took their classification from the
+    /// scanline parity at their CENTRE, so every query in one of them on the far
+    /// side of the boundary got the wrong answer, and `near_boundary` could
+    /// answer "no boundary here" over a boundary that was really there. A rotated
+    /// square at 512 cells missed 524 crossed cells.
     fn stamp_edge(
         cells: &mut [u8],
         nx: usize,
@@ -477,34 +789,121 @@ impl<'a> PolyGrid<'a> {
         a: (f64, f64),
         b: (f64, f64),
     ) {
-        // Sample the edge densely enough to hit every cell it crosses.
-        let len = (b.0 - a.0).hypot(b.1 - a.1);
-        let steps = ((len * inv_cell).ceil() as usize + 1).max(1);
-        for s in 0..=steps {
-            let t = s as f64 / steps as f64;
-            let x = a.0 + (b.0 - a.0) * t;
-            let y = a.1 + (b.1 - a.1) * t;
-            let gx = ((x - minx) * inv_cell) as isize;
-            let gy = ((y - miny) * inv_cell) as isize;
+        let mark = |cells: &mut [u8], gx: isize, gy: isize| {
             if gx >= 0 && gy >= 0 && (gx as usize) < nx && (gy as usize) < ny {
                 cells[gy as usize * nx + gx as usize] = 2;
+            }
+        };
+        // Cell coordinates, in units where one cell is 1.0.
+        let (ax, ay) = ((a.0 - minx) * inv_cell, (a.1 - miny) * inv_cell);
+        let (bx, by) = ((b.0 - minx) * inv_cell, (b.1 - miny) * inv_cell);
+        let (mut gx, mut gy) = (ax.floor() as isize, ay.floor() as isize);
+        let (tx, ty) = (bx.floor() as isize, by.floor() as isize);
+        mark(cells, gx, gy);
+        if (gx, gy) == (tx, ty) {
+            return;
+        }
+        let (dx, dy) = (bx - ax, by - ay);
+        let stepx: isize = if dx > 0.0 {
+            1
+        } else if dx < 0.0 {
+            -1
+        } else {
+            0
+        };
+        let stepy: isize = if dy > 0.0 {
+            1
+        } else if dy < 0.0 {
+            -1
+        } else {
+            0
+        };
+        // Parameter (0..1 along the segment) of the next crossing on each axis,
+        // and the parameter step between successive crossings.
+        let next = |v: f64, g: isize, step: isize, d: f64| -> f64 {
+            if step == 0 {
+                f64::INFINITY
+            } else {
+                let edge = if step > 0 { g as f64 + 1.0 } else { g as f64 };
+                (edge - v) / d
+            }
+        };
+        let mut tmx = next(ax, gx, stepx, dx);
+        let mut tmy = next(ay, gy, stepy, dy);
+        let ddx = if stepx == 0 {
+            f64::INFINITY
+        } else {
+            1.0 / dx.abs()
+        };
+        let ddy = if stepy == 0 {
+            f64::INFINITY
+        } else {
+            1.0 / dy.abs()
+        };
+        // The traversal visits at most one cell per unit crossed on either axis,
+        // so this bound cannot cut a legitimate walk short; it only stops a walk
+        // that non-finite coordinates would otherwise run forever.
+        let limit = (dx.abs() + dy.abs()).ceil().max(1.0) as usize + 4;
+        for _ in 0..limit {
+            if tmx <= tmy {
+                gx += stepx;
+                tmx += ddx;
+            } else {
+                gy += stepy;
+                tmy += ddy;
+            }
+            mark(cells, gx, gy);
+            if (gx, gy) == (tx, ty) {
+                return;
             }
         }
     }
 
-    /// Is `(px, py)` inside the polygon? O(1) grid lookup, exact test only on a
+    /// Is `(px, py)` inside the shape? O(1) grid lookup, exact test only on a
     /// boundary cell.
     pub fn contains(&self, px: f64, py: f64) -> bool {
-        let gx = ((px - self.minx) * self.inv_cell) as isize;
-        let gy = ((py - self.miny) * self.inv_cell) as isize;
+        // `floor`, not a truncating cast: a query up to one cell left of `minx` or
+        // below `miny` truncates to index 0 and reads the edge row/column instead
+        // of falling outside the grid. Unreachable through today's callers, which
+        // pre-filter by the grid's own extent, and a trap for the next one.
+        let gx = ((px - self.minx) * self.inv_cell).floor() as isize;
+        let gy = ((py - self.miny) * self.inv_cell).floor() as isize;
         if gx < 0 || gy < 0 || gx as usize >= self.nx || gy as usize >= self.ny {
             return false;
         }
         match self.cells[gy as usize * self.nx + gx as usize] {
             0 => false,
             1 => true,
-            _ => point_in_polygon(px, py, self.pts),
+            _ => self.weights.map_or_else(
+                || point_in_contours(px, py, self.contours),
+                |weights| point_in_weighted_contours(px, py, self.contours, weights),
+            ),
         }
+    }
+
+    /// Could any contour's boundary pass through this bounding box?
+    ///
+    /// A boundary edge that cuts a primitive's copper necessarily crosses a cell
+    /// the primitive's bounds cover, and every cell an edge crosses is stamped
+    /// boundary, so `false` is a sound refusal: nothing there to penetrate. The
+    /// point is to keep the exact poly-poly distance off the hot path, which on a
+    /// board-sized pour every primitive's bounds would otherwise reach.
+    pub fn near_boundary(&self, b: [f64; 4]) -> bool {
+        let cx0 = (((b[0] - self.minx) * self.inv_cell).floor() as isize).max(0);
+        let cy0 = (((b[1] - self.miny) * self.inv_cell).floor() as isize).max(0);
+        let cx1 = (((b[2] - self.minx) * self.inv_cell).ceil() as isize).min(self.nx as isize - 1);
+        let cy1 = (((b[3] - self.miny) * self.inv_cell).ceil() as isize).min(self.ny as isize - 1);
+        if cx1 < cx0 || cy1 < cy0 {
+            return false;
+        }
+        for gy in cy0..=cy1 {
+            for gx in cx0..=cx1 {
+                if self.cells[gy as usize * self.nx + gx as usize] == 2 {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -523,7 +922,8 @@ mod tests {
             (2.0, 4.0),
             (0.0, 4.0),
         ];
-        let grid = PolyGrid::new(&poly, 32);
+        let ring = vec![poly.clone()];
+        let grid = PolyGrid::new(&ring, 32);
         for i in 0..50 {
             for j in 0..50 {
                 let x = i as f64 * 0.1 - 0.5;
@@ -533,6 +933,191 @@ mod tests {
                     point_in_polygon(x, y, &poly),
                     "mismatch at ({x},{y})"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn poly_grid_matches_exact_on_diagonal_edges_and_holes() {
+        // The case a point-sampled edge stamp got wrong. Axis-aligned edges hide
+        // it: a diagonal edge advances both cell coordinates in one step, and the
+        // cell it crossed in between goes unstamped, so it takes its answer from
+        // the scanline parity at its CENTRE and every query in it on the far side
+        // of the boundary is wrong. A rotated square at 512 cells missed 524 such
+        // cells. Rotated, off-origin, with a rotated hole, at several resolutions,
+        // sampled on a grid deliberately incommensurate with the cells.
+        let rot = |pts: &[(f64, f64)], t: f64, ox: f64, oy: f64| -> Vec<(f64, f64)> {
+            pts.iter()
+                .map(|&(x, y)| {
+                    (
+                        ox + x * t.cos() - y * t.sin(),
+                        oy + x * t.sin() + y * t.cos(),
+                    )
+                })
+                .collect()
+        };
+        let square = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
+        let hole = [(-3.0, -3.0), (3.0, -3.0), (3.0, 3.0), (-3.0, 3.0)];
+        let contours = vec![rot(&square, 0.41, 1.7, -2.3), rot(&hole, 0.93, 2.1, -1.9)];
+        for cells in [32usize, 64, 97, 128, 512] {
+            let grid = PolyGrid::new(&contours, cells);
+            let mut bad = 0;
+            for i in 0..311 {
+                for j in 0..311 {
+                    let x = -14.0 + i as f64 * 0.10353;
+                    let y = -16.0 + j as f64 * 0.10171;
+                    if grid.contains(x, y) != point_in_contours(x, y, &contours) {
+                        bad += 1;
+                    }
+                }
+            }
+            assert_eq!(bad, 0, "grid disagreed with exact at {cells} cells");
+        }
+    }
+
+    #[test]
+    fn weighted_grid_keeps_overlapping_clear_images_empty() {
+        let square = |cx: f64, cy: f64, half: f64| {
+            vec![
+                (cx - half, cy - half),
+                (cx + half, cy - half),
+                (cx + half, cy + half),
+                (cx - half, cy + half),
+            ]
+        };
+        let contours = vec![
+            square(5.0, 5.0, 5.0),
+            square(4.0, 5.0, 1.5),
+            square(6.0, 5.0, 1.5),
+        ];
+        let weights = vec![1, -1, -1];
+        let grid = PolyGrid::new_weighted(&contours, &weights, 64);
+        for i in 0..101 {
+            for j in 0..101 {
+                let x = i as f64 * 0.1;
+                let y = j as f64 * 0.1;
+                assert_eq!(
+                    grid.contains(x, y),
+                    point_in_weighted_contours(x, y, &contours, &weights),
+                    "weighted grid mismatch at ({x},{y})"
+                );
+            }
+        }
+        assert!(!grid.contains(5.0, 5.0), "the overlap lens stays clear");
+    }
+
+    #[test]
+    fn a_clear_contour_buried_by_another_clear_is_not_a_copper_edge() {
+        let square =
+            |x0: f64, y0: f64, x1: f64, y1: f64| vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+        let pour = Shape::MultiPolygon {
+            contours: vec![
+                square(0.0, 0.0, 10.0, 10.0),
+                square(4.0, 4.0, 6.0, 6.0),
+                square(5.0, 4.0, 7.0, 6.0),
+            ],
+            weights: vec![1, -1, -1],
+        };
+        let isolated = Shape::Capsule(Capsule {
+            ax: 5.9,
+            ay: 5.0,
+            bx: 5.9,
+            by: 5.0,
+            r: 0.15,
+        });
+        assert!(
+            shape_gap(&isolated, &pour) > 0.0,
+            "crossing x=6 only crosses a bookkeeping contour buried in the other void"
+        );
+        let touching_copper = Shape::Capsule(Capsule {
+            ax: 6.95,
+            ay: 5.0,
+            bx: 6.95,
+            by: 5.0,
+            r: 0.1,
+        });
+        assert!(
+            shape_gap(&touching_copper, &pour) < 0.0,
+            "the exposed x=7 void edge still connects to the surrounding pour"
+        );
+    }
+
+    #[test]
+    fn poly_grid_near_boundary_never_misses_a_crossed_cell() {
+        // `near_boundary` returning false has to be a SOUND refusal: it is used to
+        // skip an exact poly-distance test, so a false negative drops a real
+        // pad-to-pour connection, which is a fabricated open. Brute-force every cell
+        // against every edge and require that each cell an edge genuinely crosses is
+        // stamped. Swept over resolutions and over a rotated shape WITH a rotated
+        // hole, because a single convex ring at one resolution misses the case the
+        // supercover walk exists for: a near-diagonal edge advancing both cell
+        // coordinates in one step.
+        let rot = |pts: &[(f64, f64)], t: f64, ox: f64, oy: f64| -> Vec<(f64, f64)> {
+            pts.iter()
+                .map(|&(x, y)| {
+                    (
+                        ox + x * t.cos() - y * t.sin(),
+                        oy + x * t.sin() + y * t.cos(),
+                    )
+                })
+                .collect()
+        };
+        let star: Vec<(f64, f64)> = (0..7)
+            .map(|k| {
+                let a = 0.37 + k as f64 * std::f64::consts::TAU / 7.0;
+                (9.0 * a.cos(), 9.0 * a.sin())
+            })
+            .collect();
+        let square = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
+        let hole = [(-3.5, -3.5), (3.5, -3.5), (3.5, 3.5), (-3.5, 3.5)];
+        let shapes: Vec<Vec<Vec<(f64, f64)>>> = vec![
+            vec![rot(&star, 0.0, 3.3, -1.1)],
+            vec![rot(&square, 0.41, 1.7, -2.3), rot(&hole, 0.93, 2.1, -1.9)],
+            vec![rot(&star, 0.79, -1.4, 2.6), rot(&hole, 0.11, -1.2, 2.4)],
+        ];
+        for contours in &shapes {
+            for cells in [16usize, 37, 64, 128] {
+                let grid = PolyGrid::new(contours, cells);
+                let cell = 1.0 / grid.inv_cell;
+                for gy in 0..grid.ny {
+                    for gx in 0..grid.nx {
+                        let (x0, y0) = (grid.minx + gx as f64 * cell, grid.miny + gy as f64 * cell);
+                        let b = [x0, y0, x0 + cell, y0 + cell];
+                        let corners = [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])];
+                        let mut crossed = false;
+                        for poly in contours {
+                            let n = poly.len();
+                            let mut j = n - 1;
+                            for i in 0..n {
+                                for k in 0..4 {
+                                    if segments_intersect(
+                                        poly[j],
+                                        poly[i],
+                                        corners[k],
+                                        corners[(k + 1) % 4],
+                                    ) {
+                                        crossed = true;
+                                    }
+                                }
+                                // An edge wholly inside the cell crosses no side.
+                                if poly[i].0 >= b[0]
+                                    && poly[i].0 <= b[2]
+                                    && poly[i].1 >= b[1]
+                                    && poly[i].1 <= b[3]
+                                {
+                                    crossed = true;
+                                }
+                                j = i;
+                            }
+                        }
+                        if crossed {
+                            assert!(
+                                grid.near_boundary(b),
+                                "cell ({gx},{gy}) at {cells} cells is crossed but not stamped"
+                            );
+                        }
+                    }
+                }
             }
         }
     }

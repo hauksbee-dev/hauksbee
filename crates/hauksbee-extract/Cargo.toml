@@ -25,6 +25,9 @@ forge-sexpr.workspace = true
 hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
 gerber-types = "0.7.0"
 gerber_parser = "0.5.0"
+# Exact RS-274X painter operations. Clear polarity is a geometric difference,
+# including when it splits a track, pad, or concave pour into separate pieces.
+geo = { version = "0.33.1", default-features = false }
 quick-xml = "0.40.1"
 regex = "1"
 rstar = "0.13"
