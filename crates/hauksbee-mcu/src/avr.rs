@@ -208,6 +208,8 @@ type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 /// edge-driven 74HC595 write path.
 type InputResponderCb = Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>;
 type InputResponderBatchCb = Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>;
+type InputResponderDirectionCb =
+    Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>;
 
 struct Callbacks {
     on_pin_change: Option<PinChangeCb>,
@@ -219,6 +221,7 @@ struct Callbacks {
     input_responder: Option<InputResponderCb>,
     /// Atomic variant used when one AVR port write changes several pins.
     input_responder_batch: Option<InputResponderBatchCb>,
+    input_responder_direction: Option<InputResponderDirectionCb>,
 }
 
 /// Per-port state tracked for edge detection.
@@ -228,11 +231,12 @@ struct PortState {
     /// Current DDR mask (1 = output). Tracks the *latest* direction, not an
     /// accumulation, so a pin set OUTPUT then back to INPUT (open-drain release /
     /// bus hand-off) reads as input again rather than stuck "output". METADATA
-    /// ONLY; it never enables a circuit driver or fires a pin-change; it just
-    /// lets a higher layer tell an output-low-held pin (driven LOW) from one the
-    /// firmware never configured (floating). Keeping it out of the drive path is
-    /// deliberate: driving the circuit from DDR edges latches open-drain pins
-    /// low and clamps SPI nets, so this stays strictly read-only.
+    /// ONLY for the analogue path: it never enables a circuit driver or fires
+    /// the ordinary pin-change callback. It also notifies the synchronous
+    /// device responder, which must see an INPUT->OUTPUT effective-level change
+    /// even when PORT did not change. Keeping DDR out of the analogue drive path
+    /// remains deliberate: driving the circuit from DDR edges latches open-drain
+    /// pins low and clamps SPI nets.
     output_dir: u8,
 }
 
@@ -487,9 +491,10 @@ macro_rules! make_port_hook {
     };
 }
 
-/// Per-port DDR (direction) hook: records which bits have ever been configured
-/// as outputs. Observation only; it does NOT fire `on_pin_change` and does NOT
-/// touch the circuit, so it cannot latch open-drain pins or clamp bus nets. The
+/// Per-port DDR (direction) hook: records the current output mask and notifies
+/// the optional synchronous device responder of effective-level changes. It
+/// does NOT fire `on_pin_change` or touch the analogue circuit, so it cannot
+/// latch open-drain pins or clamp bus nets. The
 /// boot-state panel uses it to distinguish a `pinMode(OUTPUT)` pin held LOW from
 /// a pin the firmware never configured (genuinely floating).
 macro_rules! make_ddr_hook {
@@ -502,6 +507,49 @@ macro_rules! make_ddr_hook {
             let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
             if let Ok(mut s) = state.lock() {
                 let new_ddr = value as u8;
+                let previous = s
+                    .port_state
+                    .get(&$port_char)
+                    .map(|state| state.output_dir)
+                    .unwrap_or(0);
+                let changed = previous ^ new_ddr;
+                let port_value = s
+                    .port_state
+                    .get(&$port_char)
+                    .map(|state| state.current)
+                    .unwrap_or(0);
+                let avr = s.avr_ptr;
+                let cycle = if avr.is_null() {
+                    0
+                } else {
+                    unsafe { (*avr).cycle }
+                };
+                let mut direction_changes = Vec::new();
+                if let Some(responder) = &mut s.callbacks.input_responder_direction {
+                    for bit in 0u8..8 {
+                        if changed & (1 << bit) == 0 {
+                            continue;
+                        }
+                        direction_changes.push((
+                            PinId::new($port_char, bit),
+                            new_ddr & (1 << bit) != 0,
+                            port_value & (1 << bit) != 0,
+                        ));
+                    }
+                    let updates = responder(&direction_changes, cycle);
+                    for update in updates {
+                        unsafe {
+                            match update {
+                                PinDrive::Drive { pin, high } => {
+                                    drive_ioport_input(avr, &mut s.ext_drive, pin, high)
+                                }
+                                PinDrive::Release { pin } => {
+                                    release_ioport_input(avr, &mut s.ext_drive, pin)
+                                }
+                            }
+                        }
+                    }
+                }
                 // Latest direction wins (not accumulated): a pin released back to
                 // input clears its bit, so an open-drain / handed-off bus pin
                 // does not read as a permanent output.
@@ -871,6 +919,7 @@ impl AvrMcu {
                 on_spi: None,
                 input_responder: None,
                 input_responder_batch: None,
+                input_responder_direction: None,
             },
         }));
 
@@ -1346,6 +1395,10 @@ impl Mcu for AvrMcu {
         true
     }
 
+    fn input_responder_tracks_direction(&self) -> bool {
+        true
+    }
+
     fn on_input_responder_batch(
         &mut self,
         responder: Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>,
@@ -1357,6 +1410,18 @@ impl Mcu for AvrMcu {
         }
         let ports: Vec<char> = ['A', 'B', 'C', 'D'].to_vec();
         self.register_port_hooks(&ports);
+    }
+
+    fn on_input_responder_direction(
+        &mut self,
+        responder: Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>,
+    ) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .callbacks
+            .input_responder_direction = Some(responder);
+        self.register_port_hooks(&['A', 'B', 'C', 'D']);
     }
 
     fn uart_write(&mut self, bytes: &[u8]) {
@@ -1388,6 +1453,11 @@ impl Mcu for AvrMcu {
     fn uart_rx_overflow(&self) -> u64 {
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.uart_rx_overflow
+    }
+
+    fn uart_rx_pending(&self) -> usize {
+        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.uart_pending.len()
     }
 
     fn watchdog_resets(&self) -> u64 {
@@ -1465,7 +1535,9 @@ impl Drop for AvrMcu {
 
 #[cfg(test)]
 mod cycle_budget_tests {
-    use super::{cycle_budget, drive_ioport_input, port_hook_d, release_ioport_input, AvrMcu};
+    use super::{
+        cycle_budget, ddr_hook_d, drive_ioport_input, port_hook_d, release_ioport_input, AvrMcu,
+    };
     use crate::traits::{Mcu, PinId};
     use std::sync::{Arc, Mutex};
 
@@ -1543,6 +1615,80 @@ mod cycle_budget_tests {
             *batches.lock().unwrap(),
             vec![vec![(PinId::new('D', 1), true), (PinId::new('D', 2), true),]],
             "one AVR port write must reach device logic as one atomic batch"
+        );
+    }
+
+    #[test]
+    fn uart_pending_reports_bytes_not_yet_presented_to_firmware() {
+        let mut mcu = AvrMcu::atmega328p_16mhz().expect("create live simavr core");
+        mcu.uart_write(b"terminal");
+        assert_eq!(
+            mcu.uart_rx_pending(),
+            b"terminal".len(),
+            "zero overflow does not mean an RX-disabled firmware consumed the backend queue"
+        );
+        assert_eq!(mcu.uart_rx_overflow(), 0);
+    }
+
+    #[test]
+    fn ddr_transition_reports_effective_level_to_synchronous_responder() {
+        let mut mcu = AvrMcu::atmega328p_16mhz().expect("create live simavr core");
+        assert!(mcu.input_responder_tracks_direction());
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&observed);
+        mcu.on_input_responder_direction(Box::new(move |changes, _| {
+            captured.lock().unwrap().extend_from_slice(changes);
+            Vec::new()
+        }));
+        mcu.state
+            .lock()
+            .unwrap()
+            .port_state
+            .entry('D')
+            .or_insert(super::PortState {
+                current: 0,
+                output_dir: 0,
+            });
+
+        unsafe { ddr_hook_d(std::ptr::null_mut(), 1 << 2, mcu.callback_ptr) };
+        unsafe { ddr_hook_d(std::ptr::null_mut(), 0, mcu.callback_ptr) };
+
+        assert_eq!(
+            *observed.lock().unwrap(),
+            vec![
+                (PinId::new('D', 2), true, false),
+                (PinId::new('D', 2), false, false),
+            ],
+            "DDR-only output-low and release transitions cannot leave a seeded pull-high shadow stale"
+        );
+    }
+
+    #[test]
+    fn one_ddr_write_batches_every_direction_change() {
+        let mut mcu = AvrMcu::atmega328p_16mhz().expect("create live simavr core");
+        let batches = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&batches);
+        mcu.on_input_responder_direction(Box::new(move |changes, _| {
+            captured.lock().unwrap().push(changes.to_vec());
+            Vec::new()
+        }));
+        mcu.state.lock().unwrap().port_state.insert(
+            'D',
+            super::PortState {
+                current: 0b0000_1100,
+                output_dir: 0,
+            },
+        );
+
+        unsafe { ddr_hook_d(std::ptr::null_mut(), 0b0000_1100, mcu.callback_ptr) };
+
+        assert_eq!(
+            *batches.lock().unwrap(),
+            vec![vec![
+                (PinId::new('D', 2), true, true),
+                (PinId::new('D', 3), true, true),
+            ]],
+            "one hardware DDR write must be one atomic direction batch"
         );
     }
 }

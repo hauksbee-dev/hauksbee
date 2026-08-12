@@ -947,6 +947,11 @@ pub struct RenodeBackend {
     // is killed.
     monitor: Monitor,
     uart: Option<UartSocket>,
+    /// Host bytes not accepted by the emulator UART socket. Sticky and exposed
+    /// through `uart_rx_overflow` so a dead/missing transport cannot look clean.
+    uart_rx_failed: u64,
+    /// Host bytes handed to the socket since the last successful RunFor.
+    uart_rx_inflight: usize,
     _process: RenodeProcess,
 
     /// Last-read ODR per port letter, for edge synthesis. For a port with a
@@ -1102,6 +1107,8 @@ impl RenodeBackend {
             config,
             monitor,
             uart,
+            uart_rx_failed: 0,
+            uart_rx_inflight: 0,
             _process: process,
             last_odr,
             last_dir: HashMap::new(),
@@ -1228,9 +1235,9 @@ impl RenodeBackend {
     }
 
     /// Drain UART bytes the firmware emitted and dispatch them to the callback.
-    fn pump_uart_out(&mut self) {
+    fn pump_uart_out(&mut self) -> Result<()> {
         if let Some(u) = &mut self.uart {
-            let bytes = u.drain();
+            let bytes = u.drain()?;
             let trace = std::env::var_os("HAUKSBEE_RENODE_I2C_TRACE").is_some()
                 || std::env::var_os("HAUKSBEE_RENODE_SPI_TRACE").is_some();
             if !bytes.is_empty() && trace {
@@ -1242,6 +1249,7 @@ impl RenodeBackend {
                 }
             }
         }
+        Ok(())
     }
 
     /// Write a generated C# bridge peripheral to a temp file, `include` it into
@@ -1933,9 +1941,26 @@ impl Mcu for RenodeBackend {
     }
 
     fn uart_write(&mut self, bytes: &[u8]) {
-        if let Some(u) = &mut self.uart {
-            let _ = u.write_bytes(bytes);
-        }
+        let result = self
+            .uart
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("this Renode descriptor has no UART socket"))
+            .and_then(|uart| uart.write_bytes(bytes));
+        let accepted = crate::traits::account_uart_injection(
+            "Renode",
+            bytes.len(),
+            result,
+            &mut self.uart_rx_failed,
+        );
+        self.uart_rx_inflight = self.uart_rx_inflight.saturating_add(accepted);
+    }
+
+    fn uart_rx_overflow(&self) -> u64 {
+        self.uart_rx_failed
+    }
+
+    fn uart_rx_pending(&self) -> usize {
+        self.uart_rx_inflight
     }
 
     fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>) {
@@ -2121,7 +2146,8 @@ impl RenodeBackend {
 
         // Exchange state after the chunk, matching the simavr backend's timing.
         self.poll_gpio_edges();
-        self.pump_uart_out();
+        self.pump_uart_out()?;
+        self.uart_rx_inflight = 0;
         Ok(())
     }
 

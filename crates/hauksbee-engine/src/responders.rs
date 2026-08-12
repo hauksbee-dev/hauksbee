@@ -98,6 +98,32 @@ pub trait InputResponder: Send {
             .flat_map(|&(pin, high)| self.on_edge_at(pin, high, cycle))
             .collect()
     }
+
+    /// Handle a physical-level change caused by a GPIO direction transition.
+    /// `output=true` selects the PORT latch; returning to input restores the
+    /// responder's proven external idle level when one exists.
+    fn on_direction_at(
+        &mut self,
+        _pin: (char, u8),
+        _output: bool,
+        _port_high: bool,
+        _cycle: u64,
+    ) -> Vec<InputDrive> {
+        Vec::new()
+    }
+
+    fn on_directions_at(
+        &mut self,
+        changes: &[((char, u8), bool, bool)],
+        cycle: u64,
+    ) -> Vec<InputDrive> {
+        changes
+            .iter()
+            .flat_map(|&(pin, output, port_high)| {
+                self.on_direction_at(pin, output, port_high, cycle)
+            })
+            .collect()
+    }
 }
 
 /// Multiplexes one MCU's single `on_input_responder` slot across many
@@ -165,28 +191,50 @@ impl ResponderRegistry {
         edges: &[((char, u8), bool)],
         cycle: u64,
     ) -> Vec<InputDrive> {
-        let mut by_responder = (0..self.responders.len())
-            .map(|_| Vec::new())
-            .collect::<Vec<Vec<((char, u8), bool)>>>();
+        let mut by_responder: std::collections::BTreeMap<usize, Vec<((char, u8), bool)>> =
+            std::collections::BTreeMap::new();
         for &(pin, high) in edges {
             let Some(indices) = self.by_pin.get(&pin) else {
                 continue;
             };
             for &i in indices {
-                by_responder[i].push((pin, high));
+                by_responder.entry(i).or_default().push((pin, high));
             }
         }
 
         let mut updates = Vec::new();
-        for (i, responder_edges) in by_responder.iter().enumerate() {
-            if responder_edges.is_empty() {
-                continue;
-            }
+        for (i, responder_edges) in by_responder {
             updates.extend(
                 self.responders[i]
-                    .on_edges_at(responder_edges, cycle)
+                    .on_edges_at(&responder_edges, cycle)
                     .into_iter()
                     .map(|u| (i, u)),
+            );
+        }
+        self.resolve_updates(updates)
+    }
+
+    pub fn dispatch_direction_at(
+        &mut self,
+        changes: &[((char, u8), bool, bool)],
+        cycle: u64,
+    ) -> Vec<InputDrive> {
+        let mut by_responder: std::collections::BTreeMap<usize, Vec<((char, u8), bool, bool)>> =
+            std::collections::BTreeMap::new();
+        for &change in changes {
+            if let Some(indices) = self.by_pin.get(&change.0) {
+                for &index in indices {
+                    by_responder.entry(index).or_default().push(change);
+                }
+            }
+        }
+        let mut updates = Vec::new();
+        for (i, responder_changes) in by_responder {
+            updates.extend(
+                self.responders[i]
+                    .on_directions_at(&responder_changes, cycle)
+                    .into_iter()
+                    .map(|update| (i, update)),
             );
         }
         self.resolve_updates(updates)
@@ -245,9 +293,10 @@ impl ResponderRegistry {
 
 /// Where one parallel-memory input level comes from at firmware-edge time.
 /// A 595 source reads the responder's edge-accurate shadow of the physical
-/// chain; a direct MCU pin reads the latest observed GPIO edge; a node reads
-/// the scheduler's last settled analogue snapshot (appropriate for tied rails
-/// and non-firmware controls, which cannot change inside the current chunk).
+/// chain; a direct MCU pin reads the latest observed GPIO edge. A node can read
+/// the scheduler's last settled analogue snapshot, but responder ownership is
+/// installed only for ground: pulled, supplied, and other analogue nodes do
+/// not have a trustworthy solved value before the first firmware run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParallelSignal {
     Mcu((char, u8)),
@@ -287,6 +336,8 @@ pub(crate) struct ParallelMemoryResponder {
     data_out: Vec<(char, u8)>,
     chains: Vec<Hc595Chain>,
     pin_levels: HashMap<(char, u8), bool>,
+    initial_pin_levels: HashMap<(char, u8), bool>,
+    pin_outputs: HashMap<(char, u8), bool>,
     watched: Vec<(char, u8)>,
     last_write_cycle: Option<u64>,
     runtime: Arc<Mutex<ParallelMemoryRuntime>>,
@@ -297,7 +348,7 @@ pub(crate) struct ParallelMemoryWrite {
     pub signal: ParallelSignal,
     pub edge: Edge,
     pub gates: Vec<(ParallelSignal, Level)>,
-    prev: bool,
+    prev: Option<bool>,
 }
 
 impl ParallelMemoryWrite {
@@ -310,8 +361,9 @@ impl ParallelMemoryWrite {
             signal,
             edge,
             gates,
-            // Controls default released, matching LogicComponent defaults.
-            prev: matches!(edge, Edge::Rising),
+            // A direct MCU pin begins tri-stated. Until a pull or DDR output
+            // establishes a physical level, no write edge can be inferred.
+            prev: None,
         }
     }
 }
@@ -364,49 +416,62 @@ impl ParallelMemoryResponder {
             data_out,
             chains,
             pin_levels: HashMap::new(),
+            initial_pin_levels: HashMap::new(),
+            pin_outputs: HashMap::new(),
             watched,
             last_write_cycle: None,
             runtime,
         }
     }
 
-    fn source_level(&self, source: ParallelSignal, volts: &[f64]) -> bool {
+    pub(crate) fn with_initial_pin_levels(mut self, levels: HashMap<(char, u8), bool>) -> Self {
+        self.pin_levels = levels.clone();
+        self.initial_pin_levels = levels;
+        for index in 0..self.writes.len() {
+            let signal = self.writes[index].signal;
+            let initial = self.source_level(signal, &[]);
+            self.writes[index].prev = initial;
+        }
+        self
+    }
+
+    fn source_level(&self, source: ParallelSignal, volts: &[f64]) -> Option<bool> {
         match source {
-            ParallelSignal::Mcu(pin) => self.pin_levels.get(&pin).copied().unwrap_or(false),
+            ParallelSignal::Mcu(pin) => self.pin_levels.get(&pin).copied(),
             ParallelSignal::Hc595 { chain, chip, bit } => self
                 .chains
                 .get(chain)
                 .and_then(|c| c.latched.get(chip))
-                .map(|byte| byte & (1 << bit) != 0)
-                .unwrap_or(false),
+                .map(|byte| byte & (1 << bit) != 0),
             ParallelSignal::Node(node) => {
                 let v = volts.get(node.0 as usize).copied().unwrap_or(0.0);
-                self.levels.decide(v, false)
+                Some(self.levels.decide(v, false))
             }
         }
     }
 
-    fn address(&self, volts: &[f64]) -> usize {
+    fn address(&self, volts: &[f64]) -> Option<usize> {
         self.address
             .iter()
             .enumerate()
-            .fold(0usize, |value, (bit, &source)| {
-                value | (usize::from(self.source_level(source, volts)) << bit)
+            .try_fold(0usize, |value, (bit, &source)| {
+                Some(value | (usize::from(self.source_level(source, volts)?) << bit))
             })
     }
 
     fn gates_active(&self, gates: &[(ParallelSignal, Level)], volts: &[f64]) -> bool {
-        gates
-            .iter()
-            .all(|&(source, active)| active.is_active(self.source_level(source, volts)))
+        gates.iter().all(|&(source, active)| {
+            self.source_level(source, volts)
+                .is_some_and(|level| active.is_active(level))
+        })
     }
 
-    fn data_value(&self, volts: &[f64]) -> u64 {
+    fn data_value(&self, volts: &[f64]) -> Option<u64> {
         self.data_in
             .iter()
             .enumerate()
-            .fold(0u64, |value, (bit, &source)| {
-                value | (u64::from(self.source_level(source, volts)) << bit)
+            .try_fold(0u64, |value, (bit, &source)| {
+                Some(value | (u64::from(self.source_level(source, volts)?) << bit))
             })
     }
 
@@ -432,57 +497,58 @@ impl ParallelMemoryResponder {
         let pin_levels = &self.pin_levels;
         let chains = &self.chains;
         let source_level = |source: ParallelSignal| match source {
-            ParallelSignal::Mcu(pin) => pin_levels.get(&pin).copied().unwrap_or(false),
+            ParallelSignal::Mcu(pin) => pin_levels.get(&pin).copied(),
             ParallelSignal::Hc595 { chain, chip, bit } => chains
                 .get(chain)
                 .and_then(|c| c.latched.get(chip))
-                .map(|byte| byte & (1 << bit) != 0)
-                .unwrap_or(false),
+                .map(|byte| byte & (1 << bit) != 0),
             ParallelSignal::Node(node) => {
                 let v = volts.get(node.0 as usize).copied().unwrap_or(0.0);
-                levels.decide(v, false)
+                Some(levels.decide(v, false))
             }
         };
 
         let mut qualified = false;
         for write in &mut self.writes {
             let cur = source_level(write.signal);
-            let fired = match write.edge {
-                Edge::Rising => cur && !write.prev,
-                Edge::Falling => !cur && write.prev,
+            let fired = match (write.prev, cur, write.edge) {
+                (Some(previous), Some(current), Edge::Rising) => current && !previous,
+                (Some(previous), Some(current), Edge::Falling) => !current && previous,
+                _ => false,
             };
             write.prev = cur;
-            let gates_active = write
-                .gates
-                .iter()
-                .all(|&(source, active)| active.is_active(source_level(source)));
+            let gates_active = write.gates.iter().all(|&(source, active)| {
+                source_level(source).is_some_and(|level| active.is_active(level))
+            });
             qualified |= fired && gates_active;
         }
 
         if qualified {
-            let address = self.address(volts);
-            let value = self.data_value(volts);
-            let gap_exceeded = match (cycle, self.last_write_cycle, self.port.byte_load_timeout_s) {
-                (Some(now), Some(previous), Some(limit_s)) => {
-                    now < previous
-                        || (now - previous) as f64 > limit_s * self.frequency_hz.max(1) as f64
+            if let (Some(address), Some(value)) = (self.address(volts), self.data_value(volts)) {
+                let gap_exceeded =
+                    match (cycle, self.last_write_cycle, self.port.byte_load_timeout_s) {
+                        (Some(now), Some(previous), Some(limit_s)) => {
+                            now < previous
+                                || (now - previous) as f64
+                                    > limit_s * self.frequency_hz.max(1) as f64
+                        }
+                        _ => false,
+                    };
+                if cycle.is_some() {
+                    self.last_write_cycle = cycle;
                 }
-                _ => false,
-            };
-            if cycle.is_some() {
-                self.last_write_cycle = cycle;
-            }
-            let accepted = if let Some(cycle) = cycle {
-                self.port.write_at(address, value, cycle, self.frequency_hz)
-            } else {
-                self.port.write_after_gap(address, value, gap_exceeded)
-            };
-            if !accepted {
-                eprintln!(
-                    "ERROR: parallel memory '{}': write address {address:#x} is outside {} words",
-                    self.id,
-                    self.port.words()
-                );
+                let accepted = if let Some(cycle) = cycle {
+                    self.port.write_at(address, value, cycle, self.frequency_hz)
+                } else {
+                    self.port.write_after_gap(address, value, gap_exceeded)
+                };
+                if !accepted {
+                    eprintln!(
+                        "ERROR: parallel memory '{}': write address {address:#x} is outside {} words",
+                        self.id,
+                        self.port.words()
+                    );
+                }
             }
         }
 
@@ -499,7 +565,18 @@ impl ParallelMemoryResponder {
                 .map(InputDrive::release)
                 .collect();
         }
-        let address = self.address(volts);
+        let Some(address) = self.address(volts) else {
+            self.runtime
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .read_enabled = false;
+            return self
+                .data_out
+                .iter()
+                .copied()
+                .map(InputDrive::release)
+                .collect();
+        };
         let word = cycle
             .and_then(|cycle| self.port.read_at(address, cycle, self.frequency_hz))
             .or_else(|| self.port.read(address));
@@ -509,7 +586,16 @@ impl ParallelMemoryResponder {
                 self.id,
                 self.port.words()
             );
-            return Vec::new();
+            self.runtime
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .read_enabled = false;
+            return self
+                .data_out
+                .iter()
+                .copied()
+                .map(InputDrive::release)
+                .collect();
         };
         {
             let mut runtime = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
@@ -522,6 +608,18 @@ impl ParallelMemoryResponder {
             .enumerate()
             .map(|(bit, &pin)| InputDrive::drive(pin, word & (1 << bit) != 0))
             .collect()
+    }
+
+    fn establish_pin(&mut self, pin: (char, u8), high: bool) {
+        self.pin_levels.insert(pin, high);
+        for chain in &mut self.chains {
+            chain.establish_control(pin, high);
+        }
+        for write in &mut self.writes {
+            if write.signal == ParallelSignal::Mcu(pin) {
+                write.prev = Some(high);
+            }
+        }
     }
 }
 
@@ -539,7 +637,71 @@ impl InputResponder for ParallelMemoryResponder {
     }
 
     fn on_edges_at(&mut self, edges: &[((char, u8), bool)], cycle: u64) -> Vec<InputDrive> {
-        self.process_edges(edges, Some(cycle))
+        let effective = edges
+            .iter()
+            .filter_map(|&(pin, port_high)| {
+                if self.pin_outputs.get(&pin).copied().unwrap_or(false) {
+                    Some((pin, port_high))
+                } else {
+                    // A PORT write changes only the output latch while DDR is
+                    // input. A proven external pull remains the physical level;
+                    // an unpulled pin is unknown and produces no device edge.
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if effective.is_empty() {
+            return Vec::new();
+        }
+        self.process_edges(&effective, Some(cycle))
+    }
+
+    fn on_direction_at(
+        &mut self,
+        pin: (char, u8),
+        output: bool,
+        port_high: bool,
+        cycle: u64,
+    ) -> Vec<InputDrive> {
+        let previous = self.pin_levels.get(&pin).copied();
+        self.pin_outputs.insert(pin, output);
+        let level = output
+            .then_some(port_high)
+            .or_else(|| self.initial_pin_levels.get(&pin).copied());
+        match (previous, level) {
+            (Some(_), Some(level)) => self.process_edges(&[(pin, level)], Some(cycle)),
+            (None, Some(level)) => {
+                self.establish_pin(pin, level);
+                self.process_edges(&[], Some(cycle))
+            }
+            (_, None) => {
+                self.pin_levels.remove(&pin);
+                self.process_edges(&[], Some(cycle))
+            }
+        }
+    }
+
+    fn on_directions_at(
+        &mut self,
+        changes: &[((char, u8), bool, bool)],
+        cycle: u64,
+    ) -> Vec<InputDrive> {
+        let mut edges = Vec::new();
+        for &(pin, output, port_high) in changes {
+            let previous = self.pin_levels.get(&pin).copied();
+            self.pin_outputs.insert(pin, output);
+            let level = output
+                .then_some(port_high)
+                .or_else(|| self.initial_pin_levels.get(&pin).copied());
+            match (previous, level) {
+                (Some(_), Some(level)) => edges.push((pin, level)),
+                (None, Some(level)) => self.establish_pin(pin, level),
+                (_, None) => {
+                    self.pin_levels.remove(&pin);
+                }
+            }
+        }
+        self.process_edges(&edges, Some(cycle))
     }
 }
 
@@ -1482,13 +1644,13 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             data.clone(),
             Vec::new(),
             Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
-        );
+        )
+        .with_initial_pin_levels(HashMap::from([(a0, true)]));
 
         // Idle controls, address 1, and an externally-driven 0x5a bus.
         responder.on_edge(ce, false);
         responder.on_edge(oe, true);
         responder.on_edge(we, true);
-        responder.on_edge(a0, true);
         responder.on_edge(a1, false);
         for (bit, &pin) in data.iter().enumerate() {
             responder.on_edge(pin, 0x5a & (1 << bit) != 0);
@@ -1527,6 +1689,328 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             value | (u8::from(update.level.expect("drive")) << bit)
         });
         assert_eq!(got, 0x5a, "CE-high write pulse must not overwrite memory");
+    }
+
+    #[test]
+    fn pulled_strobe_uses_effective_level_and_first_real_edge() {
+        for (initial_high, edge, port_high) in
+            [(false, Edge::Rising, true), (true, Edge::Falling, false)]
+        {
+            let spec = format!(
+                r#"
+inputs = ["gnd", "strobe"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = {{ pin = "strobe", edge = "{}" }}
+read_gates = []
+data_in = ["gnd"]
+data_out = ["io0"]
+"#,
+                match edge {
+                    Edge::Rising => "rising",
+                    Edge::Falling => "falling",
+                }
+            );
+            let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(&spec).unwrap();
+            let logic = crate::logic::LogicComponent::compile("pulled-strobe", &parsed).unwrap();
+            let port = logic.memory_ports().pop().unwrap();
+            let strobe = ('B', 0);
+            let mut responder = ParallelMemoryResponder::new(
+                "U1.cell".into(),
+                port,
+                LogicLevels {
+                    voh: 4.4,
+                    vol: 0.1,
+                    vih: 2.0,
+                    vil: 0.8,
+                    ro: 50.0,
+                },
+                1_000_000,
+                Arc::new(Mutex::new(vec![0.0])),
+                vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+                vec![ParallelMemoryWrite::new(
+                    ParallelSignal::Mcu(strobe),
+                    edge,
+                    Vec::new(),
+                )],
+                Vec::new(),
+                vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+                vec![('C', 0)],
+                Vec::new(),
+                Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
+            )
+            .with_initial_pin_levels(HashMap::from([(strobe, initial_high)]));
+
+            let _ = responder.on_edges_at(&[(strobe, port_high)], 1);
+            assert_eq!(
+                responder.port.read(0),
+                Some(1),
+                "a PORT-latch write while input must not create a physical strobe edge"
+            );
+            let _ = responder.on_direction_at(strobe, true, port_high, 2);
+            assert_eq!(
+                responder.port.read(0),
+                Some(0),
+                "the first real DDR-induced {:?} edge must not be suppressed by a synthetic prev state",
+                edge
+            );
+        }
+    }
+
+    #[test]
+    fn unpulled_port_latch_is_not_a_physical_edge_before_ddr_output() {
+        let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(
+            r#"
+inputs = ["gnd", "strobe"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "strobe", edge = "rising" }
+read_gates = []
+data_in = ["gnd"]
+data_out = ["io0"]
+"#,
+        )
+        .unwrap();
+        let logic = crate::logic::LogicComponent::compile("unpulled-strobe", &parsed).unwrap();
+        let port = logic.memory_ports().pop().unwrap();
+        let strobe = ('B', 0);
+        let mut responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            1_000_000,
+            Arc::new(Mutex::new(vec![0.0])),
+            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+            vec![ParallelMemoryWrite::new(
+                ParallelSignal::Mcu(strobe),
+                Edge::Rising,
+                Vec::new(),
+            )],
+            Vec::new(),
+            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+            vec![('C', 0)],
+            Vec::new(),
+            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
+        );
+
+        let _ = responder.on_edges_at(&[(strobe, true)], 1);
+        assert_eq!(
+            responder.port.read(0),
+            Some(1),
+            "changing only the PORT latch while DDR is input must not write"
+        );
+        let _ = responder.on_direction_at(strobe, true, true, 2);
+        assert_eq!(
+            responder.port.read(0),
+            Some(1),
+            "the first drive from an unknown floating level establishes state without inventing an edge"
+        );
+        let _ = responder.on_edges_at(&[(strobe, false)], 3);
+        let _ = responder.on_edges_at(&[(strobe, true)], 4);
+        assert_eq!(
+            responder.port.read(0),
+            Some(0),
+            "a later physical low-to-high PORT transition must remain visible"
+        );
+    }
+
+    #[test]
+    fn unpulled_input_latch_cannot_qualify_another_pins_write() {
+        let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(
+            r#"
+inputs = ["gnd", "gate", "strobe"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "strobe", edge = "rising" }
+write_gates = [{ pin = "gate", active = "high" }]
+read_gates = []
+data_in = ["gnd"]
+data_out = ["io0"]
+"#,
+        )
+        .unwrap();
+        let logic = crate::logic::LogicComponent::compile("unpulled-gate", &parsed).unwrap();
+        let port = logic.memory_ports().pop().unwrap();
+        let gate = ('B', 0);
+        let strobe = ('B', 1);
+        let mut responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            1_000_000,
+            Arc::new(Mutex::new(vec![0.0])),
+            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+            vec![ParallelMemoryWrite::new(
+                ParallelSignal::Mcu(strobe),
+                Edge::Rising,
+                vec![(ParallelSignal::Mcu(gate), Level::High)],
+            )],
+            Vec::new(),
+            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+            vec![('C', 0)],
+            Vec::new(),
+            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
+        );
+
+        let _ = responder.on_edges_at(&[(gate, true)], 1);
+        let _ = responder.on_direction_at(strobe, true, false, 2);
+        let _ = responder.on_edges_at(&[(strobe, true)], 3);
+        assert_eq!(
+            responder.port.read(0),
+            Some(1),
+            "an unpulled input's PORT latch is not its physical gate level"
+        );
+    }
+
+    #[test]
+    fn first_ddr_drive_reevaluates_read_without_inventing_a_write_edge() {
+        let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(
+            r#"
+inputs = ["gnd", "read_en"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = { pin = "read_en", edge = "rising" }
+write_gates = [{ pin = "gnd", active = "high" }]
+read_gates = [{ pin = "read_en", active = "high" }]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#,
+        )
+        .unwrap();
+        let logic = crate::logic::LogicComponent::compile("ddr-read", &parsed).unwrap();
+        let port = logic.memory_ports().pop().unwrap();
+        let read_en = ('B', 0);
+        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
+        let mut responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            1_000_000,
+            Arc::new(Mutex::new(vec![0.0])),
+            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+            vec![ParallelMemoryWrite::new(
+                ParallelSignal::Mcu(read_en),
+                Edge::Rising,
+                vec![(
+                    ParallelSignal::Node(hauksbee_ir::NodeId::GROUND),
+                    Level::High,
+                )],
+            )],
+            vec![(ParallelSignal::Mcu(read_en), Level::High)],
+            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+            vec![('C', 0)],
+            Vec::new(),
+            Arc::clone(&runtime),
+        );
+
+        assert_eq!(
+            responder.on_direction_at(read_en, true, true, 1),
+            vec![InputDrive::drive(('C', 0), true)],
+            "the first known output level must immediately establish a combinational read"
+        );
+        assert_eq!(
+            responder.port.read(0),
+            Some(1),
+            "no write edge was invented"
+        );
+        assert!(runtime.lock().unwrap().read_enabled);
+    }
+
+    #[test]
+    fn unknown_address_releases_a_previously_driven_bus() {
+        let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(
+            r#"
+inputs = ["a0", "read_en"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["a0"]
+write = { pin = "read_en", edge = "rising" }
+write_gates = []
+read_gates = [{ pin = "read_en", active = "high" }]
+data_in = ["a0"]
+data_out = ["io0"]
+"#,
+        )
+        .unwrap();
+        let logic = crate::logic::LogicComponent::compile("unknown-address", &parsed).unwrap();
+        let port = logic.memory_ports().pop().unwrap();
+        let address = ('B', 0);
+        let read_en = ('B', 1);
+        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
+        let mut responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            1_000_000,
+            Arc::new(Mutex::new(vec![0.0])),
+            vec![ParallelSignal::Mcu(address)],
+            vec![ParallelMemoryWrite::new(
+                ParallelSignal::Mcu(read_en),
+                Edge::Rising,
+                Vec::new(),
+            )],
+            vec![(ParallelSignal::Mcu(read_en), Level::High)],
+            vec![ParallelSignal::Mcu(address)],
+            vec![('C', 0)],
+            Vec::new(),
+            Arc::clone(&runtime),
+        );
+
+        responder.on_directions_at(&[(address, true, false), (read_en, true, true)], 1);
+        assert!(runtime.lock().unwrap().read_enabled);
+        assert_eq!(
+            responder.on_direction_at(address, false, false, 2),
+            vec![InputDrive::release(('C', 0))]
+        );
+        assert!(!runtime.lock().unwrap().read_enabled);
     }
 
     #[test]
@@ -1571,7 +2055,7 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         let ce = ('D', 0);
         let oe = ('D', 1);
         let we = ('D', 2);
-        let responder = ParallelMemoryResponder::new(
+        let mut responder = ParallelMemoryResponder::new(
             "U1.cell".into(),
             port,
             LogicLevels {
@@ -1612,6 +2096,14 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             Vec::new(),
             Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
         );
+        let driven = address
+            .iter()
+            .chain(&data)
+            .copied()
+            .chain([ce, oe, we])
+            .map(|pin| (pin, true, false))
+            .collect::<Vec<_>>();
+        responder.on_directions_at(&driven, 0);
 
         let mut registry = ResponderRegistry::new();
         registry.register(Box::new(responder));
@@ -1736,6 +2228,12 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             Vec::new(),
             Arc::clone(&runtime),
         );
+        let driven = std::iter::once(address)
+            .chain(data.iter().copied())
+            .chain([ce, oe, we])
+            .map(|pin| (pin, true, false))
+            .collect::<Vec<_>>();
+        responder.on_directions_at(&driven, 0);
 
         responder.on_edge_at(ce, false, 10);
         responder.on_edge_at(oe, false, 10);

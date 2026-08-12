@@ -582,6 +582,14 @@ impl DigitalComponent {
             .unwrap_or_default()
     }
 
+    /// True when the named memory is the component's only tick-owned behavior.
+    pub(crate) fn has_exclusive_memory_port(&self, name: &str) -> bool {
+        self.logic
+            .as_ref()
+            .map(|logic| logic.has_exclusive_memory_port(name))
+            .unwrap_or(false)
+    }
+
     /// Input pins whose edge timing matters (register clocks / resets /
     /// loads / enables / serial data), per the spec.
     pub fn sequential_pins(&self) -> Vec<&str> {
@@ -844,6 +852,31 @@ impl Hc595Chain {
                     self.latched.copy_from_slice(&self.shift);
                 }
             }
+        }
+    }
+
+    /// Establish a GPIO control level when firmware first changes the pin from
+    /// high-impedance input to driven output. This is not an observable edge
+    /// from a known prior logic level, so clocks and latches must not advance.
+    /// Level-sensitive active-low clear still applies immediately.
+    pub(crate) fn establish_control(&mut self, pin: (char, u8), high: bool) {
+        if pin == self.ser {
+            self.lvl_ser = high;
+        }
+        if Some(pin) == self.srclr_n {
+            self.lvl_srclr_n = high;
+            if !high {
+                self.shift.fill(0);
+            }
+        }
+        if Some(pin) == self.oe_n {
+            self.lvl_oe_n = high;
+        }
+        if pin == self.srclk {
+            self.lvl_srclk = high;
+        }
+        if pin == self.rclk {
+            self.lvl_rclk = high;
         }
     }
 

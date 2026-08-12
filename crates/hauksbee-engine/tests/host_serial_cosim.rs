@@ -115,6 +115,27 @@ fn engine_with_echo_firmware(name: &str) -> HauksbeeEngine {
     HauksbeeEngine::from_bound(bound, Some(&fw), "/ci").expect("build engine")
 }
 
+#[test]
+fn unknown_serial_mcu_refuses_before_opening_an_endpoint() {
+    let mut engine = engine_with_echo_firmware("echo_invalid_mcu.hex");
+    let mut narration = Vec::new();
+    let error = run_session(
+        &mut engine,
+        1.0,
+        &SerialSessionConfig {
+            mcu: Some("TYPO".to_string()),
+            ..Default::default()
+        },
+        &mut |line| narration.push(line.to_string()),
+    )
+    .expect_err("an unknown UART target must fail before offering an endpoint");
+    assert!(error.to_string().contains("available references: A1"));
+    assert!(
+        narration.is_empty(),
+        "validation must happen before a device path is opened or announced: {narration:?}"
+    );
+}
+
 /// Open the printed device path non-blocking, the way a host tool does.
 fn open_peer(path: &str) -> std::fs::File {
     let f = std::fs::OpenOptions::new()
