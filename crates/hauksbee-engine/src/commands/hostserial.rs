@@ -10,8 +10,8 @@
 //! Three decisions here are worth the ink:
 //!
 //! **The session is narrated.** A user who cannot tell whether their tool is
-//! attached concludes the simulator is broken, so the device path, every attach,
-//! every detach, and the final byte counts are printed. The endpoint line goes to
+//! attached concludes the simulator is broken, so the device path, every observed
+//! attach/detach transition, and the final byte counts are printed. The endpoint line goes to
 //! stderr in a paste-ready form because the interesting act is copying it into
 //! another terminal.
 //!
@@ -21,7 +21,7 @@
 //! the peer's first write, and a firmware timeout measured in emulated
 //! milliseconds would fire in wall microseconds. Pacing makes the emulated board
 //! behave at the speed the host tool expects. `--serial-no-pace` free-runs only
-//! while nobody is attached; see below for why it cannot free-run against a peer.
+//! before the first attachment; see below for why it cannot later free-run.
 //!
 //! **Host bytes land at load-independent simulated instants.** The peer is a
 //! real process on the real clock, so the session has to define a mapping from
@@ -35,7 +35,7 @@
 //! verdicts (the NEP EEPROM gate) inverted with load.
 //!
 //! The mapping [`PacedInbox`] implements is *scaled reaction time*: an anchor
-//! `(sim, wall)` is planted at each attach/detach transition and at every
+//! `(sim, wall)` is planted at the first attachment and moved at every
 //! firmware->host emission, and an inbound chunk observed at wall time `w` is
 //! due at `anchor_sim + scale * (w - anchor_wall)` — the host's own reaction
 //! gap, measured on its clock (which load does not stretch), scaled into sim
@@ -62,8 +62,10 @@
 //! becomes 100 ms of sim) stay far above the millisecond-scale timing a
 //! firmware or part model actually keys on. When the sim is starved below
 //! even that, the failure is a loud host-side timeout, never a silently
-//! shifted verdict. `--serial-no-pace` still free-runs while nobody is
-//! attached, and a pure-firmware run (no session, no peer) is untouched.
+//! shifted verdict. `--serial-no-pace` free-runs only before the first peer;
+//! one continuous compressed clock then spans detach/reopen gaps. A PTY cannot
+//! reveal a close+reopen completed between polls, so this makes hidden and
+//! observed handoffs share the same timing. A pure-firmware run is untouched.
 //!
 //! **Nothing is faked when no peer shows up.** `--serial-wait` fails loudly on
 //! timeout rather than running a session with nobody on the far end, and the
@@ -109,7 +111,7 @@ pub struct SerialSessionConfig {
     /// already handed to the backend may still sit in its metered UART queue:
     /// the idle window is what gives the firmware time to drain them, so set
     /// it comfortably above the firmware's worst-case response time (the sim
-    /// free-runs during it). Scripted sessions (the NEP acceptance pair) use
+    /// stays on its established wall mapping during it). Scripted sessions use
     /// this so they don't grind out the whole sim budget after the host is
     /// done. `None` (default) runs the full budget.
     pub end_after_idle_wall: Option<f64>,
@@ -145,9 +147,9 @@ pub const DEFAULT_UNPACED_WALL_SCALE: f64 = 0.05;
 /// This is the whole determinism story of a serial session, so it is one small
 /// object with three rules rather than logic spread through the loop:
 ///
-/// 1. **Anchoring.** An anchor `(sim, wall)` is (re)planted at every
-///    attach/detach transition and at every firmware->host emission, via
-///    [`Self::re_anchor`]. Emissions matter because a request-response host
+/// 1. **Anchoring.** An anchor `(sim, wall)` is planted at the first peer and
+///    moved only after a firmware->host emission was handed to a confirmed
+///    external peer, via [`Self::re_anchor`]. Emissions matter because a request-response host
 ///    reacts to the last thing the firmware said: measuring its next bytes
 ///    from that emission makes the measured gap a property of the *host*
 ///    (which machine load does not stretch), not of how long the starved sim
@@ -201,8 +203,11 @@ impl PacedInbox {
         }
     }
 
-    /// Move the anchor to the present (attach/detach transition, or a
-    /// firmware->host emission the peer will react to). Every caller passes
+    /// Move the anchor to a firmware->host emission the peer will react to.
+    /// Peer transitions deliberately do not move it: a PTY cannot reveal a
+    /// close+reopen that completes between polls, so one continuous mapping is
+    /// the only timing rule that gives observed and hidden handoffs identical
+    /// semantics. Every caller passes
     /// the current sim time, which only grows, so the anchor's sim component
     /// never rewinds; the schedule ahead of it re-bases (the ceiling restarts
     /// from `sim_now`), and targets stamped under the OLD anchor keep their
@@ -239,6 +244,10 @@ impl PacedInbox {
         !self.queue.is_empty()
     }
 
+    fn pending_bytes(&self) -> usize {
+        self.queue.iter().map(|(_, bytes)| bytes.len()).sum()
+    }
+
     /// Every queued chunk whose simulated arrival instant has been reached,
     /// concatenated in arrival order.
     fn take_due(&mut self, sim_now: f64) -> Vec<u8> {
@@ -263,6 +272,90 @@ impl PacedInbox {
     }
 }
 
+/// Engage the compressed wall/sim clock exactly once, after the first observed
+/// peer. It remains engaged for the rest of the run. A PTY exposes current
+/// liveness, not an open/close history, so allowing a detached free-run window
+/// would make a close+reopen between polls behave differently from an observed
+/// handoff.
+fn engage_session_clock_once(
+    inbox: &mut PacedInbox,
+    sim_now: f64,
+    wall_now: f64,
+    attach_count: u64,
+) {
+    if attach_count > 0 {
+        inbox.engage(sim_now, wall_now);
+    }
+}
+
+fn session_clock_requires_wait(pace: bool, inbox: &PacedInbox) -> bool {
+    pace || inbox.engaged()
+}
+
+fn ensure_terminal_io_delivered(
+    endpoint_input: usize,
+    scheduled_input: usize,
+    backend_input: &[(String, usize)],
+) -> Result<()> {
+    if endpoint_input == 0 && scheduled_input == 0 && backend_input.is_empty() {
+        return Ok(());
+    }
+    let backend = if backend_input.is_empty() {
+        "none".to_string()
+    } else {
+        backend_input
+            .iter()
+            .map(|(reference, bytes)| format!("{reference}: {bytes}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    bail!(
+        "host serial session ended with undelivered input: {endpoint_input} host input byte(s) \
+         remained at the endpoint, {scheduled_input} host input byte(s) had not reached their \
+         simulated delivery instant, and backend UART RX queues held [{backend}]. Increase \
+         --seconds or stop the host early enough for the firmware to consume its input; the run \
+         is refused instead of counting or discarding terminal data."
+    )
+}
+
+fn sync_peer_state(
+    attached: bool,
+    was_attached: &mut bool,
+    last_activity_wall: &mut f64,
+    wall_now: f64,
+) {
+    if attached != *was_attached {
+        *was_attached = attached;
+        *last_activity_wall = wall_now;
+    }
+}
+
+fn finalize_endpoint_io(
+    endpoint: &mut HostSerial,
+    summary: &mut SerialSessionSummary,
+    announce: &mut dyn FnMut(&str),
+    inbox: &PacedInbox,
+    backend_input: &[(String, usize)],
+) -> Result<()> {
+    // Flush may perform a PTY liveness transaction that drains final host
+    // input. Poll after it, then validate after every operation capable of
+    // moving transport bytes into the endpoint-owned queue.
+    endpoint.flush();
+    report_events(endpoint, summary, announce);
+    let terminal_output = endpoint.discard_terminal_output();
+    if terminal_output > 0 {
+        announce(&format!(
+            "host serial: WARNING {terminal_output} firmware output byte(s) remained unread at \
+             session end and are counted as dropped"
+        ));
+    }
+    ensure_terminal_io_delivered(
+        endpoint.pending_from_peer(),
+        inbox.pending_bytes(),
+        backend_input,
+    )
+}
+
 /// What the session did, for the closing summary and for tests.
 #[derive(Debug, Clone, Default)]
 pub struct SerialSessionSummary {
@@ -272,7 +365,8 @@ pub struct SerialSessionSummary {
     pub bytes_to_mcu: u64,
     /// Bytes of firmware output handed to the host tool.
     pub bytes_to_peer: u64,
-    /// Firmware output bytes dropped because the endpoint's backlog filled.
+    /// Firmware output bytes dropped because the endpoint's backlog filled or
+    /// the session ended before a peer drained it.
     pub dropped_to_peer: u64,
     /// How many host tools attached over the session. Zero means nobody did.
     pub attach_count: u64,
@@ -283,6 +377,17 @@ pub struct SerialSessionSummary {
     /// Per-MCU host bytes the backend could not deliver to the firmware. Any
     /// non-zero entry means the firmware did not see everything the host sent.
     pub rx_overflow: Vec<(String, u64)>,
+}
+
+fn validate_mcu_selection(requested: &str, available: &[String]) -> Result<()> {
+    if requested.is_empty() || available.iter().any(|reference| reference == requested) {
+        return Ok(());
+    }
+    bail!(
+        "--serial-mcu {requested} does not name an emulated MCU on this board; available \
+         references: {}",
+        available.join(", ")
+    )
 }
 
 /// Run a co-sim with a host-facing serial endpoint attached, until `seconds` of
@@ -335,8 +440,16 @@ pub fn run_session(
         frame_dt = frame_dt.max(chunk_s);
     }
 
-    let mut endpoint = HostSerial::open(cfg.transport)?;
     let mcu_ref = cfg.mcu.clone().unwrap_or_default();
+    let mcus: Vec<String> = engine
+        .scheduler()
+        .mcu_identities()
+        .iter()
+        .map(|(reference, _, _)| reference.clone())
+        .collect();
+    validate_mcu_selection(&mcu_ref, &mcus)?;
+
+    let mut endpoint = HostSerial::open(cfg.transport)?;
     let mut summary = SerialSessionSummary {
         endpoint: endpoint.endpoint().to_string(),
         ..Default::default()
@@ -351,12 +464,6 @@ pub fn run_session(
     for hint in endpoint.attach_hint() {
         announce(&format!("host serial:   {hint}"));
     }
-    let mcus: Vec<String> = engine
-        .scheduler()
-        .mcu_identities()
-        .iter()
-        .map(|(reference, _, _)| reference.clone())
-        .collect();
     announce(&format!(
         "host serial: wired to the UART of {}{}",
         if mcu_ref.is_empty() {
@@ -427,6 +534,7 @@ pub fn run_session(
     }
     let mut t = 0.0f64;
     let mut was_attached = endpoint.peer_attached();
+    let mut delivered_to_mcu = 0u64;
     // Wall instant of the last observable host activity, for
     // `end_after_idle_wall`.
     let mut last_activity_wall = 0.0f64;
@@ -439,15 +547,10 @@ pub fn run_session(
             // "Has ever attached", not "is attached": a peer that attached and
             // detached within one frame still turns the timing discipline on,
             // and its bytes (readable after the hangup) get honest stamps.
-            inbox.engage(t, wall);
+            engage_session_clock_once(&mut inbox, t, wall, endpoint.stats().attach_count);
         }
         if attached != was_attached {
-            // A fresh peer's first gap is measured from its own attach, and a
-            // detach closes the old peer's schedule, so both transitions move
-            // the anchor.
-            inbox.re_anchor(t, wall);
-            was_attached = attached;
-            last_activity_wall = wall;
+            sync_peer_state(attached, &mut was_attached, &mut last_activity_wall, wall);
         }
 
         // Host -> firmware, through the inbox so each byte lands at the sim
@@ -463,19 +566,21 @@ pub fn run_session(
         }
         let due = inbox.take_due(t);
         if !due.is_empty() {
+            delivered_to_mcu += due.len() as u64;
             engine.scheduler_mut().serial(&mcu_ref, &due);
         }
 
         // Hold the sim at-or-behind the anchored schedule (a byte arriving now
         // must not map to a sim instant already passed). Only needed while
-        // bytes can still arrive against the current anchor: paced sessions
-        // always, unpaced ones while a peer is attached or stamped bytes are
-        // still queued — an unpaced session whose peer is gone free-runs.
+        // bytes can still arrive against the current anchor. Paced sessions
+        // always wait. An unpaced session free-runs only before its first peer;
+        // after that, one compressed wall mapping spans every observed or
+        // unobserved handoff.
         //
         // The endpoint is polled BETWEEN naps, with the naps kept short. A
         // scaled schedule can spend tens of wall milliseconds per frame
-        // sleeping, and a multi-process host's close-then-reopen gap (NEP's
-        // is 50 ms) fits inside one long nap: the session then never observes
+        // sleeping, and a multi-process host's close-then-reopen gap can fit
+        // inside one long nap: the session then never observes
         // the detach/attach pair, undercounting attaches and mis-anchoring
         // the new peer. Polling here also stamps bytes closer to their true
         // arrival than a once-per-frame read would.
@@ -489,7 +594,7 @@ pub fn run_session(
         // whose firing depends on how much the frame napped, i.e. on wall
         // behavior) was tried and measurably destabilised the NEP positive
         // control: keep exactly one delivery point per frame.
-        if cfg.pace || attached || inbox.pending() {
+        if session_clock_requires_wait(cfg.pace, &inbox) {
             loop {
                 let ahead = (t + frame_dt) - inbox.sim_ceiling(run_started.elapsed().as_secs_f64());
                 if ahead <= 0.0 {
@@ -499,9 +604,12 @@ pub fn run_session(
                 report_events(&mut endpoint, &mut summary, announce);
                 let wall_nap = run_started.elapsed().as_secs_f64();
                 if endpoint.peer_attached() != was_attached {
-                    inbox.re_anchor(t, wall_nap);
-                    was_attached = endpoint.peer_attached();
-                    last_activity_wall = wall_nap;
+                    sync_peer_state(
+                        endpoint.peer_attached(),
+                        &mut was_attached,
+                        &mut last_activity_wall,
+                        wall_nap,
+                    );
                 }
                 let inbound = endpoint.read_from_peer();
                 if !inbound.is_empty() {
@@ -518,22 +626,28 @@ pub fn run_session(
         // merged stream is deterministic run to run.
         let mut entries: Vec<_> = frame.uart.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
-        let mut emitted = false;
+        let delivered_before = endpoint.stats().to_peer;
         for (_, bytes) in entries {
             if !bytes.is_empty() {
                 endpoint.write_to_peer(bytes);
-                emitted = true;
             }
         }
-        if emitted && was_attached {
+        let emitted = endpoint.stats().to_peer > delivered_before;
+        let wall_after_output = run_started.elapsed().as_secs_f64();
+        sync_peer_state(
+            endpoint.peer_attached(),
+            &mut was_attached,
+            &mut last_activity_wall,
+            wall_after_output,
+        );
+        if emitted && endpoint.peer_attached() {
             // The peer reacts to what it just heard: measuring its next bytes
             // from this emission keeps the measured gap a host property
             // rather than a sim-starvation artifact (PacedInbox rule 1).
             // `was_attached` and not the loop-top `attached`: the nap loop
             // above may have observed a transition since.
-            let wall_after = run_started.elapsed().as_secs_f64();
-            inbox.re_anchor(t, wall_after);
-            last_activity_wall = wall_after;
+            inbox.re_anchor(t, wall_after_output);
+            last_activity_wall = wall_after_output;
         }
 
         // Optional early end: the host came, spoke, and left. Termination
@@ -558,13 +672,19 @@ pub fn run_session(
 
     // A final pass so output produced by the last frame reaches an attached peer,
     // and so a detach during that frame is reported before the summary.
-    report_events(&mut endpoint, &mut summary, announce);
-    endpoint.flush();
+    let backend_input = engine.scheduler().uart_rx_pending();
+    finalize_endpoint_io(
+        &mut endpoint,
+        &mut summary,
+        announce,
+        &inbox,
+        &backend_input,
+    )?;
 
     summary.sim_seconds = engine.scheduler().sim_time;
     summary.wall_seconds = run_started.elapsed().as_secs_f64();
     let stats = endpoint.stats();
-    summary.bytes_to_mcu = stats.to_mcu;
+    summary.bytes_to_mcu = delivered_to_mcu;
     summary.bytes_to_peer = stats.to_peer;
     summary.dropped_to_peer = stats.dropped_to_peer;
     summary.attach_count = stats.attach_count;
@@ -622,16 +742,16 @@ pub fn summary_lines(s: &SerialSessionSummary) -> Vec<String> {
     if s.dropped_to_peer > 0 {
         out.push(format!(
             "host serial: WARNING {} byte(s) of firmware output were DROPPED because the \
-             endpoint's backlog filled (no peer attached, or the peer stopped reading). The \
-             host tool did not see them.",
+             endpoint's backlog filled or the session ended before a peer drained it. The host \
+             tool did not see them.",
             s.dropped_to_peer
         ));
     }
     for (reference, n) in &s.rx_overflow {
         out.push(format!(
-            "host serial: WARNING {n} host byte(s) never reached {reference}'s firmware: its \
-             pending UART buffer overflowed, which means the firmware was not draining its \
-             receiver. Findings that depend on those bytes are not trustworthy."
+            "host serial: WARNING {n} host byte(s) never reached {reference}'s firmware: the \
+             backend reported an RX queue overflow or UART transport/configuration failure. \
+             Findings that depend on those bytes are not trustworthy."
         ));
     }
     out
@@ -640,6 +760,101 @@ pub fn summary_lines(s: &SerialSessionSummary) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_serial_mcu_is_refused_before_any_endpoint_opens() {
+        let error = validate_mcu_selection("TYPO", &["A1".to_string(), "U2".to_string()])
+            .expect_err("a nonexistent UART target cannot receive host bytes");
+        let message = error.to_string();
+        assert!(message.contains("TYPO"), "{message}");
+        assert!(message.contains("A1, U2"), "{message}");
+    }
+
+    #[test]
+    fn engaged_unpaced_clock_stays_wall_bound_across_unobserved_handoffs() {
+        let mut inbox = PacedInbox::new(0.05);
+        engage_session_clock_once(&mut inbox, 1.0, 10.0, 1);
+        let before_handoff = inbox.sim_ceiling(12.0);
+
+        // A close+reopen may be invisible to a point-in-time PTY probe. Seeing
+        // the endpoint as continuously attached must therefore leave one
+        // continuous clock, rather than allowing a detached free-run window.
+        engage_session_clock_once(&mut inbox, 99.0, 12.0, 1);
+        assert_eq!(inbox.sim_ceiling(12.0), before_handoff);
+        assert!(
+            session_clock_requires_wait(false, &inbox),
+            "once any peer has attached, --serial-no-pace remains on its fixed compressed wall mapping even through an unobserved handoff"
+        );
+    }
+
+    #[test]
+    fn terminal_queued_host_bytes_are_refused_instead_of_counted_as_delivered() {
+        let mut inbox = PacedInbox::new(0.05);
+        inbox.engage(0.0, 0.0);
+        inbox.push(0.0, 1.0, b"scheduled".to_vec());
+
+        let error = ensure_terminal_io_delivered(1, inbox.pending_bytes(), &[])
+            .expect_err("a completed run cannot silently discard host input");
+        let message = error.to_string();
+        assert!(message.contains("1 host input byte"), "{message}");
+        assert!(message.contains("9 host input byte"), "{message}");
+    }
+
+    #[test]
+    fn terminal_backend_rx_is_refused() {
+        let backend_pending = vec![("A1".to_string(), 7usize)];
+        let error = ensure_terminal_io_delivered(0, 0, &backend_pending)
+            .expect_err("backend queues cannot be discarded at teardown");
+        let message = error.to_string();
+        assert!(message.contains("A1: 7"), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_validation_runs_after_the_last_endpoint_input_drain() {
+        use std::io::Write as _;
+
+        let mut endpoint = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
+        let mut peer = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(endpoint.endpoint())
+            .expect("peer");
+        for _ in 0..200 {
+            if endpoint.poll_peer().contains(&PeerEvent::Attached) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        peer.write_all(b"x").expect("terminal host byte");
+
+        let mut summary = SerialSessionSummary::default();
+        let inbox = PacedInbox::new(1.0);
+        let error = finalize_endpoint_io(&mut endpoint, &mut summary, &mut |_| {}, &inbox, &[])
+            .expect_err("the last transport drain must happen before validation");
+        assert!(error.to_string().contains("1 host input byte"));
+    }
+
+    #[test]
+    fn terminal_validation_counts_real_endpoint_output_backlog_as_dropped() {
+        let mut endpoint = HostSerial::open(HostSerialTransport::Tcp).expect("tcp endpoint");
+        endpoint.write_to_peer(b"unread");
+        let mut summary = SerialSessionSummary::default();
+        let inbox = PacedInbox::new(1.0);
+        finalize_endpoint_io(&mut endpoint, &mut summary, &mut |_| {}, &inbox, &[])
+            .expect("terminal output is explicitly counted as lost");
+        assert_eq!(endpoint.pending_to_peer(), 0);
+        assert_eq!(endpoint.stats().dropped_to_peer, 6);
+    }
+
+    #[test]
+    fn output_phase_detach_restarts_the_idle_window() {
+        let mut was_attached = true;
+        let mut last_activity_wall = 2.0;
+        sync_peer_state(false, &mut was_attached, &mut last_activity_wall, 10.0);
+        assert!(!was_attached);
+        assert_eq!(last_activity_wall, 10.0);
+    }
 
     /// The determinism invariant itself: the same wall-clock arrival schedule
     /// must produce byte-for-byte identical simulated delivery instants no

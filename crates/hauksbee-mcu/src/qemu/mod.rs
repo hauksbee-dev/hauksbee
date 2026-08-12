@@ -560,6 +560,13 @@ pub struct QemuBackend {
     /// of the backend (UART, GPIO output, stepping) still works.
     gdb: Option<GdbStub>,
     uart: UartSocket,
+    /// Host bytes not accepted by the emulator UART socket. Sticky and exposed
+    /// through `uart_rx_overflow` so a dead transport cannot look clean.
+    uart_rx_failed: u64,
+    /// Bytes accepted by the host socket since the last successful guest
+    /// advance. They are not claimed as presented to the emulated UART until
+    /// that next lockstep window completes.
+    uart_rx_inflight: usize,
     process: QemuProcess,
     /// When the caller handed us a bare app ELF, this is the merged flash
     /// image built from it (see [`flashimage`]); QEMU boots from this file, so
@@ -760,6 +767,8 @@ impl QemuBackend {
             qmp,
             gdb,
             uart,
+            uart_rx_failed: 0,
+            uart_rx_inflight: 0,
             process,
             _flash_temp: flash_temp,
             last_out,
@@ -865,13 +874,14 @@ impl QemuBackend {
     }
 
     /// Drain UART bytes the firmware emitted and dispatch them.
-    fn pump_uart_out(&mut self) {
-        let bytes = self.uart.drain();
+    fn pump_uart_out(&mut self) -> Result<()> {
+        let bytes = self.uart.drain()?;
         if let Some(cb) = &mut self.on_uart {
             for b in bytes {
                 cb(b);
             }
         }
+        Ok(())
     }
 
     /// Advance the guest by ~`seconds` of virtual time, then exchange state.
@@ -952,11 +962,12 @@ impl QemuBackend {
         // Service the mailbox bus cells while the guest is paused (05 §5.2),
         // so a firmware spin-waiting on RSP_SEQ proceeds next chunk.
         self.service_bus_mailbox()?;
-        self.pump_uart_out();
+        self.pump_uart_out()?;
         // A child that died after replying to `stop` must make this chunk fail,
         // even if a buffered/fallback read happened to return stale state.
         self.process
             .ensure_running("completing the QEMU co-simulation chunk")?;
+        self.uart_rx_inflight = 0;
         Ok(())
     }
 
@@ -1448,7 +1459,22 @@ impl Mcu for QemuBackend {
     }
 
     fn uart_write(&mut self, bytes: &[u8]) {
-        let _ = self.uart.write_bytes(bytes);
+        let result = self.uart.write_bytes(bytes);
+        let accepted = crate::traits::account_uart_injection(
+            "QEMU",
+            bytes.len(),
+            result,
+            &mut self.uart_rx_failed,
+        );
+        self.uart_rx_inflight = self.uart_rx_inflight.saturating_add(accepted);
+    }
+
+    fn uart_rx_overflow(&self) -> u64 {
+        self.uart_rx_failed
+    }
+
+    fn uart_rx_pending(&self) -> usize {
+        self.uart_rx_inflight
     }
 
     fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>) {
