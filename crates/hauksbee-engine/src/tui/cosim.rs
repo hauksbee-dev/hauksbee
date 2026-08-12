@@ -20,6 +20,35 @@ use hauksbee_server::engine::Engine;
 
 use crate::engine::HauksbeeEngine;
 
+/// Coverage fields change as firmware runs, but source-conflict discovery walks
+/// the immutable circuit topology. Cache that part once per worker instead of
+/// repeating the scan for every UI frame.
+struct CoverageSampler {
+    drive_conflicts: Vec<String>,
+}
+
+impl CoverageSampler {
+    fn new(scheduler: &crate::scheduler::Scheduler) -> Self {
+        Self::from_scan(|| scheduler.drive_conflicts())
+    }
+
+    fn from_scan(scan: impl FnOnce() -> Vec<String>) -> Self {
+        Self {
+            drive_conflicts: scan(),
+        }
+    }
+
+    fn capture(
+        &self,
+        scheduler: &crate::scheduler::Scheduler,
+    ) -> crate::reports::coverage::CoverageInputs {
+        crate::reports::coverage::CoverageInputs::from_scheduler_with_drive_conflicts(
+            scheduler,
+            self.drive_conflicts.clone(),
+        )
+    }
+}
+
 /// How many UART lines to keep in the rolling buffer shown in the pane.
 const UART_TAIL_LINES: usize = 200;
 
@@ -238,6 +267,7 @@ fn run_worker(
     // is (or was) actively driving, that's the live observability the pane is
     // for, and it's also how we tell "stalled" from "running but quiet".
     let mut tracker = NetActivity::default();
+    let coverage_sampler = CoverageSampler::new(engine.scheduler());
 
     loop {
         if stop.load(Ordering::Relaxed) || t >= target_s {
@@ -288,8 +318,7 @@ fn run_worker(
         // Coverage caveats through the shared enumeration, never a local rule:
         // the pane says what `hauksbee run --json` says because it reads the
         // same list.
-        let coverage =
-            crate::reports::coverage::CoverageInputs::from_scheduler(engine.scheduler()).caveats();
+        let coverage = coverage_sampler.capture(engine.scheduler()).caveats();
 
         // Move the frame's net voltages into the snapshot; keep a copy so the
         // final `done` update can carry the last frame's voltages too.
@@ -327,8 +356,7 @@ fn run_worker(
         .map(|s| s.message());
     let analog_valid = engine.scheduler().analog_valid();
     let failed_chunk_count = engine.scheduler().failed_chunk_count();
-    let coverage =
-        crate::reports::coverage::CoverageInputs::from_scheduler(engine.scheduler()).caveats();
+    let coverage = coverage_sampler.capture(engine.scheduler()).caveats();
     let _ = publish_snapshot(
         coverage_state,
         tx,
@@ -862,5 +890,23 @@ mod tests {
                 .all(|caveat| caveat.class != CoverageClass::WatchdogReboot),
             "a rerun must carry only its own coverage, never the prior worker's: {control:?}"
         );
+    }
+
+    #[test]
+    fn worker_coverage_sampler_caches_topology_conflicts_across_frames() {
+        use std::cell::Cell;
+        let scans = Cell::new(0);
+        let sampler = CoverageSampler::from_scan(|| {
+            scans.set(scans.get() + 1);
+            vec!["V1 and V2 contest /RAIL".to_string()]
+        });
+        assert_eq!(scans.get(), 1);
+        assert_eq!(sampler.drive_conflicts, ["V1 and V2 contest /RAIL"]);
+        // Reading the cached value for many frames cannot invoke the topology
+        // closure again; live fields are captured separately by `capture`.
+        for _ in 0..20_000 {
+            assert_eq!(sampler.drive_conflicts.len(), 1);
+        }
+        assert_eq!(scans.get(), 1);
     }
 }

@@ -27,7 +27,8 @@
 use std::path::PathBuf;
 
 use hauksbee_engine::frontdoor::{
-    analyze_with_firmware, analyze_with_firmware_json, WebCosimSection, WebReport,
+    analyze_with_firmware, analyze_with_firmware_detailed, analyze_with_firmware_json,
+    WebCosimSection, WebReport,
 };
 
 fn repo(rel: &str) -> PathBuf {
@@ -52,19 +53,13 @@ fn web_run(fw_rel: &str) -> WebReport {
     analyze_with_firmware("blinky.kicad_pcb", &board, &fw_name, &fw_bytes)
 }
 
-fn web_run_json(fw_rel: &str) -> serde_json::Value {
+fn web_run_detailed(fw_rel: &str) -> hauksbee_engine::WebFirmwareAnalysis {
     let fw = repo(fw_rel);
     assert!(fw.exists(), "tracked required fixture is absent: {fw_rel}");
     let board = std::fs::read(avr_board()).expect("the AVR board fixture reads");
     let fw_bytes = std::fs::read(&fw).expect("the firmware fixture reads");
     let fw_name = fw.file_name().unwrap().to_str().unwrap();
-    serde_json::from_str(&analyze_with_firmware_json(
-        "blinky.kicad_pcb",
-        &board,
-        fw_name,
-        &fw_bytes,
-    ))
-    .expect("firmware web report is JSON")
+    analyze_with_firmware_detailed("blinky.kicad_pcb", &board, fw_name, &fw_bytes)
 }
 
 fn cosim(report: &WebReport) -> &WebCosimSection {
@@ -136,7 +131,15 @@ fn a_watchdog_reboot_reaches_the_web_front_door_and_a_fed_watchdog_does_not() {
 
 #[test]
 fn per_core_timing_coverage_reaches_the_web_front_door_and_a_run_with_no_core_carries_none() {
-    let report = web_run_json("testdata/firmware/avr_watchdog/nowdt.elf");
+    let detailed = web_run_detailed("testdata/firmware/avr_watchdog/nowdt.elf");
+    assert_eq!(
+        detailed.coverage.timing_coverage.len(),
+        1,
+        "the public Rust result must expose the typed row, not only its JSON projection"
+    );
+    let report = detailed
+        .to_json_value()
+        .expect("the public detailed result serializes with its coverage");
     let section = &report["cosim"];
     // One row per live MCU, from the same accessor the CLI `--json`
     // `cosim.timing_coverage` field reads.

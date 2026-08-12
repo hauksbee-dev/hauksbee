@@ -167,6 +167,11 @@ test('a typed timing refusal is rendered once while the wire keeps both fields',
   const diagnosis = 'PWL replay refused on net /CLK: transition budget exceeded'
   const report: WebReport = {
     ...hostile,
+    serious: 0,
+    total: 0,
+    sections: [],
+    evidence: [],
+    bind: undefined,
     refusal: {
       claim: 'timing-sensitive firmware and electrical conclusions',
       missing_prerequisite: diagnosis,
@@ -176,6 +181,7 @@ test('a typed timing refusal is rendered once while the wire keeps both fields',
     cosim: { ...hostile.cosim!, timing_refusals: [diagnosis] },
   }
   const html = buildReportHtml({ ...input, report })
+  expect(html).toContain('border:1px solid var(--warn-border)')
   expect(html.match(/PWL replay refused on net \/CLK/g)?.length).toBe(1)
   expect(html).not.toContain('TIMING INVALID')
   expect(report.cosim?.timing_refusals).toEqual([diagnosis])

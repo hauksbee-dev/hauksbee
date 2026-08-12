@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { chromium } from 'playwright'
 import type { BoardSession } from '../src/hooks/useBoardSession'
 import type { WebReport } from '../src/types/report'
+import { reportVerdictTone } from '../src/lib/report-verdict'
 
 function realFrontdoorReport(): WebReport {
   const startup = JSON.parse(readFileSync(
@@ -101,4 +102,25 @@ test('the browser renders every structured timing qualification from a frontdoor
   } finally {
     await browser.close()
   }
+})
+
+test('typed co-sim invalidity and faults cannot retain a green verdict card', () => {
+  const refused = realFrontdoorReport()
+  refused.serious = 0
+  refused.total = 0
+  refused.sections = []
+  refused.evidence = []
+  expect(reportVerdictTone(refused)).toBe('warning')
+
+  const faulted: WebReport = {
+    ...refused,
+    refusal: null,
+    cosim: {
+      ...refused.cosim!,
+      timing_refusals: [],
+      fallback_windows: [],
+      findings: [{ level: 'serious', what: 'driver contention', why: 'two outputs fight', fix: 'remove the conflict' }],
+    },
+  }
+  expect(reportVerdictTone(faulted)).toBe('error')
 })
