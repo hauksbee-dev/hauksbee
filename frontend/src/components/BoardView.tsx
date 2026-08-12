@@ -18,6 +18,7 @@ import type { SpecSnapshot } from '../hooks/useSessions'
 import { groupFindings } from '../lib/findings'
 import type { FindingGroup } from '../lib/findings'
 import { summarizeEvidence } from '../lib/evidence'
+import { reportVerdictPalette } from '../lib/report-verdict'
 import { refusalLines } from '../lib/refusal-contract'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
@@ -167,13 +168,9 @@ export function BoardView({
   }
 
   const bindOpen = !!(r.bind?.active_path_unresolved?.length)
-  const hasHeadsUp = (r.sections || []).some(s => s.heads_up?.length)
   const evidenceSummary = summarizeEvidence(r.evidence)
-  const hasEvidenceCaveat = evidenceSummary.caveated > 0
   const runCommand = `hauksbee run ${boardLabel ?? r.file_name} --serve`
-  let verdictBorder = 'var(--ok-border)', verdictBg = 'var(--ok-bg)'
-  if (r.serious > 0) { verdictBorder = 'var(--err-border)'; verdictBg = 'var(--err-bg)' }
-  else if (r.total > 0 || bindOpen || hasHeadsUp || hasEvidenceCaveat) { verdictBorder = 'var(--warn-border)'; verdictBg = 'var(--warn-bg)' }
+  const { border: verdictBorder, background: verdictBg } = reportVerdictPalette(r)
 
   return (
     <div className="h-full overflow-y-auto view-enter" data-testid="report">
