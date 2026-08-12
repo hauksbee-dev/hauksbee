@@ -364,7 +364,10 @@ peripheral to feed a voltage into. hauksbee DROPS an unmapped
 channel's injections, and it surfaces that drop on all four batch report
 surfaces (`hauksbee run` text, `--plain`, `--json` `CosimJson.adc_dropped` and
 coverage notes, and all hauksbee-ci report formats), naming the channel, MCU,
-and net. The interactive TUI does not carry it; the per-surface matrix is in
+and net. The interactive TUI carries it too, from the same signal through one
+shared enumeration. The synchronous web report refuses the external backend
+before this scheduler signal exists and points to live/CLI co-sim; the exact
+per-surface matrix is in
 [docs/cosim/MCU.md](../cosim/MCU.md#which-surface-carries-a-coverage-hole).
 A board that knows where its counts land adds `[[soc.adc]]` to its own
 descriptor, with no recompile needed.

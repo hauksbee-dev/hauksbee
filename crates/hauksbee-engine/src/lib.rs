@@ -80,7 +80,8 @@ pub use evidence::BoardEvidence;
 // validate a spec's firmware path before it reaches the native emulator loader,
 // without taking a direct dependency on hauksbee-mcu.
 pub use frontdoor::{
-    analyze, analyze_json, analyze_with_firmware, analyze_with_firmware_json, WebCosimSection,
+    analyze, analyze_json, analyze_with_firmware, analyze_with_firmware_detailed,
+    analyze_with_firmware_json, WebCosimSection, WebFirmwareAnalysis, WebFirmwareCoverage,
     WebGpioNet, WebReport, WebSection,
 };
 pub use hauksbee_mcu::validate_firmware_path;

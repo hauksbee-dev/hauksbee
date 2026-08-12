@@ -602,20 +602,11 @@ pub fn run_headless(
         if !sched.timing_coverage().is_empty() {
             println!("\nTiming coverage (measured at the chunk actually run):");
             for t in sched.timing_coverage() {
-                println!(
-                    "  {} ({}): edge timestamps ±{:.3} us; pulses >= {:.3} us guaranteed; \
-                     {:.3} us chunk; {} stamps",
-                    t.mcu_ref,
-                    t.backend,
-                    t.timestamp_precision_s * 1e6,
-                    t.minimum_guaranteed_pulse_s * 1e6,
-                    t.chunk_s * 1e6,
-                    if t.cycle_exact {
-                        "cycle-exact"
-                    } else {
-                        "poll-boundary"
-                    },
-                );
+                // The row's wording lives in `scheduler::timing_coverage_line`,
+                // shared with the interactive surfaces' coverage caveats so one
+                // core's resolution is never worded two ways; only the table
+                // indent is added here.
+                println!("  {}", crate::scheduler::timing_coverage_line(&t));
             }
         }
         for refusal in sched.timing_refusals() {
