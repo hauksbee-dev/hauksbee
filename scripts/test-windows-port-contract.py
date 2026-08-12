@@ -188,6 +188,19 @@ class WindowsPortContract(unittest.TestCase):
             "crates/hauksbee-mcu/src/qemu/process.rs",
         ):
             self.assertIn("spawn_owned", read(process))
+        release_docs = read("docs/about/release-and-licensing.md")
+        self.assertIn("spawn-to-assignment window", release_docs)
+        self.assertNotIn("descendant cannot escape between spawn and assignment", release_docs)
+
+    def test_production_dependency_installs_use_owned_jobs_and_native_qemu(self) -> None:
+        deps = read("crates/hauksbee-engine/src/deps.rs")
+        self.assertIn("hauksbee_mcu::children::spawn_owned", deps)
+        self.assertIn("tree_guard.terminate", deps)
+        self.assertNotIn('Command::new("taskkill")', deps)
+        self.assertIn('arg("-QemuOnly")', deps)
+        self.assertIn("timeout_kills_a_real_installer_grandchild", deps)
+        docs = read("docs/cosim/SIMULATORS.md")
+        self.assertIn("invokes this same pinned PowerShell route", docs)
 
     def test_windows_teardown_never_targets_a_recycled_numeric_pid(self) -> None:
         children = read("crates/hauksbee-mcu/src/children.rs")

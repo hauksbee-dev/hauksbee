@@ -406,8 +406,9 @@ idf-tools tree under `%USERPROFILE%\.espressif\tools\`, `C:\Espressif\tools\`
 `scripts\install-sims-windows.ps1 -QemuOnly` is the release-evidence route: it
 downloads both exact Windows archives, verifies repository-recorded SHA-256
 values, rejects unsafe archive paths, checks each binary's ESP32 machine list,
-and transactionally installs the shared tree. Native CI then requires one
+and transactionally installs the shared tree. `hauksbee install esp-qemu --yes`
+invokes this same pinned PowerShell route as the interactive front door and is
+also exercised through the production dependency installer; the direct script
+remains the auditable release-evidence entry point. Native CI then requires one
 Xtensa firmware/I2C/GPIO flow and one RISC-V
-firmware/UART/current/GPIO-circuit flow. `hauksbee install esp-qemu --yes`
-remains the interactive convenience front door; the pinned script is what
-earns release evidence.
+firmware/UART/current/GPIO-circuit flow.
