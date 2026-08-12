@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -131,7 +131,9 @@ pub struct CosimHandle {
     pub rx: Receiver<CosimUpdate>,
     coverage: Arc<Mutex<Vec<crate::reports::coverage::CoverageCaveat>>>,
     stop: Arc<AtomicBool>,
-    /// Kept so the thread is joined on drop (best-effort).
+    /// Dropping a JoinHandle detaches the worker. The UI must never synchronously
+    /// join here: engine construction and an external-emulator step are not
+    /// interruptible wall-time operations, and terminal restoration has to win.
     join: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -152,9 +154,10 @@ impl CosimHandle {
 impl Drop for CosimHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
-        }
+        // Detach. Dropping `rx` makes the worker's next publish fail, while the
+        // stop flag ends it at the next boundary. The process owns no required
+        // result from this advisory interactive run.
+        let _ = self.join.take();
     }
 }
 
@@ -172,7 +175,12 @@ pub fn spawn(
     seconds: f64,
     chunk_ms: f64,
 ) -> CosimHandle {
-    let (tx, rx): (Sender<CosimUpdate>, Receiver<CosimUpdate>) = std::sync::mpsc::channel();
+    // At most one full snapshot may wait behind the renderer. Intermediate
+    // updates coalesce by being dropped while this slot is occupied; the final
+    // done/error update waits only for that one slot to drain. This bounds both
+    // memory and the amount the UI can drain before polling the keyboard.
+    let (tx, rx): (SyncSender<CosimUpdate>, Receiver<CosimUpdate>) =
+        std::sync::mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
     let stop_worker = stop.clone();
     let coverage = Arc::new(Mutex::new(Vec::new()));
@@ -205,7 +213,7 @@ fn run_worker(
     board_name: &str,
     seconds: f64,
     chunk_ms: f64,
-    tx: &Sender<CosimUpdate>,
+    tx: &SyncSender<CosimUpdate>,
     coverage_state: &Mutex<Vec<crate::reports::coverage::CoverageCaveat>>,
     stop: &AtomicBool,
 ) {
@@ -389,18 +397,25 @@ struct WorkerSnapshot {
 fn publish_update(
     coverage_state: &Mutex<Vec<crate::reports::coverage::CoverageCaveat>>,
     coverage: Vec<crate::reports::coverage::CoverageCaveat>,
-    tx: &Sender<CosimUpdate>,
+    tx: &SyncSender<CosimUpdate>,
     update: CosimUpdate,
 ) -> bool {
     *coverage_state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = coverage;
-    tx.send(update).is_ok()
+    if update.done || update.error.is_some() {
+        tx.send(update).is_ok()
+    } else {
+        match tx.try_send(update) {
+            Ok(()) | Err(TrySendError::Full(_)) => true,
+            Err(TrySendError::Disconnected(_)) => false,
+        }
+    }
 }
 
 fn publish_snapshot(
     coverage_state: &Mutex<Vec<crate::reports::coverage::CoverageCaveat>>,
-    tx: &Sender<CosimUpdate>,
+    tx: &SyncSender<CosimUpdate>,
     snapshot: WorkerSnapshot,
 ) -> bool {
     publish_update(coverage_state, snapshot.coverage, tx, snapshot.update)
@@ -645,6 +660,69 @@ pub fn autodetect_firmware(board_path: &std::path::Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn dropping_a_handle_never_joins_a_slow_worker_on_the_ui_thread() {
+        use std::time::Duration;
+
+        let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+        let join = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            finished_tx.send(()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let handle = CosimHandle {
+            rx,
+            coverage: Arc::new(Mutex::new(Vec::new())),
+            stop: Arc::new(AtomicBool::new(false)),
+            join: Some(join),
+        };
+
+        let started = Instant::now();
+        drop(handle);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "terminal teardown waited for the worker: {:?}",
+            started.elapsed()
+        );
+        finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("detached worker still winds down independently");
+    }
+
+    #[test]
+    fn snapshot_transport_is_capacity_one_and_terminal_updates_are_retained() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let coverage = Mutex::new(Vec::new());
+        let first = CosimUpdate {
+            sim_ms: 1.0,
+            ..Default::default()
+        };
+        let coalesced = CosimUpdate {
+            sim_ms: 2.0,
+            ..Default::default()
+        };
+        assert!(publish_update(&coverage, Vec::new(), &tx, first));
+        assert!(
+            publish_update(&coverage, Vec::new(), &tx, coalesced),
+            "a full snapshot slot coalesces without stopping the worker"
+        );
+        assert_eq!(rx.try_iter().count(), 1, "the backlog is strictly bounded");
+
+        let done = CosimUpdate {
+            sim_ms: 3.0,
+            done: true,
+            ..Default::default()
+        };
+        assert!(publish_update(&coverage, Vec::new(), &tx, done));
+        assert!(
+            rx.recv().unwrap().done,
+            "the terminal update is never coalesced away"
+        );
+    }
 
     #[test]
     fn watch_net_matches_led_boot_gpio_and_pins() {

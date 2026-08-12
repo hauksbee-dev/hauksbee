@@ -271,7 +271,13 @@ fn event_loop(
     loop {
         // Drain any pending co-sim updates (non-blocking).
         if let Some(h) = &cosim {
-            while let Ok(u) = h.rx.try_recv() {
+            // The worker transport is capacity-one, but keep an explicit cap so
+            // this input-before-render invariant survives any future transport
+            // change: keyboard polling must never sit behind an unbounded drain.
+            for _ in 0..2 {
+                let Ok(u) = h.rx.try_recv() else {
+                    break;
+                };
                 let done = u.done;
                 // Surface the chip-substitution caveat in AppState so both the
                 // idle and live cosim views show it (parity with CLI/web).
