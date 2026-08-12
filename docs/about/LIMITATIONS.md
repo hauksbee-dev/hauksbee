@@ -103,7 +103,13 @@ works over loopback TCP; a `pty` request refuses by name and points to
 `--serial-transport tcp`. Emulator children use a kernel Job Object, so this
 transport difference does not weaken process-tree cleanup. The browser front
 door, static analysis, CI verdicts, MCP, Renode/QEMU discovery, installation,
-and checksum-verified zip are native Windows surfaces.
+and checksum-verified zip are native Windows surfaces. Emulator descendants
+are owned after a suspended child is attached to its Job Object. A hard parent
+kill in the narrow interval between process creation and Job assignment can
+leave that still-suspended direct child; Rust's stable `Command` API does not
+currently expose atomic Job assignment. The child has not executed or spawned
+descendants in that interval, and every normal/error/timeout/post-assignment
+hard-death path is structurally owned and tested.
 
 ### A co-sim chunk no fallback can solve holds stale voltages
 

@@ -88,5 +88,11 @@ evalexpr = { version = "13", default-features = false }
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }
 
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
 [lints]
 workspace = true

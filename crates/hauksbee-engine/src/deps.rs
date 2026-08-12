@@ -10,12 +10,10 @@
 //! kicad-cli probe mirrors `reports::drc::find_kicad_cli` (private to a module
 //! another lane owns, keep the two in lockstep if either changes).
 //!
-//! The install side shells KILLABLE children and streams their output:
-//! `hauksbee install esp-qemu --yes` (this very binary's own Rust installer,
-//! which verifies each asset against the release's checksum manifest when it
-//! can fetch it and falls back to TLS plus a post-install machine check when it
-//! cannot, see `hauksbee_mcu::qemu::install`) for the Espressif
-//! QEMU fork, and the checksum-pinned platform installer for Renode
+//! The install side shells KILLABLE children and streams their output.
+//! `hauksbee install esp-qemu --yes` uses the checksum-pinned native PowerShell
+//! installer on Windows and this binary's Rust manifest-verifying installer on
+//! Unix. Renode likewise uses the checksum-pinned platform installer
 //! (`install-sims.sh` on Unix, `install-sims-windows.ps1` on Windows; both are
 //! embedded and shipped beside the binary). One install runs
 //! at a time (RAII slot, same pattern as `webcheck::WebCheckSlot`), a hard
@@ -334,6 +332,7 @@ fn probe_esp_qemu() -> DepStatus {
         "linux" => "two downloads, about 35 MB total (checksum-verified when the release \
                     manifest is reachable)"
             .to_string(),
+        "windows" => "two checksum-pinned Windows archives, about 190 MB total".to_string(),
         _ => "not auto-installable on this OS; see github.com/espressif/qemu/releases".to_string(),
     };
     let manual = "hauksbee install esp-qemu".to_string();
@@ -385,7 +384,8 @@ fn probe_esp_qemu() -> DepStatus {
                     path: None,
                     version: None,
                     unlocks,
-                    installable: hauksbee_mcu::qemu::install::host_asset_triple().is_ok(),
+                    installable: cfg!(windows)
+                        || hauksbee_mcu::qemu::install::host_asset_triple().is_ok(),
                     cost,
                     manual,
                     detail: Some(parts.join("; ")),
@@ -826,9 +826,9 @@ pub fn install_dep(id: &str, progress: &mut dyn FnMut(&str)) -> Result<(), Strin
     }
 }
 
-/// Espressif QEMU: shell this very binary's `install esp-qemu --yes`. That
-/// reuses the checksum-verifying Rust installer end-to-end AND gives us a
-/// killable child (the in-process call could not be interrupted on timeout).
+/// Espressif QEMU: use the native checksum-pinned PowerShell installer on
+/// Windows; elsewhere shell this binary's Rust installer. Both routes run as
+/// structurally owned child trees so downloads cannot survive a timeout.
 fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     #[cfg(not(feature = "qemu"))]
     {
@@ -841,15 +841,28 @@ fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     }
     #[cfg(feature = "qemu")]
     {
-        if let Err(e) = hauksbee_mcu::qemu::install::host_asset_triple() {
-            return Err(e.to_string());
+        #[cfg(windows)]
+        {
+            let script = materialize_install_sims_windows_script()?;
+            progress("installing checksum-pinned Espressif QEMU for Windows (about 190 MB) ...");
+            let mut cmd = Command::new("powershell.exe");
+            cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                .arg(&script)
+                .arg("-QemuOnly");
+            return run_streaming(cmd, progress, INSTALL_TIMEOUT);
         }
-        let exe = std::env::current_exe()
-            .map_err(|e| format!("could not locate the hauksbee binary: {e}"))?;
-        progress("installing the Espressif QEMU fork (ESP32 family) ...");
-        let mut cmd = Command::new(exe);
-        cmd.args(["install", "esp-qemu", "--yes"]);
-        run_streaming(cmd, progress, INSTALL_TIMEOUT)
+        #[cfg(not(windows))]
+        {
+            if let Err(e) = hauksbee_mcu::qemu::install::host_asset_triple() {
+                return Err(e.to_string());
+            }
+            let exe = std::env::current_exe()
+                .map_err(|e| format!("could not locate the hauksbee binary: {e}"))?;
+            progress("installing the Espressif QEMU fork (ESP32 family) ...");
+            let mut cmd = Command::new(exe);
+            cmd.args(["install", "esp-qemu", "--yes"]);
+            run_streaming(cmd, progress, INSTALL_TIMEOUT)
+        }
     }
 }
 
@@ -902,8 +915,7 @@ fn run_streaming(
         // A fresh process group so a timeout kill reaches grandchildren too.
         cmd.process_group(0);
     }
-    let mut child = cmd
-        .spawn()
+    let (mut child, tree_guard) = hauksbee_mcu::children::spawn_owned(&mut cmd)
         .map_err(|e| format!("could not start the installer: {e}"))?;
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
@@ -969,7 +981,7 @@ fn run_streaming(
             break;
         }
         if started.elapsed() > timeout {
-            kill_process_group(&mut child);
+            kill_process_group(&mut child, &tree_guard);
             for r in readers {
                 let _ = r.join();
             }
@@ -1008,9 +1020,12 @@ fn tail_text(tail: &VecDeque<String>) -> String {
 
 /// Kill the child's whole process tree, falling back to the direct child.
 /// On unix `kill -- -<pid>` addresses the group created by `process_group(0)`;
-/// on Windows `taskkill /T` walks the tree, since a timed-out installer's
-/// grandchildren would otherwise outlive it.
-fn kill_process_group(child: &mut std::process::Child) {
+/// on Windows the retained Job Object terminates the exact owned tree, never a
+/// potentially recycled numeric PID.
+fn kill_process_group(
+    child: &mut std::process::Child,
+    _tree_guard: &hauksbee_mcu::children::ProcessTreeGuard,
+) {
     #[cfg(unix)]
     {
         let _ = Command::new("kill")
@@ -1019,9 +1034,7 @@ fn kill_process_group(child: &mut std::process::Child) {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &child.id().to_string()])
-            .output();
+        let _ = _tree_guard.terminate();
     }
     let _ = child.kill();
 }
@@ -1248,6 +1261,50 @@ echo "codex-cli 0.0.0""#,
             !lines.iter().any(|l| l.contains("never")),
             "child was killed"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn timeout_kills_a_real_installer_grandchild_through_the_owned_job() {
+        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        let scratch = tempfile::tempdir().expect("scratch directory");
+        let marker = scratch.path().join("grandchild.pid");
+        let escaped = marker.display().to_string().replace('\'', "''");
+        let script = format!(
+            "$p=Start-Process powershell -ArgumentList '-NoProfile','-Command','Start-Sleep 300' -PassThru; Set-Content -LiteralPath '{escaped}' -Value $p.Id; Wait-Process -Id $p.Id"
+        );
+        let err = run_streaming(shell_command(&script), &mut |_| {}, Duration::from_secs(1))
+            .expect_err("owned installer tree times out");
+        assert!(err.contains("was stopped"), "{err}");
+        let pid: u32 = std::fs::read_to_string(&marker)
+            .expect("grandchild marker")
+            .trim()
+            .parse()
+            .expect("numeric grandchild pid");
+        for _ in 0..100 {
+            // SAFETY: the queried handle is checked and closed on every path.
+            let live = unsafe {
+                let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                if handle.is_null() {
+                    false
+                } else {
+                    let mut code = 0;
+                    let live =
+                        GetExitCodeProcess(handle, &mut code) != 0 && code == STILL_ACTIVE as u32;
+                    CloseHandle(handle);
+                    live
+                }
+            };
+            if !live {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("installer grandchild {pid} survived Job-backed timeout");
     }
 
     #[test]

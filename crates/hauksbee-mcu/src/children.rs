@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// `KILL_ON_JOB_CLOSE`: unlike a best-effort `taskkill` in `Drop`, the kernel
 /// closes this handle and terminates the whole tree even when hauksbee itself
 /// is killed and no destructor runs.
-pub(crate) struct ProcessTreeGuard {
+pub struct ProcessTreeGuard {
     #[cfg(windows)]
     job: windows_sys::Win32::Foundation::HANDLE,
 }
@@ -96,7 +96,7 @@ impl ProcessTreeGuard {
     /// Windows uses the retained Job Object handle, never a numeric PID that
     /// may already have been reaped and recycled. Unix teardown is performed
     /// by the caller's process-group kill; the guard is only a marker there.
-    pub(crate) fn terminate(&self) -> std::io::Result<()> {
+    pub fn terminate(&self) -> std::io::Result<()> {
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::JobObjects::TerminateJobObject;
@@ -113,10 +113,14 @@ impl ProcessTreeGuard {
 ///
 /// Windows starts the direct child suspended, assigns the still-unexecuted
 /// process to the kill-on-close Job Object, then resumes its primary thread.
-/// A backend therefore cannot create an escaping descendant between `spawn`
-/// and assignment. Unix callers establish their process group on `cmd` before
-/// entering here; the guard is then a zero-sized owner marker.
-pub(crate) fn spawn_owned(
+/// This prevents child-created descendants from escaping; Win32's stable
+/// `std::process::Command` API does not support atomic Job assignment, so a
+/// parent killed in the narrow spawn-to-assignment interval can still leave
+/// the suspended direct child. That bounded limitation is documented rather
+/// than represented as an impossible guarantee. Unix callers establish their
+/// process group on `cmd` before entering here; the guard is then a zero-sized
+/// owner marker.
+pub fn spawn_owned(
     cmd: &mut std::process::Command,
 ) -> std::io::Result<(std::process::Child, ProcessTreeGuard)> {
     #[cfg(windows)]
