@@ -140,6 +140,7 @@ pub fn is_available() -> bool {
 /// A spawned, headless Renode instance with a Monitor TCP port.
 pub struct RenodeProcess {
     child: Child,
+    _tree_guard: crate::children::ProcessTreeGuard,
     pub monitor_port: u16,
 }
 
@@ -176,13 +177,13 @@ impl RenodeProcess {
             // leak this prevents.
             cmd.process_group(0);
         }
-        let child = cmd
-            .spawn()
-            .with_context(|| format!("spawning Renode from {}", bin.display()))?;
-        crate::children::register(child.id());
+        let (child, tree_guard) = crate::children::spawn_owned(&mut cmd)
+            .with_context(|| format!("spawning owned Renode from {}", bin.display()))?;
+        crate::children::register(child.id(), &tree_guard);
 
         Ok(RenodeProcess {
             child,
+            _tree_guard: tree_guard,
             monitor_port,
         })
     }
@@ -215,12 +216,13 @@ impl RenodeProcess {
 impl Drop for RenodeProcess {
     fn drop(&mut self) {
         // Best-effort terminate; Renode has no clean SIGTERM handler we rely
-        // on, so kill and reap to avoid zombies. Tree-kill first (the group
-        // on unix, taskkill /T on Windows) so nothing Renode forked survives,
-        // then the direct kill/wait to reap the child handle. Also drops the
-        // signal-reaper registration.
+        // on, so kill and reap to avoid zombies. Unix addresses the process
+        // group; Windows addresses the retained Job Object rather than a PID
+        // that could have been reaped and recycled.
         crate::children::unregister(self.child.id());
+        #[cfg(unix)]
         crate::children::kill_tree(self.child.id());
+        let _ = self._tree_guard.terminate();
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

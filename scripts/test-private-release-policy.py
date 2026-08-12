@@ -464,6 +464,27 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("Cleanup private registry credential", registry_auth)
         self.assertIn("if: ${{ always()", registry_auth)
 
+    def test_release_build_jobs_do_not_retain_publication_credentials(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        publication = workflow.index("\n  release:\n")
+        build_half = workflow[:publication]
+        release_half = workflow[publication:]
+        self.assertRegex(
+            workflow,
+            r"(?m)^permissions:\s*\n(?:\s*#.*\n)*\s+contents:\s*read\b",
+        )
+        self.assertRegex(
+            release_half,
+            r"(?m)^    permissions:\s*\n\s+contents:\s*write\b",
+        )
+        checkout_count = build_half.count("uses: actions/checkout@")
+        self.assertGreater(checkout_count, 0)
+        self.assertEqual(
+            build_half.count("persist-credentials: false"),
+            checkout_count,
+            "every release build checkout must erase even its read credential before dependencies run",
+        )
+
     def test_shipped_installer_examples_authenticate_the_private_script_fetch(self) -> None:
         for relative in (Path("README.md"), Path("docs/START_HERE.md")):
             text = (ROOT / relative).read_text()

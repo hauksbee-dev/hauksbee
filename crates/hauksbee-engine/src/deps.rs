@@ -15,8 +15,9 @@
 //! which verifies each asset against the release's checksum manifest when it
 //! can fetch it and falls back to TLS plus a post-install machine check when it
 //! cannot, see `hauksbee_mcu::qemu::install`) for the Espressif
-//! QEMU fork, and `scripts/install-sims.sh --renode-only` for Renode (the
-//! script is shipped in release bundles next to the binary). One install runs
+//! QEMU fork, and the checksum-pinned platform installer for Renode
+//! (`install-sims.sh` on Unix, `install-sims-windows.ps1` on Windows; both are
+//! embedded and shipped beside the binary). One install runs
 //! at a time (RAII slot, same pattern as `webcheck::WebCheckSlot`), a hard
 //! timeout kills the whole child process group, and a failure surfaces the
 //! child's actual output tail, never a bare exit code.
@@ -241,7 +242,7 @@ pub fn deps_json() -> String {
 // ── individual probes ────────────────────────────────────────────────────────
 
 fn host_is_installable_os() -> bool {
-    matches!(std::env::consts::OS, "macos" | "linux")
+    matches!(std::env::consts::OS, "macos" | "linux" | "windows")
 }
 
 fn probe_renode() -> DepStatus {
@@ -250,8 +251,8 @@ fn probe_renode() -> DepStatus {
     // portable download is 75-90 MB, and the unpacked install is a few
     // hundred MB on disk.
     let cost = if host_is_installable_os() {
-        "about an 80 MB download, a few hundred MB unpacked (macOS and Linux; \
-         Windows needs a manual install)"
+        "about a 120 MB download on Windows (about 80 MB on Unix), a few \
+         hundred MB unpacked"
             .to_string()
     } else {
         "not auto-installable on this OS; install Renode manually (renode.io)".to_string()
@@ -644,11 +645,16 @@ fn first_line(msg: &str) -> String {
 /// defect 3). Embedding the script keeps ONE maintained installer
 /// implementation while making it available from any binary, bundle or bare;
 /// an on-disk copy still wins so a user-patched script is honored.
+#[cfg(not(windows))]
 const INSTALL_SIMS_SH: &str = include_str!("../../../scripts/install-sims.sh");
+#[cfg(not(windows))]
 const COMMON_SH: &str = include_str!("../../../scripts/common.sh");
+#[cfg(windows)]
+const INSTALL_SIMS_WINDOWS_PS1: &str = include_str!("../../../scripts/install-sims-windows.ps1");
 
 /// A runnable `install-sims.sh` path: the on-disk copy when one exists, else
 /// the embedded copy (plus the `common.sh` it sources) written to a temp dir.
+#[cfg(not(windows))]
 fn materialize_install_sims_script() -> Result<PathBuf, String> {
     if let Some(p) = find_install_sims_script() {
         return Ok(p);
@@ -670,9 +676,27 @@ fn materialize_install_sims_script() -> Result<PathBuf, String> {
     Ok(script)
 }
 
+#[cfg(windows)]
+fn materialize_install_sims_windows_script() -> Result<PathBuf, String> {
+    if let Some(p) = find_named_installer("install-sims-windows.ps1") {
+        return Ok(p);
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "hauksbee-install-sims-windows-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not stage the bundled Windows installer: {e}"))?;
+    let script = dir.join("install-sims-windows.ps1");
+    std::fs::write(&script, INSTALL_SIMS_WINDOWS_PS1)
+        .map_err(|e| format!("could not write the bundled Windows installer: {e}"))?;
+    Ok(script)
+}
+
 /// Locate `scripts/install-sims.sh`: env override first (tests), then walking
 /// up from the executable (release bundles ship `scripts/` next to `bin/`),
 /// then from the current directory and the build-time checkout (source runs).
+#[cfg(not(windows))]
 fn find_install_sims_script() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("HAUKSBEE_INSTALL_SIMS") {
         let pb = PathBuf::from(p);
@@ -697,6 +721,36 @@ fn find_install_sims_script() -> Option<PathBuf> {
             let cand = dir.join("scripts/install-sims.sh");
             if cand.is_file() {
                 return Some(cand);
+            }
+            cur = dir.parent();
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn find_named_installer(name: &str) -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("HAUKSBEE_INSTALL_SIMS") {
+        let path = PathBuf::from(path);
+        return path.is_file().then_some(path);
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd);
+    }
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    for root in roots {
+        let mut cur: Option<&std::path::Path> = Some(root.as_path());
+        for _ in 0..6 {
+            let Some(dir) = cur else { break };
+            let candidate = dir.join("scripts").join(name);
+            if candidate.is_file() {
+                return Some(candidate);
             }
             cur = dir.parent();
         }
@@ -799,24 +853,34 @@ fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     }
 }
 
-/// Renode: shell `install-sims.sh --renode-only` (the per-backend installer
-/// this repo already maintains). The script comes from disk when present,
-/// else from the copy embedded in this binary, so the shipped .app (which
-/// carries no scripts/) installs Renode exactly like a checkout does. There
-/// is no Rust-side Renode installer to prefer.
+/// Renode: shell the platform's checksum-pinned installer. The script comes
+/// from disk when present, else from the copy embedded in this binary.
 pub(crate) fn install_renode(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
-    if !host_is_installable_os() {
-        return Err(format!(
-            "Renode auto-install supports macOS and Linux only (this is {}); install \
-             it manually from github.com/renode/renode/releases",
-            std::env::consts::OS
-        ));
+    #[cfg(windows)]
+    {
+        let script = materialize_install_sims_windows_script()?;
+        progress("installing checksum-pinned Renode for Windows (about 120 MB) ...");
+        let mut cmd = Command::new("powershell.exe");
+        cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .arg("-RenodeOnly");
+        run_streaming(cmd, progress, INSTALL_TIMEOUT)
     }
-    let script = materialize_install_sims_script()?;
-    progress("installing Renode (about an 80 MB download) ...");
-    let mut cmd = Command::new("bash");
-    cmd.arg(&script).arg("--renode-only");
-    run_streaming(cmd, progress, INSTALL_TIMEOUT)
+    #[cfg(not(windows))]
+    {
+        if !host_is_installable_os() {
+            return Err(format!(
+                "Renode auto-install is unavailable on {}; install it manually from \
+                 github.com/renode/renode/releases",
+                std::env::consts::OS
+            ));
+        }
+        let script = materialize_install_sims_script()?;
+        progress("installing Renode (about an 80 MB download) ...");
+        let mut cmd = Command::new("bash");
+        cmd.arg(&script).arg("--renode-only");
+        run_streaming(cmd, progress, INSTALL_TIMEOUT)
+    }
 }
 
 /// Spawn `cmd` in its own process group, relay its stdout+stderr line by line
@@ -973,6 +1037,21 @@ mod tests {
         SERIAL.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    fn shell_command(script: &str) -> Command {
+        #[cfg(windows)]
+        {
+            let mut command = Command::new("powershell.exe");
+            command.args(["-NoProfile", "-Command", script]);
+            command
+        }
+        #[cfg(not(windows))]
+        {
+            let mut command = Command::new("sh");
+            command.args(["-c", script]);
+            command
+        }
+    }
+
     #[test]
     fn deps_json_reports_every_dep_with_the_contract_fields() {
         let json = deps_json();
@@ -1126,8 +1205,7 @@ echo "codex-cli 0.0.0""#,
     /// is the regression here).
     #[test]
     fn failure_carries_the_output_tail() {
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "echo starting; echo 'the disk is full' >&2; exit 3"]);
+        let cmd = shell_command("echo starting; echo 'the disk is full' >&2; exit 3");
         let mut lines = Vec::new();
         let err = run_streaming(
             cmd,
@@ -1148,8 +1226,11 @@ echo "codex-cli 0.0.0""#,
 
     #[test]
     fn timeout_kills_the_child_and_says_so() {
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "echo begun; sleep 30; echo never"]);
+        #[cfg(windows)]
+        let script = "echo begun; Start-Sleep -Seconds 30; echo never";
+        #[cfg(not(windows))]
+        let script = "echo begun; sleep 30; echo never";
+        let cmd = shell_command(script);
         let mut lines = Vec::new();
         let started = Instant::now();
         let err = run_streaming(
@@ -1171,8 +1252,7 @@ echo "codex-cli 0.0.0""#,
 
     #[test]
     fn success_streams_and_returns_ok() {
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "echo one; echo two >&2; exit 0"]);
+        let cmd = shell_command("echo one; echo two >&2; exit 0");
         let mut lines = Vec::new();
         run_streaming(
             cmd,
@@ -1200,24 +1280,29 @@ echo "codex-cli 0.0.0""#,
         // (script resolution -> bash child -> streamed lines -> Ok).
         let dir = std::env::temp_dir().join(format!("hauksbee-deps-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(windows)]
+        let script = dir.join("install-sims-windows.ps1");
+        #[cfg(not(windows))]
         let script = dir.join("install-sims.sh");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\necho fake renode install ran \"$@\"\nexit 0\n",
-        )
-        .unwrap();
+        #[cfg(windows)]
+        let script_body = "Write-Output \"fake renode install ran $args\"\nexit 0\n";
+        #[cfg(not(windows))]
+        let script_body = "#!/bin/sh\necho fake renode install ran \"$@\"\nexit 0\n";
+        std::fs::write(&script, script_body).unwrap();
         std::env::set_var("HAUKSBEE_INSTALL_SIMS", &script);
         let mut lines = Vec::new();
         let res = install_dep("renode", &mut |l| lines.push(l.to_string()));
         std::env::remove_var("HAUKSBEE_INSTALL_SIMS");
         let _ = std::fs::remove_dir_all(&dir);
-        if std::env::consts::OS == "macos" || std::env::consts::OS == "linux" {
+        if matches!(std::env::consts::OS, "macos" | "linux" | "windows") {
             res.expect("fake installer exits 0");
+            #[cfg(windows)]
+            let expected = "fake renode install ran -RenodeOnly";
+            #[cfg(not(windows))]
+            let expected = "fake renode install ran --renode-only";
             assert!(
-                lines
-                    .iter()
-                    .any(|l| l.contains("fake renode install ran --renode-only")),
-                "the script ran with --renode-only: {lines:?}"
+                lines.iter().any(|line| line.contains(expected)),
+                "the script ran with the platform-specific Renode-only flag: {lines:?}"
             );
         }
     }

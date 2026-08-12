@@ -2,7 +2,8 @@
 /** Real-browser release gate for board drag-and-drop journeys.
  *
  * The external cohort supplies exactly five absolute board paths; the corpus
- * cohort supplies every discovered board input. Each
+ * cohort supplies every discovered board input; the smoke cohort supplies one
+ * named board for a native platform/front-door proof. Each
  * file enters through an actual DataTransfer drop (not setInputFiles on the
  * app's picker), then has to produce a useful report, a matching independent
  * JSON export, and a live session whose pause/step/play controls advance the
@@ -133,18 +134,21 @@ const output = process.env.HB_E2E_OUT ?? join(import.meta.dir, '../../output/pla
 if (!base) throw new Error('HB_E2E_BASE must name a running real Hauksbee server')
 if (!rawFiles) throw new Error('HB_BOARD_FILES must be a JSON array of absolute paths')
 const files = JSON.parse(rawFiles) as unknown
-if (cohort !== 'external' && cohort !== 'corpus') {
-  throw new Error('HB_RELEASE_COHORT must be external or corpus')
+if (cohort !== 'external' && cohort !== 'corpus' && cohort !== 'smoke') {
+  throw new Error('HB_RELEASE_COHORT must be external, corpus or smoke')
 }
 if (!Array.isArray(files)
     || files.length === 0
     || (cohort === 'external' && files.length !== 5)
+    || (cohort === 'smoke' && files.length !== 1)
     || !files.every(path => typeof path === 'string')
     || new Set(files).size !== files.length) {
   throw new Error(
     cohort === 'external'
       ? 'HB_BOARD_FILES must contain exactly five distinct path strings'
-      : 'HB_BOARD_FILES must contain every distinct corpus path',
+      : cohort === 'smoke'
+        ? 'HB_BOARD_FILES must contain exactly one smoke-test path string'
+        : 'HB_BOARD_FILES must contain every distinct corpus path',
   )
 }
 if (!files.every(isAbsolute)) throw new Error('every HB_BOARD_FILES entry must be an absolute path')

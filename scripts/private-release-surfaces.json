@@ -12,7 +12,7 @@
     {"path": "COMPLIANCE.md", "classification": "shipped-documentation", "occurrences": 1},
     {"path": "CONTRIBUTING.md", "classification": "shipped-documentation", "occurrences": 1},
     {"path": "Cargo.toml", "classification": "package-metadata", "occurrences": 2},
-    {"path": "README.md", "classification": "shipped-documentation", "occurrences": 3},
+    {"path": "README.md", "classification": "shipped-documentation", "occurrences": 4},
     {"path": "SECURITY.md", "classification": "shipped-documentation", "occurrences": 1},
     {"path": "app/macos/build-app.sh", "classification": "release-artifact-metadata", "occurrences": 1, "required_fragments": ["https://github.com/hauksbee-dev/hauksbee   commit"]},
     {"path": "crates/hauksbee-ci/src/integrate.rs", "classification": "generated-integration", "occurrences": 5, "required_fragments": ["repo: https://github.com/hauksbee-dev/hauksbee"]},
@@ -41,9 +41,10 @@
     {"path": "integrations/pre-commit/README.md", "classification": "integration-documentation", "occurrences": 2},
     {"path": "scripts/bundle.sh", "classification": "release-artifact-metadata", "occurrences": 2, "required_fragments": ["Source: https://github.com/hauksbee-dev/hauksbee  commit ${GIT_SHA}"]},
     {"path": "scripts/check-private-container-publication.sh", "classification": "private-container-publication-guard", "occurrences": 1, "required_fragments": ["orgs/hauksbee-dev/packages/container/hauksbee"]},
-    {"path": "scripts/get-hauksbee.ps1", "classification": "private-installer", "occurrences": 3, "required_fragments": ["$Repo = \"hauksbee-dev/hauksbee\""]},
+    {"path": "scripts/get-hauksbee.ps1", "classification": "private-installer", "occurrences": 2, "required_fragments": ["$Repo = \"hauksbee-dev/hauksbee\""]},
     {"path": "scripts/get-hauksbee.sh", "classification": "private-installer", "occurrences": 4, "required_fragments": ["REPO=\"hauksbee-dev/hauksbee\""]},
     {"path": "scripts/make-public.sh", "classification": "private-release-launcher", "occurrences": 1, "scopes": ["development"]},
-    {"path": "scripts/test-install-mock.sh", "classification": "installer-regression", "occurrences": 1}
+    {"path": "scripts/test-install-mock.sh", "classification": "installer-regression", "occurrences": 1},
+    {"path": "scripts/test-windows-installer.ps1", "classification": "installer-regression", "occurrences": 1}
   ]
 }
