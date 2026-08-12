@@ -1,0 +1,19 @@
+G04 A negative plane whose antipad is an ANNULAR clear flash: the ring of*
+G04 removed copper cuts a 2 mm island free of the plane. The island is the*
+G04 annular pad of the through-hole, and it is on the via's net, not the*
+G04 plane's.*
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L1,Top*%
+%ADD10C,6.000000X2.000000*%
+G36*
+X0Y0D02*
+X20000000Y0D01*
+X20000000Y20000000D01*
+X0Y20000000D01*
+X0Y0D01*
+G37*
+%LPC*%
+D10*
+X10000000Y10000000D03*
+M02*

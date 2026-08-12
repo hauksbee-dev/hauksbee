@@ -111,10 +111,9 @@ unioned (disjoint-set). Connected components become the nets, named
   correctness rule in the module. It is exact **for the keyholed
   single-region pour** KiCad and Allegro emit (the antipad is part of the
   region winding, so even-odd puts a pocketed pad outside). It does *not*
-  hold if a fab emits the pour as a dark region plus a *separate* clear
-  (LPC) antipad; we skip clear polarity (see Limitations), so such a pad
-  would read as inside the fill and could false-short. KiCad/Allegro do not
-  do that; some tools can.
+  hold on its own if a fab emits the pour as a dark region plus *separate*
+  clear (LPC) antipads, which is Altium's default; those voids are cut out
+  of the pour first, see [Negative-drawn pours](#negative-drawn-pours-lpc).
 - **GND heuristic**: the largest pour-touching net is labelled `GND`. This
   is a **label only** (connectivity is unaffected), and it is a guess: a
   board with a power plane larger than its ground plane, or a split ground,
@@ -543,10 +542,115 @@ This makes the IPC-2221 trace-current surface runnable on a gerber-only
 board. Its reach stays honest: it needs a *cited current attributed to a
 net*, and gerber reconstruction recovers no net names or BOM-bound
 identity, so it runs but finds nothing unless a current can be tied to a
-specific reconstructed net. And a board whose fab draws traces as G36/G37
-filled regions (some Altium exports, e.g. the Inkplate 6) reads every net
-as `Poured`, so the check goes inert there, the safe failure direction (a
+specific reconstructed net. And a board whose fab draws its traces as
+G36/G37 filled regions rather than with draw apertures reads those nets as
+`Poured`, so the check goes inert on them, the safe failure direction (a
 `Poured` net is never flagged). See docs/evidence/FAMOUS_SWEEP.md Round 5.
+That was once read as a property of the Inkplate 6 export, but it was the
+negative-pour defect below: the board-sized dark region landed on every net,
+so every net looked poured. With the voids cut, the Inkplate's routed nets
+carry discrete widths and the check runs on them.
+
+## Negative-drawn pours (LPC)
+
+> **Split planes are reconstructed from the painted image.** A clear gap across
+> a negative plane is unioned with the rest of its uninterrupted clear pass and
+> subtracted from the earlier copper. If that difference produces two filled
+> polygons, they become two region primitives and two conductors. The same rule
+> covers a gap that terminates inside a concave pour, an annular antipad, and a
+> clear operation over a track or pad. Only clear geometry refused by the
+> admission rules below remains conservatively over-connected.
+
+Altium plots a plane *negatively*: one `G36/G37` dark region covering the
+whole board, then `%LPC*%` and a few hundred clear regions, one per
+clearance, antipad and thermal gap, then `%LPD*%` for whatever islands are
+added back. The voids are not decoration. They are the only thing that makes
+the film anything other than a solid sheet of copper.
+
+Reading the darks and discarding the clears therefore produced a board-sized
+slab on every signal layer. The failure was originally isolated from an Altium
+STM32 CAN board and the Inkplate 6 export, but those external designs are
+discovery inputs rather than retained native-partition oracles in this
+repository. The committed claim is therefore bounded to the distilled
+negative-plane fixtures and their exact copper probes; no unavailable external
+board's final net count is presented as release evidence.
+
+Admitted clear images are replayed as the Gerber painter operation they are.
+Every uninterrupted clear pass is unioned first, so two overlapping images
+erase their overlap instead of XOR-painting it back, and that union is
+subtracted from every track, flash and region painted before it. Copper painted
+after the pass is untouched. Each connected polygon in the Boolean remainder is
+emitted as a separate primitive. This handles clear-over-track and
+clear-over-pad operations, a gap severing a concave pour, partial intersection
+with a pour boundary, and an annular clear's isolated centre without guessing
+from cross-statement contour nesting. `%SR%` carries both dark and clear painter
+operations into every repeat.
+
+One high-density topology has an equivalent bounded fast path: exactly one
+convex plane followed only by non-overlapping interior clear images. Signed
+coverage plus indexed island extraction is exact under those preconditions and
+does not clone a cut plane containing millions of contour points. The 10,000
+annular CI regression exercises this route; overlap, concavity, boundary
+crossing, interleaved copper, or any additional primitive takes the general
+Boolean path.
+
+What that argument rests on is the void's own **geometry** never being larger
+than the void the film cleared, so **only exactly-reproduced geometry may
+erase copper**. Several aperture images are deliberate over-approximations: a
+macro flash becomes the convex hull of its primitives (a fixed disc when it
+cannot be evaluated at all), a draw whose aperture declares no width takes a
+0.1 mm hairline, and a circular draw or a circular region boundary flattens
+into inscribed chords, which stay inside a convex stretch of a boundary but
+cut across the copper on a concave one. An aperture block (`%AB`) resolves to
+nothing at all, this plotter not implementing blocks. And the object
+transforms `%LS` / `%LR` / `%LM` are not applied, so a `2x1` rectangle under
+`%LS0.5*%` really clears `1x0.5`. Nor is `%IPNEG*%`, where the whole image is
+complemented so the clear objects are the copper. Each is correct while it only
+*adds* copper,
+since a flash that claims a little too much never invents a gap, and
+destructive the moment it subtracts. Those clears are refused outright.
+
+Standard apertures are polygonized *inscribed*, so they under-remove; the one
+exception is a holed aperture's rim, which for a clear flash bounds the copper
+island the void leaves standing and is therefore **circumscribed** so the
+island reads slightly wide rather than slightly short, and refused when the
+hole is so nearly as wide as its aperture that the circumscribed rim escapes
+the outer boundary.
+
+Nesting depth is NOT used across clear images from a whole film. Those images
+can overlap and their contours can cross; the clear-pass union resolves that
+topology directly. The earlier depth reconstruction promoted 11,890 of 12,000
+overlapping antipads into phantom copper and restored the board-sized sheet.
+
+Where nesting depth IS valid is inside one `G36`/`G37` statement, whose
+contours do not cross, so a clear region is split into its connected pieces at
+the moment it is banked, each piece's outer boundary first and its holes after.
+Containment there is judged from a constructed interior point, never a vertex:
+`point_in_polygon` is half-open, so a hole whose loop starts at a point it
+shares with its outer, which boolean-op CAM emits routinely, answered inside or
+outside by drawing orientation alone. The pieces of one clear statement enter
+the same Boolean pass together: cutting a ring's outer while dropping the piece
+that restores its island would erase copper the film kept. That statement may
+legally carry several disjoint islands in any order, and
+treating everything after the first contour as a hole is a guess about draw
+order: a second disjoint void in one statement was cancelled outright, and an
+annular void drawn hole-first had its cleared ring promoted to copper.
+
+A region counts as clear only when the polarity is clear at **both** `G36` and
+`G37`. Which end decides is a reading of when the region object is created, and
+requiring both means an ambiguous film is painted rather than subtracted, so a
+wrong reading over-connects instead of fabricating a break. A region that flips
+polarity mid-way is painted, never dropped.
+
+The remaining limits are the admission refusals above: a clear outline that is
+not conservative enough to subtract safely, negative image polarity, unapplied
+transforms, unsupported aperture blocks, and arc-bearing clear regions or
+strokes. Accepted straight-edged and standard-aperture clears no longer have
+track/pad, concavity, boundary-crossing, or multi-pour exceptions.
+
+Gated by `crates/hauksbee-extract/tests/gerber_negative_pour.rs`: a distilled
+pour with two ringed pads must reconstruct to three conductors, and its
+lookalike, whose right-hand pad the voids leave bridged, to two.
 
 ## Excellon dialects
 
@@ -567,7 +671,21 @@ touch sweep; R-tree-pruned region lookups). Pour containment over
 board-spanning plane layers (tens of thousands of vertices, tested against
 every primitive) is accelerated by `PolyGrid`: a scanline-rasterised
 inside/outside/boundary grid built once per large pour, making each query
-O(1) outside a thin boundary band.
+O(1) outside a thin boundary band. Multi-contour Boolean remainders and the
+qualified dense-plane fast path use it too. The grid also answers "is
+there any pour boundary inside this pad's bounds", which keeps the exact
+poly-distance penetration test off a hot path that a board-sized pour would
+otherwise reach for every pad on the layer. Its scanline classifier sweeps an
+active-edge table, so it holds one copy of each edge rather than one per row
+the edge spans, and its time is linear in the rows those edges sweep (two or
+three per edge of an antipad's outline). A layer's gridded pours share a cell
+budget rather than each taking the resolution ceiling.
+
+The retained bounded stress regression replays 10,000 non-overlapping annular
+antipads in one convex plane and requires one plane plus all 10,000 isolated
+islands. The prior 62,500-antipad timing figures describe the earlier signed
+implementation and are not claimed for the new release candidate until that
+exact final-HEAD benchmark is rerun.
 
 Two-layer boards extract in tens to hundreds of milliseconds. The 6-layer
 reform motherboard (about 75k draws and four 35k-vertex plane pours)
@@ -644,11 +762,12 @@ is the all-pairs touch sweep on the densest signal layers.
   `ReconStats::refused_plating_files` and named in a note. Guessing plated
   invents a net; guessing mechanical deletes one; there is no safe default,
   only a visible refusal.
-- **Clear polarity (LPC)** is skipped for connectivity: a thermal relief or
-  antipad clearing copper inside a pour does not disconnect a net the way
-  it changes a rendered image, so treating the board as additive is correct
-  for connectivity but means a net split *only* by a clear cut-out would be
-  missed.
+- **Clear polarity (LPC)** is cut, not skipped. See [Negative-drawn
+  pours](#negative-drawn-pours-lpc). Admitted geometry is clipped at a pour edge
+  and cuts earlier tracks and pads too. Geometry that cannot be reproduced
+  conservatively enough for subtraction (such as an unapplied transform,
+  unsupported aperture block, or arc-bearing clear region/stroke) is refused and
+  leaves copper standing rather than fabricating an open.
 - **Inner-layer order: the `.gbrjob` manifest is read when the job ships
   one**, and it is authoritative: each copper film's `Copper,L<n>` entry
   places it in the stack, so an Allegro-style plane named without a stack

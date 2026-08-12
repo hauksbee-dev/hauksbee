@@ -336,30 +336,102 @@ pub fn reconstruct(
                     })
                     .collect(),
             );
-            // Grid-accelerate containment only for *large* pours: a board-
-            // spanning plane carries tens of thousands of vertices and is tested
-            // against every primitive, so a raw even-odd test there is
-            // quadratic; the grid makes each query O(1) outside the boundary
-            // band. Small pours (the common case: a few hundred separate fill
-            // islands) are cheaper tested directly than gridded, so they are
-            // left to plain `point_in_polygon` and skip the build cost.
+            // Grid-accelerate containment for *large* pours: a board-spanning
+            // plane carries tens of thousands of vertices and is tested against
+            // every primitive, so a raw even-odd test there is quadratic; the
+            // grid makes each query O(1) outside the boundary band. Small pours
+            // (the common case: a few hundred separate fill islands) are cheaper
+            // tested directly than gridded, so they skip the build cost.
+            //
+            // Multi-contour pours take the grid too. They used to be left to the
+            // exact test on the grounds that they are "rare and small", which a
+            // negative-drawn plane broke outright: cutting its `%LPC%` voids
+            // turns it into ONE board-sized shape carrying a contour per antipad,
+            // exactly the case the grid exists for.
             const GRID_VERT_THRESHOLD: usize = 2000;
-            let region_grids: HashMap<usize, super::geo::PolyGrid> = regions
-                .iter()
-                .filter_map(|&rgi| {
-                    if let Shape::Polygon { pts, .. } = &prims[rgi].shape {
+            // A MultiPolygon pour's contours are borrowed, not copied. Those are the
+            // board-sized ones, a cut negative plane being exactly a multi-contour
+            // pour, so cloning them held the layer's largest geometry twice over for
+            // the whole pass. A `Polygon` has to be wrapped in a one-contour slice
+            // to be gridded at all, so those alone are materialised, and they are the
+            // small ones.
+            let mut owned: Vec<(usize, Vec<Vec<(f64, f64)>>, Vec<i16>)> = Vec::new();
+            let mut borrowed: Vec<(usize, &[Vec<(f64, f64)>], &[i16])> = Vec::new();
+            for &rgi in &regions {
+                match &prims[rgi].shape {
+                    Shape::Polygon { pts, .. } => {
                         if pts.len() >= GRID_VERT_THRESHOLD {
-                            let cells = (pts.len() / 4).clamp(64, 512);
-                            return Some((rgi, super::geo::PolyGrid::new(pts, cells)));
+                            owned.push((rgi, vec![pts.clone()], vec![1]));
                         }
                     }
-                    None
+                    Shape::MultiPolygon { contours, weights } => {
+                        if contours.iter().map(Vec::len).sum::<usize>() >= GRID_VERT_THRESHOLD {
+                            borrowed.push((rgi, contours.as_slice(), weights.as_slice()));
+                        }
+                    }
+                    Shape::Capsule(_) => {}
+                }
+            }
+            let n_gridded = owned.len() + borrowed.len();
+            // Every gridded pour's grid is alive at once, and a 4096-a-side grid is
+            // 16.8 MB of cells, so a layer of many detailed pours has to share a
+            // budget rather than each take the ceiling. 64 M cells is 64 MB for the
+            // layer; up to four dense planes can take the ceiling.
+            const CELL_BUDGET: usize = 64 << 20;
+            let side_ceiling = {
+                let per_pour = CELL_BUDGET / n_gridded.max(1);
+                // The lower clamp wins over the division, so past about 16000
+                // gridded pours the budget stops being a bound and each still takes
+                // 64 cells a side. That needs a film whose own geometry is orders
+                // larger than its grids.
+                ((per_pour as f64).sqrt() as usize).clamp(64, 4096)
+            };
+            let region_grids: HashMap<usize, super::geo::PolyGrid> = owned
+                .iter()
+                .map(|(rgi, cs, weights)| (*rgi, cs.as_slice(), weights.as_slice()))
+                .chain(borrowed.iter().copied())
+                .map(|(rgi, contours, weights)| {
+                    let verts: usize = contours.iter().map(Vec::len).sum();
+                    // Resolution scales with vertex count, so detail buys cells,
+                    // and the ceiling is 4096 rather than 512 because the cell
+                    // size decides how often a query falls back to the exact
+                    // test. A negative plane's pads sit ~0.2 mm from the void rim
+                    // that isolates them, which at 512 cells over a 100 mm board
+                    // (0.2 mm a cell) is one cell: every pad landed in the
+                    // boundary band and paid the exact poly distance over the
+                    // pour's whole vertex count anyway. A 4096 ceiling also keeps
+                    // an annular island's bounds clear of its surrounding hole's
+                    // boundary cells, so dense plane/island reconstruction stays
+                    // indexed instead of falling back to a whole-plane Boolean
+                    // comparison. The grid is exact at any resolution (scanline
+                    // coverage plus an exact test on a boundary cell), so this only
+                    // moves work, never answers.
+                    //
+                    // Whole-extraction times for a 100 mm plane with 6084
+                    // rectangular antipads and a pad in each: 3.97 s with the
+                    // ceiling at 512, 60-75 ms at 2048. With the antipads drawn as
+                    // ANNULAR clear flashes, the shape a real negative plane
+                    // carries (a 64-gon plus a 32-gon rim each, some 600k contour
+                    // vertices), 90-100 ms; 62500 non-overlapping annular ones,
+                    // each leaving an island to free, 1-2 s. Those last two are only
+                    // affordable because the scanline buckets its edges by row (see
+                    // `PolyGrid::new`); without that the build alone was 3.2 s.
+                    let cells = (verts / 4).clamp(64, side_ceiling);
+                    (
+                        rgi,
+                        super::geo::PolyGrid::new_weighted(contours, weights, cells),
+                    )
+                })
+                .collect();
+            let region_witnesses: HashMap<usize, (f64, f64)> = regions
+                .iter()
+                .filter_map(|&rgi| {
+                    super::rs274x::filled_interior_witness(&prims[rgi].shape)
+                        .map(|point| (rgi, point))
                 })
                 .collect();
             for &gi in members {
-                if prims[gi].kind == PrimKind::Region {
-                    continue;
-                }
+                let gi_is_region = prims[gi].kind == PrimKind::Region;
                 let pb = prims[gi].bounds;
                 let near_regions: Vec<usize> = region_tree
                     .locate_in_envelope_intersecting(AABB::from_corners(
@@ -375,11 +447,23 @@ pub fn reconstruct(
                 // a few interior samples along the segment. A pour that floods
                 // onto a pad/spoke contains at least one of these points inside
                 // its filled outline; an antipad-isolated pad has none inside
-                // (the even-odd keyhole puts the pocket outside); a track merely
+                // (the signed-coverage keyhole puts the pocket outside); a track merely
                 // skirting the boundary also has none inside. Pure point-in-
                 // polygon (no poly-poly distance) keeps this near-linear in the
                 // pour's vertex count, so big copper pours stay cheap.
-                let mut test_pts = vec![prims[gi].shape.center()];
+                let mut test_pts = match &prims[gi].shape {
+                    // A region's vertex-average may sit in one of its holes. It is
+                    // not copper and using it as a containment witness joins the
+                    // island in an annular clearance straight back to the plane.
+                    Shape::Polygon { .. } | Shape::MultiPolygon { .. } => if gi_is_region {
+                        region_witnesses.get(&gi).copied()
+                    } else {
+                        super::rs274x::filled_interior_witness(&prims[gi].shape)
+                    }
+                    .into_iter()
+                    .collect(),
+                    Shape::Capsule(_) => vec![prims[gi].shape.center()],
+                };
                 if let Shape::Capsule(c) = &prims[gi].shape {
                     test_pts.push((c.ax, c.ay));
                     test_pts.push((c.bx, c.by));
@@ -391,53 +475,87 @@ pub fn reconstruct(
                     }
                 }
                 for &rgi in &near_regions {
+                    // Region/region joins are visited once. They matter after an
+                    // exact clear operation splits one painted object while a
+                    // different region still overlaps the surviving pieces.
+                    if gi_is_region && rgi <= gi {
+                        continue;
+                    }
                     let b = prims[rgi].bounds;
                     // Only polygonal regions participate: a capsule-shaped
                     // region primitive has no filled outline to contain into.
                     if !matches!(prims[rgi].shape, Shape::Capsule(_)) {
                         // (a) Containment: a sample point inside the filled
                         // outline means the pour copper is *on* that primitive.
-                        // Large pours use the grid; small ones test directly. A
-                        // multi-contour pour (an outer with holes) uses even-odd
-                        // containment, inside the ring is in, inside a hole is
-                        // out; these are rare and small, so they take the exact
-                        // test without a grid.
-                        let inside = test_pts.iter().any(|&(px, py)| {
+                        // Large pours use the grid; small ones test directly.
+                        // Either way containment uses the shape's signed coverage,
+                        // so inside a pour's ring is in and inside a void is out.
+                        let grid = region_grids.get(&rgi);
+                        let contains = |px: f64, py: f64, region: usize| {
+                            let b = prims[region].bounds;
                             if px < b[0] || px > b[2] || py < b[1] || py > b[3] {
                                 return false;
                             }
-                            match &prims[rgi].shape {
-                                Shape::Polygon { pts, .. } => match region_grids.get(&rgi) {
-                                    Some(g) => g.contains(px, py),
-                                    None => super::geo::point_in_polygon(px, py, pts),
-                                },
-                                Shape::MultiPolygon { contours } => {
-                                    super::geo::point_in_contours(px, py, contours)
+                            match (region_grids.get(&region), &prims[region].shape) {
+                                (Some(g), _) => g.contains(px, py),
+                                (None, Shape::Polygon { pts, .. }) => {
+                                    super::geo::point_in_polygon(px, py, pts)
                                 }
-                                Shape::Capsule(_) => false,
+                                (None, Shape::MultiPolygon { contours, weights }) => {
+                                    super::geo::point_in_weighted_contours(
+                                        px, py, contours, weights,
+                                    )
+                                }
+                                (None, Shape::Capsule(_)) => false,
                             }
-                        });
-                        // (b) Edge penetration: a pad/track whose finite-width
-                        // copper laps onto the pour but whose centre-line stays
-                        // just outside the outline (thermal-relief pads, pour
-                        // edge feathering). The pour boundary genuinely cuts
-                        // *through* the primitive's copper, so the signed gap is
-                        // clearly negative. An antipad-isolated pad keeps the
-                        // drawn clearance (~0.2 mm) to the boundary, so its gap
-                        // stays positive and it is NOT joined. We only pay this
-                        // poly distance when the cheap containment missed and the
-                        // bounding boxes actually overlap.
-                        // Only pads (flashes) pay this poly distance: a track
-                        // long enough to reach a pour lands a sample point inside
-                        // it (caught by containment), so the costly poly-poly is
-                        // confined to the comparatively few pad primitives, which
-                        // keeps board-sized pours from making this quadratic.
-                        let penetrates = !inside && prims[gi].kind == PrimKind::Flash && {
-                            let bp = prims[gi].bounds;
-                            !(bp[2] < b[0] || bp[0] > b[2] || bp[3] < b[1] || bp[1] > b[3])
-                                && shape_gap(&prims[gi].shape, &prims[rgi].shape) < -0.04
                         };
-                        if inside || penetrates {
+                        let inside = test_pts.iter().any(|&(px, py)| contains(px, py, rgi));
+                        let reverse_inside = gi_is_region
+                            && region_witnesses
+                                .get(&rgi)
+                                .is_some_and(|&(px, py)| contains(px, py, gi));
+                        // (b) Exact finite-width contact: a pad, track, or plated
+                        // barrel may lap onto the pour while every sampled centre
+                        // point stays just outside it (thermal spokes and edge
+                        // feathering do this routinely). A real zero-gap touch is
+                        // electrical contact; an antipad-isolated object retains a
+                        // positive geometric gap and is not joined. We only pay
+                        // this distance when containment missed and the bounding
+                        // boxes actually overlap.
+                        // A gridded pour also answers "is there any boundary in
+                        // this pad's bounds at all" in O(1). Without that guard a
+                        // board-sized pour's bounds overlap EVERY pad, so every
+                        // antipad-isolated pad paid an exact poly distance over
+                        // the pour's whole vertex count, which is the quadratic
+                        // the grid was introduced to remove.
+                        let penetrates = !inside
+                            && matches!(
+                                prims[gi].kind,
+                                PrimKind::Flash | PrimKind::Track | PrimKind::Via
+                            )
+                            && {
+                                let bp = prims[gi].bounds;
+                                !(bp[2] < b[0] || bp[0] > b[2] || bp[3] < b[1] || bp[1] > b[3])
+                                    && grid.is_none_or(|g| g.near_boundary(bp))
+                                    && shape_gap(&prims[gi].shape, &prims[rgi].shape) <= TOUCH_EPS
+                            };
+                        // Boolean painter replay emits valid region polygons, so
+                        // exact filled-area overlap between two regions is a real
+                        // electrical join. Containment handles the common case;
+                        // only crossing/touching boundaries pay the exact gap.
+                        let gi_boundary_may_cross =
+                            region_grids.get(&gi).is_none_or(|g| g.near_boundary(b));
+                        let rgi_boundary_may_cross = grid.is_none_or(|g| g.near_boundary(pb));
+                        let boundaries_may_cross = gi_boundary_may_cross && rgi_boundary_may_cross;
+                        let regions_overlap = gi_is_region
+                            && !inside
+                            && !reverse_inside
+                            && boundaries_may_cross
+                            && super::rs274x::filled_regions_touch(
+                                &prims[gi].shape,
+                                &prims[rgi].shape,
+                            );
+                        if inside || reverse_inside || penetrates || regions_overlap {
                             dsu.union(gi, rgi);
                         }
                     }
@@ -1280,6 +1398,7 @@ fn largest_dimension_hint(p: &str) -> Option<f64> {
 mod tests {
     use super::*;
     use crate::gerber::geo::Capsule;
+    use crate::gerber::{geo, rs274x};
 
     fn stats_with_flashes(total: usize, assigned: usize) -> ReconStats {
         ReconStats {
@@ -1410,6 +1529,80 @@ mod tests {
         ];
         let (_b, stats) = reconstruct("t", vec![layer], vec![], vec![]);
         assert_eq!(stats.n_nets, 2);
+    }
+
+    #[test]
+    fn region_witness_inside_a_hole_cannot_rejoin_its_island() {
+        let plane_shape = Shape::MultiPolygon {
+            contours: vec![
+                vec![(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)],
+                vec![(0.005, 0.005), (0.05, 0.005), (0.05, 0.05), (0.005, 0.05)],
+            ],
+            weights: vec![1, -1],
+        };
+        let island_shape = Shape::Polygon {
+            pts: vec![(0.01, 0.01), (0.04, 0.01), (0.04, 0.04), (0.01, 0.04)],
+            r: 0.0,
+        };
+        let plane_witness = rs274x::filled_interior_witness(&plane_shape).unwrap();
+        assert!(matches!(
+            &plane_shape,
+            Shape::MultiPolygon { contours, weights }
+                if geo::point_in_weighted_contours(
+                    plane_witness.0,
+                    plane_witness.1,
+                    contours,
+                    weights
+                )
+        ));
+        assert!(matches!(
+            &island_shape,
+            Shape::Polygon { pts, .. }
+                if !geo::point_in_polygon(plane_witness.0, plane_witness.1, pts)
+        ));
+        let plane = CopperPrim::bare(plane_shape, PrimKind::Region);
+        let island = CopperPrim::bare(island_shape, PrimKind::Region);
+
+        let (_board, stats) = reconstruct(
+            "holed-region-witness",
+            vec![vec![plane, island]],
+            vec![],
+            vec![],
+        );
+        assert_eq!(
+            stats.n_nets, 2,
+            "copper isolated inside a real hole must not union back to its surrounding plane"
+        );
+    }
+
+    #[test]
+    fn polygon_flash_inside_a_gridded_pour_keeps_its_containment_witness() {
+        let pour = CopperPrim::bare(
+            Shape::Polygon {
+                pts: (0..2048)
+                    .map(|index| {
+                        let angle = index as f64 * std::f64::consts::TAU / 2048.0;
+                        (10.0 * angle.cos(), 10.0 * angle.sin())
+                    })
+                    .collect(),
+                r: 0.0,
+            },
+            PrimKind::Region,
+        );
+        let pad = CopperPrim::bare(
+            Shape::Polygon {
+                pts: vec![(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)],
+                r: 0.0,
+            },
+            PrimKind::Flash,
+        );
+
+        let (_board, stats) =
+            reconstruct("polygon-pad-in-pour", vec![vec![pour, pad]], vec![], vec![]);
+        assert_eq!(
+            stats.n_nets, 1,
+            "a rectangular pad wholly flooded by a large pour is the same conductor"
+        );
     }
 
     #[test]
