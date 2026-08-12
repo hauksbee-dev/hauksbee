@@ -70,9 +70,10 @@ globalThis.hauksbee = {
     analyzeBoard: (path, firmwarePath, schematicPath) =>
         __call("analyze_board", { board_path: path, firmware_path: firmwarePath,
                                    schematic_path: schematicPath }),
-    runChecks: (path, specToml, firmwarePath) =>
+    runChecks: (path, specToml, firmwarePath, schematicPath) =>
         __call("run_checks", { board_path: path, spec_toml: specToml,
-                               firmware_path: firmwarePath }),
+                               firmware_path: firmwarePath,
+                               schematic_path: schematicPath }),
     listCapabilities: () => __call("list_capabilities", {}),
     boardToCode: (path) => __call("board_to_code", { board_path: path }),
 };

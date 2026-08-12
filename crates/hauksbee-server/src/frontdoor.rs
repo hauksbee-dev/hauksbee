@@ -85,6 +85,13 @@ pub type SchematicAnalyzer =
 pub type CheckRunner =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, &str) -> String + Send + Sync>;
 
+/// Schematic-aware checks runner. Kept beside [`CheckRunner`] so existing
+/// embedders retain the four-argument callback while the shipped app can carry
+/// the same Eagle companion into analysis, live launch, and checks.
+pub type SchematicCheckRunner = Arc<
+    dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>, &str) -> String + Send + Sync,
+>;
+
 /// Everything a successful live-launch callback hands back: the engine to run,
 /// plus the session metadata the hub serves (identity for `/api/live/status`,
 /// the board's own layout text for the geometry viewer, and any staged temp
@@ -285,8 +292,13 @@ pub fn router_with_firmware(analyze: FirmwareAnalyzer) -> Router {
     api_routes(analyze)
 }
 
+enum CheckCallback {
+    Legacy(CheckRunner),
+    Schematic(SchematicCheckRunner),
+}
+
 struct CheckState {
-    check: CheckRunner,
+    check: CheckCallback,
 }
 
 /// The web checks route (`POST /api/check`, multipart: `board` + optional
@@ -295,7 +307,21 @@ struct CheckState {
 /// the uploaded parts. Merged into the unified router next to the analysis
 /// routes.
 pub fn check_route(check: CheckRunner) -> Router {
-    let state = Arc::new(CheckState { check });
+    let state = Arc::new(CheckState {
+        check: CheckCallback::Legacy(check),
+    });
+    Router::new()
+        .route("/api/check", post(check_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
+        .with_state(state)
+}
+
+/// Schematic-aware checks route used by the shipped standalone app.
+pub fn check_route_with_schematic(check: SchematicCheckRunner) -> Router {
+    let state = Arc::new(CheckState {
+        check: CheckCallback::Schematic(check),
+    });
     Router::new()
         .route("/api/check", post(check_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
@@ -936,6 +962,7 @@ async fn check_handler(
         return json_error("the check request needs a 'board' part and a 'spec' part");
     };
     let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
+    let (schematic_name, schematic_bytes) = (parts.schematic_name, parts.schematic_bytes);
 
     // The runner returns a ready JSON string (its own {ok:...} shape); relay
     // it verbatim with the content-type header. It BLOCKS for the whole child
@@ -944,10 +971,21 @@ async fn check_handler(
     // active check, and a handful of concurrent checks could pin every worker
     // and stall all the other routes (the same reason datasheet_check_handler
     // uses spawn_blocking).
-    let check = state.check.clone();
-    let json = match tokio::task::spawn_blocking(move || match &fw_bytes {
-        Some(bytes) => (check)(&board_name, &board_bytes, Some((&fw_name, bytes)), &spec),
-        None => (check)(&board_name, &board_bytes, None, &spec),
+    let check = match &state.check {
+        CheckCallback::Legacy(check) => CheckCallback::Legacy(check.clone()),
+        CheckCallback::Schematic(check) => CheckCallback::Schematic(check.clone()),
+    };
+    let json = match tokio::task::spawn_blocking(move || {
+        let firmware = fw_bytes.as_deref().map(|bytes| (fw_name.as_str(), bytes));
+        let schematic = schematic_bytes
+            .as_deref()
+            .map(|bytes| (schematic_name.as_str(), bytes));
+        match check {
+            CheckCallback::Legacy(check) => check(&board_name, &board_bytes, firmware, &spec),
+            CheckCallback::Schematic(check) => {
+                check(&board_name, &board_bytes, firmware, schematic, &spec)
+            }
+        }
     })
     .await
     {
