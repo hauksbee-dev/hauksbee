@@ -247,6 +247,18 @@ pub trait Mcu {
     ) {
     }
 
+    /// Whether [`Mcu::on_input_responder`] is invoked synchronously inside the
+    /// run loop and applies its returned pin drives before the next guest
+    /// instruction.
+    ///
+    /// Exact edge timestamps alone do not prove that the optional responder
+    /// hook is implemented. The conservative default delegates to the stronger
+    /// atomic-batch capability, so an atomic backend opts into both contracts;
+    /// a legacy singleton backend must override this method explicitly.
+    fn input_responder_synchronous(&self) -> bool {
+        self.input_responder_batches_atomic()
+    }
+
     /// Whether [`Mcu::on_input_responder_batch`] reports one complete hardware
     /// GPIO-port update per callback.
     ///
@@ -256,6 +268,14 @@ pub trait Mcu {
     /// multi-pin memory gates atomic. Backends may return true only when they
     /// override the batch hook and preserve that hardware update boundary.
     fn input_responder_batches_atomic(&self) -> bool {
+        false
+    }
+
+    /// Whether direction-register transitions are synchronously reported to
+    /// the responder. This is required before a pulled GPIO may participate in
+    /// a memory fast path: changing INPUT->OUTPUT changes the physical level
+    /// even when the PORT latch itself does not change.
+    fn input_responder_tracks_direction(&self) -> bool {
         false
     }
 
@@ -276,6 +296,17 @@ pub trait Mcu {
         }));
     }
 
+    /// Register direction transitions for responder-watched GPIOs. `output`
+    /// is the new direction and `port_high` is the current output latch. A
+    /// backend advertising [`Mcu::input_responder_tracks_direction`] must call
+    /// this synchronously from the same hardware-register write.
+    #[allow(clippy::type_complexity)]
+    fn on_input_responder_direction(
+        &mut self,
+        _responder: Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>,
+    ) {
+    }
+
     // ---- UART ----
 
     /// Inject bytes into the MCU's UART RX (as if the host sent them).
@@ -288,12 +319,21 @@ pub trait Mcu {
     /// record-based host protocol (the NEP-board study's SEV-1).
     fn uart_write(&mut self, bytes: &[u8]);
 
-    /// Host serial bytes DROPPED on their way to the firmware because even the
-    /// backend's pending buffer overflowed (a host flooding a firmware that
-    /// never drains). Zero on a healthy run; a caller can surface a non-zero
-    /// value as the loud coverage warning it is. Default 0 for backends whose
-    /// transport is already lossless.
+    /// Host serial bytes not delivered to firmware. This includes a pending
+    /// buffer overflow and an external emulator UART socket/configuration
+    /// failure. Zero on a healthy run; a caller must surface a non-zero value
+    /// as a loud coverage warning. Default 0 for backends whose transport is
+    /// synchronous and lossless.
     fn uart_rx_overflow(&self) -> u64 {
+        0
+    }
+
+    /// Host serial bytes accepted by this backend but not yet presented to
+    /// the emulated UART. A live-session caller uses this at teardown so
+    /// queued input cannot be counted as delivered and then discarded with
+    /// the MCU. External socket backends retain accepted bytes here until the
+    /// next successful emulator advance; synchronous injectors may keep zero.
+    fn uart_rx_pending(&self) -> usize {
         0
     }
 
@@ -492,4 +532,169 @@ pub trait Mcu {
     /// ships a `tmp105` at 0x48), so it overrides this to set that device's
     /// temperature each frame. Backends without such a device ignore it.
     fn set_i2c_device_temperature(&mut self, _addr: u8, _milli_c: i32) {}
+}
+
+/// Convert a backend UART socket failure into the trait's lossless-or-loud
+/// accounting signal. External emulators cannot return a `Result` through the
+/// source-compatible [`Mcu::uart_write`] method, so they retain the failed byte
+/// count and expose it through [`Mcu::uart_rx_overflow`].
+pub(crate) fn account_uart_injection(
+    backend: &str,
+    bytes: usize,
+    result: anyhow::Result<usize>,
+    failed: &mut u64,
+) -> usize {
+    match result {
+        Ok(accepted) => accepted,
+        Err(error) => {
+            let accepted = error
+                .downcast_ref::<UartWriteFailure>()
+                .map(|failure| failure.written)
+                .unwrap_or(0)
+                .min(bytes);
+            let lost = bytes - accepted;
+            if *failed == 0 {
+                eprintln!(
+                    "ERROR: {backend} UART injection failed after {accepted} byte(s); counting \
+                     {lost} host byte(s) as lost: {error:#}"
+                );
+            }
+            *failed = failed.saturating_add(lost as u64);
+            accepted
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct UartWriteFailure {
+    pub written: usize,
+    pub source: std::io::Error,
+}
+
+impl std::fmt::Display for UartWriteFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "UART socket write failed after {} byte(s): {}",
+            self.written, self.source
+        )
+    }
+}
+
+impl std::error::Error for UartWriteFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+pub(crate) fn write_uart_bytes_counted(
+    writer: &mut impl std::io::Write,
+    bytes: &[u8],
+) -> anyhow::Result<usize> {
+    let mut written = 0;
+    while written < bytes.len() {
+        match writer.write(&bytes[written..]) {
+            Ok(0) => {
+                return Err(UartWriteFailure {
+                    written,
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "UART socket accepted zero bytes",
+                    ),
+                }
+                .into())
+            }
+            Ok(count) => written += count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(source) => return Err(UartWriteFailure { written, source }.into()),
+        }
+    }
+    writer
+        .flush()
+        .map_err(|source| UartWriteFailure { written, source })?;
+    Ok(written)
+}
+
+pub(crate) fn drain_uart_bytes(
+    reader: &mut impl std::io::Read,
+    backend: &str,
+) -> anyhow::Result<Vec<u8>> {
+    use anyhow::Context as _;
+
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 2048];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => anyhow::bail!("{backend} UART socket closed while draining firmware output"),
+            Ok(count) => out.extend_from_slice(&chunk[..count]),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                return Ok(out)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("reading {backend} UART socket"))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod uart_accounting_tests {
+    use super::{account_uart_injection, drain_uart_bytes, write_uart_bytes_counted};
+
+    #[test]
+    fn failed_external_uart_write_is_counted_loudly() {
+        let mut failed = 3;
+        let accepted = account_uart_injection(
+            "test backend",
+            7,
+            Err(anyhow::anyhow!("closed socket")),
+            &mut failed,
+        );
+        assert_eq!(accepted, 0);
+        assert_eq!(failed, 10);
+    }
+
+    #[test]
+    fn partial_uart_write_counts_only_the_unwritten_suffix() {
+        struct PrefixThenFail(bool);
+        impl std::io::Write for PrefixThenFail {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "gone"))
+                } else {
+                    self.0 = true;
+                    Ok(bytes.len().min(3))
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let result = write_uart_bytes_counted(&mut PrefixThenFail(false), b"1234567");
+        let mut failed = 0;
+        let accepted = account_uart_injection("test backend", 7, result, &mut failed);
+        assert_eq!(accepted, 3);
+        assert_eq!(failed, 4);
+    }
+
+    #[test]
+    fn uart_drain_refuses_eof_and_non_timeout_errors() {
+        assert!(drain_uart_bytes(&mut std::io::Cursor::new(Vec::<u8>::new()), "test").is_err());
+
+        struct Broken;
+        impl std::io::Read for Broken {
+            fn read(&mut self, _bytes: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "reset",
+                ))
+            }
+        }
+        assert!(drain_uart_bytes(&mut Broken, "test").is_err());
+    }
 }

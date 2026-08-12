@@ -32,7 +32,7 @@ on_spi_controller(name,cb)  same, routed to ONE named SPI controller (a slave on
 That is the coupling surface, the part a peripheral model or the scheduler
 drives. The trait (`crates/hauksbee-mcu/src/traits.rs`) also carries status and
 fidelity accessors the engine reads rather than drives: `state`, `frequency`,
-`reset`, `cycle_exact`, `pins_configured_output`, `uart_rx_overflow`,
+`reset`, `cycle_exact`, `pins_configured_output`, `uart_rx_overflow`, `uart_rx_pending`,
 `set_active_ports`. `reset` is implemented on the AVR backend only; on Renode and
 QEMU it errors, and nothing in the engine calls it in response to a rail event,
 so a board that browns out has its analog collapse caught by a `rail` assertion
@@ -55,8 +55,21 @@ returns onto their ioport input IRQs *synchronously*, before the firmware's
 next instruction. All bits changed by one port-register write are delivered in
 one batch, so a multipin device evaluates the externally visible final levels,
 not a transient bit-order artifact. The legacy single-edge hook remains the
-source-compatible fallback, but its singleton callbacks do not claim synchronous
-parallel-memory ownership. The engine installs an edge-driven `Hc165Chain` here: on
+source-compatible fallback. A backend must separately advertise
+`input_responder_synchronous()` before the engine trusts that optional hook; it
+may then own a memory with one mutable MCU input and otherwise ground-only
+inputs. A dynamic HIGH-active read gate must also keep the power-on bus released
+until its first callback; zero-trigger and power-on-active memories stay on the
+ordinary tick path. Multipin gates, addresses, or data still require an atomic
+batch. One unambiguous weak pull directly to a known supply may seed a GPIO's
+physical idle level when the backend synchronously reports DDR transitions; a
+PORT-latch write while that pin is input still leaves the pull unchanged. An
+unpulled input remains unknown until DDR first drives it, and that first drive
+establishes state without inventing an edge. Conflicting or strong pulls,
+pulled 74HC595 controls, supplied non-GPIO nodes, and any node another MCU,
+edge-driven device, or analogue component can influence stay on the ordinary
+tick path.
+The engine installs an edge-driven `Hc165Chain` here: on
 the PL falling edge it latches the parallel inputs (the spike latches) into
 a QH-emit bit sequence, and on each SCLK rising edge it presents the next
 bit on MISO. This is the read-direction analogue of the edge-driven
@@ -929,7 +942,7 @@ that already speaks sockets, or for a platform with no pty.
 | `--serial-attach` | open the endpoint and run the live co-sim (needs `--firmware`) |
 | `--serial-transport pty\|tcp` | how the host attaches; `pty` (default) needs no changes to your tool |
 | `--serial-wait SECS` | hold the co-sim at t=0 until your tool opens the port, then fail loudly if it never does |
-| `--serial-no-pace` | let the co-sim free-run instead of pacing sim time to wall-clock time |
+| `--serial-no-pace` | free-run before the first peer, then use a compressed wall/sim clock for load-independent host timing |
 | `--serial-mcu REF` | which MCU's UART to bridge on a multi-MCU board (default: all of them) |
 
 **What the session guarantees, and what it says when it cannot.**
@@ -937,28 +950,34 @@ that already speaks sockets, or for a platform with no pty.
 - **Sim time is paced to wall-clock time** by default, because a host tool's
   `timeout=2` and `time.sleep(0.1)` are wall-clock quantities. A free-running
   AVR co-sim would be over before the script's first write. `--serial-no-pace`
-  turns pacing off for a client that does not care.
+  free-runs only before the first attachment, then uses a fixed 1/20 compressed
+  wall/sim mapping. That mapping remains continuous through later handoffs.
 - **Output produced before you attach is held** (bounded, 64 KiB) and flushed on
   attach, so a boot banner is not lost to the gap between reading the device
   path and starting your tool. Past the cap the newest bytes are dropped and
   counted, and the summary says so; it is never silent.
-- **Attach and detach are printed.** A user who cannot tell whether their tool
-  is connected debugs the wrong thing. A peer may attach late, disconnect
-  mid-run, and reattach; the co-sim keeps running throughout, and both attaches
-  are counted.
+- **Observed attach and detach transitions are printed.** A peer may attach
+  late, disconnect mid-run, and reattach; the co-sim keeps running throughout.
+  A close+reopen completed between two PTY polls is one continuous observation,
+  so the compressed wall/sim clock deliberately remains continuous too.
 - **A host record longer than the emulated RX fifo arrives whole.** `uart_write`
   queues bytes and meters them under the emulated UART's own flow control (the
   fifo-truncation defect described above), so a 90-byte or 4 KiB single write is
   delivered in order rather than truncated at 64. If the firmware genuinely does
   not drain its receiver, the session reports the overflow per MCU rather than
   pretending the bytes arrived.
-- **The link is byte-transparent**: NUL, `0x0A` and `0x0D` pass through
-  untouched in both directions. This is not free on a pty (the default cooked
-  line discipline echoes and rewrites those bytes), so the endpoint forces raw
-  mode on every attach.
+- **The link is byte-transparent for a configured serial peer**: NUL, `0x0A`
+  and `0x0D` pass through untouched in both directions. The endpoint applies
+  raw mode on every observed attach, and each process must configure its own tty
+  before writing (normal behavior for pyserial, minicom, screen, and vendor
+  serial clients). A close+reopen hidden between probes cannot be reconfigured
+  by the endpoint before that replacement process's first write.
 - **A session nobody attached to is reported as such**, not as a quiet success.
 
-Honest limits: no baud-rate emulation (the endpoint is transparent, and the
+Honest limits: every PTY process must configure its serial fd before writing and
+must remain open until its command is consumed (use a
+protocol acknowledgement or a transport drain); a write followed by immediate
+close is not delivery evidence on Darwin. There is no baud-rate emulation (the endpoint is transparent, and the
 firmware's own UART divisor sets the pace at which simavr delivers bytes), no
 modem-control lines (no RTS/CTS/DTR, no hardware flow control), and no pty on
 Windows, where `--serial-transport tcp` is the only option. `--serial-attach` and
