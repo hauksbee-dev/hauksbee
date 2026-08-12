@@ -878,7 +878,7 @@ fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
             return (c.r * 2.0, (c.ax, c.ay), (c.bx, c.by));
         }
         geo::Shape::Polygon { pts, .. } => pts,
-        geo::Shape::MultiPolygon { contours } => {
+        geo::Shape::MultiPolygon { contours, .. } => {
             contours.first().map(|c| c.as_slice()).unwrap_or(&[])
         }
     };
