@@ -40,17 +40,20 @@
 //! identical to an attached-and-silent one. [`HostSerial::open`] therefore opens
 //! the slave once itself and immediately closes it: that arms `POLLHUP`, which
 //! then clears the moment a real peer opens the device. `POLLHUP` clear means a
-//! peer is attached, and the transition either way is a reportable event.
+//! peer is attached, and an observed transition either way is reportable. A
+//! close+reopen completed between probes is necessarily one continuous
+//! observation; callers must give both observations identical timing semantics.
 //!
 //! Line discipline is the other half. A pty comes up in *cooked* mode: `ECHO`
 //! bounces every host byte back into the endpoint's own read path, `ONLCR`
 //! rewrites a firmware's `0x0A` as `0x0D 0x0A`, `ICRNL` rewrites the host's
 //! `0x0D` as `0x0A`, and `ISIG`/`ICANON` swallow control bytes outright. Binary
 //! framing does not survive that, so the endpoint forces raw mode on every
-//! attach (the discipline resets to cooked on each fresh slave open, so doing it
-//! once at startup is useless), and it does so through a slave fd rather than the
-//! master, because a `tcsetattr` on the master discards bytes the peer has
-//! already written. See [`raw_via_slave`] for the failure that taught us.
+//! *observed* attach as a convenience, through a slave fd rather than the master
+//! (a `tcsetattr` on the master discards bytes already written). A close+reopen
+//! completed between probes is not observable, so every host process must
+//! configure its own serial fd before writing, as ordinary serial clients do.
+//! See [`raw_via_slave`] for the failure that taught us.
 //!
 //! # Buffering, and what is honestly lost
 //!
@@ -119,12 +122,15 @@ const READ_BUDGET: usize = 64 * 1024;
 /// summary line.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HostSerialStats {
-    /// Bytes read from the host tool (destined for the firmware's UART RX).
+    /// Bytes read from the host tool into the endpoint's owned inbound queue.
+    /// The session layer separately counts bytes actually injected into the
+    /// firmware, because a simulation budget may end while bytes are queued.
     pub to_mcu: u64,
     /// Bytes actually handed to the host tool.
     pub to_peer: u64,
-    /// Firmware output bytes dropped because the backlog was full. Non-zero
-    /// means the host tool did not see everything the firmware sent.
+    /// Firmware output bytes dropped because the backlog was full or the
+    /// session ended before a peer drained it. Non-zero means the host tool
+    /// did not see everything the firmware sent.
     pub dropped_to_peer: u64,
     /// How many times a peer attached over the session (0 = the user never
     /// connected anything).
@@ -159,6 +165,10 @@ pub struct HostSerial {
     attached: bool,
     /// Transitions observed but not yet reported by `poll_peer`.
     events: Vec<PeerEvent>,
+    /// Host bytes drained before observing a hangup. PTYs may discard their
+    /// unread tail once the last slave closes, so polling must preserve it
+    /// before updating attach state.
+    inbound: VecDeque<u8>,
     backlog: VecDeque<u8>,
     stats: HostSerialStats,
 }
@@ -231,6 +241,7 @@ impl HostSerial {
                 endpoint,
                 attached: false,
                 events: Vec::new(),
+                inbound: VecDeque::new(),
                 backlog: VecDeque::new(),
                 stats: HostSerialStats::default(),
             })
@@ -264,6 +275,7 @@ impl HostSerial {
             endpoint,
             attached: false,
             events: Vec::new(),
+            inbound: VecDeque::new(),
             backlog: VecDeque::new(),
             stats: HostSerialStats::default(),
         })
@@ -292,12 +304,24 @@ impl HostSerial {
 
     /// Update the attach state and return every transition since the last call.
     ///
-    /// Call this once per co-sim frame. A peer that attaches and detaches
-    /// entirely between two calls is reported as both events in order; one that
-    /// does so twice within a single frame collapses to one pair, which is a
-    /// reporting limit, not a data-loss one (buffered bytes still flow).
+    /// Call this once per co-sim frame. This is a point-in-time liveness probe:
+    /// a close+reopen that completes between calls can remain one continuous
+    /// observed attachment. Buffered bytes still flow, but callers must not
+    /// assign different timing semantics to an observed versus hidden handoff.
     pub fn poll_peer(&mut self) -> Vec<PeerEvent> {
-        self.refresh();
+        if self.attached {
+            // Drain before asking whether the last slave closed. This retains
+            // bytes already available while the peer is open; an external
+            // process that writes and closes before the next drain must use a
+            // protocol acknowledgement or keep the tty open until consumed.
+            self.buffer_peer_input();
+            self.refresh();
+        } else {
+            // A new peer must be detected and switched to raw mode before its
+            // first bytes are read, or the line discipline can rewrite them.
+            self.refresh();
+            self.buffer_peer_input();
+        }
         std::mem::take(&mut self.events)
     }
 
@@ -308,11 +332,25 @@ impl HostSerial {
     /// stay fine downstream: the fifo-truncation defect class is the reason
     /// `Mcu::uart_write` queues and meters rather than raising bytes at one
     /// instant.
-    /// The pty side reads even when the peer has already gone: a script that
-    /// writes a command and closes immediately leaves its bytes in the pty
-    /// buffer, and dropping them would make a short-lived host tool look like a
-    /// broken simulator.
+    /// The pty side attempts a final read while the peer is still observed.
+    /// A host that writes and immediately closes without waiting for a protocol
+    /// response or transport drain is not a checked delivery: Darwin may discard
+    /// bytes that the master did not consume before the last slave closed.
     pub fn read_from_peer(&mut self) -> Vec<u8> {
+        self.buffer_peer_input();
+        let take = self.inbound.len().min(READ_BUDGET);
+        self.inbound.drain(..take).collect()
+    }
+
+    /// Host bytes already owned by the endpoint but not yet taken by the
+    /// session for simulated-time scheduling.
+    pub fn pending_from_peer(&self) -> usize {
+        self.inbound.len()
+    }
+
+    /// Drain the transport into an owned queue before any attach-state probe
+    /// can turn a PTY's final readable byte into EOF.
+    fn buffer_peer_input(&mut self) {
         let mut out = Vec::new();
         match &mut self.inner {
             #[cfg(unix)]
@@ -384,7 +422,7 @@ impl HostSerial {
             }
         }
         self.stats.to_mcu += out.len() as u64;
-        out
+        self.inbound.extend(out);
     }
 
     /// Queue firmware output for the host tool, flushing as much as the peer
@@ -406,9 +444,35 @@ impl HostSerial {
     /// Push as much of the backlog as the peer will accept. Called by
     /// [`Self::write_to_peer`] and on attach; safe to call at any time.
     pub fn flush(&mut self) {
+        self.flush_with_after_probe(|| {});
+    }
+
+    fn flush_with_after_probe<F>(&mut self, after_probe: F)
+    where
+        F: FnOnce(),
+    {
         if !self.attached || self.backlog.is_empty() {
             return;
         }
+
+        #[cfg(unix)]
+        if matches!(self.inner, Inner::Pty { .. }) {
+            // Drain inbound, then keep the PTY free of internal slave fds from
+            // the external-liveness probe through every master write below.
+            // That makes a successful write evidence of a real peer, never a
+            // pseudo-peer owned by this endpoint.
+            self.buffer_peer_input();
+            let external_attached = match &mut self.inner {
+                Inner::Pty { master, .. } => pty_peer_attached(*master),
+                Inner::Tcp { .. } => unreachable!(),
+            };
+            if !external_attached {
+                self.mark_detached();
+                return;
+            }
+        }
+
+        after_probe();
         loop {
             self.backlog.make_contiguous();
             let (front, _) = self.backlog.as_slices();
@@ -474,6 +538,16 @@ impl HostSerial {
     /// How many bytes are still waiting for the peer.
     pub fn pending_to_peer(&self) -> usize {
         self.backlog.len()
+    }
+
+    /// Account for terminal firmware output that no peer drained. Session
+    /// teardown is the only valid caller: while the endpoint remains live the
+    /// backlog must stay available for a later peer instead of being discarded.
+    pub fn discard_terminal_output(&mut self) -> usize {
+        let pending = self.backlog.len();
+        self.backlog.clear();
+        self.stats.dropped_to_peer += pending as u64;
+        pending
     }
 
     /// A paste-ready hint for attaching a tool, tailored to the transport.
@@ -721,6 +795,203 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(saw_detach, "a peer that disconnects must be reported");
+        assert!(!ep.peer_attached());
+    }
+
+    /// A checked command remains lossless when the peer stays open until the
+    /// endpoint consumes it. Immediate write-and-close without an ACK/drain is
+    /// deliberately outside the PTY contract: keeping an internal slave open
+    /// to save that external bug would make firmware output falsely deliverable.
+    #[cfg(unix)]
+    #[test]
+    fn pty_checked_command_is_consumed_before_peer_close() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
+        let mut peer = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(ep.endpoint())
+            .expect("open pty peer");
+
+        for _ in 0..200 {
+            if ep.poll_peer().contains(&PeerEvent::Attached) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(ep.peer_attached(), "peer attach must be observed and rawed");
+
+        // Match the original NEP host: it re-applies its own noncanonical
+        // termios options after the endpoint has observed and rawed the peer.
+        unsafe {
+            let mut options: libc::termios = std::mem::zeroed();
+            options.c_cflag = libc::B9600 | libc::CS8 | libc::CLOCAL | libc::CREAD;
+            options.c_iflag = libc::IGNPAR;
+            options.c_oflag = 0;
+            options.c_lflag = 0;
+            assert_eq!(libc::tcflush(peer.as_raw_fd(), libc::TCIFLUSH), 0);
+            assert_eq!(
+                libc::tcsetattr(peer.as_raw_fd(), libc::TCSANOW, &options),
+                0
+            );
+        }
+
+        peer.write_all(&[0x05]).expect("write signature request");
+        let mut first = Vec::new();
+        for _ in 0..200 {
+            first.extend(ep.read_from_peer());
+            if first == [0x05] {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(first, [0x05]);
+
+        ep.write_to_peer(&[0x06, 0x00, 0x01, 0x01, b'\n']);
+        let mut signature = [0u8; 5];
+        peer.read_exact(&mut signature).expect("read signature");
+        assert_eq!(signature, [0x06, 0x00, 0x01, 0x01, b'\n']);
+
+        peer.write_all(&[0x07]).expect("write final command");
+        let mut command = Vec::new();
+        for _ in 0..200 {
+            command.extend(ep.read_from_peer());
+            if command == [0x07] {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(command, [0x07]);
+        drop(peer);
+
+        let events = ep.poll_peer();
+        assert!(events.contains(&PeerEvent::Detached));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_reopen_before_poll_preserves_bytes_as_one_continuous_observation() {
+        use std::os::fd::AsRawFd;
+
+        let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
+        let mut first = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(ep.endpoint())
+            .expect("first peer");
+        for _ in 0..200 {
+            if ep.poll_peer().contains(&PeerEvent::Attached) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(ep.peer_attached());
+        first.write_all(b"a").expect("first peer byte");
+        let mut first_byte = Vec::new();
+        for _ in 0..200 {
+            first_byte.extend(ep.read_from_peer());
+            if first_byte == b"a" {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(first_byte, b"a");
+        drop(first);
+
+        let mut second = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(ep.endpoint())
+            .expect("second peer before next poll");
+        // A hidden replacement cannot be rawed by a point-in-time observer.
+        // Real serial clients configure their fd before writing; use binary
+        // bytes here so an accidental cooked-mode test cannot false-green.
+        set_raw(second.as_raw_fd());
+        let replacement = [0x00, 0x0a, 0x0d, b'b'];
+        second
+            .write_all(&replacement)
+            .expect("replacement peer bytes");
+
+        assert!(
+            ep.poll_peer().is_empty(),
+            "a point-in-time PTY probe cannot invent a close+reopen history"
+        );
+        assert!(ep.peer_attached());
+        assert_eq!(ep.read_from_peer(), replacement);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_output_after_peer_close_stays_backlogged_for_the_next_peer() {
+        let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
+        let first = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(ep.endpoint())
+            .expect("first peer");
+        for _ in 0..200 {
+            if ep.poll_peer().contains(&PeerEvent::Attached) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(ep.peer_attached());
+        drop(first);
+
+        ep.write_to_peer(b"retained");
+        assert_eq!(
+            ep.pending_to_peer(),
+            b"retained".len(),
+            "an internal PTY fd is not a host and cannot earn delivery credit"
+        );
+        assert!(ep.poll_peer().contains(&PeerEvent::Detached));
+
+        let mut second = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(ep.endpoint())
+            .expect("replacement peer");
+        for _ in 0..200 {
+            if ep.poll_peer().contains(&PeerEvent::Attached) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let mut received = [0u8; 8];
+        second.read_exact(&mut received).expect("retained output");
+        assert_eq!(&received, b"retained");
+        assert_eq!(ep.stats().to_peer, b"retained".len() as u64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_peer_close_after_probe_cannot_deliver_output_to_the_guard() {
+        let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
+        let mut peer = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(ep.endpoint())
+            .expect("peer");
+        for _ in 0..200 {
+            if ep.poll_peer().contains(&PeerEvent::Attached) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(ep.peer_attached());
+        ep.backlog.extend(b"racy");
+
+        ep.flush_with_after_probe(move || {
+            peer.write_all(b"unchecked-final")
+                .expect("external write before immediate close");
+            drop(peer);
+        });
+
+        assert_eq!(ep.pending_to_peer(), 4);
+        assert_eq!(ep.stats().to_peer, 0);
         assert!(!ep.peer_attached());
     }
 }
