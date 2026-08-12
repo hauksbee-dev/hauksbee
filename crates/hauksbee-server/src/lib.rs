@@ -17,8 +17,8 @@ use axum::routing::get;
 use axum::Router;
 use engine::Engine;
 use frontdoor::{
-    CheckRunner, FirmwareAnalyzer, LiveLauncher, SchematicAnalyzer, SchematicLiveLauncher,
-    ToolHooks,
+    CheckRunner, FirmwareAnalyzer, LiveLauncher, SchematicAnalyzer, SchematicCheckRunner,
+    SchematicLiveLauncher, ToolHooks,
 };
 use protocol::{ClientMessage, ServerMessage, SessionBacklog, SimFrame, Status};
 use std::path::Path;
@@ -359,6 +359,7 @@ impl Server {
             Some(analyze),
             None,
             check,
+            None,
             tools,
             launch,
             None,
@@ -432,7 +433,7 @@ impl Server {
         static_dir: Option<&Path>,
         board_file: Option<(String, String)>,
         analyze: SchematicAnalyzer,
-        check: Option<CheckRunner>,
+        check: Option<SchematicCheckRunner>,
         tools: Option<ToolHooks>,
         launch: Option<SchematicLiveLauncher>,
         startup_json: String,
@@ -443,6 +444,7 @@ impl Server {
             board_file,
             None,
             Some(analyze),
+            None,
             check,
             tools,
             None,
@@ -467,6 +469,7 @@ fn unified_router(
     analyze: Option<FirmwareAnalyzer>,
     schematic_analyze: Option<SchematicAnalyzer>,
     check: Option<CheckRunner>,
+    schematic_check: Option<SchematicCheckRunner>,
     tools: Option<ToolHooks>,
     launch: Option<LiveLauncher>,
     schematic_launch: Option<SchematicLiveLauncher>,
@@ -510,6 +513,9 @@ fn unified_router(
     // embedding binary supplied a runner (the hauksbee-ci shell-out).
     if let Some(check) = check {
         router = router.merge(frontdoor::check_route(check));
+    }
+    if let Some(check) = schematic_check {
+        router = router.merge(frontdoor::check_route_with_schematic(check));
     }
     // The dependency panel's backend (`GET /api/deps`, `POST
     // /api/deps/install/{id}`) and the datasheet-extraction backend
@@ -634,6 +640,7 @@ pub async fn serve_frontdoor_on(
         Some(analyze),
         None,
         check,
+        None,
         tools,
         launch,
         None,
@@ -651,7 +658,7 @@ pub async fn serve_frontdoor_on_with_schematic(
     listener: tokio::net::TcpListener,
     static_dir: Option<&Path>,
     analyze: SchematicAnalyzer,
-    check: Option<CheckRunner>,
+    check: Option<SchematicCheckRunner>,
     tools: Option<ToolHooks>,
     launch: Option<SchematicLiveLauncher>,
     startup_json: String,
@@ -663,6 +670,7 @@ pub async fn serve_frontdoor_on_with_schematic(
         None,
         None,
         Some(analyze),
+        None,
         check,
         tools,
         None,

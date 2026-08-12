@@ -441,6 +441,17 @@ pub fn run_spec_with_lib(
     let input_raw = normalized.raw;
     let reader_notes = normalized.notes;
     let base = normalized.board;
+    let board_is_eagle = input_raw
+        .windows(b"<eagle".len())
+        .any(|window| window.eq_ignore_ascii_case(b"<eagle"));
+    let schematic_path = spec.schematic_path();
+    let schematic_ties = hauksbee_engine::schematic_ties::resolve(
+        &board_path,
+        &base,
+        schematic_path.as_deref(),
+        board_is_eagle,
+    )
+    .map_err(|error| SpecError::Invalid(format!("resolving companion schematic: {error}")))?;
     crate::progress::say(&format!(
         "  read {} components across {} nets",
         base.components.len(),
@@ -537,6 +548,7 @@ pub fn run_spec_with_lib(
             input_kind,
             &input_raw,
             &reader_notes,
+            schematic_ties.as_ref(),
         )?;
         outcome.ac = match &shared_ac {
             Some(ac) => Some(ac.clone()),
@@ -1141,6 +1153,7 @@ fn run_one(
     input_kind: hauksbee_engine::board_input::InputKind,
     input_raw: &[u8],
     reader_notes: &[String],
+    schematic_ties: Option<&hauksbee_engine::schematic_ties::SchematicTies>,
 ) -> Result<RunOutcome, SpecError> {
     let seed = plan.seed;
     let mut board = apply_overrides(spec, base)?;
@@ -1754,6 +1767,19 @@ fn run_one(
     })
     .and_then(|evidence| evidence.with_assumptions(production_assumptions))
     .map_err(|e| SpecError::Invalid(format!("building run evidence: {e}")))?;
+    if let Some(ties) = schematic_ties {
+        evidence = evidence
+            .with_schematic_artifact(
+                &ties.path,
+                &ties.raw,
+                format!(
+                    "{} declared net tie{} retained as context only; the CI run uses the board as physical authority",
+                    ties.ties.len(),
+                    if ties.ties.len() == 1 { "" } else { "s" }
+                ),
+            )
+            .map_err(|e| SpecError::Invalid(format!("building schematic evidence: {e}")))?;
+    }
     if let Some(path) = firmware.as_deref() {
         let bytes = std::fs::read(path).map_err(|error| {
             SpecError::Io(format!(

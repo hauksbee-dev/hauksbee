@@ -297,9 +297,9 @@ pub fn serve(
         let analyze = schematic_analyzer();
         // Same checks backend as `hauksbee serve`, so the web checks panel works
         // in the preloaded (`run --serve`) flow too.
-        let check: hauksbee_server::frontdoor::CheckRunner =
-            Arc::new(|name, contents, fw, spec| {
-                crate::webcheck::run_web_check(name, contents, fw, spec)
+        let check: hauksbee_server::frontdoor::SchematicCheckRunner =
+            Arc::new(|name, contents, fw, schematic, spec| {
+                crate::webcheck::run_web_check_with_schematic(name, contents, fw, schematic, spec)
             });
 
         // Bind FIRST, then print. The requested port may be busy, in which case

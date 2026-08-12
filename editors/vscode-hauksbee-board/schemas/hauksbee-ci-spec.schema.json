@@ -172,6 +172,14 @@
         "$ref": "#/definitions/Scenario"
       }
     },
+    "schematic": {
+      "description": "Optional companion Eagle schematic. It contributes declared-net-tie\ncontext and exact provenance; the board remains the physical authority.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
     "sensor": {
       "description": "Declarative sensors attached to the co-sim for this run. Each entry\ndescribes one I2C or SPI sensor (via an inline spec string or a file\npath) plus optional per-run input overrides.",
       "type": "array",

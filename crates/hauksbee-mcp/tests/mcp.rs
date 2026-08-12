@@ -286,6 +286,36 @@ kind = "no_faults"
 }
 
 #[test]
+fn run_checks_retains_an_explicit_eagle_schematic() {
+    let mut c = McpClient::start();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../hauksbee-extract/tests/fixtures/eagle_ties");
+    let (verdict, is_error) = c.call_tool(
+        "run_checks",
+        json!({
+            "board_path": root.join("declared.brd"),
+            "schematic_path": root.join("declared.sch"),
+            "spec_toml": "duration_ms = 1\n\n[[assert]]\nkind = \"no_faults\"\n",
+        }),
+    );
+    assert!(!is_error, "explicit schematic check should run: {verdict}");
+    assert!(
+        verdict["inventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|artifact| {
+                artifact["role"] == "schematic"
+                    && artifact["format"] == "eagle_schematic"
+                    && artifact["sha256"]
+                        .as_str()
+                        .is_some_and(|hash| hash.len() == 64)
+            }),
+        "the exact schematic input must ride in CI provenance: {verdict}"
+    );
+}
+
+#[test]
 fn run_checks_rejects_a_board_key_in_the_spec_body() {
     let mut c = McpClient::start();
     let (v, is_error) = c.call_tool(
