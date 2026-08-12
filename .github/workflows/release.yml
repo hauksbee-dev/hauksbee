@@ -1,9 +1,10 @@
 # Build hauksbee release binaries and attach them to a GitHub Release on a tag.
 #
 # Trigger: push a tag like `v0.1.0`. The workflow builds the `hauksbee`,
-# `hauksbee-ci` and `hauksbee-mcp` binaries on four native runners, packages each with
-# scripts/bundle.sh into a versioned tarball (+ sha256), and uploads them as
-# release assets. scripts/get-hauksbee.sh downloads, verifies the sha256, and
+# `hauksbee-ci` and `hauksbee-mcp` binaries on four Unix runners plus native
+# Windows x86_64. Unix legs use scripts/bundle.sh for the two licence shapes;
+# Windows uses scripts/bundle-windows.ps1 for its honest permissive-only zip.
+# Every asset has a sha256 sidecar. scripts/get-hauksbee.sh downloads, verifies it, and
 # installs the binaries (hauksbee, hauksbee-ci, hauksbee-mcp); the composite
 # Action and the KiCad plugin also
 # prefer these assets and fall back to building from source.
@@ -87,7 +88,9 @@ on:
         required: true
 
 permissions:
-  contents: write   # needed to create the release and upload assets
+  # Build and test jobs execute third-party build scripts. They receive no
+  # repository-write credential; only the final publication job can write.
+  contents: read
 
 jobs:
   build:
@@ -112,6 +115,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: hauksbee
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-03
@@ -492,6 +496,110 @@ jobs:
             hauksbee/dist/*.sha256
           if-no-files-found: error
 
+  build-windows:
+    name: build windows-x86_64 (permissive)
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: -D warnings
+      SIMAVR_INCLUDE_DIR: C:\nonexistent\simavr-must-not-be-linked
+      SIMAVR_LIB_DIR: C:\nonexistent\simavr-must-not-be-linked
+    steps:
+      - name: Checkout hauksbee
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: hauksbee
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-03
+      - name: Install bun for the embedded web UI
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~\.cargo\registry\index
+            ~\.cargo\registry\cache
+            ~\.cargo\git\db
+            hauksbee\target
+          key: release-windows-x86_64-${{ hashFiles('hauksbee/Cargo.lock') }}
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $raw = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { $env:REF_NAME }
+          if ($raw -notmatch '^v?[0-9A-Za-z._-]+$') { throw "refusing suspicious version: $raw" }
+          $version = $raw -replace '^v', ''
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Install checksum-pinned Windows simulator backends
+        shell: pwsh
+        working-directory: hauksbee
+        run: .\scripts\install-sims-windows.ps1
+      - name: Refuse modified installed simulator payloads
+        shell: powershell
+        working-directory: hauksbee
+        run: .\scripts\test-windows-simulator-integrity.ps1
+      - name: Verify offline Windows contracts
+        shell: powershell
+        working-directory: hauksbee
+        run: python scripts/test-windows-port-contract.py
+      - name: Verify native Windows Job Object timeout
+        shell: powershell
+        working-directory: hauksbee
+        run: .\scripts\test-windows-process-tree.ps1
+      - name: Verify native engine, CI, and emulator lifecycle
+        shell: powershell
+        working-directory: hauksbee
+        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
+      - name: Require and retain real Windows firmware integrations
+        shell: pwsh
+        working-directory: hauksbee
+        run: |
+          .\scripts\run-required-integrations-windows.ps1 `
+            -ExpectedSha "${{ github.sha }}" `
+            -EvidenceOut "required-integrations-windows-x86_64.json"
+      - name: Build embedded web UI
+        working-directory: hauksbee/frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: Build permissive Windows release binaries
+        working-directory: hauksbee
+        run: cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
+      - name: Package and verify permissive Windows zip
+        shell: pwsh
+        working-directory: hauksbee
+        run: |
+          .\scripts\bundle-windows.ps1 -Version "${{ steps.ver.outputs.version }}" -Out dist
+          $V = "${{ steps.ver.outputs.version }}"
+          $zip = "dist\hauksbee-$V-windows-x86_64-permissive.zip"
+          $sum = "$zip.sha256"
+          if (-not (Test-Path $zip) -or -not (Test-Path $sum)) { throw "Windows bundle or checksum missing" }
+          $expected = ((Get-Content $sum -First 1) -split '\s+')[0]
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash
+          if ($expected -ne $actual) { throw "Windows bundle checksum mismatch" }
+          $extract = Join-Path $env:RUNNER_TEMP "hauksbee-windows-verify"
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract
+          $root = Join-Path $extract "hauksbee-$V-windows-x86_64-permissive"
+          foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
+            if (-not (Test-Path (Join-Path $root "bin\$binary"))) { throw "$binary missing from Windows bundle" }
+          }
+          if (-not (Test-Path (Join-Path $root "LICENSE-BINARY.txt"))) { throw "LICENSE-BINARY.txt missing" }
+          $doctor = & (Join-Path $root "bin\hauksbee.exe") doctor | Out-String
+          if ($doctor -notmatch '(?m)^avr\s+disabled\b') { throw "packaged Windows binary is not permissive" }
+          .\scripts\test-windows-installer.ps1 -Zip $zip -Checksum $sum -Version $V
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hauksbee-windows-x86_64
+          path: |
+            hauksbee/dist/*.zip
+            hauksbee/dist/*.zip.sha256
+            hauksbee/required-integrations-windows-x86_64.json
+          if-no-files-found: error
+
   # A nightly run on another commit is useful feedback, not release evidence.
   # This job checks out the tag's exact SHA, verifies checksum-backed installed
   # emulator artifacts, and retains the three named real firmware-through-
@@ -519,6 +627,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: hauksbee
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-03
@@ -558,8 +667,10 @@ jobs:
 
   release:
     name: publish release
-    needs: [build, required-integrations]
+    needs: [build, build-windows, required-integrations]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     # Only publish a Release for an actual tag push; workflow_dispatch just
     # produces downloadable build artifacts (above).
     if: startsWith(github.ref, 'refs/tags/')
@@ -568,6 +679,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: hauksbee
+          persist-credentials: false
 
       # The bundles, installer and OCI labels all point at the private release
       # repository hauksbee-dev/hauksbee. This release is distributed only to
@@ -622,6 +734,12 @@ jobs:
               --verify-evidence "artifacts/required-integration-evidence-$label/required-integrations-$label.json" \
               --expected-sha "$GITHUB_SHA"
           done
+          windows_evidence="$(find artifacts/hauksbee-windows-x86_64 -name required-integrations-windows-x86_64.json -print -quit)"
+          test -n "$windows_evidence"
+          python3 hauksbee/scripts/run_required_integrations.py \
+            --verify-evidence "$windows_evidence" \
+            --expected-sha "$GITHUB_SHA" \
+            --expected-platform "windows-x86_64"
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
@@ -634,13 +752,15 @@ jobs:
           fail_on_unmatched_files: true
 
 # =============================================================================
-# Asset list a release produces (per matrix leg, four legs):
+# Asset list a release produces:
 #   hauksbee-<ver>-<label>.tar.gz              + .sha256   default, GPL-3.0
 #   hauksbee-<ver>-<label>-permissive.tar.gz   + .sha256   permissive, Apache-2.0
 #   hauksbee-<ver>-<label>-app.zip             + .sha256   macOS legs only,
 #                                                          wraps the default shape
 #   hauksbee-ci-pcm-v<ver>.zip                  + .sha256   one platform-neutral
 #                                                          KiCad PCM archive
+#   hauksbee-<ver>-windows-x86_64-permissive.zip + .sha256 Windows x64,
+#                                                          Apache-2.0, no AVR
 #
 # The historical "OPTION A, not shipped" block that used to live here described
 # the GPL shape as a hypothetical to be enabled by hand. It is now the default

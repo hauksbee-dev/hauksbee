@@ -1,32 +1,24 @@
 <#
 .SYNOPSIS
-  get-hauksbee.ps1 - download and install prebuilt hauksbee + hauksbee-ci binaries on Windows.
+  Download and transactionally install hauksbee, hauksbee-ci, and hauksbee-mcp on Windows.
 
 .DESCRIPTION
   The Windows counterpart of scripts/get-hauksbee.sh. Fetches the latest GitHub
   Release asset (or a pinned version), verifies the sha256 checksum with
-  Get-FileHash, and extracts hauksbee.exe and hauksbee-ci.exe to the install
-  prefix. Safe to re-run: an existing install is only overwritten once the
-  checksum of the new download is verified.
+  Get-FileHash, and installs all three executables to the install prefix. Safe
+  to re-run: the complete new bin directory is staged and validated before the
+  old directory is swapped out; a failed swap restores the old installation.
 
-  NOTE: there are no published Windows release assets yet. Windows is
-  evaluated but NOT a promised target (docs/about/release-and-licensing.md
-  section 5); this installer implements the section 3 naming contract with a
-  `windows-x86_64` suffix and `.zip` assets so the release workflow and the
-  installer cannot drift when that leg lands. Until a `windows-x86_64` asset
-  exists on a release, the download step will report 404: build from source
-  instead (https://github.com/hauksbee-dev/hauksbee#quickstart).
+  Windows releases use the `windows-x86_64` suffix and `.zip` assets. They are
+  permissive-only: Renode and Espressif QEMU are compiled in, while the AVR
+  backend is disabled because this repository has no supported native MSVC
+  libsimavr build.
 
   Which build you get:
-    Default: the full build, AVR / ATmega co-simulation included. It statically
-    links libsimavr, so THE BINARY is GPL-3.0 (hauksbee's source stays
-    Apache-2.0). GPL-3.0 constrains redistributing the binary, not running it.
-    -Permissive: the same tool without the avr backend, so no GPL code is
-    linked and the binary is Apache-2.0. Take it if you redistribute or embed
-    hauksbee. It cannot do AVR co-sim; Renode and Espressif QEMU still work.
-    Either way, LICENSE-BINARY.txt inside the zip spells out the terms.
-    (A first Windows release would ship the permissive shape only: the avr
-    backend needs an MSYS2 libsimavr build nobody has written yet.)
+    Windows releases are permissive-only. The binary is Apache-2.0, cannot do
+    AVR co-sim, and retains the Renode and Espressif QEMU backends. The
+    installer selects that shape even when -Permissive is omitted and names
+    the limitation before downloading. LICENSE-BINARY.txt records it too.
 
 .PARAMETER Version
   Install a specific release tag (e.g. v0.1.0). Default: latest.
@@ -35,7 +27,8 @@
   Install binaries to <Prefix>\bin. Default: $env:LOCALAPPDATA\hauksbee.
 
 .PARAMETER Permissive
-  Install the GPL-free build instead of the default one.
+  Accepted for parity with the Unix installer. Windows has only this GPL-free
+  shape, so omitting the switch selects the same artifact with a notice.
 
 .EXAMPLE
   try {
@@ -92,6 +85,10 @@ if ($arch -ne [System.Runtime.InteropServices.Architecture]::X64) {
 }
 $AssetSuffix = "windows-x86_64"
 Write-Host "Detected platform: Windows/$arch -> asset suffix: $AssetSuffix"
+if (-not $Permissive) {
+    Write-Host "Windows releases are permissive-only: selecting the renode+qemu build (AVR disabled)."
+    $Permissive = $true
+}
 
 # ---------------------------------------------------------------------------
 # Resolve the release tag (latest or pinned)
@@ -154,10 +151,92 @@ $assetHeaders = @{
     "X-GitHub-Api-Version" = "2022-11-28"
 }
 
+function Invoke-TokenFreeVersionProbe([string]$Path) {
+    $savedHauksbee = [Environment]::GetEnvironmentVariable("HAUKSBEE_GITHUB_TOKEN", "Process")
+    $savedGithub = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", "Process")
+    try {
+        Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue
+        Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+        $output = & $Path --version 2>&1 | Out-String
+        return @{ ExitCode = $LASTEXITCODE; Output = $output }
+    } finally {
+        if ($null -eq $savedHauksbee) { Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:HAUKSBEE_GITHUB_TOKEN = $savedHauksbee }
+        if ($null -eq $savedGithub) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $savedGithub }
+    }
+}
+
+function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVersion) {
+    $probe = Invoke-TokenFreeVersionProbe $Path
+    $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
+    $escapedVersion = [regex]::Escape($ExpectedVersion)
+    if ($probe.ExitCode -ne 0 -or $probe.Output -notmatch "(?m)^$escapedName $escapedVersion(?:\s|$)") {
+        throw "staged $Name does not identify release version $ExpectedVersion`: $($probe.Output)"
+    }
+}
+
+function Recover-StaleBackup([string]$Target) {
+    $parent = Split-Path -Parent $Target
+    $leaf = Split-Path -Leaf $Target
+    $backups = @(Get-ChildItem -LiteralPath $parent -Filter "$leaf.install-backup-*" -Directory -ErrorAction SilentlyContinue)
+    if (Test-Path -LiteralPath $Target) {
+        foreach ($stale in $backups) {
+            Remove-Item -LiteralPath $stale.FullName -Recurse -Force
+        }
+        return
+    }
+    if ($backups.Count -gt 1) {
+        throw "multiple interrupted-install backups exist for $Target; refusing to guess which is authoritative"
+    }
+    if ($backups.Count -eq 1) {
+        Move-Item -LiteralPath $backups[0].FullName -Destination $Target
+        Write-Warning "Recovered the previous installation after an interrupted tree swap."
+    }
+}
+
+function Replace-Tree([string]$Staging, [string]$Target) {
+    $parent = Split-Path -Parent $Target
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $lockPath = "$Target.install.lock"
+    $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        Recover-StaleBackup $Target
+        $backup = "$Target.install-backup-$([guid]::NewGuid().ToString('N'))"
+        $movedOld = $false
+        try {
+            if (Test-Path -LiteralPath $Target) {
+                Move-Item -LiteralPath $Target -Destination $backup
+                $movedOld = $true
+            }
+            if ($env:HAUKSBEE_TEST_FAIL_INSTALL_SWAP) { throw "injected install swap failure" }
+            Move-Item -LiteralPath $Staging -Destination $Target
+        } catch {
+            if (Test-Path -LiteralPath $Target) {
+                Remove-Item -LiteralPath $Target -Recurse -Force
+            }
+            if ($movedOld -and (Test-Path -LiteralPath $backup)) {
+                Move-Item -LiteralPath $backup -Destination $Target
+            }
+            throw
+        }
+        if ($movedOld -and (Test-Path -LiteralPath $backup)) {
+            Remove-Item -LiteralPath $backup -Recurse -Force
+        }
+    } finally {
+        $lock.Dispose()
+    }
+}
+
+function Remove-AbandonedStaging([string]$Path) {
+    if ($Path -and (Test-Path -LiteralPath $Path)) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Download to a temp directory; verify; then install
 # ---------------------------------------------------------------------------
 $workDir = Join-Path ([System.IO.Path]::GetTempPath()) "get-hauksbee-$([System.IO.Path]::GetRandomFileName())"
+$installStaging = $null
 New-Item -ItemType Directory -Path $workDir | Out-Null
 try {
     $zipPath = Join-Path $workDir $ZipName
@@ -217,8 +296,9 @@ try {
     $binDir = Join-Path (Join-Path $workDir $AssetName) "bin"
     $hauksbeeExe = Join-Path $binDir "hauksbee.exe"
     $ciExe = Join-Path $binDir "hauksbee-ci.exe"
-    if (-not (Test-Path $hauksbeeExe) -or -not (Test-Path $ciExe)) {
-        Write-Error "Unexpected zip layout: bin\hauksbee.exe or bin\hauksbee-ci.exe not found."
+    $mcpExe = Join-Path $binDir "hauksbee-mcp.exe"
+    if (-not (Test-Path $hauksbeeExe) -or -not (Test-Path $ciExe) -or -not (Test-Path $mcpExe)) {
+        Write-Error "Unexpected zip layout: one or more of bin\hauksbee.exe, bin\hauksbee-ci.exe, bin\hauksbee-mcp.exe is missing."
         exit 1
     }
 
@@ -226,14 +306,25 @@ try {
     # Install to <Prefix>\bin
     # -----------------------------------------------------------------------
     $installDir = Join-Path $Prefix "bin"
-    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    Copy-Item $hauksbeeExe (Join-Path $installDir "hauksbee.exe") -Force
-    Copy-Item $ciExe (Join-Path $installDir "hauksbee-ci.exe") -Force
+    $installStaging = Join-Path $Prefix "bin.install-staging-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $Prefix -Force | Out-Null
+    if (Test-Path -LiteralPath $installStaging) {
+        Remove-Item -LiteralPath $installStaging -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $installStaging | Out-Null
+    foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
+        Copy-Item -LiteralPath (Join-Path $binDir $binary) -Destination (Join-Path $installStaging $binary)
+    }
+    foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
+        Assert-BinaryVersion (Join-Path $installStaging $binary) $binary $VersionBare
+    }
+    Replace-Tree $installStaging $installDir
 
     Write-Host ""
     Write-Host "Installed:"
     Write-Host "  $(Join-Path $installDir 'hauksbee.exe')"
     Write-Host "  $(Join-Path $installDir 'hauksbee-ci.exe')"
+    Write-Host "  $(Join-Path $installDir 'hauksbee-mcp.exe')"
 
     # -----------------------------------------------------------------------
     # PATH hint
@@ -252,15 +343,12 @@ try {
         Write-Host "  `$env:Path += ';$installDir'"
     }
 
-    if ($Permissive) {
-        $licenceLine = "Apache-2.0 binary (permissive build: no avr backend, no libsimavr, no GPL code)."
-    } else {
-        $licenceLine = "GPL-3.0 binary (includes the avr backend, which links GPL-3.0 libsimavr); hauksbee's source is Apache-2.0."
-    }
+    $licenceLine = "Apache-2.0 binary (Windows permissive build: no avr backend, no libsimavr, no GPL code)."
 
     Write-Host ""
     Write-Host "hauksbee $Version installed. Run: hauksbee --help"
     Write-Host "Licence: $licenceLine"
 } finally {
+    Remove-AbandonedStaging $installStaging
     Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue
 }
