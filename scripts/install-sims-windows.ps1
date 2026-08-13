@@ -20,6 +20,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+# StrictMode treats this automatic variable as absent until the first native
+# process sets it. Initialise it so a successfully invoked command that leaves
+# it untouched cannot make the verification path fail while reading the status.
+$global:LASTEXITCODE = 0
 
 $RenodeVersion = "1.16.1"
 $QemuTag = "esp-develop-9.2.2-20260417"
@@ -148,6 +152,17 @@ function Assert-SafeTar([string]$Archive) {
         $normalized = $entry -replace '\\', '/'
         if ($normalized.StartsWith('/') -or $normalized -match '(^|/)\.\.(/|$)' -or $normalized -match '^[A-Za-z]:') {
             throw "unsafe archive entry in $Archive`: $entry"
+        }
+    }
+    # `tar -tf` prints names only. Verbose mode exposes the leading Unix type
+    # character; release payloads must contain regular files/directories only,
+    # never links, devices, sockets, or FIFOs whose extraction semantics could
+    # escape or mutate outside the selected staging root.
+    $verbose = & tar -tvf $Archive
+    if ($LASTEXITCODE -ne 0) { throw "could not inspect archive metadata $Archive" }
+    foreach ($line in $verbose) {
+        if ($line -and $line[0] -notin @('-', 'd')) {
+            throw "unsafe archive member type in $Archive`: $line"
         }
     }
 }

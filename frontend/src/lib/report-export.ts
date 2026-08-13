@@ -369,25 +369,26 @@ ${TOKENS.map(n => `  --${n}: ${t[n]};`).join('\n')}
   color-scheme: ${light ? 'light' : 'dark'};
 }
 *{box-sizing:border-box}
+html,body{overflow-x:clip}
 body{
   margin:0; padding:0 1rem 4rem;
   background:var(--canvas); color:var(--silk);
   font-family:var(--font-sans); font-size:15px; line-height:1.55;
   -webkit-font-smoothing:antialiased;
 }
-.page{max-width:52rem;margin:0 auto}
+.page{max-width:52rem;min-width:0;margin:0 auto}
 header.top{padding:2.25rem 0 0}
 .wordmark{
   font-family:var(--font-mono); font-size:12px; font-weight:600;
   letter-spacing:.22em; color:var(--copper); margin:0 0 .5rem;
 }
-h1{font-size:1.5rem;line-height:1.2;margin:0 0 .25rem;text-wrap:balance}
+h1{font-size:1.5rem;line-height:1.2;margin:0 0 .25rem;text-wrap:balance;overflow-wrap:anywhere}
 h2{
   font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
   color:var(--silk-faint);margin:2.25rem 0 .35rem;
 }
 h3{font-size:13px;font-weight:600;color:var(--silk-dim);margin:1.25rem 0 .35rem}
-p{margin:.35rem 0;text-wrap:pretty}
+p{margin:.35rem 0;text-wrap:pretty;overflow-wrap:anywhere}
 .verdict{
   border:1px solid ${verdictBorder}; background:${verdictBg};
   border-radius:12px; padding:.9rem 1rem; margin-top:1.25rem; font-size:15.5px;
@@ -408,20 +409,21 @@ dl.meta dd{margin:0;color:var(--silk);overflow-wrap:anywhere}
   border:1px solid var(--hairline); border-left:4px solid var(--note-accent);
   background:var(--surface); border-radius:8px;
   padding:.7rem .9rem; margin:.5rem 0;
+  overflow-wrap:anywhere;
 }
 .tag{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
-.what{font-weight:600;font-size:14px;margin:.25rem 0 .35rem}
-.gloss{font-size:14px;margin:.15rem 0;color:var(--silk)}
+.what{font-weight:600;font-size:14px;margin:.25rem 0 .35rem;overflow-wrap:anywhere}
+.gloss{font-size:14px;margin:.15rem 0;color:var(--silk);overflow-wrap:anywhere}
 .gloss b{color:var(--silk-dim);font-weight:600}
 .card ul{margin:.35rem 0 .5rem;padding-left:1.15rem;font-size:14px}
-.card li{margin:.15rem 0}
+.card li{margin:.15rem 0;overflow-wrap:anywhere}
 .scroll-x{overflow-x:auto;max-width:100%}
 table{border-collapse:collapse;width:100%;font-size:13px;min-width:34rem}
 th{
   text-align:left;padding:.35rem .5rem;font-weight:600;color:var(--silk-dim);
   border-bottom:1px solid var(--hairline);white-space:nowrap;
 }
-td{padding:.35rem .5rem;border-bottom:1px solid var(--rule);vertical-align:top}
+td{padding:.35rem .5rem;border-bottom:1px solid var(--rule);vertical-align:top;overflow-wrap:anywhere}
 .mono{font-family:var(--font-mono)}
 .num{font-variant-numeric:tabular-nums}
 pre{
@@ -438,6 +440,7 @@ pre.instrument{
   border:1px solid var(--hairline); border-left:4px solid var(--note-accent);
   background:var(--surface); border-radius:8px; padding:.6rem .9rem;
   margin:.5rem 0; font-size:14px;
+  overflow-wrap:anywhere;
 }
 footer{
   margin-top:3rem; padding-top:1rem; border-top:1px solid var(--hairline);

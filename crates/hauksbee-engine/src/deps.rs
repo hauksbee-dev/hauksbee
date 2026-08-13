@@ -829,7 +829,7 @@ pub fn install_dep(id: &str, progress: &mut dyn FnMut(&str)) -> Result<(), Strin
 /// Espressif QEMU: use the native checksum-pinned PowerShell installer on
 /// Windows; elsewhere shell this binary's Rust installer. Both routes run as
 /// structurally owned child trees so downloads cannot survive a timeout.
-fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
+pub(crate) fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     #[cfg(not(feature = "qemu"))]
     {
         let _ = progress;

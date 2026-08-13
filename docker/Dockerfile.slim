@@ -17,7 +17,8 @@
 #     hauksbee/        (this repo, incl. vendor/kicad-forge)
 #
 # Build from that parent with:
-#   docker build -f hauksbee/docker/Dockerfile.slim -t hauksbee:slim parent/
+#   docker build --build-arg SOURCE_COMMIT="$(git -C parent/hauksbee rev-parse HEAD)" \
+#     -f parent/hauksbee/docker/Dockerfile.slim -t hauksbee:slim parent/
 #
 # Multi-arch (linux/amd64 + linux/arm64) is produced by buildx in CI; see
 # .github/workflows/docker.yml. simavr is built natively per arch (no
@@ -34,15 +35,20 @@
 # toolchain at build time, so the pin here buys nothing and costs a download on
 # every build.
 ARG RUST_CHANNEL=1.92.0
-ARG RUST_TAG=${RUST_CHANNEL}-bookworm
-ARG SIMAVR_VERSION=v1.8
+ARG DEBIAN_BASE=debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+ARG RUST_BASE=rust:1.92.0-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2
+ARG SIMAVR_COMMIT=f44723e8c42431136d5b4de81f789ded56d7e8fa
+ARG SIMAVR_TAG=v1.8
 
 # ---------------------------------------------------------------------------
 # Stage 1: build simavr (static lib) so the `avr` feature can link it.
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim AS simavr-build
+FROM ${DEBIAN_BASE} AS simavr-build
 
-ARG SIMAVR_VERSION
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ARG SIMAVR_COMMIT
+ARG SIMAVR_TAG
 
 # build-essential + gcc, libelf-dev (libelf.pc, the only hard simavr dep), git
 # (simavr derives its version from `git describe`, so the clone must carry tags).
@@ -65,16 +71,31 @@ RUN apt-get update \
 # the headers in /usr/local/include/simavr, and simavr.pc.
 WORKDIR /src
 RUN git clone https://github.com/buserror/simavr.git \
-    && git -C simavr checkout "${SIMAVR_VERSION}" \
+    && git -C simavr checkout --detach "${SIMAVR_COMMIT}" \
+    && test "$(git -C simavr rev-parse HEAD)" = "${SIMAVR_COMMIT}" \
+    && test "$(git -C simavr rev-parse "${SIMAVR_TAG}^{commit}")" = "${SIMAVR_COMMIT}" \
     && make -C simavr CC=gcc RELEASE=1 build-simavr \
     && make -C simavr CC=gcc RELEASE=1 DESTDIR=/usr/local PREFIX=/usr/local install-simavr \
+    && printf '%s\n' "${SIMAVR_COMMIT}" > /usr/local/.hauksbee-simavr-commit \
+    && { find /usr/local/include/simavr -type f -name '*.h' -print \
+           | LC_ALL=C sort \
+           | while IFS= read -r header; do \
+               sha256sum "$header" | sed 's#  /usr/local/#  #'; \
+             done; \
+         sha256sum /usr/local/lib/libsimavr.a | sed 's#  /usr/local/#  #'; \
+       } > /usr/local/.hauksbee-simavr-payload.sha256 \
     && ldconfig
+RUN tar --exclude=.git -czf /simavr-source.tar.gz -C /src simavr
 
 # ---------------------------------------------------------------------------
 # Stage 2: build the hauksbee binaries against that simavr.
 # ---------------------------------------------------------------------------
-ARG RUST_TAG
-FROM rust:${RUST_TAG} AS rust-build
+FROM ${RUST_BASE} AS rust-build
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG SIMAVR_COMMIT
+ARG SOURCE_COMMIT
+RUN printf '%s\n' "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$' \
+    || { echo "SOURCE_COMMIT must be the exact 40-hex Hauksbee source revision" >&2; exit 1; }
 
 # clang/libclang are needed by bindgen (the simavr build.rs generates bindings);
 # libelf + zlib are simavr's link dependencies; pkg-config resolves both.
@@ -91,6 +112,8 @@ RUN apt-get update \
 # Bring the simavr static lib + headers in so the build.rs link step resolves.
 COPY --from=simavr-build /usr/local/lib /usr/local/lib
 COPY --from=simavr-build /usr/local/include /usr/local/include
+COPY --from=simavr-build /usr/local/.hauksbee-simavr-commit /usr/local/.hauksbee-simavr-commit
+COPY --from=simavr-build /usr/local/.hauksbee-simavr-payload.sha256 /usr/local/.hauksbee-simavr-payload.sha256
 RUN ldconfig
 
 # The build.rs hardcodes the homebrew search path /opt/homebrew/lib for macOS;
@@ -98,13 +121,16 @@ RUN ldconfig
 # linker and to pkg-config without patching the build script.
 ENV LIBRARY_PATH=/usr/local/lib \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
-    BINDGEN_EXTRA_CLANG_ARGS="-I/usr/local/include -I/usr/local/include/simavr"
+    BINDGEN_EXTRA_CLANG_ARGS="-I/usr/local/include -I/usr/local/include/simavr" \
+    SIMAVR_COMMIT=${SIMAVR_COMMIT} \
+    HAUKSBEE_SOURCE_COMMIT=${SOURCE_COMMIT}
 
 # Use the toolchain the base image already has, ignoring rust-toolchain.toml.
 # That file lists rust-analyzer so contributors' editors follow the project pin,
 # which is right for a laptop and wrong here: an image build would fetch a
 # ~200 MB editor component it can never use, on every build, and fail the whole
-# image if static.rust-lang.org is unreachable. RUST_TAG above keeps the version
+# image if static.rust-lang.org is unreachable. RUST_CHANNEL and the digest-
+# pinned Rust base above keep the version
 # the same either way, so this changes what is downloaded, not what is compiled.
 ARG RUST_CHANNEL
 ENV RUSTUP_TOOLCHAIN=${RUST_CHANNEL}
@@ -115,16 +141,26 @@ WORKDIR /build
 COPY hauksbee/ ./hauksbee/
 
 WORKDIR /build/hauksbee
-# Build the two release binaries with default features (avr + renode + qemu):
-# renode and qemu are pure-process backends, so they add no link deps here and
-# the slim image simply ships without those external tools installed.
-RUN cargo build --release -p hauksbee-engine -p hauksbee-ci \
+# GPL Corresponding Source includes every registry crate compiled into the
+# linked binaries, not merely Cargo.lock pointers to an external service. Cargo
+# verifies the registry checksums while materialising the exact locked graph;
+# the actual release build then runs offline from that tree. The archive copied
+# into the runtime is made only after this, so it is the same rebuildable input.
+RUN mkdir -p .cargo third-party \
+    && cargo vendor --locked --versioned-dirs third-party/cargo-vendor > .cargo/config.toml \
+    && registry_packages="$(grep -c '^source = \"registry+' Cargo.lock)" \
+    && vendored_packages="$(find third-party/cargo-vendor -mindepth 2 -maxdepth 2 -name .cargo-checksum.json | wc -l | tr -d ' ')" \
+    && test "$vendored_packages" = "$registry_packages" \
+    && cargo metadata --locked --offline --no-deps >/dev/null \
+    && cargo build --release --locked --offline -p hauksbee-engine -p hauksbee-ci \
     && strip target/release/hauksbee target/release/hauksbee-ci
+RUN tar --exclude=.git --exclude=target --exclude=frontend/node_modules \
+    -czf /hauksbee-source.tar.gz -C /build hauksbee
 
 # ---------------------------------------------------------------------------
 # Stage 3: slim runtime.
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+FROM ${DEBIAN_BASE} AS runtime
 
 # licenses is GPL-3.0-only, not Apache-2.0: this image ships the default
 # (avr) shape, which statically links GPL-3.0 libsimavr, so the BINARIES in
@@ -161,6 +197,9 @@ RUN useradd --create-home --uid 1000 hauksbee
 COPY --from=rust-build /build/hauksbee/target/release/hauksbee    /usr/local/bin/hauksbee
 COPY --from=rust-build /build/hauksbee/target/release/hauksbee-ci /usr/local/bin/hauksbee-ci
 COPY --from=rust-build /build/hauksbee/crates/hauksbee-models/db  /opt/hauksbee/db
+COPY --from=rust-build /build/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb /opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb
+COPY --from=rust-build /build/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex /opt/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex
+COPY --from=rust-build /build/hauksbee/crates/hauksbee-ci/examples/boot_gate_pass.toml /opt/hauksbee/crates/hauksbee-ci/examples/boot_gate_pass.toml
 
 # Licence terms travel with the image, same as with the tarballs: hauksbee's
 # Apache-2.0 source terms + attribution, the GPL-3.0 text (the binaries link
@@ -169,6 +208,9 @@ COPY --from=rust-build /build/hauksbee/crates/hauksbee-models/db  /opt/hauksbee/
 COPY --from=rust-build /build/hauksbee/LICENSE               /usr/share/doc/hauksbee/LICENSE
 COPY --from=rust-build /build/hauksbee/NOTICE                /usr/share/doc/hauksbee/NOTICE
 COPY --from=rust-build /build/hauksbee/licenses/gpl-3.0.txt  /usr/share/doc/hauksbee/LICENSE-GPL-3.0.txt
+COPY --from=rust-build /build/hauksbee/licenses/evalexpr-MIT.txt /usr/share/doc/hauksbee/LICENSE-EVALEXPR-MIT.txt
+COPY --from=rust-build /hauksbee-source.tar.gz /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz
+COPY --from=simavr-build /simavr-source.tar.gz /usr/share/doc/hauksbee/source/simavr-source.tar.gz
 RUN printf '%s\n' \
       'hauksbee container image - licence of the binaries' \
       '===================================================' \
@@ -184,10 +226,21 @@ RUN printf '%s\n' \
       'constrains redistribution, not use.' \
       '' \
       'Full GPL-3.0 text: LICENSE-GPL-3.0.txt, in this directory.' \
+      'evalexpr 11.3.1 MIT notice: LICENSE-EVALEXPR-MIT.txt, in this directory.' \
       'Corresponding source (GPL-3.0 section 6):' \
-      '  https://github.com/hauksbee-dev/hauksbee' \
-      '  https://github.com/buserror/simavr' \
-      > /usr/share/doc/hauksbee/LICENSE-BINARY.txt
+      '  /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz' \
+      '  /usr/share/doc/hauksbee/source/simavr-source.tar.gz' \
+      > /usr/share/doc/hauksbee/LICENSE-BINARY.txt \
+    && printf '%s\n' \
+      'CORRESPONDING SOURCE OFFER' \
+      '' \
+      'Hauksbee and libsimavr form the GPL-3.0 combined binaries in this image.' \
+      'For at least three years after this image version is distributed,' \
+      'Hauksbee will provide any recipient the complete corresponding source' \
+      'for the exact image digest on a durable medium for no more than the' \
+      'physical cost of transfer. Request it at security@hauksbee.dev and name' \
+      'the image digest. Preserve this offer when redistributing the image.' \
+      > /usr/share/doc/hauksbee/SOURCE-OFFER.txt
 
 USER hauksbee
 WORKDIR /work

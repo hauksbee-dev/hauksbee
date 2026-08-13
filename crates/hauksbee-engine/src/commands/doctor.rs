@@ -40,7 +40,7 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
     backends.push(Backend {
         name: "avr",
         status: "builtin",
-        detail: "simavr linked into this binary".to_string(),
+        detail: hauksbee_mcu::simavr_build_detail(),
         summary: "ATmega / ATtiny firmware co-sim",
     });
     #[cfg(not(feature = "avr"))]

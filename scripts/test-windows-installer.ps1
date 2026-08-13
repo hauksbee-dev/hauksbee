@@ -6,7 +6,10 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Checksum,
     [Parameter(Mandatory = $true)]
-    [string]$Version
+    [string]$Version,
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string]$ExpectedCommit
 )
 
 Set-StrictMode -Version Latest
@@ -17,7 +20,12 @@ $Checksum = (Resolve-Path $Checksum).Path
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "hauksbee-installer-contract-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 
-function Start-MockRelease([string]$ZipFile, [string]$ChecksumFile) {
+function Start-MockRelease(
+    [string]$ZipFile,
+    [string]$ChecksumFile,
+    [string]$ServedCommit = $ExpectedCommit,
+    [bool]$CorruptAssetDigest = $false
+) {
     $zipName = Split-Path -Leaf $ZipFile
     $checksumName = Split-Path -Leaf $ChecksumFile
     $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
@@ -26,13 +34,16 @@ function Start-MockRelease([string]$ZipFile, [string]$ChecksumFile) {
     $probe.Stop()
     $prefix = "http://127.0.0.1:$port/"
     $apiBase = "${prefix}repos/hauksbee-dev/hauksbee"
+    $zipDigest = (Get-FileHash -Algorithm SHA256 -Path $ZipFile).Hash.ToLowerInvariant()
+    $sumDigest = (Get-FileHash -Algorithm SHA256 -Path $ChecksumFile).Hash.ToLowerInvariant()
+    if ($CorruptAssetDigest) { $zipDigest = "0" * 64 }
     $job = Start-Job -ScriptBlock {
-        param($Prefix, $ApiBase, $Tag, $ZipPath, $SumPath, $ZipName, $SumName)
+        param($Prefix, $ApiBase, $Tag, $Commit, $ZipPath, $SumPath, $ZipName, $SumName, $ZipDigest, $SumDigest)
         $listener = [Net.HttpListener]::new()
         $listener.Prefixes.Add($Prefix)
         $listener.Start()
         try {
-            for ($served = 0; $served -lt 3; $served++) {
+            for ($served = 0; $served -lt 4; $served++) {
                 $context = $listener.GetContext()
                 $request = $context.Request
                 $response = $context.Response
@@ -45,15 +56,20 @@ function Start-MockRelease([string]$ZipFile, [string]$ChecksumFile) {
                     "/releases/tags/" {
                         $body = [Text.Encoding]::UTF8.GetBytes((@{
                             tag_name = $Tag
+                            immutable = $true
                             assets = @(
-                                @{ name = $ZipName; url = "$ApiBase/releases/assets/1" },
-                                @{ name = $SumName; url = "$ApiBase/releases/assets/2" }
+                                @{ name = $ZipName; url = "$ApiBase/releases/assets/1"; digest = "sha256:$ZipDigest" },
+                                @{ name = $SumName; url = "$ApiBase/releases/assets/2"; digest = "sha256:$SumDigest" }
                             )
                         } | ConvertTo-Json -Depth 4 -Compress))
                         $response.ContentType = "application/json"
                     }
                     "/releases/assets/1$" { $body = [IO.File]::ReadAllBytes($ZipPath) }
                     "/releases/assets/2$" { $body = [IO.File]::ReadAllBytes($SumPath) }
+                    "/commits/" {
+                        $body = [Text.Encoding]::UTF8.GetBytes((@{ sha = $Commit } | ConvertTo-Json -Compress))
+                        $response.ContentType = "application/json"
+                    }
                     default {
                         $response.StatusCode = 404
                         $body = [byte[]]::new(0)
@@ -67,7 +83,7 @@ function Start-MockRelease([string]$ZipFile, [string]$ChecksumFile) {
             $listener.Stop()
             $listener.Close()
         }
-    } -ArgumentList $prefix, $apiBase, "v$Version", $ZipFile, $ChecksumFile, $zipName, $checksumName
+    } -ArgumentList $prefix, $apiBase, "v$Version", $ServedCommit, $ZipFile, $ChecksumFile, $zipName, $checksumName, $zipDigest, $sumDigest
     Start-Sleep -Milliseconds 300
     return @{ Job = $job; ApiBase = $apiBase }
 }
@@ -77,24 +93,28 @@ function Invoke-InstallerCase(
     [string]$ZipFile,
     [string]$ChecksumFile,
     [bool]$FailSwap,
-    [string]$PowerShell
+    [string]$PowerShell,
+    [string]$ServedCommit = $ExpectedCommit,
+    [bool]$CorruptAssetDigest = $false
 ) {
-    $server = Start-MockRelease $ZipFile $ChecksumFile
+    $server = Start-MockRelease $ZipFile $ChecksumFile $ServedCommit $CorruptAssetDigest
     $env:HAUKSBEE_API_BASE = $server.ApiBase
     $env:HAUKSBEE_GITHUB_TOKEN = "installer-contract-token"
     $env:GITHUB_TOKEN = "fallback-contract-token"
+    $env:GH_TOKEN = "gh-fallback-contract-token"
     if ($FailSwap) { $env:HAUKSBEE_TEST_FAIL_INSTALL_SWAP = "1" } else { Remove-Item Env:HAUKSBEE_TEST_FAIL_INSTALL_SWAP -ErrorAction SilentlyContinue }
     $stdout = Join-Path $testRoot "installer-$([guid]::NewGuid().ToString('N')).stdout"
     $stderr = "$stdout.stderr"
     try {
         $child = Start-Process -FilePath $PowerShell -ArgumentList @(
-            "-NoProfile", "-File", $installer, "-Version", "v$Version", "-Prefix", $Prefix
+            "-NoProfile", "-File", $installer, "-Version", "v$Version", "-ExpectedCommit", $ExpectedCommit, "-Prefix", $Prefix
         ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         return $child.ExitCode
     } finally {
         Remove-Item Env:HAUKSBEE_API_BASE -ErrorAction SilentlyContinue
         Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue
         Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+        Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
         Remove-Item Env:HAUKSBEE_TEST_FAIL_INSTALL_SWAP -ErrorAction SilentlyContinue
         Stop-Job $server.Job -ErrorAction SilentlyContinue
         Remove-Job $server.Job -Force -ErrorAction SilentlyContinue
@@ -115,6 +135,7 @@ use std::process;
 fn main() {
     if env::var_os("HAUKSBEE_GITHUB_TOKEN").is_some()
         || env::var_os("GITHUB_TOKEN").is_some()
+        || env::var_os("GH_TOKEN").is_some()
     {
         process::exit(91);
     }
@@ -123,7 +144,7 @@ fn main() {
     }
     let path = env::current_exe().expect("current executable");
     let name = path.file_stem().expect("executable stem").to_string_lossy();
-    println!("{} $Version", name);
+    println!("{} $Version (git $ExpectedCommit)", name);
 }
 "@)
     $probe = Join-Path $fixtureRoot "token-probe.exe"
@@ -153,8 +174,8 @@ try {
         }
     }
 
-    # Downloaded executables must not inherit either private API token during
-    # their probe. The fixture exits 91 if either variable reaches it, and the
+    # Downloaded executables must not inherit any private API token during
+    # their probe. The fixture exits 91 if any variable reaches it, and the
     # same authenticated flow runs under stock Windows PowerShell 5.1 + pwsh.
     $tokenProbe = New-TokenProbeBundle
     foreach ($runtime in @("powershell.exe", "pwsh.exe")) {
@@ -162,6 +183,17 @@ try {
         if ((Invoke-InstallerCase $prefix $tokenProbe.Zip $tokenProbe.Checksum $false $runtime) -ne 0) {
             throw "token-free executable probe failed under $runtime"
         }
+    }
+
+    # A valid immutable tag that resolves to another source commit must refuse
+    # before downloading either asset.
+    $wrongCommit = "f" * 40
+    $mismatchPrefix = Join-Path $testRoot "commit-mismatch"
+    if ((Invoke-InstallerCase $mismatchPrefix $Zip $Checksum $false "pwsh.exe" $wrongCommit) -eq 0) {
+        throw "release/source commit mismatch was accepted"
+    }
+    if (Test-Path -LiteralPath (Join-Path $mismatchPrefix "bin")) {
+        throw "release/source commit mismatch modified the prefix"
     }
 
     # A corrupt checksum must refuse before creating an installation.
@@ -172,6 +204,17 @@ try {
     $badPrefix = Join-Path $testRoot "corrupt"
     if ((Invoke-InstallerCase $badPrefix $Zip $corrupt $false "pwsh.exe") -eq 0) { throw "corrupt checksum was accepted" }
     if (Test-Path -LiteralPath (Join-Path $badPrefix "bin")) { throw "corrupt checksum modified the prefix" }
+
+    # A checksum sidecar cannot authenticate itself. Even when zip+sidecar are
+    # mutually consistent, the authenticated immutable-release asset digest is
+    # the independent publisher/server binding and must win.
+    $digestPrefix = Join-Path $testRoot "asset-digest-mismatch"
+    if ((Invoke-InstallerCase $digestPrefix $Zip $Checksum $false "pwsh.exe" $ExpectedCommit $true) -eq 0) {
+        throw "GitHub asset digest mismatch was accepted"
+    }
+    if (Test-Path -LiteralPath (Join-Path $digestPrefix "bin")) {
+        throw "GitHub asset digest mismatch modified the prefix"
+    }
 
     # A failure after backing up the old tree must rollback it byte-for-byte.
     $rollbackPrefix = Join-Path $testRoot "rollback"
@@ -200,9 +243,9 @@ try {
     if (Get-ChildItem -LiteralPath $stalePrefix -Filter "bin.install-staging-*" -Directory) {
         throw "stale-interruption rollback left an unconsumed staging tree"
     }
-    Write-Host "Windows installer dual-runtime, token isolation, checksum, rollback, and interruption contracts passed."
+    Write-Host "Windows installer dual-runtime, token isolation, GitHub digest, checksum, rollback, and interruption contracts passed."
 } finally {
-    foreach ($name in @("HAUKSBEE_API_BASE", "HAUKSBEE_GITHUB_TOKEN", "GITHUB_TOKEN", "HAUKSBEE_TEST_FAIL_INSTALL_SWAP")) {
+    foreach ($name in @("HAUKSBEE_API_BASE", "HAUKSBEE_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "HAUKSBEE_TEST_FAIL_INSTALL_SWAP")) {
         Remove-Item "Env:$name" -ErrorAction SilentlyContinue
     }
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }

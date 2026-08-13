@@ -4,7 +4,7 @@
 // What this exists to prove, and what nothing else in the repo can:
 //   - a session is written, survives a full page reload, and comes back with
 //     its composed checks attached;
-//   - the two exports produce real files, and the HTML one renders STANDALONE:
+//   - the portable exports produce real files, and the HTML one renders STANDALONE:
 //     it is opened again from disk in a fresh browser context, with no server
 //     and no network, and has to still be a styled report;
 //   - the named-session operations (switch, rename, delete) do what they say
@@ -30,6 +30,7 @@ import { pathToFileURL } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const OUT = process.env.HB_E2E_OUT ?? join(here, '../../test-results/e2e')
 const DL = join(OUT, 'downloads')
+const expectWorkflowExport = process.env.HB_EXPECT_WORKFLOW_EXPORT === '1'
 
 let pass = 0
 const failures: string[] = []
@@ -169,7 +170,11 @@ async function main() {
   await page.click('[data-testid="export-open"]')
   await page.waitForSelector('[data-testid="export-menu"]')
   const itemCount = await page.locator('[data-testid="export-menu"] [role="menuitem"]').count()
-  ok('the menu offers all four files once a spec exists', itemCount === 4, `${itemCount} items`)
+  const expectedItems = expectWorkflowExport ? 4 : 3
+  ok(expectWorkflowExport
+    ? 'a release build offers all four files once a spec exists'
+    : 'a development build omits the credential-bearing workflow export',
+  itemCount === expectedItems, `${itemCount} items`)
   await shoot(page, '02-export-menu')
 
   const grab = async (testid: string): Promise<string> => {
@@ -193,8 +198,11 @@ async function main() {
   const jsonPath = await grab('export-json')
   await page.click('[data-testid="export-open"]')
   const tomlPath = await grab('export-toml')
-  await page.click('[data-testid="export-open"]')
-  const ymlPath = await grab('export-workflow')
+  let ymlPath: string | null = null
+  if (expectWorkflowExport) {
+    await page.click('[data-testid="export-open"]')
+    ymlPath = await grab('export-workflow')
+  }
 
   // ── 3. The exported HTML is self-contained ──────────────────────────────
   step('the exported HTML renders standalone, off a file:// URL, with no network')
@@ -284,8 +292,17 @@ async function main() {
 
   const toml = readFileSync(tomlPath, 'utf8')
   ok('the exported spec is the one the pane showed', toml.trim() === specText.trim())
-  const yml = readFileSync(ymlPath, 'utf8')
-  ok('the workflow pins the action to a release tag', /integrations\/github-action@v\d/.test(yml))
+  if (ymlPath) {
+    const yml = readFileSync(ymlPath, 'utf8')
+    ok('the workflow fetches the private Action at the exact release commit',
+      /repository:\s*hauksbee-dev\/hauksbee/.test(yml)
+        && /ref:\s*[0-9a-f]{40}/.test(yml)
+        && /hauksbee-ref:\s*[0-9a-f]{40}/.test(yml)
+        && /hauksbee-version:\s*v\d/.test(yml)
+        && /persist-credentials:\s*false/.test(yml)
+        && /uses:\s*\.\/\.hauksbee-action\/integrations\/github-action/.test(yml)
+        && /permissions:\s*\n\s*contents:\s*read\s*\n\s*checks:\s*write/.test(yml))
+  }
 
   // ── 5. Restore across a full reload ─────────────────────────────────────
   step('the session survives a reload and comes back with its checks')

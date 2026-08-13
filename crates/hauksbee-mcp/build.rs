@@ -1,10 +1,4 @@
-//! Embed the git commit hash into the binary so `hauksbee --version` can name
-//! the exact build (an agent operator diffing behaviour across sessions needs
-//! more than a crate version that changes once a release).
-//!
-//! Best-effort by design: outside this repository's own Git root (a crates.io
-//! build, source tarball, or vendored copy inside a consumer repo) `GIT_HASH`
-//! is absent. Never borrow the enclosing consumer repository's HEAD.
+//! Embed a verified Hauksbee source commit for release identity.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -50,19 +44,16 @@ fn main() {
         println!("cargo:rustc-env=GIT_HASH={hash}");
         return;
     }
+
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
         .canonicalize()
-        .expect("canonical Hauksbee engine manifest directory");
+        .expect("canonical Hauksbee MCP manifest directory");
     let source_root = manifest_dir
         .join("../..")
         .canonicalize()
         .expect("canonical Hauksbee source root");
-    // A crate installed by `cargo vendor` lives at <consumer>/vendor/<crate>.
-    // Its ../.. is the consumer repository, so merely owning that Git root is
-    // not proof that the commit identifies Hauksbee. Accept repository Git
-    // identity only for this crate's canonical workspace position.
     let owns_workspace_layout = source_root
-        .join("crates/hauksbee-engine")
+        .join("crates/hauksbee-mcp")
         .canonicalize()
         .ok()
         .as_ref()
@@ -92,12 +83,12 @@ fn main() {
         .output()
         .is_ok_and(|out| out.status.success() && out.stdout.is_empty());
     if owns_workspace_layout && owns_git_root && source_is_clean {
-        let out = Command::new("git")
+        if let Ok(out) = Command::new("git")
             .args(["-C", source_root.to_str().unwrap(), "rev-parse", "HEAD"])
-            .output();
-        if let Ok(o) = out {
-            let hash = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if o.status.success()
+            .output()
+        {
+            let hash = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if out.status.success()
                 && hash.len() == 40
                 && hash
                     .bytes()
@@ -107,8 +98,6 @@ fn main() {
             }
         }
     }
-    // Re-run when the checked-out commit changes (branch switch or new commit).
-    // Harmless when the paths do not exist (non-git builds).
     let dot_git = source_root.join(".git");
     if dot_git.is_file() {
         println!("cargo:rerun-if-changed={}", dot_git.display());

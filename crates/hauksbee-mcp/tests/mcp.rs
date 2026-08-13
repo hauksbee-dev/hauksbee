@@ -403,6 +403,19 @@ fn list_capabilities_reports_backends_probed_on_this_machine() {
             "doctor-style status token: {b}"
         );
     }
+    let avr = backends
+        .iter()
+        .find(|backend| backend["name"] == "avr")
+        .expect("avr backend row");
+    #[cfg(feature = "avr")]
+    assert_eq!(
+        avr["detail"],
+        hauksbee_mcu::SIMAVR_BUILD_COMMIT.map_or_else(
+            || "simavr linked into this binary (source commit not embedded)".to_string(),
+            |commit| format!("simavr linked into this binary; source commit {commit}"),
+        ),
+        "MCP capability provenance must match doctor --backends"
+    );
     assert!(v["assertions"]
         .as_array()
         .unwrap()
@@ -548,11 +561,11 @@ fn version_flag_prints_the_version_and_exits_zero() {
             .expect("run hauksbee-mcp");
         assert!(out.status.success(), "{flag} must exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout);
-        assert_eq!(
-            stdout.trim(),
-            format!("hauksbee-mcp {}", env!("CARGO_PKG_VERSION")),
-            "{flag} stdout: {stdout:?}"
-        );
+        let expected = match option_env!("GIT_HASH") {
+            Some(hash) => format!("hauksbee-mcp {} (git {hash})", env!("CARGO_PKG_VERSION")),
+            None => format!("hauksbee-mcp {}", env!("CARGO_PKG_VERSION")),
+        };
+        assert_eq!(stdout.trim(), expected, "{flag} stdout: {stdout:?}");
     }
 }
 

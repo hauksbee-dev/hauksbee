@@ -3,8 +3,8 @@
   Download and transactionally install hauksbee, hauksbee-ci, and hauksbee-mcp on Windows.
 
 .DESCRIPTION
-  The Windows counterpart of scripts/get-hauksbee.sh. Fetches the latest GitHub
-  Release asset (or a pinned version), verifies the sha256 checksum with
+  The Windows counterpart of scripts/get-hauksbee.sh. Fetches one explicitly
+  pinned GitHub Release asset, verifies its source commit and sha256 with
   Get-FileHash, and installs all three executables to the install prefix. Safe
   to re-run: the complete new bin directory is staged and validated before the
   old directory is swapped out; a failed swap restores the old installation.
@@ -21,7 +21,11 @@
     the limitation before downloading. LICENSE-BINARY.txt records it too.
 
 .PARAMETER Version
-  Install a specific release tag (e.g. v0.1.0). Default: latest.
+  Install a specific release tag (e.g. v0.1.0).
+
+.PARAMETER ExpectedCommit
+  Exact 40-character source commit printed by the immutable release. The
+  installer resolves Version through GitHub and refuses any mismatch.
 
 .PARAMETER Prefix
   Install binaries to <Prefix>\bin. Default: $env:LOCALAPPDATA\hauksbee.
@@ -34,13 +38,18 @@
   try {
     $env:HAUKSBEE_GITHUB_TOKEN = Get-Secret hauksbee-read -AsPlainText
     $headers = @{ Authorization = "Bearer $env:HAUKSBEE_GITHUB_TOKEN" }
-    irm -Headers $headers https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
+    $releaseCommit = "REPLACE_WITH_RELEASE_COMMIT_SHA"
+    $releaseTag = "REPLACE_WITH_RELEASE_TAG"
+    $payload = irm -Headers $headers "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.ps1?ref=$releaseCommit"
+    $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($payload.content -replace '\s', '')))
+    $block = [ScriptBlock]::Create($script)
+    & $block -Version $releaseTag -ExpectedCommit $releaseCommit
   } finally {
     Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue
   }
 
 .EXAMPLE
-  .\get-hauksbee.ps1 -Version v0.1.0 -Permissive
+  .\get-hauksbee.ps1 -Version v0.1.0 -ExpectedCommit 0123456789abcdef0123456789abcdef01234567 -Permissive
 
 .NOTES
   Set $env:HAUKSBEE_GITHUB_TOKEN to a fine-grained personal access token or a
@@ -50,12 +59,20 @@
 [CmdletBinding()]
 param(
     [string]$Version = "",
+    [string]$ExpectedCommit = "",
     [string]$Prefix = "",
     [switch]$Permissive
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($Version -notmatch '^v[0-9A-Za-z._-]+$') {
+    throw "-Version must name one explicit v* release tag."
+}
+if ($ExpectedCommit -notmatch '^[0-9a-f]{40}$') {
+    throw "-ExpectedCommit must be the exact lowercase 40-character release source commit."
+}
 
 $Repo = "hauksbee-dev/hauksbee"
 # The API base is overridable for GitHub Enterprise or the local contract test.
@@ -96,20 +113,12 @@ if (-not $Permissive) {
 $headers = @{
     "Authorization" = "Bearer $privateToken"
     "Accept" = "application/vnd.github+json"
-    "X-GitHub-Api-Version" = "2022-11-28"
+    "X-GitHub-Api-Version" = "2026-03-10"
 }
 
-if ($Version) {
-    $releaseUri = "$ApiBase/releases/tags/$Version"
-} else {
-    $releaseUri = "$ApiBase/releases/latest"
-    Write-Host "Fetching latest release tag..."
-}
+$releaseUri = "$ApiBase/releases/tags/$Version"
 try {
     $release = Invoke-RestMethod -Uri $releaseUri -Headers $headers
-    if (-not $Version) {
-        $Version = $release.tag_name
-    }
 } catch {
     Write-Error ("Could not resolve the release through the authenticated GitHub API: $_`n" +
         "Pass -Version vX.Y.Z explicitly, or check https://github.com/$Repo/releases")
@@ -117,6 +126,15 @@ try {
 }
 if (-not $Version -or $release.tag_name -ne $Version) {
     Write-Error "The GitHub API response did not identify the requested release tag."
+    exit 1
+}
+if (-not $release.immutable) {
+    Write-Error "Release $Version is not immutable; refusing replaceable private assets."
+    exit 1
+}
+$tagCommit = Invoke-RestMethod -Uri "$ApiBase/commits/$Version" -Headers $headers
+if (-not $tagCommit.sha -or $tagCommit.sha -cne $ExpectedCommit) {
+    Write-Error "Release $Version resolves to $($tagCommit.sha), not expected commit $ExpectedCommit."
     exit 1
 }
 
@@ -131,37 +149,46 @@ $ShapeSuffix = if ($Permissive) { "-permissive" } else { "" }
 $AssetName = "hauksbee-$VersionBare-$AssetSuffix$ShapeSuffix"
 $ZipName = "$AssetName.zip"
 $ChecksumName = "$ZipName.sha256"
-function Resolve-AssetUrl([string]$Name) {
+function Resolve-Asset([string]$Name) {
     $matches = @($release.assets | Where-Object { $_.name -ceq $Name })
-    if ($matches.Count -ne 1 -or -not $matches[0].url) {
+    if ($matches.Count -ne 1 -or -not $matches[0].url -or -not $matches[0].digest) {
         throw "Release $Version does not contain exactly one $Name asset."
     }
     $url = [string]$matches[0].url
+    $digest = [string]$matches[0].digest
     $allowedPrefix = "$ApiBase/releases/assets/"
     if (-not $url.StartsWith($allowedPrefix, [System.StringComparison]::Ordinal)) {
         throw "Refusing release asset URL outside the configured GitHub API: $url"
     }
-    return $url
+    if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Release asset $Name has no valid GitHub asset digest."
+    }
+    return @{ Url = $url; Digest = $digest.Substring(7) }
 }
-$ZipUrl = Resolve-AssetUrl $ZipName
-$ChecksumUrl = Resolve-AssetUrl $ChecksumName
+$ZipAsset = Resolve-Asset $ZipName
+$ChecksumAsset = Resolve-Asset $ChecksumName
+$ZipUrl = $ZipAsset.Url
+$ChecksumUrl = $ChecksumAsset.Url
 $assetHeaders = @{
     "Authorization" = "Bearer $privateToken"
     "Accept" = "application/octet-stream"
-    "X-GitHub-Api-Version" = "2022-11-28"
+    "X-GitHub-Api-Version" = "2026-03-10"
 }
 
 function Invoke-TokenFreeVersionProbe([string]$Path) {
     $savedHauksbee = [Environment]::GetEnvironmentVariable("HAUKSBEE_GITHUB_TOKEN", "Process")
     $savedGithub = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", "Process")
+    $savedGh = [Environment]::GetEnvironmentVariable("GH_TOKEN", "Process")
     try {
         Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue
         Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-        $output = & $Path --version 2>&1 | Out-String
+        Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+        $output = (& $Path --version 2>&1 | Out-String).Trim()
         return @{ ExitCode = $LASTEXITCODE; Output = $output }
     } finally {
         if ($null -eq $savedHauksbee) { Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:HAUKSBEE_GITHUB_TOKEN = $savedHauksbee }
         if ($null -eq $savedGithub) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $savedGithub }
+        if ($null -eq $savedGh) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $savedGh }
     }
 }
 
@@ -169,7 +196,8 @@ function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVer
     $probe = Invoke-TokenFreeVersionProbe $Path
     $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
     $escapedVersion = [regex]::Escape($ExpectedVersion)
-    if ($probe.ExitCode -ne 0 -or $probe.Output -notmatch "(?m)^$escapedName $escapedVersion(?:\s|$)") {
+    $escapedCommit = [regex]::Escape($ExpectedCommit)
+    if ($probe.ExitCode -ne 0 -or $probe.Output -notmatch "(?m)^$escapedName $escapedVersion \(git $escapedCommit\)$") {
         throw "staged $Name does not identify release version $ExpectedVersion`: $($probe.Output)"
     }
 }
@@ -265,6 +293,15 @@ try {
     Write-Host "Downloading checksum..."
     Get-WithRetry $ChecksumUrl $checksumPath
 
+    # GitHub's immutable-release API attests each uploaded asset independently.
+    # Verify those server-recorded digests before trusting the checksum sidecar;
+    # a coherently replaced zip + sidecar must not authenticate itself.
+    $zipGitHubDigest = (Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLowerInvariant()
+    $checksumGitHubDigest = (Get-FileHash -Algorithm SHA256 -Path $checksumPath).Hash.ToLowerInvariant()
+    if ($zipGitHubDigest -cne $ZipAsset.Digest -or $checksumGitHubDigest -cne $ChecksumAsset.Digest) {
+        throw "Downloaded bytes do not match the GitHub asset digest for immutable release $Version."
+    }
+
     # -----------------------------------------------------------------------
     # Verify sha256 checksum
     # -----------------------------------------------------------------------
@@ -278,7 +315,7 @@ try {
         Write-Error "The checksum file does not look like a sha256 line: '$checksumLine'. Aborting."
         exit 1
     }
-    $actual = (Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLowerInvariant()
+    $actual = $zipGitHubDigest
     if ($actual -ne $expected) {
         Write-Error ("Checksum mismatch for ${ZipName}:`n  expected $expected`n  got      $actual`n" +
             "Refusing to install a download that does not match its published checksum.")

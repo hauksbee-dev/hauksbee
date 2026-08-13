@@ -17,6 +17,11 @@ backend **statically links libsimavr, which is GPL-3.0**. Statically linking
 GPL code makes the *binary* a combined work: distributing it puts that download
 under GPL-3.0, even though the source stays Apache-2.0.
 
+Every binary shape also links evalexpr 11.3.1 under MIT. Release CI forbids
+AGPL runtime dependencies, pins that final MIT line, and verifies that the
+exact `LICENSE-EVALEXPR-MIT.txt` notice is staged into Unix, Windows, macOS-app,
+and container artifacts.
+
 **Decision: every release publishes both shapes, each labelled for what it is.**
 
 | Download | Build | Binary licence | Who it is for |
@@ -41,7 +46,7 @@ under GPL-3.0, even though the source stays Apache-2.0.
 - **Nothing is implied.** Each tarball carries a `LICENSE-BINARY.txt` written by
   `scripts/bundle.sh` naming its licence in the first line, plus the
   corresponding-source pointers GPL-3.0 section 6 requires (this repo at the
-  exact build commit, simavr at its pinned tag, the two scripts that reproduce
+  exact build commit, simavr at its immutable commit, the two scripts that reproduce
   the build, and a copy of the GPL-3.0 text). The installer prints the licence
   of what it just installed. The README states the two-download story where the
   download is offered.
@@ -147,7 +152,7 @@ compile time:
 
 | Shape | `hauksbee doctor` avr line |
 | --- | --- |
-| default | `avr` `builtin` "simavr linked into this binary" |
+| default | `avr` `builtin` "simavr linked into this binary; source commit <immutable 40-hex revision>" |
 | permissive | `avr` `disabled` "not in this build (the permissive, Apache-2.0 download drops the GPL simavr backend). For AVR co-sim, install the default (GPL-3.0) download instead, or build from source with libsimavr (scripts/install-sims.sh --avr)" |
 
 `scripts/bundle.sh` runs that check on every build and **refuses to package**
@@ -176,7 +181,8 @@ The installer and `scripts/bundle.sh` agree on this exact shape (do not drift):
 | checksum         | `<base>.tar.gz.sha256` (relative basename, `shasum -a 256` format) |
 | tarball layout   | `<base>/bin/hauksbee`, `<base>/bin/hauksbee-ci` and `<base>/bin/hauksbee-mcp` (three binaries, mode 0755) |
 | licence file     | `<base>/LICENSE-BINARY.txt`, plus `<base>/LICENSE` and `<base>/NOTICE`. The default shape also carries `<base>/LICENSE-GPL-3.0.txt` |
-| macOS app        | `<base>-app.zip` + `<base>-app.zip.sha256` (darwin suffixes only, default shape only, contains `Hauksbee.app`, built by `app/macos/build-app.sh`, signed and notarized, see `app/macos/SIGNING.md`) |
+| macOS release app | `<base>-app.zip` + `<base>-app.zip.sha256` (darwin suffixes only, default shape only, contains `Hauksbee.app`, built by `app/macos/build-app.sh`, signed and notarized, see `app/macos/SIGNING.md`) |
+| local permissive macOS app | `<base>-permissive-app.zip` + `.sha256` (`app/macos/build-app.sh --no-default-features`; Apache-2.0 Renode/QEMU shape; intentionally not published by release automation) |
 | Windows          | `hauksbee-<version>-windows-x86_64-permissive.zip` + `.zip.sha256`; contains the same three binaries with `.exe` suffixes and an Apache-2.0 `LICENSE-BINARY.txt` |
 
 The `-permissive` suffix is part of the base name, so it appears in the tarball
@@ -202,13 +208,15 @@ has one shape rather than two: the installer always selects `-permissive`, says
 that AVR is disabled before download, and the bundle refuses any binary whose
 `doctor` output does not say the same thing.
 
-The full asset list for a release of version `V`, 24 files:
+The full binary-release asset list for version `V` is 36 files:
 
 - 4 targets x `hauksbee-V-<suffix>.tar.gz` + `.sha256`
 - 4 targets x `hauksbee-V-<suffix>-permissive.tar.gz` + `.sha256`
 - 2 darwin targets x `hauksbee-V-<suffix>-app.zip` + `.sha256`
 - 1 Windows target x `hauksbee-V-windows-x86_64-permissive.zip` + `.sha256`
 - 1 platform-neutral KiCad PCM zip + `.sha256`
+- 1 complete Corresponding Source tarball + `.sha256`
+- 5 same-SHA required-integration JSON evidence records + `.sha256`
 
 ### 3.1 macOS signing, stated plainly
 
@@ -239,7 +247,7 @@ the installer as well as by the docs. Mechanics and credentials:
 ## 4. aarch64-linux mechanism
 
 Built **natively** on GitHub's `ubuntu-24.04-arm` runner (and Intel macOS on
-`macos-13`). No `cross`, no QEMU userland emulation. This matches the honest,
+`macos-15-intel`). No `cross`, no QEMU userland emulation. This matches the honest,
 tested, no-cross-compilation philosophy the release workflow has always stated:
 every artifact is produced on its own architecture, so nothing ships that no
 runner actually executed.

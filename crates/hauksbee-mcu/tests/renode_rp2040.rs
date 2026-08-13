@@ -51,12 +51,12 @@ fn firmware(dir: &str, name: &str) -> Option<PathBuf> {
 ///
 /// Renode has to compile ~380 KB of C# for the support bundle before the
 /// platform parses, which takes a few seconds on first machine creation. That
-/// fits inside the backend's own 30 s Monitor timeout on an idle host, so a slow
+/// fits inside the backend's 60 s setup timeout on an idle host, so a slow
 /// first test is not a hang. It does NOT fit under heavy contention: measured at
-/// load average 248, bring-up overran the budget and the tests died as "Renode
-/// monitor command timed out after 30s with no prompt", both in parallel and
-/// with `--test-threads=1`, a different test each run. Read a red here against
-/// the host's load first.
+/// load average 248, bring-up overran the former 30 s budget, both in parallel
+/// and with `--test-threads=1`, a different test each run. The production setup
+/// allowance is still finite, and runtime polling returns to the tighter 30 s
+/// bound. Read a startup red here against the host's load first.
 macro_rules! rp2040_or_skip {
     ($name:ident, $dir:literal, $elf:literal) => {
         if !is_available() {

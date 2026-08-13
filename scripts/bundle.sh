@@ -115,6 +115,60 @@ case "$SHAPE" in
 esac
 
 CARGO="${CARGO:-cargo}"
+HAUKSBEE_RELEASE_COMMIT="${HAUKSBEE_RELEASE_COMMIT:-$(git -C "$HAUKSBEE_ROOT" rev-parse HEAD 2>/dev/null || true)}"
+export HAUKSBEE_RELEASE_COMMIT
+[[ "$HAUKSBEE_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+  || die "release bundle needs one exact HAUKSBEE_RELEASE_COMMIT to pin generated private workflows"
+if [ -n "$(git -C "$HAUKSBEE_ROOT" status --porcelain --untracked-files=normal --)" ]; then
+  die "refusing to bundle a dirty source tree: commit or stash every tracked/untracked source change so the embedded commit identifies the bytes being packaged"
+fi
+export HAUKSBEE_SOURCE_COMMIT="$HAUKSBEE_RELEASE_COMMIT"
+
+# Resolve the immutable simavr revision before Cargo runs. build.rs embeds this
+# value into every AVR-capable binary; discovering it only after the build would
+# guarantee that an ordinary local bundle builds an unattested binary and then
+# correctly refuses to package it.
+SIMAVR_COMMIT="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' \
+  "$HAUKSBEE_ROOT/scripts/install-sims.sh" | head -1)"
+[[ "$SIMAVR_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+  || die "scripts/install-sims.sh does not name one immutable SIMAVR_COMMIT"
+
+if [ "$SHAPE" = default ] && [ "$DO_BUILD" -eq 1 ]; then
+  export SIMAVR_COMMIT
+
+  # Bind Cargo to one installation carrying the same immutable marker. Honour
+  # an explicit pair first, then the CI/release prefix, then the installer's
+  # conventional platform prefix. A half-specified or unmarked install is not
+  # corresponding-source evidence and must fail before compilation.
+  if { [ -n "${SIMAVR_INCLUDE_DIR:-}" ] && [ -z "${SIMAVR_LIB_DIR:-}" ]; } \
+      || { [ -z "${SIMAVR_INCLUDE_DIR:-}" ] && [ -n "${SIMAVR_LIB_DIR:-}" ]; }; then
+    die "set both SIMAVR_INCLUDE_DIR and SIMAVR_LIB_DIR, or neither"
+  fi
+  if [ -n "${SIMAVR_INCLUDE_DIR:-}" ]; then
+    simavr_prefix="$(dirname "$SIMAVR_INCLUDE_DIR")"
+    [ "$(dirname "$SIMAVR_LIB_DIR")" = "$simavr_prefix" ] \
+      || die "SIMAVR_INCLUDE_DIR and SIMAVR_LIB_DIR must belong to one prefix"
+  else
+    pinned_prefix="$HOME/.hauksbee-simavr/$SIMAVR_COMMIT"
+    if [ -f "$pinned_prefix/.hauksbee-simavr-commit" ]; then
+      simavr_prefix="$pinned_prefix"
+    elif [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
+      simavr_prefix="/opt/homebrew"
+    else
+      simavr_prefix="/usr/local"
+    fi
+    export SIMAVR_INCLUDE_DIR="$simavr_prefix/include"
+    export SIMAVR_LIB_DIR="$simavr_prefix/lib"
+  fi
+  [ -f "$SIMAVR_INCLUDE_DIR/simavr/sim_avr.h" ] \
+    || die "pinned simavr header missing at $SIMAVR_INCLUDE_DIR/simavr/sim_avr.h; run scripts/install-sims.sh --avr --prefix '$HOME/.hauksbee-simavr/$SIMAVR_COMMIT'"
+  [ -f "$SIMAVR_LIB_DIR/libsimavr.a" ] \
+    || die "pinned libsimavr.a missing at $SIMAVR_LIB_DIR/libsimavr.a; run scripts/install-sims.sh --avr --prefix '$HOME/.hauksbee-simavr/$SIMAVR_COMMIT'"
+  [ "$(cat "$simavr_prefix/.hauksbee-simavr-commit" 2>/dev/null || true)" = "$SIMAVR_COMMIT" ] \
+    || die "simavr at $simavr_prefix is not marked as immutable commit $SIMAVR_COMMIT; refusing to build an unattested default bundle"
+  "$HAUKSBEE_ROOT/scripts/simavr-payload-provenance.sh" verify "$simavr_prefix" \
+    || die "simavr payload bytes under $simavr_prefix do not match their recorded provenance"
+fi
 
 # Version: from the workspace Cargo.toml [workspace.package] version unless given.
 if [ -z "$VERSION" ]; then
@@ -265,6 +319,9 @@ notarize_staged_binaries() {
                  --password "$HAUKSBEE_NOTARY_PASSWORD")
   fi
   if [ "${#NOTARY_ARGS[@]}" -eq 0 ]; then
+    if [ "${HAUKSBEE_REQUIRE_NOTARIZATION:-0}" = "1" ]; then
+      die "Darwin release shape requires notary credentials (set HAUKSBEE_NOTARY_PROFILE or the Apple ID credential triple)"
+    fi
     info "No notary credentials set; binaries are signed but NOT notarised."
     info "Set HAUKSBEE_NOTARY_PROFILE (or the APPLE_ID/TEAM_ID/PASSWORD triple) to notarise."
     return 0
@@ -287,6 +344,9 @@ if [ "$(uname -s)" = "Darwin" ]; then
     ok "codesign --verify --strict: passed for hauksbee, hauksbee-ci, hauksbee-mcp"
     notarize_staged_binaries
   else
+    if [ "${HAUKSBEE_REQUIRE_NOTARIZATION:-0}" = "1" ]; then
+      die "Darwin release shape requires HAUKSBEE_SIGN_IDENTITY before notarisation"
+    fi
     info "HAUKSBEE_SIGN_IDENTITY not set; darwin binaries ship UNSIGNED."
     info "Release builds must set it to a 'Developer ID Application' identity (see app/macos/SIGNING.md)."
   fi
@@ -301,7 +361,7 @@ cp -R "$HAUKSBEE_ROOT/integrations" "$ROOTDIR/integrations"
 # (release mirroring, benchmarking, demo capture) that has no business in a
 # user tarball.
 mkdir -p "$ROOTDIR/scripts"
-for s in install.sh doctor.sh ci.sh install-sims.sh common.sh simulator-provenance.py; do
+for s in install.sh doctor.sh ci.sh install-sims.sh common.sh simavr-payload-provenance.sh simulator-provenance.py; do
   install -m 0755 "$HAUKSBEE_ROOT/scripts/$s" "$ROOTDIR/scripts/$s"
 done
 for s in required-simulator-versions.env renode-checksums.txt espressif-qemu-checksums.txt; do
@@ -311,6 +371,16 @@ done
 mkdir -p "$ROOTDIR/examples"
 cp -R "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/." "$ROOTDIR/examples/ci-specs"
 [ -d "$HAUKSBEE_ROOT/examples" ] && cp -R "$HAUKSBEE_ROOT/examples/." "$ROOTDIR/examples/"
+mkdir -p "$ROOTDIR/examples/firmware"
+install -m 0644 "$HAUKSBEE_ROOT/testdata/firmware/boot_gate_a/boot_gate.hex" \
+  "$ROOTDIR/examples/firmware/boot_gate.hex"
+# The checkout-relative tracked spec points at testdata/. The bundle retains a
+# package-local copy so its documented example and runtime gate are self-contained.
+sed 's#firmware = "../../../testdata/firmware/boot_gate_a/boot_gate.hex"#firmware = "../firmware/boot_gate.hex"#' \
+  "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boot_gate_pass.toml" \
+  > "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
+perl -pi -e 's#hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass\.toml#hauksbee-ci run examples/ci-specs/boot_gate_pass.toml#' \
+  "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
 # Drop python bytecode caches so the bundle is reproducible.
 find "$ROOTDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$ROOTDIR" -name '*.pyc' -delete 2>/dev/null || true
@@ -349,15 +419,21 @@ GIT_SHA_SHORT="${GIT_SHA:0:7}"
 # hauksbee's own terms travel with every redistribution (Apache-2.0 §4).
 cp "$HAUKSBEE_ROOT/LICENSE" "$ROOTDIR/LICENSE"
 cp "$HAUKSBEE_ROOT/NOTICE"  "$ROOTDIR/NOTICE"
+[ -s "$HAUKSBEE_ROOT/licenses/evalexpr-MIT.txt" ] \
+  || die "licenses/evalexpr-MIT.txt missing; every binary must retain evalexpr's MIT notice"
+cp "$HAUKSBEE_ROOT/licenses/evalexpr-MIT.txt" "$ROOTDIR/LICENSE-EVALEXPR-MIT.txt"
 
 # ── LICENSE-BINARY.txt: what THIS build is licensed under ────────────────────
 #
 # The two shapes have genuinely different answers, and a download that does not
 # say which one it is puts the obligation-guessing on the person installing it.
-# The simavr tag is read from install-sims.sh so the two can never drift.
-SIMAVR_TAG="$(grep -m1 '^SIMAVR_TAG=' "$HAUKSBEE_ROOT/scripts/install-sims.sh" \
-  | sed -E 's/.*"([^"]+)".*/\1/')"
-SIMAVR_TAG="${SIMAVR_TAG:-see scripts/install-sims.sh}"
+# The immutable simavr commit was resolved before the build so build.rs and the
+# corresponding-source notice are necessarily bound to the same revision.
+if [ "$SHAPE" = default ]; then
+  doctor_avr="$("$ROOTDIR/bin/hauksbee" doctor --backends | awk -F '\t' '$1 == "avr" { print; exit }')"
+  [[ "$doctor_avr" == *"source commit $SIMAVR_COMMIT"* ]] \
+    || die "default binaries do not attest simavr commit $SIMAVR_COMMIT (doctor says: ${doctor_avr:-no avr row}); refusing to write a false corresponding-source notice"
+fi
 PERMISSIVE_NAME="hauksbee-${VERSION}-${TARGET}-permissive.tar.gz"
 DEFAULT_NAME="hauksbee-${VERSION}-${TARGET}.tar.gz"
 
@@ -390,12 +466,15 @@ WHAT THIS MEANS FOR YOU
   applies to you, including the obligation to offer the corresponding source.
 
 CORRESPONDING SOURCE (GPL-3.0 section 6)
+  Complete, checksummed Corresponding Source for Hauksbee, every locked Cargo
+  dependency compiled into these binaries, and simavr is the same-release asset:
+    hauksbee-${VERSION}-source.tar.gz
   hauksbee (Apache-2.0), at the exact commit this was built from:
     https://github.com/hauksbee-dev/hauksbee
     commit ${GIT_SHA}
-  simavr (GPL-3.0), at the pinned tag this build links:
+  simavr (GPL-3.0), at the immutable commit this build links:
     https://github.com/buserror/simavr
-    tag ${SIMAVR_TAG}
+    commit ${SIMAVR_COMMIT}
   The build recipe, both scripts included in this bundle:
     scripts/install-sims.sh --avr     builds and installs libsimavr
     scripts/bundle.sh --shape default rebuilds this exact bundle
@@ -494,10 +573,10 @@ The binaries are self-contained (model db compiled in). Optional firmware
 backends (qemu, renode) are detected at runtime; run scripts/doctor.sh to see
 what is present.
 
-NOTE: the firmware-bearing hauksbee-ci specs in examples/ci-specs (blinky.toml,
-the boot_gate and lm75_thermostat specs) reference firmware and boards that
-live in the hauksbee repo's testdata/ (too large to bundle). Run those from a
-repo checkout. The bundled specs are the canonical, documented examples to copy.
+NOTE: boot_gate_pass.toml and its tiny AVR fixture are package-local and
+self-contained. Other firmware-bearing specs (blinky, boot_gate_fail, and the
+lm75 thermostat variants) still reference firmware in the repository's large
+testdata tree; run those from a checkout. They remain canonical examples to copy.
 EOF
 
 log "Writing tarball"

@@ -394,7 +394,7 @@ fn junit_and_sarif_artifacts_are_written_and_valid() {
     let out = run(&[
         "run",
         b.to_str().unwrap(),
-        "--report",
+        "--drc",
         "--junit",
         junit.to_str().unwrap(),
         "--sarif",

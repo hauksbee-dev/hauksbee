@@ -62,14 +62,23 @@ section 5.
 
 ```bash
 (
+  set -o pipefail
+  set +x
   export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
+  export HAUKSBEE_INSTALLER_COMMIT=REPLACE_WITH_RELEASE_COMMIT_SHA
+  export HAUKSBEE_INSTALLER_VERSION=REPLACE_WITH_RELEASE_TAG
   printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
-    | curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh \
-    | bash
+    | curl -q --config - -fsSL "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.sh?ref=$HAUKSBEE_INSTALLER_COMMIT" \
+    | python3 -c 'import base64,json,sys; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["content"]).decode())' \
+    | bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION"
 )
 ```
 
-This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee`, `hauksbee-ci`, and `hauksbee-mcp` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. The installer needs `curl`, CA certificates, and Python 3 (on minimal Debian/Ubuntu: `apt-get install -y curl ca-certificates python3`).
+This fetches the explicitly selected release for your OS/arch, verifies its
+sha256 checksum and signed GitHub provenance, and installs `hauksbee`,
+`hauksbee-ci`, and `hauksbee-mcp` to `~/.local/bin`. If that directory is not
+on your `PATH`, the installer prints the exact line to add. The installer needs
+`curl`, CA certificates, Python 3 and GitHub CLI `gh`.
 The token must be a fine-grained PAT or GitHub App installation token with
 Contents: read on the private release repository. The example reads it from the
 macOS keychain; use your platform's secret manager in the same role. Curl reads
@@ -83,13 +92,19 @@ before it requests either asset through GitHub's release-assets API.
 ```powershell
 try {
   $env:HAUKSBEE_GITHUB_TOKEN = Get-Secret hauksbee-read -AsPlainText
+  $releaseCommit = "REPLACE_WITH_RELEASE_COMMIT_SHA"
+  $releaseTag = "REPLACE_WITH_RELEASE_TAG"
   $headers = @{ Authorization = "Bearer $env:HAUKSBEE_GITHUB_TOKEN" }
-  irm -Headers $headers https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
+  $payload = irm -Headers $headers "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.ps1?ref=$releaseCommit"
+  $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($payload.content -replace '\s', '')))
+  $block = [ScriptBlock]::Create($script)
+  & $block -Version $releaseTag -ExpectedCommit $releaseCommit
 } finally {
   Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue
 }
 ```
 
+Replace the commit placeholder with the 40-character SHA printed by the release.
 The Windows installer verifies the zip's sha256 and installs `hauksbee.exe`,
 `hauksbee-ci.exe`, and `hauksbee-mcp.exe` under `%LOCALAPPDATA%\hauksbee\bin`.
 It always selects the Apache-2.0 permissive artifact and says that AVR is
@@ -112,6 +127,7 @@ Building needs Rust via rustup (the pinned toolchain builds automatically), plus
 
 ```bash
 (
+  set +x
   export HAUKSBEE_GHCR_USER="<authorized GitHub user or x-access-token for an App token>"
   export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
   export DOCKER_CONFIG="$(mktemp -d)"

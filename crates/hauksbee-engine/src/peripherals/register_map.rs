@@ -37,8 +37,7 @@
 use std::collections::HashMap;
 
 use evalexpr::{
-    build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
-    Node as EvalNode, Value,
+    build_operator_tree, ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value,
 };
 
 use hauksbee_models::sensor_spec::{
@@ -54,7 +53,7 @@ use super::spi::SpiSlave;
 /// A precompiled register: the spec plus its parsed expression (if any).
 struct CompiledRegister {
     spec: RegisterSpec,
-    program: Option<EvalNode<DefaultNumericTypes>>,
+    program: Option<EvalNode>,
 }
 
 impl CompiledRegister {
@@ -94,13 +93,10 @@ impl CompiledRegister {
 }
 
 /// Build an evalexpr context from the current input values and evaluate.
-fn eval_number(
-    program: &EvalNode<DefaultNumericTypes>,
-    inputs: &HashMap<String, f64>,
-) -> Option<f64> {
-    let mut ctx = HashMapContext::<DefaultNumericTypes>::new();
+fn eval_number(program: &EvalNode, inputs: &HashMap<String, f64>) -> Option<f64> {
+    let mut ctx = HashMapContext::new();
     for (k, v) in inputs {
-        let _ = ctx.set_value(k.clone(), Value::from_float(*v));
+        let _ = ctx.set_value(k.clone(), Value::Float(*v));
     }
     match program.eval_with_context(&ctx) {
         Ok(Value::Float(f)) => Some(f),
@@ -216,7 +212,7 @@ struct CompiledCommand {
     spec: WriteCommandSpec,
     /// state name -> parsed update expression, iterated in BTreeMap order (the
     /// order cannot matter: all RHS evaluate against the pre-update snapshot).
-    programs: Vec<(String, EvalNode<DefaultNumericTypes>)>,
+    programs: Vec<(String, EvalNode)>,
 }
 
 /// A compiled output law, plus the net driver the engine attached (None until
@@ -225,7 +221,7 @@ struct CompiledCommand {
 /// nothing).
 struct CompiledOutput {
     spec: OutputSpec,
-    program: EvalNode<DefaultNumericTypes>,
+    program: EvalNode,
     driver: Option<PinDriver>,
 }
 
@@ -278,7 +274,7 @@ pub struct RegisterMapSensor {
     outputs: Vec<CompiledOutput>,
     /// Streamed read frame (per-channel byte expressions), replacing the
     /// pointered read path when present.
-    read_frame: Option<(bool, Vec<EvalNode<DefaultNumericTypes>>)>,
+    read_frame: Option<(bool, Vec<EvalNode>)>,
     /// Payload bytes accumulated for the currently pointed write register.
     write_buf: Vec<u8>,
     /// Command-framing transaction state.
@@ -323,7 +319,7 @@ impl RegisterMapSensor {
         let compile_check = |what: String,
                              expr: &str|
          -> Result<(), hauksbee_models::sensor_spec::SensorSpecError> {
-            build_operator_tree::<DefaultNumericTypes>(expr).map_err(|e| {
+            build_operator_tree(expr).map_err(|e| {
                 hauksbee_models::sensor_spec::SensorSpecError::Invalid(format!(
                     "{what} expr {expr:?} failed to compile: {e}"
                 ))
@@ -384,10 +380,7 @@ impl RegisterMapSensor {
         // without a partial-move borrow conflict.
         let register_specs = std::mem::take(&mut s.registers);
         for r in register_specs {
-            let program = r
-                .expr
-                .as_deref()
-                .and_then(|e| build_operator_tree::<DefaultNumericTypes>(e).ok());
+            let program = r.expr.as_deref().and_then(|e| build_operator_tree(e).ok());
             let key = s.register_key(r.addr);
             if registers.contains_key(&key) {
                 panic!(
@@ -432,14 +425,13 @@ impl RegisterMapSensor {
                     .update
                     .iter()
                     .map(|(k, expr)| {
-                        let program = build_operator_tree::<DefaultNumericTypes>(expr)
-                            .unwrap_or_else(|e| {
-                                panic!(
-                                    "RegisterMapSensor::from_spec: write_command '{}' update \
+                        let program = build_operator_tree(expr).unwrap_or_else(|e| {
+                            panic!(
+                                "RegisterMapSensor::from_spec: write_command '{}' update \
                                      '{k}' failed to compile ({e}); construct via from_toml",
-                                    c.name
-                                )
-                            });
+                                c.name
+                            )
+                        });
                         (k.clone(), program)
                     })
                     .collect();
@@ -454,14 +446,13 @@ impl RegisterMapSensor {
         let outputs = std::mem::take(&mut s.outputs)
             .into_iter()
             .map(|o| {
-                let program =
-                    build_operator_tree::<DefaultNumericTypes>(&o.expr).unwrap_or_else(|e| {
-                        panic!(
-                            "RegisterMapSensor::from_spec: output '{}' failed to compile \
+                let program = build_operator_tree(&o.expr).unwrap_or_else(|e| {
+                    panic!(
+                        "RegisterMapSensor::from_spec: output '{}' failed to compile \
                              ({e}); construct via from_toml",
-                            o.name
-                        )
-                    });
+                        o.name
+                    )
+                });
                 CompiledOutput {
                     spec: o,
                     program,
@@ -475,7 +466,7 @@ impl RegisterMapSensor {
                 .iter()
                 .enumerate()
                 .map(|(i, b)| {
-                    build_operator_tree::<DefaultNumericTypes>(b).unwrap_or_else(|e| {
+                    build_operator_tree(b).unwrap_or_else(|e| {
                         panic!(
                             "RegisterMapSensor::from_spec: read_frame byte {i} failed to \
                              compile ({e}); construct via from_toml"

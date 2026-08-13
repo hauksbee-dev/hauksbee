@@ -47,8 +47,7 @@
 //! un-braced expressions.
 
 use evalexpr::{
-    build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
-    Node as EvalNode, Value,
+    build_operator_tree, ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -64,7 +63,7 @@ pub struct CompiledExpr {
     /// Canonical source text (what serializes; see the module doc).
     src: String,
     /// The pre-parsed operator tree, rebuilt from `src` on deserialize.
-    tree: EvalNode<DefaultNumericTypes>,
+    tree: EvalNode,
     /// Cached `__d{k}` variable names, index = dependency slot. Slot count is
     /// the highest `__d` index in the tree plus one; the loader constructs
     /// slots densely so this equals the device's `deps.len()`.
@@ -79,7 +78,7 @@ impl CompiledExpr {
     /// `Err(String)`; the loader wraps it with a line number, serde with a
     /// deserialization error.
     pub fn compile(src: &str) -> Result<CompiledExpr, String> {
-        let tree = build_operator_tree::<DefaultNumericTypes>(src)
+        let tree = build_operator_tree(src)
             .map_err(|e| format!("malformed behavioral expression `{src}`: {e}"))?;
         let mut n_slots = 0usize;
         let mut uses_time = false;
@@ -135,13 +134,13 @@ impl CompiledExpr {
                 deps.len()
             ));
         }
-        let mut ctx = HashMapContext::<DefaultNumericTypes>::new();
+        let mut ctx = HashMapContext::new();
         for (name, v) in self.dep_names.iter().zip(deps) {
-            ctx.set_value(name.clone(), Value::from_float(*v))
+            ctx.set_value(name.clone(), Value::Float(*v))
                 .map_err(|e| format!("behavioral eval context: {e}"))?;
         }
         if self.uses_time {
-            ctx.set_value("time".to_string(), Value::from_float(time))
+            ctx.set_value("time".to_string(), Value::Float(time))
                 .map_err(|e| format!("behavioral eval context: {e}"))?;
         }
         match self.tree.eval_with_context(&ctx) {

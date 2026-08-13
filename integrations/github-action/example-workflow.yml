@@ -32,16 +32,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # 1. Check out YOUR hardware repo (board + firmware + spec).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # 2. Fetch the private Action code. HAUKSBEE_READ_TOKEN is a fine-grained
       # PAT or GitHub App installation token with Contents: read on the private
       # hauksbee repository; the consumer repo's github.token cannot do this.
       - name: Fetch the private hauksbee Action
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: hauksbee-dev/hauksbee
-          ref: v0.1.0
+          # Replace this with the 40-character commit printed by the v0.1.0
+          # release. A tag is not an immutable credential boundary.
+          ref: REPLACE_WITH_RELEASE_COMMIT_SHA
           path: .hauksbee-action
           token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
           persist-credentials: false
@@ -53,12 +55,14 @@ jobs:
 
       # 4. Run the hardware check. The action fetches hauksbee-ci, runs your
       #    spec, writes JUnit XML, and emits inline annotations. Pin the
-      #    action to a released tag (or a full commit SHA, stricter still),
-      #    not @main.
+      #    action to the exact release commit above. The separate version input
+      #    names the release assets, and the Action verifies both identities.
       - name: hauksbee-ci power-up check
         uses: ./.hauksbee-action/integrations/github-action
         with:
           hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
+          hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
+          hauksbee-version: v0.1.0
           spec: ci/power-up.toml
           junit: hauksbee-ci-results.xml
 
@@ -75,16 +79,18 @@ jobs:
           - ci/blink.toml
           - ci/brownout.toml
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: hauksbee-dev/hauksbee
-          ref: v0.1.0
+          ref: REPLACE_WITH_RELEASE_COMMIT_SHA
           path: .hauksbee-action
           token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
           persist-credentials: false
       - uses: ./.hauksbee-action/integrations/github-action
         with:
           hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
+          hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
+          hauksbee-version: v0.1.0
           spec: ${{ matrix.spec }}
           junit: results-${{ strategy.job-index }}.xml

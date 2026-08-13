@@ -432,7 +432,7 @@ fn backend_probes() -> Vec<Value> {
     #[cfg(feature = "avr")]
     out.push(json!({
         "name": "avr", "status": "builtin", "available": true,
-        "detail": "simavr linked into this binary",
+        "detail": hauksbee_mcu::simavr_build_detail(),
         "summary": "ATmega / ATtiny firmware co-sim",
     }));
     #[cfg(not(feature = "avr"))]

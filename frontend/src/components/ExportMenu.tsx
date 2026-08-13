@@ -5,7 +5,7 @@ import type { SpecSnapshot } from '../hooks/useSessions'
 import { DownloadIcon } from './Icons'
 import { ARRIVE, LEAVE } from '../motion'
 import { buildReportHtml, downloadText, reportJson } from '../lib/report-export'
-import { specStemFor, workflowYaml } from '../lib/ci-workflow'
+import { specStemFor, workflowExportAvailable, workflowYaml } from '../lib/ci-workflow'
 import { APP_VERSION } from '../lib/version'
 
 // One Export menu, under the report's verdict, holding every file this report
@@ -108,12 +108,14 @@ export function ExportMenu({
       what: `${spec.fileName}; the file hauksbee-ci runs`,
       run: () => emit('The spec', spec.fileName, spec.toml, 'text/plain;charset=utf-8'),
     })
-    items.push({
-      id: 'export-workflow',
-      label: 'The CI workflow',
-      what: 'hauksbee-ci.yml; runs that spec on every push',
-      run: () => emit('The workflow', 'hauksbee-ci.yml', workflowYaml(stem), 'text/yaml;charset=utf-8'),
-    })
+    if (workflowExportAvailable) {
+      items.push({
+        id: 'export-workflow',
+        label: 'The CI workflow',
+        what: 'hauksbee-ci.yml; runs that spec on every push',
+        run: () => emit('The workflow', 'hauksbee-ci.yml', workflowYaml(stem), 'text/yaml;charset=utf-8'),
+      })
+    }
   }
 
   return (

@@ -33,14 +33,23 @@ The binary ships in every release bundle as `bin/hauksbee-mcp`, alongside
 `PATH`:
 
 ```bash
-export HAUKSBEE_GITHUB_TOKEN="$(gh auth token)"
-printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
-  | curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh \
-  | bash
+(
+  set -o pipefail
+  set +x
+  export HAUKSBEE_GITHUB_TOKEN="$(gh auth token)"
+  export HAUKSBEE_INSTALLER_COMMIT=REPLACE_WITH_RELEASE_COMMIT_SHA
+  export HAUKSBEE_INSTALLER_VERSION=REPLACE_WITH_RELEASE_TAG
+  printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
+    | curl -q --config - -fsSL "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.sh?ref=$HAUKSBEE_INSTALLER_COMMIT" \
+    | python3 -c 'import base64,json,sys; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["content"]).decode())' \
+    | bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION"
+)
 ```
 
 The token must have `Contents: read` access to the private repository. Passing
-the header through curl's stdin keeps the credential out of the process argv.
+the header through curl's stdin keeps the credential out of the process argv;
+the subshell removes it afterward. Replace the commit placeholder with the
+40-character SHA printed by the release so installer code is immutable too.
 
 From a checkout, `scripts/install.sh` builds and installs the same three.
 

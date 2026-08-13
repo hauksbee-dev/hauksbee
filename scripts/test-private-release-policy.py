@@ -26,11 +26,163 @@ SURFACE_MANIFEST = ROOT / "scripts" / "private-release-surfaces.json"
 SURFACE_CHECKER = ROOT / "scripts" / "check-private-release-surfaces.py"
 CONTAINER_PREFLIGHT = ROOT / "scripts" / "check-private-container-publication.sh"
 MIRROR_DEPENDENCY_CHECKER = ROOT / "scripts" / "check-mirror-dependencies.py"
-PREBUILT_PROVENANCE = ROOT / "integrations" / "github-action" / "prebuilt-provenance.sh"
 REGISTRY_USER = ROOT / "integrations" / "github-action" / "resolve-registry-user.sh"
 
 
 class PrivateReleasePolicyTests(unittest.TestCase):
+    def test_build_provenance_never_borrows_an_enclosing_consumer_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            consumer = tmp / "consumer"
+            source_root = consumer / "vendor" / "hauksbee"
+            crates = source_root / "crates"
+            crates.mkdir(parents=True)
+            (consumer / "owned.txt").write_text("consumer\n")
+            subprocess.run(["git", "init", "-q", str(consumer)], check=True)
+            subprocess.run(["git", "-C", str(consumer), "add", "owned.txt"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(consumer),
+                    "-c",
+                    "user.name=contract",
+                    "-c",
+                    "user.email=contract@example.invalid",
+                    "commit",
+                    "-qm",
+                    "consumer",
+                ],
+                check=True,
+            )
+            consumer_sha = subprocess.check_output(
+                ["git", "-C", str(consumer), "rev-parse", "HEAD"], text=True
+            ).strip()
+
+            for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
+                manifest = crates / crate
+                manifest.mkdir()
+                binary = tmp / f"{crate}-build-script"
+                subprocess.run(
+                    ["rustc", str(ROOT / "crates" / crate / "build.rs"), "-o", str(binary)],
+                    check=True,
+                )
+                result = subprocess.run(
+                    [str(binary)],
+                    env={**os.environ, "CARGO_MANIFEST_DIR": str(manifest)},
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                )
+                self.assertNotIn(consumer_sha, result.stdout, crate)
+                self.assertNotIn("cargo:rustc-env=GIT_HASH=", result.stdout, crate)
+
+            # Cargo's real vendor layout is flat: vendor/<crate>, not a copy of
+            # Hauksbee's crates/<crate> workspace hierarchy. In that shape the
+            # historical ../.. probe lands exactly on the consumer repository.
+            flat_manifest = consumer / "vendor" / "hauksbee-ci"
+            flat_manifest.mkdir(parents=True)
+            binary = tmp / "flat-hauksbee-ci-build-script"
+            subprocess.run(
+                ["rustc", str(ROOT / "crates/hauksbee-ci/build.rs"), "-o", str(binary)],
+                check=True,
+            )
+            result = subprocess.run(
+                [str(binary)],
+                env={**os.environ, "CARGO_MANIFEST_DIR": str(flat_manifest)},
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertNotIn(consumer_sha, result.stdout)
+            self.assertNotIn("cargo:rustc-env=GIT_HASH=", result.stdout)
+
+        for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
+            source = (ROOT / "crates" / crate / "build.rs").read_text()
+            self.assertNotIn(
+                'println!("cargo:rerun-if-changed=../../.git");', source
+            )
+            self.assertIn('"packed-refs"', source)
+
+    def test_build_provenance_refuses_a_dirty_owned_source_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            source_root = tmp / "hauksbee"
+            manifest = source_root / "crates" / "hauksbee-ci"
+            manifest.mkdir(parents=True)
+            tracked = source_root / "tracked.txt"
+            tracked.write_text("clean\n")
+            subprocess.run(["git", "init", "-q", str(source_root)], check=True)
+            subprocess.run(["git", "-C", str(source_root), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(source_root), "-c", "user.name=contract",
+                    "-c", "user.email=contract@example.invalid", "commit", "-qm", "clean",
+                ],
+                check=True,
+            )
+            binary = tmp / "build-script"
+            subprocess.run(
+                ["rustc", str(ROOT / "crates/hauksbee-ci/build.rs"), "-o", str(binary)],
+                check=True,
+            )
+            clean = subprocess.run(
+                [str(binary)],
+                env={**os.environ, "CARGO_MANIFEST_DIR": str(manifest)},
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn("cargo:rustc-env=GIT_HASH=", clean.stdout)
+            tracked.write_text("dirty\n")
+            dirty = subprocess.run(
+                [str(binary)],
+                env={**os.environ, "CARGO_MANIFEST_DIR": str(manifest)},
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertNotIn("cargo:rustc-env=GIT_HASH=", dirty.stdout)
+        for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
+            source = (ROOT / "crates" / crate / "build.rs").read_text()
+            for watched in ("../../crates", "../../vendor", "../../frontend/src", "../../integrations"):
+                self.assertIn(watched, source)
+
+    def test_cargo_rechecks_provenance_when_a_workspace_sibling_becomes_dirty(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp) / "hauksbee"
+            crate = root / "crates/hauksbee-ci"
+            (crate / "src").mkdir(parents=True)
+            (root / "docs").mkdir()
+            (root / ".gitignore").write_text(
+                "/target\n/crates/hauksbee-ci/target\n/crates/hauksbee-ci/Cargo.lock\n"
+            )
+            (root / "docs/contract.md").write_text("clean\n")
+            shutil.copy(ROOT / "crates/hauksbee-ci/build.rs", crate / "build.rs")
+            (crate / "Cargo.toml").write_text(
+                '[package]\nname="probe"\nversion="0.0.0"\nedition="2021"\nbuild="build.rs"\n'
+            )
+            (crate / "src/main.rs").write_text(
+                'fn main() { println!("{}", option_env!("GIT_HASH").unwrap_or("none")); }\n'
+            )
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "-c", "user.name=contract", "-c",
+                 "user.email=contract@example.invalid", "commit", "-qm", "clean"],
+                check=True,
+            )
+            manifest = crate / "Cargo.toml"
+            clean = subprocess.check_output(
+                ["cargo", "run", "--quiet", "--manifest-path", str(manifest)], text=True
+            ).strip()
+            self.assertRegex(clean, r"^[0-9a-f]{40}$")
+            (root / "docs/contract.md").write_text("dirty\n")
+            dirty = subprocess.check_output(
+                ["cargo", "run", "--quiet", "--manifest-path", str(manifest)], text=True
+            ).strip()
+            self.assertEqual(dirty, "none")
+
     def test_canonical_surface_manifest_exists(self) -> None:
         self.assertTrue(
             SURFACE_MANIFEST.is_file(),
@@ -159,7 +311,9 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("fn real_nep_host_exposes_standard_grade_7ms_gap()", nep)
         self.assertIn("fn real_nep_host_succeeds_with_compliant_firmware()", nep)
 
-    def private_installer_fixture(self) -> tuple[str, bytes, bytes]:
+    def private_installer_fixture(
+        self, *, include_mcp: bool = True, bad_binary_version: str | None = None
+    ) -> tuple[str, bytes, bytes]:
         system = subprocess.check_output(["uname", "-s"], text=True).strip()
         machine = subprocess.check_output(["uname", "-m"], text=True).strip()
         os_slug = {"Linux": "linux", "Darwin": "darwin"}[system]
@@ -172,8 +326,16 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         root = asset.removesuffix(".tar.gz")
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-            for binary in ("hauksbee", "hauksbee-ci", "hauksbee-mcp"):
-                content = b"#!/usr/bin/env bash\nexit 0\n"
+            binaries = ["hauksbee", "hauksbee-ci"]
+            if include_mcp:
+                binaries.append("hauksbee-mcp")
+            for binary in binaries:
+                reported = "9.9.9" if binary == bad_binary_version else "0.1.0"
+                content = (
+                    b"#!/usr/bin/env bash\n"
+                    b'test -z "${HAUKSBEE_GITHUB_TOKEN:-}${GITHUB_TOKEN:-}${GH_TOKEN:-}"\n'
+                    + f'printf "%s {reported} (git 0123456789abcdef0123456789abcdef01234567)\\n" "$(basename "$0")"\n'.encode()
+                )
                 info = tarfile.TarInfo(f"{root}/bin/{binary}")
                 info.mode = 0o755
                 info.size = len(content)
@@ -183,9 +345,28 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         return asset, tarball, checksum
 
     def run_private_installer(
-        self, *, token: str | None, corrupt_asset: bool = False
-    ) -> tuple[subprocess.CompletedProcess[str], list[tuple[str, str, str]]]:
-        asset, tarball, checksum = self.private_installer_fixture()
+        self,
+        *,
+        token: str | None,
+        corrupt_asset: bool = False,
+        existing_install: bool = False,
+        fail_commit_binary: str | None = None,
+        immutable_release: bool = True,
+        active_install_lock: bool = False,
+        seeded_journal: str | None = None,
+        include_mcp: bool = True,
+        fail_atomic_link: bool = False,
+        cross_user_install_lock: bool = False,
+        stale_install_lock: bool = False,
+        bad_binary_version: str | None = None,
+    ) -> tuple[
+        subprocess.CompletedProcess[str],
+        list[tuple[str, str, str]],
+        dict[str, bytes],
+    ]:
+        asset, tarball, checksum = self.private_installer_fixture(
+            include_mcp=include_mcp, bad_binary_version=bad_binary_version
+        )
         if corrupt_asset:
             tarball += b"corrupt-after-checksum"
         expected_auth = "Bearer installer-token"
@@ -208,6 +389,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 release = json.dumps(
                     {
                         "tag_name": "v0.1.0",
+                        "immutable": immutable_release,
                         "assets": [
                             {
                                 "name": asset,
@@ -256,6 +438,73 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 env.pop("HAUKSBEE_RELEASES_BASE", None)
                 if token is not None:
                     env["HAUKSBEE_GITHUB_TOKEN"] = token
+                fake_bin = Path(raw_tmp) / "fake-bin"
+                fake_bin.mkdir()
+                fake_gh = fake_bin / "gh"
+                fake_gh.write_text(
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    "if [ \"${1:-}\" = api ]; then\n"
+                    "  printf '%s\\n' 0123456789abcdef0123456789abcdef01234567\n"
+                    "  exit 0\n"
+                    "fi\n"
+                    "if [ \"${1:-}\" = release ] && [ \"${2:-}\" = verify-asset ]; then exit 0; fi\n"
+                    "exit 2\n"
+                )
+                fake_gh.chmod(0o755)
+                if fail_atomic_link:
+                    fake_ln = fake_bin / "ln"
+                    fake_ln.write_text("#!/usr/bin/env bash\nexit 70\n")
+                    fake_ln.chmod(0o755)
+                if cross_user_install_lock:
+                    fake_ps = fake_bin / "ps"
+                    fake_ps.write_text("#!/usr/bin/env bash\nprintf '999999\\n'\n")
+                    fake_ps.chmod(0o755)
+                if fail_commit_binary is not None:
+                    fake_mv = fake_bin / "mv"
+                    fake_mv.write_text(
+                        "#!/usr/bin/env bash\n"
+                        "set -euo pipefail\n"
+                        'for arg in "$@"; do\n'
+                        f'  if [[ "$arg" == */new-{fail_commit_binary} ]] '
+                        '&& [ ! -e "$HAUKSBEE_FAKE_MV_MARKER" ]; then\n'
+                        '    : > "$HAUKSBEE_FAKE_MV_MARKER"\n'
+                        "    exit 70\n"
+                        "  fi\n"
+                        "done\n"
+                        'exec /bin/mv "$@"\n'
+                    )
+                    fake_mv.chmod(0o755)
+                    env["HAUKSBEE_FAKE_MV_MARKER"] = str(Path(raw_tmp) / "mv-failed")
+                env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+                prefix = Path(raw_tmp) / "prefix"
+                if existing_install:
+                    install_dir = prefix / "bin"
+                    install_dir.mkdir(parents=True)
+                    for binary in ("hauksbee", "hauksbee-ci", "hauksbee-mcp"):
+                        path = install_dir / binary
+                        path.write_bytes(f"old-{binary}\n".encode())
+                        path.chmod(0o755)
+                if active_install_lock or stale_install_lock:
+                    install_dir = prefix / "bin"
+                    install_dir.mkdir(parents=True, exist_ok=True)
+                    (install_dir / ".hauksbee-install.lock").write_text(
+                        f"{999999 if (cross_user_install_lock or stale_install_lock) else os.getpid()}\nACTIVE-OWNER-TOKEN\n"
+                    )
+                if seeded_journal is not None:
+                    install_dir = prefix / "bin"
+                    install_dir.mkdir(parents=True, exist_ok=True)
+                    journal = install_dir / ".hauksbee-install.seeded"
+                    journal.mkdir()
+                    for binary in ("hauksbee", "hauksbee-ci", "hauksbee-mcp"):
+                        live = install_dir / binary
+                        live.write_bytes(f"new-{binary}\n".encode())
+                        live.chmod(0o755)
+                        (journal / f"old-{binary}").write_bytes(f"old-{binary}\n".encode())
+                        (journal / f"installing-{binary}").touch()
+                    if seeded_journal == "committed":
+                        (journal / "committed").touch()
+                    env["HAUKSBEE_TEST_EXIT_AFTER_RECOVERY"] = "1"
                 result = subprocess.run(
                     [
                         "bash",
@@ -263,7 +512,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                         "--version",
                         "v0.1.0",
                         "--prefix",
-                        str(Path(raw_tmp) / "prefix"),
+                        str(prefix),
                     ],
                     cwd=ROOT,
                     env=env,
@@ -271,20 +520,30 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     capture_output=True,
                     check=False,
                 )
+                installed = {
+                    path.name: path.read_bytes()
+                    for path in (prefix / "bin").glob("hauksbee*")
+                    if path.is_file()
+                }
+                installed["transaction_dirs"] = "\n".join(
+                    sorted(path.name for path in (prefix / "bin").glob(".hauksbee-install.*"))
+                ).encode()
+                lock = prefix / "bin/.hauksbee-install.lock"
+                installed["install_lock"] = lock.read_bytes() if lock.is_file() else b""
         finally:
             server.shutdown()
             server.server_close()
             thread.join()
-        return result, requests
+        return result, requests, installed
 
     def test_private_installer_refuses_to_download_without_credential(self) -> None:
-        result, requests = self.run_private_installer(token=None)
+        result, requests, _installed = self.run_private_installer(token=None)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("HAUKSBEE_GITHUB_TOKEN", result.stdout + result.stderr)
         self.assertEqual(requests, [], "missing credentials must fail before HTTP")
 
     def test_private_installer_authenticates_every_asset_download(self) -> None:
-        result, requests = self.run_private_installer(token="installer-token")
+        result, requests, _installed = self.run_private_installer(token="installer-token")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
             requests,
@@ -314,12 +573,131 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertNotIn("installer itself needs only `curl`", (ROOT / "README.md").read_text())
 
     def test_private_installer_refuses_corrupt_api_asset_bytes(self) -> None:
-        result, requests = self.run_private_installer(
+        result, requests, _installed = self.run_private_installer(
             token="installer-token", corrupt_asset=True
         )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("did not match", (result.stdout + result.stderr).lower())
         self.assertEqual(len(requests), 3)
+
+    def test_private_installer_refuses_a_mutable_release(self) -> None:
+        result, requests, _installed = self.run_private_installer(
+            token="installer-token", immutable_release=False
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("not immutable", (result.stdout + result.stderr).lower())
+        self.assertEqual(len(requests), 1, "mutable release must refuse before assets")
+
+    def test_private_installer_rolls_back_a_mid_commit_failure(self) -> None:
+        result, _requests, installed = self.run_private_installer(
+            token="installer-token",
+            existing_install=True,
+            fail_commit_binary="hauksbee-ci",
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        for binary in ("hauksbee", "hauksbee-ci", "hauksbee-mcp"):
+            self.assertEqual(installed[binary], f"old-{binary}\n".encode())
+        self.assertEqual(installed["transaction_dirs"], b"")
+
+    def test_private_installer_removes_partial_fresh_install_on_commit_failure(self) -> None:
+        result, _requests, installed = self.run_private_installer(
+            token="installer-token",
+            existing_install=False,
+            fail_commit_binary="hauksbee-ci",
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            installed,
+            {"transaction_dirs": b"", "install_lock": b""},
+            "a failed fresh transaction must leave no installed subset",
+        )
+
+    def test_private_installer_probes_staged_binaries_before_replacing_live_files(self) -> None:
+        result, _requests, installed = self.run_private_installer(
+            token="installer-token",
+            existing_install=True,
+            bad_binary_version="hauksbee-ci",
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("existing install left untouched", result.stdout + result.stderr)
+        for binary in ("hauksbee", "hauksbee-ci", "hauksbee-mcp"):
+            self.assertEqual(installed[binary], f"old-{binary}\n".encode())
+        self.assertEqual(installed["transaction_dirs"], b"")
+
+    def test_unix_release_and_installer_bind_every_binary_to_one_commit(self) -> None:
+        installer = (ROOT / "scripts/get-hauksbee.sh").read_text()
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        for binary in ("hauksbee", "hauksbee-ci", "hauksbee-mcp"):
+            self.assertIn(f'for b in ${{BINARIES}}', installer)
+            self.assertIn(binary, release)
+        self.assertIn('expected_version="$b ${VERSION#v} (git $RELEASE_SHA)"', installer)
+        self.assertIn('expected="$b $expected_version (git $expected_sha)"', release)
+
+    def test_unix_installer_serializes_and_recovers_crash_journals(self) -> None:
+        installer = (ROOT / "scripts/get-hauksbee.sh").read_text()
+        self.assertIn('INSTALL_LOCK="${INSTALL_DIR}/.hauksbee-install.lock"', installer)
+        self.assertIn("LOCK_OWNED=0", installer)
+        self.assertIn('[ "$LOCK_OWNED" -eq 1 ] || return 0', installer)
+        self.assertIn('ln "$candidate_lock" "$INSTALL_LOCK"', installer)
+        self.assertIn('> "$TXN_DIR/committed"', installer)
+        self.assertIn("kill -0", installer)
+        self.assertIn("refusing concurrent replacement", installer)
+        self.assertIn("recover_transaction", installer)
+        self.assertIn("Multiple interrupted install journals", installer)
+        self.assertLess(installer.index("acquire_install_lock"), installer.index('TXN_DIR="$(mktemp'))
+
+    def test_rejected_unix_installer_cannot_delete_the_active_owners_lock(self) -> None:
+        result, _requests, installed = self.run_private_installer(
+            token="installer-token", active_install_lock=True
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("refusing concurrent replacement", result.stdout + result.stderr)
+        self.assertEqual(
+            installed["install_lock"],
+            f"{os.getpid()}\nACTIVE-OWNER-TOKEN\n".encode(),
+        )
+
+    def test_unix_installer_recovers_every_binary_named_by_an_old_journal(self) -> None:
+        result, _requests, installed = self.run_private_installer(
+            token="installer-token", seeded_journal="uncommitted", include_mcp=False
+        )
+        self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
+        for binary in ("hauksbee", "hauksbee-ci", "hauksbee-mcp"):
+            self.assertEqual(installed[binary], f"old-{binary}\n".encode())
+        self.assertEqual(installed["transaction_dirs"], b"")
+
+    def test_unix_installer_fails_instead_of_spinning_when_atomic_lock_is_unsupported(self) -> None:
+        result, _requests, installed = self.run_private_installer(
+            token="installer-token", fail_atomic_link=True
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("cannot atomically acquire", result.stdout + result.stderr)
+        self.assertEqual(installed["install_lock"], b"")
+
+    def test_cross_user_live_owner_is_not_mistaken_for_a_stale_lock(self) -> None:
+        result, _requests, installed = self.run_private_installer(
+            token="installer-token", active_install_lock=True, cross_user_install_lock=True
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("refusing concurrent replacement", result.stdout + result.stderr)
+        self.assertEqual(installed["install_lock"], b"999999\nACTIVE-OWNER-TOKEN\n")
+
+    def test_stale_lock_is_left_for_explicit_inspection_not_racy_reclamation(self) -> None:
+        result, _requests, installed = self.run_private_installer(
+            token="installer-token", stale_install_lock=True
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("automatic stale-lock reclamation is unsafe", result.stdout + result.stderr)
+        self.assertEqual(installed["install_lock"], b"999999\nACTIVE-OWNER-TOKEN\n")
+
+    def test_unix_installer_keeps_live_files_for_a_committed_crash_journal(self) -> None:
+        result, _requests, installed = self.run_private_installer(
+            token="installer-token", seeded_journal="committed", include_mcp=False
+        )
+        self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
+        for binary in ("hauksbee", "hauksbee-ci", "hauksbee-mcp"):
+            self.assertEqual(installed[binary], f"new-{binary}\n".encode())
+        self.assertEqual(installed["transaction_dirs"], b"")
 
     def test_powershell_installer_authenticates_asset_downloads(self) -> None:
         text = (ROOT / "scripts/get-hauksbee.ps1").read_text()
@@ -328,73 +706,78 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("$matches[0].url", text)
         self.assertIn('"Accept" = "application/octet-stream"', text)
         self.assertIn("Get-FileHash -Algorithm SHA256", text)
+        self.assertIn(".digest", text)
+        self.assertIn("GitHub asset digest", text)
         self.assertNotIn("ReleasesBase", text)
+
+    def test_unix_installer_disables_xtrace_before_reading_credentials(self) -> None:
+        env = os.environ.copy()
+        env["HAUKSBEE_GITHUB_TOKEN"] = "XTRACE-CONTRACT-SECRET"
+        result = subprocess.run(
+            ["bash", "-x", str(ROOT / "scripts/get-hauksbee.sh"), "--help"],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("XTRACE-CONTRACT-SECRET", result.stdout + result.stderr)
 
     def test_action_source_fallback_uses_the_stock_runner_feature_set(self) -> None:
         action = (ROOT / "integrations/github-action/action.yml").read_text()
         build = action[action.index("- name: Build hauksbee (fallback build)") :]
         self.assertEqual(build.count("--no-default-features --features renode,qemu"), 2)
-        self.assertIn("stock runner", build)
+        self.assertIn("working-directory: .hauksbee", build)
+        toolchain = action[action.index("- name: Install Rust toolchain (fallback build)") : action.index("- name: Cache cargo (fallback build)")]
+        self.assertIn("toolchain: 1.92.0", toolchain)
+        self.assertNotIn("toolchain: stable", toolchain)
 
-    def test_prebuilt_cache_is_repository_bound_and_rejects_wrong_provenance(self) -> None:
+    def test_action_release_version_fallback_checks_out_that_exact_release_sha(self) -> None:
         action = (ROOT / "integrations/github-action/action.yml").read_text()
-        key = next(line for line in action.splitlines() if "key: hauksbee-prebuilt-" in line)
-        self.assertIn("inputs.hauksbee-repo", key)
-        self.assertIn("prebuilt-provenance.sh", action)
-        self.assertIn('verify "$dl" "$REPO" "$TAG" "$platform"', action)
-        self.assertIn('TAG="$(gh release view', action)
+        pick = action[
+            action.index("- name: Pick prebuilt release tag") :
+            action.index("- name: Fetch prebuilt hauksbee-ci")
+        ]
+        self.assertIn('echo "source-ref=$source_ref"', pick)
+        self.assertIn('if [ -n "$release_sha" ]; then source_ref="$release_sha"; fi', pick)
+        checkout = action[
+            action.index("- name: Checkout hauksbee (fallback build)") :
+            action.index("- name: Install Rust toolchain (fallback build)")
+        ]
+        self.assertIn("steps.reltag.outputs.source-ref || inputs.hauksbee-ref", checkout)
+        image = action[action.index("- name: Run the hardware check (image)") :]
+        self.assertIn("RELEASE_SHA: ${{ steps.reltag.outputs.expected-sha }}", image)
 
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            cache = Path(raw_tmp)
-            (cache / "hauksbee-0.1.0/bin").mkdir(parents=True)
-            for binary in ("hauksbee", "hauksbee-ci"):
-                path = cache / "hauksbee-0.1.0/bin" / binary
-                path.write_text("#!/bin/sh\n")
-                path.chmod(0o755)
-            subprocess.run(
-                [
-                    "bash",
-                    str(PREBUILT_PROVENANCE),
-                    "record",
-                    str(cache),
-                    "owner/one",
-                    "v0.1.0",
-                    "linux-x86_64",
-                ],
-                check=True,
-                text=True,
-                capture_output=True,
-            )
-            good = subprocess.run(
-                [
-                    "bash",
-                    str(PREBUILT_PROVENANCE),
-                    "verify",
-                    str(cache),
-                    "owner/one",
-                    "v0.1.0",
-                    "linux-x86_64",
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            wrong = subprocess.run(
-                [
-                    "bash",
-                    str(PREBUILT_PROVENANCE),
-                    "verify",
-                    str(cache),
-                    "owner/two",
-                    "v0.1.0",
-                    "linux-x86_64",
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
-            self.assertNotEqual(wrong.returncode, 0, wrong.stdout + wrong.stderr)
+    def test_prebuilt_private_bytes_are_uncached_and_publisher_attested(self) -> None:
+        action = (ROOT / "integrations/github-action/action.yml").read_text()
+        self.assertIn('repos/$REPO/commits/$tag', action)
+        self.assertIn(
+            "release tag $tag resolves to $release_sha, not pinned ref $REF",
+            action,
+        )
+        self.assertIn('[[ "$ci_version" == *"(git $release_sha)"* ]]', action)
+        self.assertIn('[[ "$engine_version" == *"(git $release_sha)"* ]]', action)
+        self.assertNotIn("key: hauksbee-prebuilt-", action)
+        self.assertNotIn("~/.cache/hauksbee/prebuilt-archives", action)
+        fallback_cache = action[
+            action.index("- name: Cache cargo (fallback build)") :
+            action.index("- name: Build hauksbee (fallback build)")
+        ]
+        self.assertNotIn(".hauksbee/target", fallback_cache)
+        self.assertIn("$RUNNER_TEMP/hauksbee-private-archives", action)
+        self.assertIn('gh release verify-asset "$TAG" "$tarball"', action)
+        self.assertIn('--jq .immutable', action)
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("Verify GitHub's immutable release attestations", release)
+        self.assertNotIn("actions/attest@", release)
+        self.assertIn("env -u GH_TOKEN -u GITHUB_TOKEN", action)
+        self.assertNotIn("path: .hauksbee-prebuilt", action)
+        self.assertIn('cached_sha256', action)
+        self.assertIn('actual_asset_sha256', action)
+        self.assertIn('dl="$RUNNER_TEMP/hauksbee-prebuilt-$platform"', action)
+        self.assertLess(action.index('actual_asset_sha256='), action.index('tar -xzf "$tarball"'))
+        self.assertNotIn(".hauksbee-provenance", action)
 
     def test_registry_username_supports_pat_and_github_app_tokens(self) -> None:
         def resolve(token: str, explicit: str = "") -> subprocess.CompletedProcess[str]:
@@ -463,6 +846,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("docker logout ghcr.io", registry_auth)
         self.assertIn("Cleanup private registry credential", registry_auth)
         self.assertIn("if: ${{ always()", registry_auth)
+        login = registry_auth[
+            registry_auth.index("Authenticate to the private image registry") :
+            registry_auth.index("\n    - name: Run the hardware check (image)")
+        ]
+        self.assertLess(login.index("set +x"), login.index('printf \'%s\' "$GH_TOKEN"'))
 
     def test_release_build_jobs_do_not_retain_publication_credentials(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
@@ -486,17 +874,35 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         )
 
     def test_shipped_installer_examples_authenticate_the_private_script_fetch(self) -> None:
-        for relative in (Path("README.md"), Path("docs/START_HERE.md")):
+        for relative in (
+            Path("README.md"),
+            Path("docs/START_HERE.md"),
+            Path("crates/hauksbee-mcp/README.md"),
+            Path("frontend/src/demo/DemoApp.tsx"),
+        ):
             text = (ROOT / relative).read_text()
             with self.subTest(path=relative):
                 self.assertIn("export HAUKSBEE_GITHUB_TOKEN", text)
-                self.assertIn("Authorization: Bearer %s", text)
-                self.assertIn("curl --config -", text)
+                self.assertIn("REPLACE_WITH_RELEASE_COMMIT_SHA", text)
+                self.assertIn("set -o pipefail", text)
+                self.assertIn("set +x", text)
+                self.assertIn("api.github.com/repos/hauksbee-dev/hauksbee/contents/", text)
+                self.assertNotIn("raw.githubusercontent.com/hauksbee-dev/hauksbee/main", text)
                 example = text[text.index("export HAUKSBEE_GITHUB_TOKEN") :]
-                self.assertIn("(\n", text[: text.index("export HAUKSBEE_GITHUB_TOKEN") + 1])
-                self.assertIn("\n)", example)
+                if relative.suffix == ".tsx":
+                    self.assertIn("'(\\n  set -o pipefail", text)
+                    self.assertIn(
+                        '| bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION"\\n)',
+                        example,
+                    )
+                else:
+                    self.assertIn("(\n", text[: text.index("export HAUKSBEE_GITHUB_TOKEN") + 1])
+                    self.assertIn("\n)", example)
 
         readme = (ROOT / "README.md").read_text()
+        self.assertIn("[Convert]::FromBase64String", readme)
+        self.assertNotIn("/main/scripts/get-hauksbee.ps1", readme)
+
         docker_example = readme[readme.index("export HAUKSBEE_GHCR_USER") : readme.index("The credential needs")]
         self.assertIn('DOCKER_CONFIG="$(mktemp -d)"', docker_example)
         self.assertIn("trap cleanup EXIT", docker_example)
@@ -566,6 +972,191 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertNotIn("COPY", workflow[bootstrap:before])
         self.assertEqual(workflow.count("check-private-container-publication.sh"), 3)
 
+    def test_docker_publication_binds_source_actions_and_slim_base_immutably(self) -> None:
+        workflow = (ROOT / ".github/workflows/docker.yml").read_text()
+        for line in workflow.splitlines():
+            match = re.search(r"(?:^|-)\s*uses:\s*[^#\s]+@([^\s#]+)", line)
+            if match:
+                self.assertRegex(
+                    match.group(1),
+                    r"^[0-9a-f]{40}$",
+                    f"mutable action in docker workflow: {line.strip()}",
+                )
+        self.assertIn("github.event.inputs.tag || github.ref", workflow)
+        self.assertIn(
+            "tag-push checkout $source_sha does not match immutable event SHA",
+            workflow,
+        )
+        self.assertIn('refs/tags/$raw^{commit}', workflow)
+        self.assertIn("source_sha=$source_sha", workflow)
+        self.assertIn("id: slim", workflow)
+        self.assertIn("SLIM_IMAGE=${{ env.IMAGE }}@${{ steps.slim.outputs.digest }}", workflow)
+        self.assertNotIn("SLIM_IMAGE=${{ env.IMAGE }}:slim-", workflow)
+        self.assertIn('digest_tag="container-digests-${GITHUB_REF_NAME}"', workflow)
+        self.assertNotIn('digest_tag="${GITHUB_REF_NAME}-docker-digests"', workflow)
+        self.assertIn('gh release create "$digest_tag" "$manifest"', workflow)
+        self.assertIn("--prerelease --latest=false", workflow)
+        self.assertIn('gh release edit "$digest_tag" --draft=false', workflow)
+        self.assertIn('gh release verify-asset "$digest_tag" "$manifest"', workflow)
+        slim = (ROOT / "docker/Dockerfile.slim").read_text()
+        self.assertIn("grep -Eq '^[0-9a-f]{40}$'", slim)
+        from_lines = [line for line in slim.splitlines() if line.startswith("FROM ")]
+        self.assertGreaterEqual(len(from_lines), 3)
+        pinned_bases = dict(
+            re.findall(r"(?m)^ARG ([A-Z_]+)=([^\n]+@sha256:[0-9a-f]{64})$", slim)
+        )
+        for line in from_lines:
+            match = re.match(r"FROM \$\{([A-Z_]+)\}", line)
+            self.assertIsNotNone(match, f"mutable base image in {line}")
+            self.assertIn(match.group(1), pinned_bases, f"unpinned base in {line}")
+
+    def test_manual_release_dispatch_builds_the_requested_tag_source(self) -> None:
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("resolve-source:", release)
+        self.assertEqual(release.count("github.event.inputs.tag || github.ref"), 1)
+        self.assertIn('tag_sha="$(git rev-parse "refs/tags/$tag^{commit}")"', release)
+        self.assertIn('[ "$source_sha" = "$EVENT_SHA" ]', release)
+        self.assertGreaterEqual(
+            release.count("ref: ${{ needs.resolve-source.outputs.source_sha }}"), 4
+        )
+        self.assertGreaterEqual(
+            release.count("EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}"), 4
+        )
+        self.assertIn("checked-out source $source_sha does not match captured release source", release)
+        self.assertIn("checked-out source $sourceSha does not match captured release source", release)
+        self.assertGreaterEqual(
+            release.count("does not match workspace package"), 2
+        )
+        self.assertIn('Source commit: `${{ github.sha }}`', release)
+        self.assertIn("draft: true", release)
+        self.assertIn('gh release edit "$GITHUB_REF_NAME" --draft=false', release)
+        self.assertIn("REPLACE_WITH_RELEASE_COMMIT_SHA", release)
+
+        docker = (ROOT / ".github/workflows/docker.yml").read_text()
+        self.assertIn(
+            "github.event.inputs.tag || github.ref", docker
+        )
+        self.assertNotIn(
+            "github.event.inputs.tag || github.sha", release + docker
+        )
+
+    def test_release_runners_and_setup_preserve_a_clean_tag_checkout(self) -> None:
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertNotIn("macos-13", release)
+        self.assertEqual(release.count("macos-15-intel"), 3)
+        self.assertNotIn("chmod +x hauksbee/scripts/*.sh", release)
+        self.assertIn(
+            'bash scripts/install-sims.sh --avr --prefix "$simavr_prefix"',
+            release,
+        )
+        self.assertLess(
+            release.index("Build and install libsimavr"),
+            release.index("Resolve version"),
+        )
+
+    def test_full_container_verifies_every_download_and_carries_licenses(self) -> None:
+        dockerfile = (ROOT / "docker/Dockerfile.full").read_text()
+        args = dict(
+            re.findall(r"(?m)^ARG ([A-Z0-9_]+)=([0-9a-f]{64})$", dockerfile)
+        )
+        for knob in (
+            "RENODE_AMD64_SHA256",
+            "RENODE_ARM64_SHA256",
+            "QEMU_XTENSA_AMD64_SHA256",
+            "QEMU_XTENSA_ARM64_SHA256",
+            "QEMU_RISCV32_AMD64_SHA256",
+            "QEMU_RISCV32_ARM64_SHA256",
+            "FREEROUTING_SHA256",
+        ):
+            self.assertRegex(dockerfile, rf"ARG {knob}=[0-9a-f]{{64}}")
+        def checksums(relative: str) -> dict[str, str]:
+            return {
+                name: digest
+                for line in (ROOT / relative).read_text().splitlines()
+                if line and not line.startswith("#")
+                for digest, name in [line.split()]
+            }
+
+        renode = checksums("scripts/renode-checksums.txt")
+        qemu = checksums("scripts/espressif-qemu-checksums.txt")
+        freerouting = checksums("scripts/freerouting-checksums.txt")
+        self.assertEqual(args["RENODE_AMD64_SHA256"], renode["renode-1.16.1.linux-portable-dotnet.tar.gz"])
+        self.assertEqual(args["RENODE_ARM64_SHA256"], renode["renode-1.16.1.linux-arm64-portable-dotnet.tar.gz"])
+        self.assertEqual(args["QEMU_XTENSA_AMD64_SHA256"], qemu["qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz"])
+        self.assertEqual(args["QEMU_XTENSA_ARM64_SHA256"], qemu["qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-aarch64-linux-gnu.tar.xz"])
+        self.assertEqual(args["QEMU_RISCV32_AMD64_SHA256"], qemu["qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz"])
+        self.assertEqual(args["QEMU_RISCV32_ARM64_SHA256"], qemu["qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-aarch64-linux-gnu.tar.xz"])
+        self.assertEqual(args["FREEROUTING_SHA256"], freerouting["freerouting-1.9.0.jar"])
+        for verification in (
+            "printf '%s  %s\\n' \"$rsha\" /tmp/renode.tar.gz | sha256sum -c -;",
+            "printf '%s  %s\\n' \"$qsha\" /tmp/qemu.tar.xz | sha256sum -c -;",
+            "printf '%s  %s\\n' \"$FREEROUTING_SHA256\" \"/opt/freerouting-${FREEROUTING_VERSION}.jar\" | sha256sum -c -",
+            "printf '%s  %s\\n' \"$RENODE_LICENSE_SHA256\" /usr/share/doc/hauksbee/third-party/RENODE-LICENSE | sha256sum -c -;",
+            "printf '%s  %s\\n' \"$QEMU_LICENSE_SHA256\" /usr/share/doc/hauksbee/third-party/QEMU-COPYING | sha256sum -c -;",
+            "printf '%s  %s\\n' \"$FREEROUTING_LICENSE_SHA256\" /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE | sha256sum -c -",
+        ):
+            self.assertIn(verification, dockerfile)
+        workflow = (ROOT / ".github/workflows/docker.yml").read_text()
+        self.assertIn("Verify slim and full image contents and labels", workflow)
+        for platform in ("linux/amd64", "linux/arm64"):
+            self.assertIn(platform, workflow)
+        for command in (
+            "hauksbee --version",
+            "hauksbee-ci --version",
+            "renode --version",
+            "qemu-system-xtensa --version",
+            "qemu-system-riscv32 --version",
+            'grep -F "Freerouting v1.9.0"',
+        ):
+            self.assertIn(command, workflow)
+        verify = workflow.index("Verify slim and full image contents and labels")
+        record = workflow.index("Publish or reconcile immutable digest manifest")
+        promote = workflow.index("Promote only the recorded immutable image digests")
+        post = workflow.index("Check private container publication after push")
+        self.assertIn("group: docker-${{ github.ref }}", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertLess(verify, record)
+        self.assertLess(record, promote)
+        self.assertIn("gh release verify-asset", workflow[record:promote])
+        self.assertIn(
+            'gh release verify "$digest_tag" --repo "$GITHUB_REPOSITORY"',
+            workflow[record:promote],
+        )
+        self.assertIn("GH_REPO: ${{ github.repository }}", workflow[record:promote])
+        self.assertIn('isDraft', workflow[record:promote])
+        self.assertIn('gh release edit "$digest_tag" --draft=false', workflow[record:promote])
+        self.assertIn("recorded_slim", workflow[record:promote])
+        self.assertIn("recorded_full", workflow[record:promote])
+        slim_build = workflow[workflow.index("Build and push slim") : workflow.index("Build and push full")]
+        full_build = workflow[workflow.index("Build and push full") : verify]
+        self.assertIn("slim-candidate-", slim_build)
+        self.assertNotIn("${{ env.IMAGE }}:slim\n", slim_build)
+        self.assertIn("full-candidate-", full_build)
+        self.assertNotIn("${{ env.IMAGE }}:full\n", full_build)
+        promotion = workflow[promote:]
+        self.assertIn('"$SLIM_REF"', promotion)
+        self.assertIn('"$FULL_REF"', promotion)
+        self.assertNotIn("SLIM_DIGEST", promotion)
+        self.assertNotIn("FULL_DIGEST", promotion)
+        for notice in ("RENODE-LICENSE", "QEMU-COPYING", "FREEROUTING-LICENSE"):
+            self.assertIn(
+                f"test -s /usr/share/doc/hauksbee/third-party/{notice}", workflow
+            )
+        self.assertIn("CORRESPONDING SOURCE OFFER", dockerfile)
+        self.assertRegex(dockerfile, r"ARG ESP_QEMU_SOURCE_COMMIT=[0-9a-f]{40}")
+        self.assertRegex(dockerfile, r"ARG FREEROUTING_SOURCE_COMMIT=[0-9a-f]{40}")
+        self.assertIn("at least three years", dockerfile)
+        self.assertIn("security@hauksbee.dev", dockerfile)
+        self.assertIn(
+            "test -s /usr/share/doc/hauksbee/third-party/SOURCE-OFFER.txt", workflow
+        )
+        self.assertIn("test -s /usr/share/doc/hauksbee/SOURCE-OFFER.txt", workflow)
+        self.assertIn("SOURCE_COMMIT=${{ steps.ver.outputs.source_sha }}", workflow)
+        self.assertIn(
+            'org.opencontainers.image.licenses="GPL-3.0-only AND GPL-2.0-only AND MIT"',
+            dockerfile,
+        )
+
     def run_container_preflight(
         self,
         *,
@@ -591,12 +1182,21 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                           [ "$FAKE_REPO_VISIBILITY" != inaccessible ] || exit 66
                           printf '%s\\n' "$FAKE_REPO_VISIBILITY"
                           ;;
-                        orgs/hauksbee-dev/packages/container/hauksbee)
-                          [ "$FAKE_PACKAGE_VISIBILITY" != inaccessible ] || exit 66
-                          [ "$FAKE_PACKAGE_VISIBILITY" != missing ] || exit 66
-                          printf '%s\\n' "$FAKE_PACKAGE_VISIBILITY"
-                          ;;
                         *) exit 64 ;;
+                      esac
+                    elif [ "$#" -eq 3 ] && [ "$1" = api ] && [ "$2" = --include ] && [ "$3" = orgs/hauksbee-dev/packages/container/hauksbee ]; then
+                      case "$FAKE_PACKAGE_VISIBILITY" in
+                        inaccessible)
+                          printf 'HTTP/2 403 Forbidden\\n\\n{"message":"forbidden"}\\n'
+                          exit 66
+                          ;;
+                        missing)
+                          printf 'HTTP/2 404 Not Found\\n\\n{"message":"not found"}\\n'
+                          exit 1
+                          ;;
+                        *)
+                          printf 'HTTP/2 200 OK\\n\\n{"visibility":"%s"}\\n' "$FAKE_PACKAGE_VISIBILITY"
+                          ;;
                       esac
                     else
                       exit 64
@@ -639,6 +1239,14 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertEqual(missing.returncode, 0, missing.stdout + missing.stderr)
         self.assertIn("bootstrap_required=true", missing.stdout)
 
+        inaccessible, _calls = self.run_container_preflight(
+            phase="probe", package_visibility="inaccessible"
+        )
+        self.assertNotEqual(
+            inaccessible.returncode, 0, inaccessible.stdout + inaccessible.stderr
+        )
+        self.assertNotIn("bootstrap_required=true", inaccessible.stdout)
+
         docs = (ROOT / "docs/ci/DOCKER.md").read_text()
         self.assertIn("privacy-bootstrap", docs)
         self.assertIn("no Hauksbee binaries or source", docs)
@@ -652,7 +1260,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     calls.splitlines(),
                     [
                         "api repos/hauksbee-dev/hauksbee --jq .visibility",
-                        "api orgs/hauksbee-dev/packages/container/hauksbee --jq .visibility",
+                        "api --include orgs/hauksbee-dev/packages/container/hauksbee",
                     ],
                 )
 
@@ -685,7 +1293,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         build = workflow.index("Build KiCad PCM archive")
         upload = workflow.index("Upload build artifact")
-        publish = workflow.index("Create / update GitHub Release")
+        publish = workflow.index("Stage immutable GitHub Release draft")
         self.assertLess(build, upload)
         self.assertIn("integrations/kicad-plugin/build-pcm.sh", workflow[build:upload])
         self.assertIn("hauksbee-ci-pcm-v", workflow[build:upload])
@@ -693,14 +1301,51 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("hauksbee-ci-pcm-v*.zip.sha256", workflow[upload:publish])
 
     def test_all_named_private_consumers_authenticate_before_fetching(self) -> None:
+        token_curl_surfaces = (
+            Path("README.md"),
+            Path("docs/START_HERE.md"),
+            Path("crates/hauksbee-mcp/README.md"),
+            Path("frontend/src/demo/DemoApp.tsx"),
+            Path("scripts/get-hauksbee.sh"),
+        )
+        for relative in token_curl_surfaces:
+            surface = (ROOT / relative).read_text()
+            with self.subTest(curl_surface=relative):
+                self.assertNotIn("curl --config -", surface)
+                self.assertIn("curl -q --config -", surface)
+
         mcp = (ROOT / "crates/hauksbee-mcp/README.md").read_text()
         self.assertIn("HAUKSBEE_GITHUB_TOKEN", mcp)
-        self.assertIn("curl --config -", mcp)
+        self.assertIn("curl -q --config -", mcp)
 
         demo = (ROOT / "frontend/src/demo/DemoApp.tsx").read_text()
         self.assertIn("HAUKSBEE_GITHUB_TOKEN", demo)
-        self.assertIn("curl --config -", demo)
+        self.assertIn("curl -q --config -", demo)
         self.assertNotIn("curl -fsSL https://raw.githubusercontent.com", demo)
+
+        action = (ROOT / "integrations/github-action/action.yml").read_text()
+        self.assertIn('asset manifest did not contain one sha256', action)
+        self.assertIn('actual_asset_sha256=', action)
+        self.assertIn('expected_asset_sha256=', action)
+        self.assertIn('[[ "$IMAGE" =~ ^ghcr\\.io/${REPO}@sha256:[0-9a-f]{64}$ ]]', action)
+        self.assertIn('digest_tag="container-digests-${release_tag}"', action)
+        self.assertIn('gh release verify "$digest_tag" --repo "$REPO"', action)
+        self.assertIn('image digest is not present in the immutable', action)
+        self.assertIn('org.opencontainers.image.revision', action)
+        self.assertIn('default: "ghcr.io/hauksbee-dev/hauksbee:slim"', action)
+        image_step = action[
+            action.index("- name: Run the hardware check (image)") :
+            action.index("- name: Cleanup private registry credential")
+        ]
+        self.assertIn("GH_TOKEN: ${{ inputs.hauksbee-token }}", image_step)
+        self.assertIn('image_flavor=slim', image_step)
+        self.assertIn('image_flavor=full', image_step)
+
+        slim = (ROOT / "docker/Dockerfile.slim").read_text()
+        full = (ROOT / "docker/Dockerfile.full").read_text()
+        self.assertIn("at least three years", slim)
+        self.assertIn("Hauksbee and libsimavr", slim)
+        self.assertIn("Hauksbee and libsimavr", full)
 
         for relative in (Path("README.md"), Path("docs/ci/DOCKER.md")):
             text = (ROOT / relative).read_text()
@@ -710,6 +1355,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     login,
                     text.index("\n  docker run", login),
                 )
+                snippet = text[text.rfind("```", 0, login) : text.find("```", login)]
+                self.assertIn("set +x", snippet)
 
         recipes = (ROOT / "docs/ci/RECIPES.md").read_text()
         for credential_contract in (
@@ -719,6 +1366,74 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "docker login ghcr.io",
         ):
             self.assertIn(credential_contract, recipes)
+        self.assertIn("set +x", recipes[recipes.index("## Buildkite") :])
+
+    def test_container_carries_exact_corresponding_source_without_repository_access(self) -> None:
+        slim = (ROOT / "docker/Dockerfile.slim").read_text()
+        self.assertIn("/usr/share/doc/hauksbee/source/hauksbee-source.tar.gz", slim)
+        self.assertIn("/usr/share/doc/hauksbee/source/simavr-source.tar.gz", slim)
+        self.assertIn("cargo vendor --locked --versioned-dirs", slim)
+        self.assertIn("third-party/cargo-vendor", slim)
+        self.assertIn("cargo build --release --locked --offline", slim)
+        self.assertIn("cargo metadata --locked --offline", slim)
+        self.assertIn(".cargo-checksum.json", slim)
+        workflow = (ROOT / ".github/workflows/docker.yml").read_text()
+        for archive in ("hauksbee-source.tar.gz", "simavr-source.tar.gz"):
+            self.assertIn(f"test -s /usr/share/doc/hauksbee/source/{archive}", workflow)
+        self.assertIn("third-party/cargo-vendor", workflow)
+        self.assertIn("cargo-checksum", workflow)
+        self.assertIn("tar -xOf", workflow)
+
+    def test_release_serializes_and_retains_quality_source_and_evidence(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("group: release-${{ github.ref }}", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("release-quality:", workflow)
+        self.assertIn(
+            "needs: [build, build-windows, required-integrations, release-quality]",
+            workflow,
+        )
+        for gate in (
+            "cargo fmt --all --check",
+            "cargo clippy --workspace --all-targets -- -D warnings",
+            "cargo test --workspace",
+            "python3 scripts/test-private-release-policy.py",
+            "bun run test:unit",
+            "bun run test:e2e",
+            "bun run visual-lint",
+            "qc/run.sh",
+        ):
+            self.assertIn(gate, workflow)
+        self.assertIn("scripts/build-release-source.sh", workflow)
+        self.assertIn("scripts/test-release-artifact-runtime.sh", workflow)
+        self.assertIn("dist/*.json", workflow)
+        self.assertIn('sha256sum "$evidence" > "$evidence.sha256"', workflow)
+        self.assertIn("for asset in dist/*", workflow)
+
+        source_builder = (ROOT / "scripts/build-release-source.sh").read_text()
+        self.assertIn("cargo vendor --locked --versioned-dirs", source_builder)
+        self.assertIn("third-party/cargo-vendor", source_builder)
+        self.assertIn("third-party/simavr", source_builder)
+        self.assertIn("actual_registry_packages", source_builder)
+        bundle = (ROOT / "scripts/bundle.sh").read_text()
+        app = (ROOT / "app/macos/build-app.sh").read_text()
+        self.assertIn("hauksbee-${VERSION}-source.tar.gz", bundle)
+        self.assertIn("hauksbee-${VERSION}-source.tar.gz", app)
+
+        docker = (ROOT / ".github/workflows/docker.yml").read_text()
+        dockerfile = (ROOT / "docker/Dockerfile.slim").read_text()
+        self.assertIn("/opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb", docker)
+        self.assertIn("/opt/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex", docker)
+        self.assertIn("--firmware /opt/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex", docker)
+        self.assertIn("hauksbee-ci run boot_gate_pass.toml", docker)
+        self.assertIn("/opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb", dockerfile)
+        full_dockerfile = (ROOT / "docker/Dockerfile.full").read_text()
+        for fixture in ("stm32.kicad_pcb", "stm32.elf", "esp32.kicad_pcb", "esp32-flash.bin", "blinky.board"):
+            self.assertIn(f"/opt/hauksbee/external-smoke/{fixture}", full_dockerfile)
+        self.assertIn("/opt/hauksbee/external-smoke/stm32.elf", docker)
+        self.assertIn("/opt/hauksbee/external-smoke/esp32-flash.bin", docker)
+        self.assertIn("freerouting handoff", docker)
+        self.assertIn("--route --route-passes 2", docker)
 
     def test_release_plans_do_not_advertise_a_public_installer_endpoint(self) -> None:
         for relative in (
@@ -786,6 +1501,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         extra_unclassified: Path | None = None,
         extra_content: str | None = None,
         requested_repo: str | None = None,
+        immutable_releases: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
@@ -837,12 +1553,19 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
                     [ "$#" -eq 4 ] || exit 64
                     [ "$1" = api ] || exit 64
-                    [ "$2" = repos/hauksbee-dev/hauksbee ] || exit 64
                     [ "$3" = --jq ] || exit 64
-                    [ "$4" = .visibility ] || exit 64
                     [ "${GH_TOKEN:-}" = release-token ] || exit 65
-                    [ "$FAKE_GH_VISIBILITY" != missing ] || exit 1
-                    printf '%s\\n' "$FAKE_GH_VISIBILITY"
+                    case "$2 $4" in
+                      "repos/hauksbee-dev/hauksbee .visibility")
+                        [ "$FAKE_GH_VISIBILITY" != missing ] || exit 1
+                        printf '%s\\n' "$FAKE_GH_VISIBILITY"
+                        ;;
+                      "repos/hauksbee-dev/hauksbee/immutable-releases .enabled")
+                        [ "$FAKE_IMMUTABLE_RELEASES" = true ] || exit 1
+                        printf '%s\\n' true
+                        ;;
+                      *) exit 64 ;;
+                    esac
                     """
                 )
             )
@@ -853,6 +1576,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     "PATH": f"{tmp}:{env['PATH']}",
                     "FAKE_GH_LOG": str(tmp / "gh.log"),
                     "FAKE_GH_VISIBILITY": visibility,
+                    "FAKE_IMMUTABLE_RELEASES": str(immutable_releases).lower(),
                 }
             )
             if token is None:
@@ -881,6 +1605,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
     def test_release_preflight_accepts_private_target_with_exact_surfaces(self) -> None:
         result = self.run_release_preflight()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_release_preflight_requires_immutable_releases(self) -> None:
+        result = self.run_release_preflight(immutable_releases=False)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("immutable releases", (result.stdout + result.stderr).lower())
 
     def test_release_preflight_fails_closed_on_every_baked_url_surface(self) -> None:
         for relative in self.release_url_surfaces():
@@ -951,8 +1680,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             log = tmp / "gh.log"
             mirror_state = tmp / "mirror.state"
             developer_state = tmp / "developer.state"
+            immutable_state = tmp / "immutable.state"
             mirror_state.write_text(mirror_visibility)
             developer_state.write_text(developer_visibility)
+            immutable_state.write_text("false")
             gh = tmp / "gh"
             gh.write_text(
                 textwrap.dedent(
@@ -961,6 +1692,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     set -eu
                     printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
                     if [ "$1" = api ]; then
+                      if [ "${2:-}" = --method ] && [ "${3:-}" = PUT ] \
+                        && [ "${4:-}" = repos/hauksbee-dev/hauksbee/immutable-releases ]; then
+                        printf '%s\\n' true > "$FAKE_IMMUTABLE_STATE"
+                        exit 0
+                      fi
                       case "$2" in
                         repos/ETM-Code/hauksbee-developer)
                           visibility=$(cat "$FAKE_DEVELOPER_STATE")
@@ -971,6 +1707,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                           visibility=$(cat "$FAKE_MIRROR_STATE")
                           [ "$visibility" != missing ] || exit 1
                           printf '%s\\n' "$visibility"
+                          ;;
+                        repos/hauksbee-dev/hauksbee/immutable-releases)
+                          [ "$(cat "$FAKE_IMMUTABLE_STATE")" = true ] || exit 1
+                          printf '%s\\n' true
                           ;;
                         *) exit 64 ;;
                       esac
@@ -1000,6 +1740,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     "FAKE_GH_LOG": str(log),
                     "FAKE_MIRROR_STATE": str(mirror_state),
                     "FAKE_DEVELOPER_STATE": str(developer_state),
+                    "FAKE_IMMUTABLE_STATE": str(immutable_state),
                     "NO_COLOR": "1",
                 }
             )
@@ -1029,6 +1770,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         result, calls = self.run_privacy_phase(mirror_visibility="missing", armed=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("repo create hauksbee-dev/hauksbee --private", calls)
+        self.assertIn(
+            "api --method PUT repos/hauksbee-dev/hauksbee/immutable-releases",
+            calls,
+        )
         self.assertNotIn("--visibility public", calls)
 
     def test_public_repository_is_changed_to_private_never_the_reverse(self) -> None:

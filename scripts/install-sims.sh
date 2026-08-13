@@ -133,8 +133,10 @@ esac
 # Bumping QEMU_VERSION also requires replacing the checksum manifest and keeping
 # it in step with FALLBACK_TAG in crates/hauksbee-mcu/src/qemu/install.rs and
 # ESP_QEMU_TAG in docker/Dockerfile.full.
-# Pinned simavr release tag (buserror/simavr). Bumping this is a deliberate,
-# reviewed change — see the licensing note in the header.
+# Immutable simavr revision (buserror/simavr v1.8). The tag is useful prose,
+# but it is not a trust boundary: Git tags can move. Bumping this commit is a
+# deliberate, reviewed change — see the licensing note in the header.
+SIMAVR_COMMIT="f44723e8c42431136d5b4de81f789ded56d7e8fa"
 SIMAVR_TAG="v1.8"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -147,7 +149,7 @@ SIMAVR_TAG="v1.8"
 # to hold a checksum against. A `latest` that moves is a `latest` nobody
 # reviewed. Bumping this is a deliberate change: update the version, download
 # the assets, and record their hashes in renode-checksums.txt beside this
-# script, the same discipline SIMAVR_TAG already gets.
+# script, the same immutable-review discipline SIMAVR_COMMIT gets.
 resolve_renode_version() {
   printf '%s' "$RENODE_VERSION"
 }
@@ -790,6 +792,7 @@ install_renode() {
       curl --fail --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" \
         || die "Download failed. Check the URL or download manually: $DOWNLOAD_URL"
       verify_renode_asset "$TMPDIR/$ASSET" "$ASSET"
+      validate_archive_members "$TMPDIR/$ASSET" 1
 
       mkdir -p "$HOME/renode-portable"
       log "Renode: extracting to ~/renode-portable/ ..."
@@ -892,6 +895,7 @@ install_qemu() {
       continue
     fi
     verify_qemu_asset "$TMPDIR/$ASSET" "$ASSET"
+    validate_archive_members "$TMPDIR/$ASSET" 1
 
     DEST_DIR="$HOME/.espressif/tools/${tool_name}/${QEMU_DIR_VER}/qemu"
     mkdir -p "$DEST_DIR"
@@ -941,11 +945,25 @@ install_avr() {
   local prefix; prefix="$(avr_prefix)"
 
   log "AVR / simavr: checking for existing install under $prefix ..."
-  if find_avr_prefix >/dev/null 2>&1; then
-    ok "Already installed at $prefix — skipping."
-    info "  header: $prefix/include/simavr/sim_avr.h"
-    info "  lib:    $prefix/lib/libsimavr.a"
-    return 0
+  if [ -f "$prefix/include/simavr/sim_avr.h" ] \
+    && [ -f "$prefix/lib/libsimavr.a" ]; then
+    local installed_commit=""
+    if [ -f "$prefix/.hauksbee-simavr-commit" ]; then
+      installed_commit="$(cat "$prefix/.hauksbee-simavr-commit")"
+    fi
+    if [ "$installed_commit" = "$SIMAVR_COMMIT" ] \
+      && grep -Fx "Version: $SIMAVR_TAG" "$prefix/lib/pkgconfig/simavr.pc" >/dev/null 2>&1 \
+      && "$SCRIPT_DIR/simavr-payload-provenance.sh" verify "$prefix" >/dev/null 2>&1; then
+      ok "Verified commit $SIMAVR_COMMIT already installed at $prefix — skipping."
+      info "  header: $prefix/include/simavr/sim_avr.h"
+      info "  lib:    $prefix/lib/libsimavr.a"
+      return 0
+    fi
+    if [ "$installed_commit" = "$SIMAVR_COMMIT" ]; then
+      warn "simavr at $prefix has the right commit marker but incomplete, tagless, or payload-mismatched build metadata; rebuilding it from the verified source."
+    else
+      die "existing simavr under $prefix is not proven to be commit $SIMAVR_COMMIT. Move that prefix aside or choose an empty --prefix, then rerun; refusing to overwrite or trust an unidentified library."
+    fi
   fi
 
   # 1. libelf (simavr's ELF loader dependency). zlib ships with the OS.
@@ -969,14 +987,33 @@ install_avr() {
       ;;
   esac
 
-  # 2. clone + build + install simavr at the pinned tag.
+  # 2. fetch, verify, build, and install the exact reviewed simavr commit.
   have git  || die "git not found; needed to clone simavr."
   have make || die "make not found; needed to build simavr."
   TMPDIR="$(make_tmpdir)"
-  log "AVR / simavr: cloning buserror/simavr @ $SIMAVR_TAG ..."
+  log "AVR / simavr: fetching buserror/simavr @ $SIMAVR_COMMIT ..."
   info "  into: $TMPDIR/simavr"
-  git clone --depth 1 --branch "$SIMAVR_TAG" https://github.com/buserror/simavr "$TMPDIR/simavr" \
-    || die "git clone of simavr failed (tag $SIMAVR_TAG). Clone it manually and 'make install-simavr'."
+  git init -q "$TMPDIR/simavr" \
+    || die "could not initialize the temporary simavr checkout."
+  git -C "$TMPDIR/simavr" remote add origin https://github.com/buserror/simavr \
+    || die "could not configure the simavr upstream."
+  git -C "$TMPDIR/simavr" fetch --depth 1 origin "$SIMAVR_COMMIT" \
+    || die "git fetch of simavr commit $SIMAVR_COMMIT failed."
+  local fetched_commit
+  fetched_commit="$(git -C "$TMPDIR/simavr" rev-parse FETCH_HEAD)" \
+    || die "could not resolve the fetched simavr revision."
+  [ "$fetched_commit" = "$SIMAVR_COMMIT" ] \
+    || die "simavr revision mismatch: expected $SIMAVR_COMMIT, got $fetched_commit."
+  git -C "$TMPDIR/simavr" fetch --depth 1 origin \
+    "refs/tags/$SIMAVR_TAG:refs/tags/$SIMAVR_TAG" \
+    || die "could not fetch simavr version tag $SIMAVR_TAG."
+  local tagged_commit
+  tagged_commit="$(git -C "$TMPDIR/simavr" rev-parse "$SIMAVR_TAG^{commit}")" \
+    || die "could not resolve simavr version tag $SIMAVR_TAG."
+  [ "$tagged_commit" = "$SIMAVR_COMMIT" ] \
+    || die "simavr tag mismatch: $SIMAVR_TAG resolves to $tagged_commit, expected $SIMAVR_COMMIT."
+  git -C "$TMPDIR/simavr" checkout -q --detach "$SIMAVR_COMMIT" \
+    || die "could not check out verified simavr commit $SIMAVR_COMMIT."
 
   # simavr's install prefix is controlled by DESTDIR (its Makefile sets
   # PREFIX = ${DESTDIR}); headers land in <DESTDIR>/include/simavr, the archive
@@ -1000,6 +1037,12 @@ install_avr() {
     || die "simavr headers not found at $prefix/include/simavr/sim_avr.h after install."
   [ -f "$prefix/lib/libsimavr.a" ] \
     || die "libsimavr.a not found at $prefix/lib/libsimavr.a after install."
+  grep -Fx "Version: $SIMAVR_TAG" "$prefix/lib/pkgconfig/simavr.pc" >/dev/null \
+    || die "simavr build metadata at $prefix/lib/pkgconfig/simavr.pc does not attest version $SIMAVR_TAG."
+  printf '%s\n' "$SIMAVR_COMMIT" > "$prefix/.hauksbee-simavr-commit" \
+    || die "could not record the verified simavr revision under $prefix."
+  "$SCRIPT_DIR/simavr-payload-provenance.sh" record "$prefix" \
+    || die "could not bind the installed simavr payload bytes to their provenance."
   ok "simavr installed under $prefix"
   info "  header: $prefix/include/simavr/sim_avr.h"
   info "  lib:    $prefix/lib/libsimavr.a"

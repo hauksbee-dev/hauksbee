@@ -1,0 +1,5 @@
+# sha256 of the freerouting binary distributed in the full container image.
+# Measured from the v1.9.0 GitHub release asset on 2026-08-12. A version bump
+# must replace both the asset name and digest; Docker refuses a mismatch before
+# Java can load the downloaded jar.
+9084a4888937a7f31f857ecc12aa7a37407f51160e4d2892dff9c9bb47ae3102  freerouting-1.9.0.jar
