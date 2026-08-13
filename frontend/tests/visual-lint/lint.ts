@@ -119,7 +119,10 @@ async function runPass(
   for (const msg of pageErrors) {
     rows.push({
       surface: `${label}(page)`, viewport: viewport.name, shot: null,
-      rule: 'page-error', severity: 'info', selector: '-', detail: msg.slice(0, 200),
+      // A runtime exception is never a cosmetic note. A page may happen to
+      // retain enough DOM to satisfy layout rules after throwing; keeping this
+      // as `info` made the release visual gate false-green on broken JS.
+      rule: 'page-error', severity: 'error', selector: '-', detail: msg.slice(0, 200),
     })
   }
   await ctx.close()
@@ -248,9 +251,10 @@ try {
     await runPass(browser, appBase, '', APP_SURFACES, vp)
   }
 
-  // ── The site: optional, tolerant ────────────────────────────────────────
-  // A separate build owned separately. If it is not built, say so and move on;
-  // the app's lint result must not depend on it.
+  // ── The separately owned site ───────────────────────────────────────────
+  // Local app-only work can opt out explicitly. When the site pass is enabled,
+  // an absent build is a gate failure rather than a silent release-quality
+  // skip.
   const siteDist = join(here, '../../../site/dist')
   const doSite = process.env.HB_LINT_SITE !== '0'
   if (doSite && existsSync(join(siteDist, 'index.html'))) {
@@ -261,7 +265,11 @@ try {
       await runPass(browser, siteBase, 'site/', SITE_SURFACES, vp)
     }
   } else if (doSite) {
-    console.log(`\n[skipped] site pass: no build at ${siteDist} (run \`bun run build\` in site/)`)
+    rows.push({
+      surface: 'site', viewport: 'all', shot: null,
+      rule: 'missing-build', severity: 'error', selector: siteDist,
+      detail: 'site pass requested but site/dist/index.html is absent',
+    })
   }
 } finally {
   await browser.close()

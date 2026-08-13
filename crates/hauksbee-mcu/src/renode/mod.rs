@@ -49,7 +49,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uart::UartSocket;
 
 type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
@@ -475,14 +475,20 @@ const SPAWN_ATTEMPTS: usize = 3;
 /// ports if the process dies before it binds.
 fn spawn_and_connect() -> Result<(RenodeProcess, Monitor, u16)> {
     let mut last_err = None;
+    let startup_timeout = RenodeProcess::startup_timeout();
+    let deadline = Instant::now() + startup_timeout;
     for attempt in 1..=SPAWN_ATTEMPTS {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        anyhow::ensure!(
+            !remaining.is_zero(),
+            "Renode monitor did not bind within the {:?} startup budget",
+            startup_timeout
+        );
         let (monitor_port, uart_port) = free_port_pair()?;
         let mut process = RenodeProcess::spawn(monitor_port)?;
-        let connected = Monitor::connect_while(
-            ("127.0.0.1", monitor_port),
-            RenodeProcess::startup_timeout(),
-            || process.exit_reason(),
-        );
+        let connected = Monitor::connect_while(("127.0.0.1", monitor_port), remaining, || {
+            process.exit_reason()
+        });
         match connected {
             Ok(monitor) => return Ok((process, monitor, uart_port)),
             Err(e) => {
@@ -1011,16 +1017,11 @@ impl RenodeBackend {
     /// the Monitor and (optional) UART socket.
     pub fn new(config: RenodeConfig) -> Result<Self> {
         let (process, mut monitor, uart_port) = spawn_and_connect()?;
-        // Fixed wall-clock budget, not a per-load one, and that is the cause of
-        // the Renode co-sim test flake we measured: on a build host under heavy CPU
-        // contention (measured at load average 248) machine bring-up misses this
-        // budget and the run dies as "Renode monitor command timed out after 30s
-        // with no prompt". Measured there both in parallel and with
-        // `--test-threads=1`, with a DIFFERENT test failing each run, so
-        // serialising the suite does not fix it and a temp-file race is not the
-        // explanation. A red here is evidence about the host's load before it is
-        // evidence about the backend.
-        monitor.set_timeout(Duration::from_secs(30));
+        // Cold macOS/.NET startup and platform parsing have both been observed
+        // to exceed 30 seconds on an otherwise healthy but loaded build host.
+        // Setup commands get a bounded 60 seconds each; runtime register polls
+        // return to the tighter default after setup completes below.
+        monitor.set_timeout(Duration::from_secs(60));
 
         // Bring up the machine.
         let mach = monitor.command(&format!("mach create \"{}\"", config.machine))?;
@@ -1100,6 +1101,11 @@ impl RenodeBackend {
                 bail!("Renode extra setup command failed ({cmd}): {resp}");
             }
         }
+
+        // Setup is the cold path. Runtime register polls must keep the tighter
+        // bound so a stalled emulator cannot freeze each port read for a full
+        // minute while the backend silently reuses cached GPIO state.
+        monitor.set_timeout(Duration::from_secs(30));
 
         let last_odr = config.ports.iter().map(|p| (p.letter, 0u32)).collect();
 

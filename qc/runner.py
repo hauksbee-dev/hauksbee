@@ -419,13 +419,34 @@ def run_scenario(directory: Path, bin_dir: Path, work_root: Path) -> ScenarioRes
     return result
 
 
-def write_report(results: list[ScenarioResult], out_dir: Path, bin_dir: Path) -> Path:
+def binary_versions(bin_dir: Path) -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for name in ("hauksbee", "hauksbee-ci"):
+        proc = subprocess.run(
+            [str(bin_dir / name), "--version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"{name} --version failed: {proc.stderr.strip()}")
+        versions[name] = proc.stdout.strip()
+    return versions
+
+
+def write_report(
+    results: list[ScenarioResult], out_dir: Path, bin_dir: Path, versions: dict[str, str]
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.md"
     lines = [
         "# Scenario QC report",
         "",
         f"Binaries: `{bin_dir}`",
+        f"hauksbee version: `{versions['hauksbee']}`",
+        f"hauksbee-ci version: `{versions['hauksbee-ci']}`",
         "",
         "| Scenario | Title | Result | Steps | Wall |",
         "| --- | --- | --- | --- | --- |",
@@ -540,7 +561,12 @@ def main() -> int:
         print(f"... {d.name}", flush=True)
         results.append(run_scenario(d, bin_dir, out_dir / "work"))
 
-    report = write_report(results, out_dir, bin_dir)
+    try:
+        versions = binary_versions(bin_dir)
+    except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+        print(f"error: could not bind QC evidence to the tested binaries: {error}", file=sys.stderr)
+        return 2
+    report = write_report(results, out_dir, bin_dir, versions)
     print()
     print_table(results)
     print()

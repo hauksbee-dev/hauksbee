@@ -612,10 +612,16 @@ fn cmd_hook_install() -> ExitCode {
 /// `hauksbee-ci github-action [--write [PATH]]`.
 fn cmd_github_action(args: GithubActionArgs) -> ExitCode {
     match args.write {
-        None => {
-            print!("{}", hauksbee_ci::integrate::github_workflow_yaml());
-            ExitCode::from(0)
-        }
+        None => match hauksbee_ci::integrate::try_github_workflow_yaml() {
+            Ok(yaml) => {
+                print!("{yaml}");
+                ExitCode::from(0)
+            }
+            Err(e) => {
+                eprintln!("hauksbee-ci: {e}");
+                ExitCode::from(2)
+            }
+        },
         Some(path) => {
             let cwd = match std::env::current_dir() {
                 Ok(d) => d,

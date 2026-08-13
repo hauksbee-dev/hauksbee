@@ -69,6 +69,8 @@ class WindowsPortContract(unittest.TestCase):
         self.assertNotIn("there are no published Windows release assets yet", installer)
         self.assertRegex(installer, r"if\s*\(\s*-not\s+\$Permissive\s*\)")
         self.assertIn("Windows releases are permissive-only", installer)
+        self.assertIn("release.immutable", installer)
+        self.assertIn("refusing replaceable private assets", installer)
 
     def test_windows_children_are_owned_by_kill_on_close_jobs(self) -> None:
         children = read("crates/hauksbee-mcu/src/children.rs")
@@ -99,7 +101,10 @@ class WindowsPortContract(unittest.TestCase):
         ):
             self.assertIn(test_name, required)
         self.assertIn('if ($output -match "SKIP:")', required)
-        for workflow in (".github/workflows/ci.yml", ".github/workflows/release.yml"):
+        for workflow in (
+            ".github/workflows/ci.yml",
+            ".github/workflows/release.yml",
+        ):
             text = read(workflow)
             self.assertIn("install-sims-windows.ps1", text)
             self.assertIn("run-required-integrations-windows.ps1", text)
@@ -202,6 +207,28 @@ class WindowsPortContract(unittest.TestCase):
         docs = read("docs/cosim/SIMULATORS.md")
         self.assertIn("invokes this same pinned PowerShell route", docs)
 
+    def test_every_public_windows_qemu_install_front_door_uses_the_native_route(
+        self,
+    ) -> None:
+        commands = read("crates/hauksbee-engine/src/commands/install.rs")
+        self.assertGreaterEqual(
+            commands.count("crate::deps::install_esp_qemu"),
+            2,
+            "the explicit install command and interactive run offer must both use "
+            "the checksum-pinned PowerShell route on Windows",
+        )
+        self.assertGreaterEqual(commands.count("#[cfg(windows)]"), 2)
+
+    def test_simulator_installer_initializes_native_exit_status_under_strict_mode(
+        self,
+    ) -> None:
+        installer = read("scripts/install-sims-windows.ps1")
+        strict = installer.index("Set-StrictMode -Version Latest")
+        first_read = installer.index("$LASTEXITCODE -ne 0")
+        initialization = installer.index("$global:LASTEXITCODE = 0")
+        self.assertLess(strict, initialization)
+        self.assertLess(initialization, first_read)
+
     def test_windows_teardown_never_targets_a_recycled_numeric_pid(self) -> None:
         children = read("crates/hauksbee-mcu/src/children.rs")
         self.assertNotIn('Command::new("taskkill")', children)
@@ -236,6 +263,16 @@ class WindowsPortContract(unittest.TestCase):
         self.assertIn("Assert-BinaryVersion", installer)
         self.assertRegex(bundle, r"Assert-BinaryVersion[^\n]+\$Version")
         self.assertRegex(installer, r"Assert-BinaryVersion[^\n]+\$VersionBare")
+        self.assertIn("ExpectedCommit", bundle)
+        self.assertIn("ExpectedCommit", installer)
+        self.assertIn('"$ApiBase/commits/$Version"', installer)
+        self.assertIn("$tagCommit.sha -cne $ExpectedCommit", installer)
+        self.assertIn(r"\(git $escapedCommit\)", bundle)
+        self.assertIn(r"\(git $escapedCommit\)", installer)
+        self.assertIn("Out-String).Trim()", bundle)
+        self.assertIn("Out-String).Trim()", installer)
+        bootstrap = read("README.md")
+        self.assertIn("-Version $releaseTag -ExpectedCommit $releaseCommit", bootstrap)
 
     def test_windows_tree_swaps_use_unique_recoverable_backups(self) -> None:
         for path in ("scripts/get-hauksbee.ps1", "scripts/install-sims-windows.ps1"):
@@ -260,11 +297,12 @@ class WindowsPortContract(unittest.TestCase):
     def test_downloaded_executable_probes_receive_no_private_tokens(self) -> None:
         installer = read("scripts/get-hauksbee.ps1")
         self.assertIn("Invoke-TokenFreeVersionProbe", installer)
-        for token in ("HAUKSBEE_GITHUB_TOKEN", "GITHUB_TOKEN"):
+        for token in ("HAUKSBEE_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"):
             self.assertRegex(installer, rf"Remove-Item Env:{token}")
         fixture = read("scripts/test-windows-installer.ps1")
         self.assertIn('env::var_os("HAUKSBEE_GITHUB_TOKEN")', fixture)
         self.assertIn('env::var_os("GITHUB_TOKEN")', fixture)
+        self.assertIn('env::var_os("GH_TOKEN")', fixture)
 
     def test_installer_contract_runs_under_both_windows_powershells(self) -> None:
         fixture = read("scripts/test-windows-installer.ps1")
@@ -295,7 +333,11 @@ class WindowsPortContract(unittest.TestCase):
         self.assertIn("MSYS2", limits)
 
     def test_no_mutable_actions_are_added_to_touched_workflows(self) -> None:
-        for workflow in (".github/workflows/ci.yml", ".github/workflows/release.yml"):
+        for workflow in (
+            ".github/workflows/ci.yml",
+            ".github/workflows/release.yml",
+            ".github/workflows/docker.yml",
+        ):
             for line in read(workflow).splitlines():
                 match = re.search(r"(?:^|-)\s*uses:\s*[^#\s]+@([^\s#]+)", line)
                 if match:
@@ -304,6 +346,15 @@ class WindowsPortContract(unittest.TestCase):
                         r"^[0-9a-f]{40}$",
                         f"mutable action in {workflow}: {line.strip()}",
                     )
+
+    def test_windows_simulator_archives_reject_links_and_special_members(self) -> None:
+        installer = read("scripts/install-sims-windows.ps1")
+        safe = installer.split("function Assert-SafeTar", 1)[1].split(
+            "function Recover-StaleBackup", 1
+        )[0]
+        self.assertIn("tar -tvf", safe)
+        self.assertIn("@('-', 'd')", safe)
+        self.assertIn("unsafe archive member type", safe)
 
 
 if __name__ == "__main__":

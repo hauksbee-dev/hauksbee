@@ -39,16 +39,17 @@ Two entries in that table need reading carefully:
 
 ---
 
-## Why these are not bundled
+## Why the default downloads do not bundle them
 
-Renode is EPL-licensed and ~150 MB. Espressif QEMU is GPL-2.0 and similarly
-large. Vendoring either into hauksbee would bloat the distribution, impose
-redistribution obligations, and undercut the core premise: PCB CI from the
-design files, no bulky EDA toolchain required. The same "detect, don't
-bundle" pattern used for the KiCad and ngspice oracles (see
-[`docs/cosim/ORACLES.md`](ORACLES.md)) applies here. hauksbee locates an
-externally installed binary and uses it on demand. Tests skip cleanly when
-the binary is absent, rather than failing.
+Renode is MIT-licensed and ~150 MB. Espressif QEMU is GPL-2.0 and similarly
+large. The normal tarballs and macOS app keep both as separately installed
+programs so the everyday download stays small. The optional private `:full`
+container deliberately bundles them for turnkey CI; it retains their exact
+license texts and a corresponding-source offer under
+`/usr/share/doc/hauksbee/third-party/`. Outside that image, the same "detect,
+don't bundle" pattern used for the KiCad and ngspice oracles (see
+[`docs/cosim/ORACLES.md`](ORACLES.md)) applies. Tests skip cleanly when a
+separately installed binary is absent, rather than failing.
 
 ---
 
@@ -68,8 +69,8 @@ unpacks the fork into `~/.hauksbee-qemu-esp/` (discovery slot 3 below), and
 accepts each binary only after the same esp32-machine check the co-sim
 applies. `install renode` fetches Antmicro's published Renode portable build
 and unpacks it into `~/renode-portable`, the same flow as
-`scripts/install-sims.sh --renode-only`. Nothing is bundled: each is a separate
-program hauksbee talks to over sockets. Both subcommands prompt for consent and
+`scripts/install-sims.sh --renode-only`. In these installer flows each remains a
+separate program hauksbee talks to over sockets. Both subcommands prompt for consent and
 take `--yes` to skip it, and both report "already installed" and exit when the
 binary is already discoverable.
 
@@ -201,7 +202,7 @@ per backend (add `--json` for machine consumption). On this machine:
 $ hauksbee doctor --backends
 hauksbee co-sim backends (resolved by the engine's own discovery)
     avr           ATmega / ATtiny firmware co-sim
-avr	builtin	simavr linked into this binary
+avr	builtin	simavr linked into this binary; source commit f44723e8c42431136d5b4de81f789ded56d7e8fa
     qemu-xtensa   ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)
 qemu-xtensa	ok	/Users/you/.hauksbee-qemu-esp/qemu/bin/qemu-system-xtensa
     qemu-riscv32  ESP32-C3 firmware co-sim (Espressif QEMU fork)

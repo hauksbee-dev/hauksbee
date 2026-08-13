@@ -46,7 +46,7 @@ inputs:
     required: false
     default: ""
   hauksbee-version:
-    description: "Release version to download a prebuilt hauksbee-ci from (e.g. 0.1.0 or a vX.Y.Z tag). Empty: use the release named by hauksbee-ref if that is a tag, the newest release if hauksbee-ref is the default, and otherwise build the pinned ref from source."
+    description: "Release version to download a prebuilt hauksbee-ci from (e.g. 0.1.0 or a vX.Y.Z tag). Required with use-image so the digest can be checked against that release's immutable Docker manifest. Otherwise empty uses the release named by hauksbee-ref if that is a tag, the newest release for the default ref, or builds the pinned ref."
     required: false
     default: ""
   prefer-prebuilt:
@@ -58,7 +58,7 @@ inputs:
     required: false
     default: "false"
   image:
-    description: "Docker image to run when use-image is true. Use the full image (ghcr.io/hauksbee-dev/hauksbee:full) for STM32 / ESP32 co-sim or autorouting; the slim image covers static checks, board-as-code, and AVR co-sim."
+    description: "Image selector for use-image: slim/full (or the canonical :slim/:full tag spelling) resolves through hauksbee-version's immutable Docker digest record; an explicit canonical sha256 digest must occur in the same record. The executed digest's OCI revision must match the release commit."
     required: false
     default: "ghcr.io/hauksbee-dev/hauksbee:slim"
 
@@ -89,6 +89,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.hauksbee-token }}
         REPO: ${{ inputs.hauksbee-repo }}
+        RELEASE_TAG: ${{ steps.reltag.outputs.tag }}
       run: |
         set -euo pipefail
         if [ -z "$GH_TOKEN" ]; then
@@ -126,7 +127,7 @@ runs:
     #    falling back to source.
     - name: Pick prebuilt release tag
       id: reltag
-      if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' }}
+      if: ${{ inputs.use-image == 'true' || inputs.prefer-prebuilt == 'true' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.hauksbee-token }}
@@ -144,16 +145,26 @@ runs:
         fi
         echo "choice=$choice" >> "$GITHUB_OUTPUT"
         echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-    # A warm cache skips the release download entirely. The key is the
-    # concrete repository + release tag, so neither a new release nor a
-    # different configured private repository can restore another build.
-    - name: Cache prebuilt hauksbee
-      if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' && steps.reltag.outputs.tag != '' }}
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: .hauksbee-prebuilt
-        key: hauksbee-prebuilt-${{ inputs.hauksbee-repo }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.reltag.outputs.tag }}
+        release_sha=""
+        if [ -n "$tag" ]; then
+          release_sha="$(gh api "repos/$REPO/commits/$tag" --jq .sha)"
+          if [[ "$REF" =~ ^[0-9a-f]{40}$ ]] && [ "$release_sha" != "$REF" ]; then
+            echo "::error::release tag $tag resolves to $release_sha, not pinned ref $REF"
+            exit 1
+          fi
+        fi
+        echo "release-sha=$release_sha" >> "$GITHUB_OUTPUT"
+        expected_sha="$release_sha"
+        if [ -z "$expected_sha" ] && [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+          expected_sha="$REF"
+        fi
+        echo "expected-sha=$expected_sha" >> "$GITHUB_OUTPUT"
+        # Source fallback must preserve an explicitly selected release. Without
+        # this output, a missing platform asset for vX.Y.Z silently built the
+        # default main input instead.
+        source_ref="$REF"
+        if [ -n "$release_sha" ]; then source_ref="$release_sha"; fi
+        echo "source-ref=$source_ref" >> "$GITHUB_OUTPUT"
 
     # 3. Try to download a prebuilt bundle from a GitHub Release, so most
     #    users never compile. Sets steps.prebuilt.outputs.bin (hauksbee-ci)
@@ -169,6 +180,7 @@ runs:
         REF: ${{ inputs.hauksbee-ref }}
         CHOICE: ${{ steps.reltag.outputs.choice }}
         TAG: ${{ steps.reltag.outputs.tag }}
+        RELEASE_SHA: ${{ steps.reltag.outputs.expected-sha }}
         RUNNER_OS: ${{ runner.os }}
         RUNNER_ARCH: ${{ runner.arch }}
       run: |
@@ -189,44 +201,84 @@ runs:
           echo "Building that ref from source rather than downloading a different build."
           exit 0
         fi
-        dl=".hauksbee-prebuilt"
-        mkdir -p "$dl"
         platform="${os}-${arch}"
-        provenance=""
-        if provenance="$("$GITHUB_ACTION_PATH/prebuilt-provenance.sh" verify "$dl" "$REPO" "$TAG" "$platform" 2>/dev/null)"; then
-          echo "repository-bound prebuilt bundle restored from cache; skipping download"
-        else
-          # A partial or mismatched restore is not executable evidence. Empty it
-          # before the authenticated release download populates this exact key.
-          find "$dl" -depth -mindepth 1 -delete
-          asset_glob="hauksbee-*-${os}-${arch}.tar.gz"
-          if [ -n "$TAG" ]; then
-            gh release download "$TAG" --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
-          else
-            gh release download --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
-          fi
-          tarball="$(ls "$dl"/hauksbee-*-"${os}"-"${arch}".tar.gz 2>/dev/null | head -n1 || true)"
-          if [ -z "$tarball" ]; then
-            echo "no prebuilt asset ($asset_glob) found; will build from source"
-            exit 0
-          fi
-          if [ -z "$TAG" ]; then
-            TAG="$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null || true)"
-            if [ -z "$TAG" ]; then
-              echo "downloaded a latest asset but could not prove its release tag; will build from source"
-              exit 0
-            fi
-          fi
-          tar -xzf "$tarball" -C "$dl"
-          "$GITHUB_ACTION_PATH/prebuilt-provenance.sh" record "$dl" "$REPO" "$TAG" "$platform" >/dev/null
-          provenance="$("$GITHUB_ACTION_PATH/prebuilt-provenance.sh" verify "$dl" "$REPO" "$TAG" "$platform")"
+        release_sha="$RELEASE_SHA"
+        if [ -z "$TAG" ]; then
+          echo "no private release is available; will build from source"
+          exit 0
         fi
-        ci_bin="$(printf '%s\n' "$provenance" | sed -n 's/^ci_bin=//p')"
-        run_bin="$(printf '%s\n' "$provenance" | sed -n 's/^engine_bin=//p')"
+        [ "$(gh api "repos/$REPO/releases/tags/$TAG" --jq .immutable)" = true ] || {
+          echo "release $TAG is not immutable; refusing replaceable private assets" >&2
+          exit 1
+        }
+        [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]] || {
+          echo "selected release has no exact commit identity" >&2
+          exit 1
+        }
+        manifest_dir="$(mktemp -d "$RUNNER_TEMP/hauksbee-release-manifest.XXXXXX")"
+        trap 'find "$manifest_dir" -depth -mindepth 1 -delete 2>/dev/null || true; rmdir "$manifest_dir" 2>/dev/null || true' EXIT
+        asset_glob="hauksbee-*-${os}-${arch}.tar.gz"
+        gh release download "$TAG" --repo "$REPO" --pattern "${asset_glob}.sha256" --dir "$manifest_dir" 2>/dev/null || true
+        manifest="$(find "$manifest_dir" -maxdepth 1 -type f -name "${asset_glob}.sha256" -print)"
+        if [ -z "$manifest" ]; then
+          echo "no checksum sidecar for $asset_glob; will build from source"
+          exit 0
+        fi
+        [ "$(printf '%s\n' "$manifest" | wc -l | tr -d ' ')" -eq 1 ] || {
+          echo "asset manifest did not resolve to exactly one file for $asset_glob" >&2
+          exit 1
+        }
+        expected_asset_sha256="$(awk 'NF == 2 && $1 ~ /^[0-9a-f]{64}$/ { print $1 }' "$manifest")"
+        [ "$(printf '%s\n' "$expected_asset_sha256" | wc -l | tr -d ' ')" -eq 1 ] \
+          && [[ "$expected_asset_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+          echo "asset manifest did not contain one sha256" >&2
+          exit 1
+        }
+        # Private release archives must not enter the consumer repository's
+        # Actions cache: fork workflows can restore base-branch caches.
+        archive_cache="$RUNNER_TEMP/hauksbee-private-archives/$platform"
+        mkdir -p "$archive_cache"
+        tarball="$(find "$archive_cache" -maxdepth 1 -type f -name "$asset_glob" -print -quit)"
+        if [ -n "$tarball" ]; then
+          cached_sha256="$(if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$tarball"; else sha256sum "$tarball"; fi | awk '{print $1}')"
+          if [ "$cached_sha256" != "$expected_asset_sha256" ]; then
+            echo "cached archive failed the publisher checksum; quarantining it"
+            find "$archive_cache" -maxdepth 1 -type f -name "$asset_glob" -delete
+            tarball=""
+          fi
+        fi
+        if [ -z "$tarball" ]; then
+          gh release download "$TAG" --repo "$REPO" --pattern "$asset_glob" --dir "$archive_cache" 2>/dev/null || true
+          tarball="$(find "$archive_cache" -maxdepth 1 -type f -name "$asset_glob" -print -quit)"
+        fi
+        if [ -z "$tarball" ]; then
+          echo "no prebuilt asset ($asset_glob) found; will build from source"
+          exit 0
+        fi
+        actual_asset_sha256="$(if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$tarball"; else sha256sum "$tarball"; fi | awk '{print $1}')"
+        [ "$actual_asset_sha256" = "$expected_asset_sha256" ] || {
+          echo "publisher checksum mismatch for $(basename "$tarball")" >&2
+          exit 1
+        }
+        # The repository release policy is immutable. GitHub signs every asset
+        # in that release, binding these exact bytes to the protected tag.
+        gh release verify-asset "$TAG" "$tarball" --repo "$REPO" >/dev/null
+        dl="$RUNNER_TEMP/hauksbee-prebuilt-$platform"
+        mkdir -p "$dl"
+        find "$dl" -depth -mindepth 1 -delete
+        tar -xzf "$tarball" -C "$dl"
+        ci_bin="$(find "$dl" -type f -path '*/bin/hauksbee-ci' -perm -111 -print -quit)"
+        run_bin="$(find "$dl" -type f -path '*/bin/hauksbee' -perm -111 -print -quit)"
         if [ -z "$ci_bin" ] || [ ! -x "$ci_bin" ] || [ -z "$run_bin" ] || [ ! -x "$run_bin" ]; then
           echo "prebuilt bundle had no usable binaries; will build from source"
           exit 0
         fi
+        ci_version="$(env -u GH_TOKEN -u GITHUB_TOKEN -u HAUKSBEE_GITHUB_TOKEN "$ci_bin" --version)"
+        engine_version="$(env -u GH_TOKEN -u GITHUB_TOKEN -u HAUKSBEE_GITHUB_TOKEN "$run_bin" --version)"
+        [[ "$ci_version" == *"(git $release_sha)"* ]] && [[ "$engine_version" == *"(git $release_sha)"* ]] || {
+          echo "prebuilt binaries do not attest release commit $release_sha" >&2
+          exit 1
+        }
         echo "bin=$ci_bin" >> "$GITHUB_OUTPUT"
         echo "engine-bin=$run_bin" >> "$GITHUB_OUTPUT"
         echo "Using prebuilt binaries from $dl"
@@ -237,7 +289,7 @@ runs:
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       with:
         repository: ${{ inputs.hauksbee-repo }}
-        ref: ${{ inputs.hauksbee-ref }}
+        ref: ${{ steps.reltag.outputs.source-ref || inputs.hauksbee-ref }}
         path: .hauksbee
         token: ${{ inputs.hauksbee-token }}
         persist-credentials: false
@@ -248,10 +300,10 @@ runs:
       with:
         # The SHA pin no longer names the toolchain the way @stable did, so it
         # is named explicitly here.
-        toolchain: stable
+        toolchain: 1.92.0
 
-    # Cache the cargo registry, git index, and the hauksbee build so only the
-    # first run pays the compile cost. Keyed on the hauksbee ref + lockfile.
+    # Cache public Cargo downloads only. Never cache `.hauksbee/target`: caches
+    # belong to the consumer repository and fork workflows can restore them.
     - name: Cache cargo (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -260,27 +312,26 @@ runs:
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db
-          .hauksbee/target
-        key: hauksbee-ci-${{ inputs.hauksbee-repo }}-${{ runner.os }}-${{ inputs.hauksbee-ref }}-${{ hashFiles('.hauksbee/Cargo.lock') }}
-        restore-keys: |
-          hauksbee-ci-${{ inputs.hauksbee-repo }}-${{ runner.os }}-${{ inputs.hauksbee-ref }}-
-          hauksbee-ci-${{ inputs.hauksbee-repo }}-${{ runner.os }}-
+        key: hauksbee-ci-${{ inputs.hauksbee-repo }}-${{ runner.os }}-${{ steps.reltag.outputs.source-ref || inputs.hauksbee-ref }}-${{ hashFiles('.hauksbee/Cargo.lock') }}
 
     - name: Build hauksbee (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
       shell: bash
+      working-directory: .hauksbee
       env:
         MODE: ${{ steps.resolve.outputs.mode }}
       run: |
         set -euo pipefail
+        source_sha="$(git rev-parse HEAD)"
+        [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked-out source identity" >&2; exit 1; }
         # A stock runner has no system libsimavr. Build the honest GPL-free
         # Renode + QEMU feature set; those backends still fail explicitly at
         # runtime when a spec selects an emulator that is not installed.
         if [ "$MODE" = "check" ]; then
-          cargo build --release -p hauksbee-engine --manifest-path .hauksbee/Cargo.toml \
+          HAUKSBEE_SOURCE_COMMIT="$source_sha" cargo build --release -p hauksbee-engine \
             --no-default-features --features renode,qemu
         else
-          cargo build --release -p hauksbee-ci --manifest-path .hauksbee/Cargo.toml \
+          HAUKSBEE_SOURCE_COMMIT="$source_sha" cargo build --release -p hauksbee-ci \
             --no-default-features --features renode,qemu
         fi
 
@@ -340,6 +391,7 @@ runs:
         GH_TOKEN: ${{ inputs.hauksbee-token }}
         REGISTRY_USER_INPUT: ${{ inputs.registry-user }}
       run: |
+        set +x
         set -euo pipefail
         config="$(mktemp -d "$RUNNER_TEMP/hauksbee-docker-auth.XXXXXX")"
         chmod 700 "$config"
@@ -358,8 +410,62 @@ runs:
         SPECS: ${{ steps.resolve.outputs.specs }}
         JUNIT: ${{ inputs.junit }}
         IMAGE: ${{ inputs.image }}
+        REPO: ${{ inputs.hauksbee-repo }}
+        RELEASE_SHA: ${{ steps.reltag.outputs.expected-sha }}
+        RELEASE_TAG: ${{ steps.reltag.outputs.tag }}
+        GH_TOKEN: ${{ inputs.hauksbee-token }}
         DOCKER_CONFIG: ${{ steps.registry-auth.outputs.docker-config }}
       run: |
+        set -euo pipefail
+        [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+          echo "::error::use-image requires a release version/ref with an exact commit"
+          exit 1
+        }
+        release_tag="$RELEASE_TAG"
+        [[ "$release_tag" =~ ^v[0-9A-Za-z._-]+$ ]] || {
+          echo "::error::use-image requires a safe immutable v* release tag"
+          exit 1
+        }
+        [ -n "$release_tag" ] || {
+          echo "::error::use-image requires an immutable release tag/version, not only a source SHA"
+          exit 1
+        }
+        digest_tag="container-digests-${release_tag}"
+        manifest_dir="$(mktemp -d "$RUNNER_TEMP/hauksbee-image-manifest.XXXXXX")"
+        trap 'find "$manifest_dir" -depth -mindepth 1 -delete 2>/dev/null || true; rmdir "$manifest_dir" 2>/dev/null || true' EXIT
+        gh release download "$digest_tag" --repo "$REPO" \
+          --pattern 'hauksbee-*-docker-digests.txt' --dir "$manifest_dir"
+        manifest="$(find "$manifest_dir" -maxdepth 1 -type f -name 'hauksbee-*-docker-digests.txt' -print)"
+        [ "$(printf '%s\n' "$manifest" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 1 ] || {
+          echo "::error::immutable container digest manifest did not resolve uniquely"
+          exit 1
+        }
+        gh release verify "$digest_tag" --repo "$REPO" >/dev/null
+        gh release verify-asset "$digest_tag" "$manifest" --repo "$REPO" >/dev/null
+        case "$IMAGE" in
+          ""|slim|"ghcr.io/${REPO}:slim") image_flavor=slim ;;
+          full|"ghcr.io/${REPO}:full") image_flavor=full ;;
+          "ghcr.io/${REPO}@"sha256:*) image_flavor= ;;
+          *) echo "::error::image must select slim/full or be the canonical ghcr.io/$REPO package at an immutable digest"; exit 1 ;;
+        esac
+        if [ -n "$image_flavor" ]; then
+          IMAGE="$(awk -v flavor="$image_flavor" '$1 == flavor { print $2 }' "$manifest")"
+        fi
+        [[ "$IMAGE" =~ ^ghcr\.io/${REPO}@sha256:[0-9a-f]{64}$ ]] || {
+          echo "::error::immutable manifest did not resolve one canonical image digest"
+          exit 1
+        }
+        awk '$1 == "slim" || $1 == "full" { print $2 }' "$manifest" \
+          | grep -Fx "$IMAGE" >/dev/null || {
+            echo "::error::image digest is not present in the immutable $digest_tag record"
+            exit 1
+          }
+        docker pull "$IMAGE"
+        image_revision="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE")"
+        [ "$image_revision" = "$RELEASE_SHA" ] || {
+          echo "::error::image revision $image_revision does not match release commit $RELEASE_SHA"
+          exit 1
+        }
         set +e
         if [ "$MODE" = "check" ]; then
           ARGS=(hauksbee run "$BOARD" --check --strict)

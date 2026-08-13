@@ -1,17 +1,19 @@
 # Build and push the hauksbee Docker images to GHCR on a release tag.
 #
 # Trigger: push a tag like `v0.1.0` (same tag that drives release.yml), or run
-# manually. Produces two multi-arch (linux/amd64 + linux/arm64) images:
+# manually. Tag pushes publish stable version tags after immutable verification;
+# manual runs build and verify source-SHA candidate images only. Both paths
+# produce two multi-arch (linux/amd64 + linux/arm64) images:
 #
-#   ghcr.io/hauksbee-dev/hauksbee:slim     prebuilt binaries + model db + kicad-cli
-#                                      + simavr; the everyday CI image.
+#   ghcr.io/hauksbee-dev/hauksbee:slim     prebuilt binaries + model db + simavr;
+#                                      the everyday CI image (no kicad-cli).
 #   ghcr.io/hauksbee-dev/hauksbee:full     slim plus Renode, the Espressif QEMU fork,
 #                                      and freerouting; STM32 / ESP32 co-sim and
 #                                      autorouting.
 #
 # Each is also tagged with the version (e.g. :slim-0.1.0, :full-0.1.0) and, on a
-# tag push, :latest / :full-latest. The full image builds FROM the slim image,
-# so slim is built and pushed first, then full pulls it per-platform.
+# tag push, :latest / :full-latest. The full image builds FROM the slim manifest,
+# so slim is built and pushed first, then full consumes its immutable digest.
 #
 # BUILD CONTEXT: the forge-* crates are vendored into this repo
 # (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), so the build is
@@ -28,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag to build (e.g. v0.1.0). Used as the image version tag."
+        description: "Existing version tag whose source is built into candidate-only images; stable tags are published only by a tag-push run."
         required: true
 
 env:
@@ -39,15 +41,28 @@ permissions:
   contents: read
   packages: write   # push to GHCR
 
+# A tag can publish one digest set only. Reruns serialize, reconcile the
+# immutable digest release, and promote only the already-recorded references.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: build and push images
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      source-sha: ${{ steps.ver.outputs.source_sha }}
+      slim-digest: ${{ steps.slim.outputs.digest }}
+      full-digest: ${{ steps.full.outputs.digest }}
     steps:
       - name: Checkout hauksbee
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: ctx/hauksbee
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Resolve version
         id: ver
@@ -55,15 +70,33 @@ jobs:
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
           # Tag push -> strip the leading v; manual dispatch -> the provided tag.
           raw="${INPUT_TAG:-$REF_NAME}"
-          if ! printf '%s' "$raw" | grep -Eq '^v?[0-9A-Za-z._-]+$'; then
+          if ! printf '%s' "$raw" | grep -Eq '^v[0-9A-Za-z._-]+$'; then
             echo "refusing suspicious version string: $raw" >&2
             exit 1
           fi
+          source_sha="$(git -C ctx/hauksbee rev-parse HEAD)"
+          if [ "$EVENT_NAME" != "workflow_dispatch" ] && [ "$source_sha" != "$EVENT_SHA" ]; then
+            echo "tag-push checkout $source_sha does not match immutable event SHA $EVENT_SHA" >&2
+            exit 1
+          fi
+          tag_sha="$(git -C ctx/hauksbee rev-parse "refs/tags/$raw^{commit}")"
+          if [ "$source_sha" != "$tag_sha" ]; then
+            echo "checked-out source $source_sha does not match $raw ($tag_sha)" >&2
+            exit 1
+          fi
           version="${raw#v}"
+          workspace_version="$(sed -nE 's/^version = "([^"]+)"$/\1/p' ctx/hauksbee/Cargo.toml | head -1)"
+          [ "$version" = "$workspace_version" ] || {
+            echo "tag version $version does not match workspace package $workspace_version" >&2
+            exit 1
+          }
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           # Move the floating :latest / :full-latest tags only on an actual tag
           # push. Emit them as their own outputs so the tag lists never carry a
           # blank line (an empty tag would be rejected by the registry).
@@ -99,13 +132,13 @@ jobs:
           sed -i 's/^[[:space:]]*//' ctx/.dockerignore
 
       - name: Set up QEMU (for arm64 emulation)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -141,7 +174,7 @@ jobs:
             --platform linux/amd64,linux/arm64 \
             --push \
             --provenance=false \
-            --tag "${IMAGE}:privacy-bootstrap-${GITHUB_SHA}" \
+            --tag "${IMAGE}:privacy-bootstrap-${{ steps.ver.outputs.source_sha }}" \
             "$context"
 
       - name: Check private container publication before push
@@ -150,32 +183,34 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash ctx/hauksbee/scripts/check-private-container-publication.sh before
 
-      # 1. Slim first: full builds FROM it. Tag :slim, :slim-<version>, and
-      #    (on a tag push) :latest.
+      # 1. Slim first: full builds FROM its immutable digest. Publish only a
+      #    source-SHA candidate until both product binaries pass on both arches.
       - name: Build and push slim
-        uses: docker/build-push-action@v6
+        id: slim
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: ctx
           file: ctx/hauksbee/docker/Dockerfile.slim
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
+          build-args: |
+            SOURCE_COMMIT=${{ steps.ver.outputs.source_sha }}
           # build-push-action trims blank lines, so an empty slim_latest output
           # (non-tag builds) simply drops the floating tag.
           tags: |
-            ${{ env.IMAGE }}:slim
-            ${{ env.IMAGE }}:slim-${{ steps.ver.outputs.version }}
-            ${{ steps.ver.outputs.slim_latest }}
+            ${{ env.IMAGE }}:slim-candidate-${{ steps.ver.outputs.source_sha }}
           cache-from: type=gha,scope=hauksbee-slim
           cache-to: type=gha,mode=max,scope=hauksbee-slim
           labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.ver.outputs.source_sha }}
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
 
-      # 2. Full builds FROM the just-pushed multi-arch slim. buildx pulls the
-      #    matching per-platform slim image for each target arch.
+      # 2. Full builds FROM the just-pushed multi-arch slim digest. buildx pulls
+      #    the matching per-platform image without a mutable-tag race.
       - name: Build and push full
-        uses: docker/build-push-action@v6
+        id: full
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: ctx
           file: ctx/hauksbee/docker/Dockerfile.full
@@ -183,16 +218,106 @@ jobs:
           push: true
           provenance: false
           build-args: |
-            SLIM_IMAGE=${{ env.IMAGE }}:slim-${{ steps.ver.outputs.version }}
+            SLIM_IMAGE=${{ env.IMAGE }}@${{ steps.slim.outputs.digest }}
           tags: |
-            ${{ env.IMAGE }}:full
-            ${{ env.IMAGE }}:full-${{ steps.ver.outputs.version }}
-            ${{ steps.ver.outputs.full_latest }}
+            ${{ env.IMAGE }}:full-candidate-${{ steps.ver.outputs.source_sha }}
           cache-from: type=gha,scope=hauksbee-full
           cache-to: type=gha,mode=max,scope=hauksbee-full
           labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.ver.outputs.source_sha }}
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+
+      - name: Verify slim and full image contents and labels
+        env:
+          SLIM_IMAGE: ${{ env.IMAGE }}@${{ steps.slim.outputs.digest }}
+          FULL_IMAGE: ${{ env.IMAGE }}@${{ steps.full.outputs.digest }}
+          EXPECTED_VERSION: ${{ steps.ver.outputs.version }}
+          EXPECTED_SHA: ${{ steps.ver.outputs.source_sha }}
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            docker pull --platform "$platform" "$SLIM_IMAGE"
+            docker run --rm --platform "$platform" \
+              -e EXPECTED_VERSION -e EXPECTED_SHA -e PLATFORM="$platform" \
+              --entrypoint /bin/sh "$SLIM_IMAGE" -eu -c '
+                hauksbee --version | grep -F "hauksbee $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
+                hauksbee-ci --version | grep -F "hauksbee-ci $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
+                output="$(mktemp)"
+                hauksbee run /opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb \
+                  --firmware /opt/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex --headless --plain --seconds 0.05 \
+                  >"$output" 2>&1
+                ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output"
+                grep -Eq "UART|toggle|active net|firmware" "$output"
+                cd /opt/hauksbee/crates/hauksbee-ci/examples
+                hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null
+                test -s /usr/share/doc/hauksbee/SOURCE-OFFER.txt
+                test -s /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz
+                test -s /usr/share/doc/hauksbee/source/simavr-source.tar.gz
+                tar -tzf /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz \
+                  | grep -E "^hauksbee/third-party/cargo-vendor/serde-[^/]+/\.cargo-checksum\.json$" >/dev/null
+                test "$(tar -tzf /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz \
+                  | grep -c "/\.cargo-checksum\.json$")" -gt 100
+                tar -xOf /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz \
+                  hauksbee/.cargo/config.toml | grep -F "third-party/cargo-vendor" >/dev/null
+              '
+            docker pull --platform "$platform" "$FULL_IMAGE"
+            docker run --rm --platform "$platform" \
+              -e EXPECTED_VERSION -e EXPECTED_SHA -e PLATFORM="$platform" \
+              --entrypoint /bin/sh "$FULL_IMAGE" -eu -c '
+              hauksbee --version | grep -F "hauksbee $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
+              hauksbee-ci --version | grep -F "hauksbee-ci $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
+              output="$(mktemp)"
+              hauksbee run /opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb \
+                --firmware /opt/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex --headless --plain --seconds 0.05 \
+                >"$output" 2>&1
+              ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output"
+              grep -Eq "UART|toggle|active net|firmware" "$output"
+              cd /opt/hauksbee/crates/hauksbee-ci/examples
+              hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null
+              renode --version >/dev/null
+              /opt/qemu/bin/qemu-system-xtensa --version >/dev/null
+              /opt/qemu/bin/qemu-system-riscv32 --version >/dev/null
+              if [ "$PLATFORM" = linux/amd64 ]; then
+                stm32="$(mktemp)"
+                timeout 90 hauksbee run /opt/hauksbee/external-smoke/stm32.kicad_pcb \
+                  --firmware /opt/hauksbee/external-smoke/stm32.elf --headless --plain --seconds 0.25 \
+                  >"$stm32" 2>&1
+                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$stm32"
+                grep -Eq "UART|toggle|active net|firmware" "$stm32"
+
+                esp32="$(mktemp)"
+                timeout 120 hauksbee run /opt/hauksbee/external-smoke/esp32.kicad_pcb \
+                  --firmware /opt/hauksbee/external-smoke/esp32-flash.bin --headless --plain --seconds 0.25 \
+                  >"$esp32" 2>&1
+                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$esp32"
+                grep -Eq "UART|toggle|active net|firmware" "$esp32"
+
+                route_log="$(mktemp)"
+                timeout 90 hauksbee from-code /opt/hauksbee/external-smoke/blinky.board \
+                  --out /tmp/blinky-routed.kicad_pcb --route --route-passes 2 \
+                  >"$route_log" 2>&1
+                grep -F "freerouting handoff" "$route_log" >/dev/null
+                grep -F "merged" "$route_log" >/dev/null
+                test -s /tmp/blinky-routed.kicad_pcb
+              fi
+              set +e
+              timeout 15 java -jar /opt/freerouting.jar --help >/tmp/freerouting-smoke.log 2>&1
+              freerouting_status=$?
+              set -e
+              { [ "$freerouting_status" -eq 0 ] || [ "$freerouting_status" -eq 124 ]; }
+              grep -F "Freerouting v1.9.0" /tmp/freerouting-smoke.log >/dev/null
+              test -s /usr/share/doc/hauksbee/third-party/RENODE-LICENSE
+              test -s /usr/share/doc/hauksbee/third-party/QEMU-COPYING
+              test -s /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE
+              test -s /usr/share/doc/hauksbee/SOURCE-OFFER.txt
+              test -s /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz
+              test -s /usr/share/doc/hauksbee/source/simavr-source.tar.gz
+              tar -tzf /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz \
+                | grep -E "^hauksbee/third-party/cargo-vendor/serde-[^/]+/\.cargo-checksum\.json$" >/dev/null
+              test -s /usr/share/doc/hauksbee/third-party/SOURCE-OFFER.txt
+            '
+            test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$FULL_IMAGE")" \
+              = "GPL-3.0-only AND GPL-2.0-only AND MIT"
+          done
 
       - name: Check private container publication after push
         if: always()
@@ -200,3 +325,111 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash ctx/hauksbee/scripts/check-private-container-publication.sh after
+
+  publish-digests:
+    name: publish immutable image digest record
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Publish or reconcile immutable digest manifest
+        id: record
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          SLIM_DIGEST: ${{ needs.build.outputs.slim-digest }}
+          FULL_DIGEST: ${{ needs.build.outputs.full-digest }}
+        run: |
+          set -euo pipefail
+          manifest="hauksbee-${VERSION}-docker-digests.txt"
+          # This auxiliary tag must not match either workflow's `v*` release
+          # trigger, or publishing provenance recursively launches another
+          # binary/container release run.
+          digest_tag="container-digests-${GITHUB_REF_NAME}"
+          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled \
+            | grep -qx true || {
+              echo "repository does not enforce immutable releases" >&2
+              exit 1
+            }
+          find . -maxdepth 1 -type f -name "$manifest" -delete
+          is_draft=false
+          if gh release view "$digest_tag" >/dev/null 2>&1; then
+            # A retry never trusts rebuilt bytes or retargets the version. It
+            # recovers the already-published immutable record and promotes
+            # exactly the digests named there.
+            gh release download "$digest_tag" --pattern "$manifest" --dir .
+            is_draft="$(gh release view "$digest_tag" --json isDraft --jq .isDraft)"
+          else
+            printf 'source %s\nslim %s@%s\nfull %s@%s\n' \
+              "$SOURCE_SHA" "$IMAGE" "$SLIM_DIGEST" "$IMAGE" "$FULL_DIGEST" > "$manifest"
+            # A separate prerelease keeps the stable binary release immutable
+            # while making verified OCI digests durable and discoverable.
+            gh release create "$digest_tag" "$manifest" \
+              --target "$SOURCE_SHA" \
+              --title "Hauksbee ${VERSION} container digests" \
+              --notes "Verified slim/full GHCR digests for source commit $SOURCE_SHA." \
+              --prerelease --latest=false --draft
+            is_draft=true
+          fi
+          recorded_source="$(awk '$1 == "source" { print $2 }' "$manifest")"
+          recorded_slim="$(awk '$1 == "slim" { print $2 }' "$manifest")"
+          recorded_full="$(awk '$1 == "full" { print $2 }' "$manifest")"
+          [ "$recorded_source" = "$SOURCE_SHA" ] || {
+            echo "immutable digest record belongs to $recorded_source, not $SOURCE_SHA" >&2
+            exit 1
+          }
+          [[ "$recorded_slim" =~ ^${IMAGE}@sha256:[0-9a-f]{64}$ ]] || {
+            echo "invalid slim reference in immutable digest record" >&2
+            exit 1
+          }
+          [[ "$recorded_full" =~ ^${IMAGE}@sha256:[0-9a-f]{64}$ ]] || {
+            echo "invalid full reference in immutable digest record" >&2
+            exit 1
+          }
+          if [ "$is_draft" = true ]; then
+            gh release edit "$digest_tag" --draft=false
+          fi
+          for attempt in $(seq 1 12); do
+            if gh release verify-asset "$digest_tag" "$manifest"; then break; fi
+            [ "$attempt" -lt 12 ] || {
+              echo "GitHub did not attest immutable digest manifest" >&2
+              exit 1
+            }
+            sleep 5
+          done
+          # Repository policy is prospective: an older release can remain
+          # mutable even after immutable releases are enabled. Require the
+          # signed release-level attestation as well as this asset's digest
+          # before any stable tag is promoted from a recovered record.
+          gh release verify "$digest_tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+          echo "slim_ref=$recorded_slim" >> "$GITHUB_OUTPUT"
+          echo "full_ref=$recorded_full" >> "$GITHUB_OUTPUT"
+
+      - name: Promote only the recorded immutable image digests
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SLIM_REF: ${{ steps.record.outputs.slim_ref }}
+          FULL_REF: ${{ steps.record.outputs.full_ref }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:slim" --tag "${IMAGE}:slim-${VERSION}" --tag "${IMAGE}:latest" \
+            "$SLIM_REF"
+          docker buildx imagetools create \
+            --tag "${IMAGE}:full" --tag "${IMAGE}:full-${VERSION}" --tag "${IMAGE}:full-latest" \
+            "$FULL_REF"

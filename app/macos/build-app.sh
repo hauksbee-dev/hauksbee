@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # build-app.sh - assemble Hauksbee.app, the double-clickable macOS front door.
 #
-# Produces <out>/hauksbee-<version>-<target>-app.zip (+ .sha256) containing
+# Produces <out>/hauksbee-<version>-<target>-app.zip (+ .sha256), or the
+# distinctly named `-permissive-app.zip` with --no-default-features, containing
 # Hauksbee.app:
 #   Contents/Info.plist            name / identifier / version (from Cargo.toml)
 #   Contents/MacOS/Hauksbee        compiled Swift launcher (a real Mach-O, so
@@ -56,7 +57,9 @@
 #                   what the release workflow passes, right after bundle.sh has
 #                   already built them.
 #   --no-default-features
-#                   Forwarded to scripts/bundle.sh for the GPL-free shape.
+#                   Select the GPL-free permissive shape (Renode + QEMU, no
+#                   AVR/libsimavr). This app variant is local-only; release CI
+#                   publishes the signed default app shape.
 #   --features LIST Forwarded to scripts/bundle.sh (e.g. "renode,qemu").
 #   --help          Show this help.
 #
@@ -75,6 +78,7 @@ TARGET=""
 OUT="dist"
 DO_BUILD=1
 BUNDLE_FLAGS=()
+PERMISSIVE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION="${2:?--version needs a value}"; shift 2 ;;
@@ -84,7 +88,10 @@ while [ $# -gt 0 ]; do
     --out) OUT="${2:?--out needs a directory}"; shift 2 ;;
     --out=*) OUT="${1#*=}"; shift ;;
     --no-build) DO_BUILD=0; shift ;;
-    --no-default-features) BUNDLE_FLAGS+=(--no-default-features); shift ;;
+    # `--shape permissive` owns the complete feature contract in bundle.sh.
+    # Passing `--no-default-features` as a second flag would mark the feature
+    # set as an explicit override and accidentally suppress renode,qemu.
+    --no-default-features) BUNDLE_FLAGS+=(--shape permissive); PERMISSIVE=1; shift ;;
     --features) BUNDLE_FLAGS+=(--features "${2:?--features needs a value}"); shift 2 ;;
     --features=*) BUNDLE_FLAGS+=("$1"); shift ;;
     -h|--help) usage; exit 0 ;;
@@ -118,7 +125,11 @@ for bin in hauksbee hauksbee-ci hauksbee-mcp; do
   [ -x "$SRC/$bin" ] || die "$SRC/$bin missing (build first, or drop --no-build)."
 done
 
-NAME="hauksbee-${VERSION}-${TARGET}-app"
+if [ "$PERMISSIVE" -eq 1 ]; then
+  NAME="hauksbee-${VERSION}-${TARGET}-permissive-app"
+else
+  NAME="hauksbee-${VERSION}-${TARGET}-app"
+fi
 OUT_ABS="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/hauksbee-app.XXXXXX")"
 trap 'rm -rf "$STAGE" ${BUNDLE_OUT:+"$BUNDLE_OUT"}' EXIT
@@ -134,35 +145,57 @@ install -m 0755 "$SRC/hauksbee"     "$APP/Contents/Resources/bin/hauksbee"
 install -m 0755 "$SRC/hauksbee-ci"  "$APP/Contents/Resources/bin/hauksbee-ci"
 install -m 0755 "$SRC/hauksbee-mcp" "$APP/Contents/Resources/bin/hauksbee-mcp"
 
-# Licence terms travel inside the app, same as inside the tarball: the app
-# wraps the DEFAULT-shape binaries, which statically link GPL-3.0 libsimavr,
-# so the binaries are GPL-3.0 while hauksbee's source stays Apache-2.0.
+# Licence terms travel inside the app, same as inside the tarball. The default
+# app statically links GPL-3.0 libsimavr; the distinctly named local permissive
+# app carries the Apache-2.0 Renode/QEMU shape and no AVR backend.
 log "Staging licence files"
 cp "$HAUKSBEE_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$HAUKSBEE_ROOT/NOTICE"  "$APP/Contents/Resources/NOTICE"
-[ -s "$HAUKSBEE_ROOT/licenses/gpl-3.0.txt" ] \
-  || die "licenses/gpl-3.0.txt missing; the app carries GPL-3.0 binaries and must enclose the licence text."
-cp "$HAUKSBEE_ROOT/licenses/gpl-3.0.txt" "$APP/Contents/Resources/LICENSE-GPL-3.0.txt"
+cp "$HAUKSBEE_ROOT/licenses/evalexpr-MIT.txt" \
+  "$APP/Contents/Resources/LICENSE-EVALEXPR-MIT.txt"
 GIT_SHA="$(cd "$HAUKSBEE_ROOT" && git rev-parse HEAD 2>/dev/null || echo unknown)"
+doctor_avr="$("$APP/Contents/Resources/bin/hauksbee" doctor --backends \
+  | awk -F '\t' '$1 == "avr" { print; exit }')"
+if [ "$PERMISSIVE" -eq 1 ]; then
+  [[ "$doctor_avr" == *$'\tdisabled\t'* ]] \
+    || die "--no-default-features app unexpectedly contains AVR (doctor says: ${doctor_avr:-no avr row})"
+  binary_licence="APACHE-2.0"
+  licence_reason="This app wraps the permissive build. Its binaries do not link libsimavr or other GPL code."
+  source_lines="  https://github.com/hauksbee-dev/hauksbee   commit ${GIT_SHA}"
+  licence_reference="Apache-2.0 terms: LICENSE, next to this file."
+  alternative_line="This is the permissive app shape."
+else
+  SIMAVR_COMMIT="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' \
+    "$HAUKSBEE_ROOT/scripts/install-sims.sh" | head -1)"
+  [[ "$SIMAVR_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+    || die "scripts/install-sims.sh does not name one immutable SIMAVR_COMMIT"
+  [[ "$doctor_avr" == *"source commit $SIMAVR_COMMIT"* ]] \
+    || die "app binary does not attest simavr source commit $SIMAVR_COMMIT (doctor says: ${doctor_avr:-no avr row})"
+  binary_licence="GPL-3.0"
+  [ -s "$HAUKSBEE_ROOT/licenses/gpl-3.0.txt" ] \
+    || die "licenses/gpl-3.0.txt missing; the app carries GPL-3.0 binaries and must enclose the licence text."
+  cp "$HAUKSBEE_ROOT/licenses/gpl-3.0.txt" "$APP/Contents/Resources/LICENSE-GPL-3.0.txt"
+  licence_reason="This app wraps the default build, whose AVR backend statically links GPL-3.0 libsimavr."
+  source_lines="  same-release asset hauksbee-${VERSION}-source.tar.gz
+  https://github.com/hauksbee-dev/hauksbee   commit ${GIT_SHA}
+  https://github.com/buserror/simavr         source commit ${SIMAVR_COMMIT}"
+  licence_reference="Full GPL-3.0 text: LICENSE-GPL-3.0.txt, next to this file."
+  alternative_line="If you cannot take GPL code, use the -permissive tarball from the same release."
+fi
 cat > "$APP/Contents/Resources/LICENSE-BINARY.txt" <<EOF
 Hauksbee.app ${VERSION} (${TARGET}) - licence of the enclosed binaries
 ======================================================================
 
-THE BINARIES IN Contents/Resources/bin/ ARE LICENSED TO YOU UNDER GPL-3.0.
+THE BINARIES IN Contents/Resources/bin/ ARE LICENSED TO YOU UNDER ${binary_licence}.
 
 hauksbee's own source code is Apache-2.0 (see LICENSE and NOTICE, next to
-this file). This app wraps the default-shape build, whose optional avr
-co-simulation backend STATICALLY LINKS libsimavr (GPL-3.0); statically
-linking GPL-3.0 code makes the executable a combined work, so these binaries
-are distributed under GPL-3.0. Running the app imposes no obligations at
-all; GPL-3.0 constrains redistribution, not use.
+this file). ${licence_reason}
 
-Full GPL-3.0 text: LICENSE-GPL-3.0.txt, next to this file.
-Corresponding source (GPL-3.0 section 6):
-  https://github.com/hauksbee-dev/hauksbee   commit ${GIT_SHA}
-  https://github.com/buserror/simavr         (tag: see scripts/install-sims.sh)
-If you cannot take GPL code, use the -permissive tarball from the same
-release: the same tool without the avr backend, licensed Apache-2.0.
+${licence_reference}
+evalexpr 11.3.1 MIT notice: LICENSE-EVALEXPR-MIT.txt, next to this file.
+Source identity:
+${source_lines}
+${alternative_line}
 EOF
 
 log "Writing Info.plist"

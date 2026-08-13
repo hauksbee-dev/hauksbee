@@ -73,8 +73,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use evalexpr::{
-    build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
-    Node as EvalNode, Value,
+    build_operator_tree, ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value,
 };
 use hauksbee_models::logic_spec::{Edge, Level, Logic, LogicExpr, LogicSpecError, RegisterOp};
 
@@ -160,7 +159,7 @@ struct CompReg {
 struct CompComb {
     /// Index into `outputs`.
     out: usize,
-    node: EvalNode<DefaultNumericTypes>,
+    node: EvalNode,
 }
 
 /// One evaluation-plan step: a single acyclic output, or a strongly connected
@@ -727,7 +726,7 @@ pub struct LogicComponent {
     /// Register bits referenced by any expression: (reg index, bit, var name).
     reg_bit_vars: Vec<(usize, u32, String)>,
     /// Reused evaluation context (keys are stable; values overwritten per tick).
-    ctx: HashMapContext<DefaultNumericTypes>,
+    ctx: HashMapContext,
     /// Cycle warnings raised at validation (surfaced by lint / bind).
     pub warnings: Vec<String>,
 }
@@ -1002,11 +1001,9 @@ impl LogicComponent {
             let out = output_idx[out_name.as_str()];
             let mut src = String::new();
             lower_expr(ast, &mut src);
-            let node = build_operator_tree::<DefaultNumericTypes>(&src).map_err(|e| {
-                LogicCompileError::Lowering {
-                    output: out_name.clone(),
-                    message: e.to_string(),
-                }
+            let node = build_operator_tree(&src).map_err(|e| LogicCompileError::Lowering {
+                output: out_name.clone(),
+                message: e.to_string(),
             })?;
             let mut names = Vec::new();
             let mut bits = Vec::new();

@@ -28,7 +28,9 @@ thiserror = { workspace = true }
 # code uses it); the SPICE loader consuming it here is a deliberate dependency
 # edge, the same environment the future B-source
 # (§2.5) will consume, built once. `default-features = false` matches engine.
-evalexpr = { version = "13", default-features = false }
+# Keep this on the final MIT-licensed line. evalexpr 12+ is AGPL-3.0-only and
+# must never enter the published Apache-2.0 permissive shape.
+evalexpr = { version = "=11.3.1", default-features = false }
 
 [lints]
 workspace = true

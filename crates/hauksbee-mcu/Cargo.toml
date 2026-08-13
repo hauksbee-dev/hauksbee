@@ -66,6 +66,7 @@ windows-sys = { version = "0.61", features = [
 [build-dependencies]
 bindgen = "0.71"
 pkg-config = "0.3"
+sha2 = "0.11"
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }

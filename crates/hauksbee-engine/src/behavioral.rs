@@ -40,9 +40,7 @@
 
 use std::collections::BTreeMap;
 
-use evalexpr::{
-    ContextWithMutableVariables, DefaultNumericTypes, HashMapContext, Node as EvalNode, Value,
-};
+use evalexpr::{ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::behavioral::{
     Behavioral, Converter, Law, LawKind, SenseProgram, StatePinBehaviour,
@@ -225,7 +223,7 @@ struct ConverterLeg {
 struct LawLeg {
     law: Law,
     /// Compiled expression (parsed once at stamp time).
-    program: EvalNode<DefaultNumericTypes>,
+    program: EvalNode,
     /// How the law reached the circuit (implicit B-source vs chunk-updated
     /// source); see [`LawStamp`].
     stamp: LawStamp,
@@ -414,7 +412,7 @@ fn compile_law_implicit(
 #[derive(Debug, Clone)]
 struct CompiledTransition {
     tr: hauksbee_models::behavioral::Transition,
-    guard: Option<EvalNode<DefaultNumericTypes>>,
+    guard: Option<EvalNode>,
 }
 
 /// A behavioural device bound onto the circuit: its stamped legs plus live FSM
@@ -618,18 +616,17 @@ impl BehavioralDevice {
                 .transitions
                 .iter()
                 .map(|tr| {
-                    let guard =
-                        match evalexpr::build_operator_tree::<DefaultNumericTypes>(&tr.guard) {
-                            Ok(p) => Some(p),
-                            Err(e) => {
-                                eprintln!(
-                                    "[behavioural] {reference}: FSM guard '{}' ({} -> {}) \
+                    let guard = match evalexpr::build_operator_tree(&tr.guard) {
+                        Ok(p) => Some(p),
+                        Err(e) => {
+                            eprintln!(
+                                "[behavioural] {reference}: FSM guard '{}' ({} -> {}) \
                                  failed to parse: {e}; transition disabled",
-                                    tr.guard, tr.from, tr.to
-                                );
-                                None
-                            }
-                        };
+                                tr.guard, tr.from, tr.to
+                            );
+                            None
+                        }
+                    };
                     CompiledTransition {
                         tr: tr.clone(),
                         guard,
@@ -738,7 +735,7 @@ impl BehavioralDevice {
                 .as_ref()
                 .and_then(|b| role_nodes.get(b).copied())
                 .unwrap_or(NodeId::GROUND);
-            let program = match evalexpr::build_operator_tree::<DefaultNumericTypes>(&law.expr) {
+            let program = match evalexpr::build_operator_tree(&law.expr) {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!(
@@ -986,31 +983,27 @@ impl BehavioralDevice {
 
     /// Build an evalexpr context: `v_<role>` for each connected pin's voltage,
     /// every param key verbatim, `t`, `t_in_state`, and `state_<name>` booleans.
-    fn build_context(
-        &self,
-        node_v: &dyn Fn(NodeId) -> f64,
-        t: f64,
-    ) -> HashMapContext<DefaultNumericTypes> {
-        let mut ctx = HashMapContext::<DefaultNumericTypes>::new();
+    fn build_context(&self, node_v: &dyn Fn(NodeId) -> f64, t: f64) -> HashMapContext {
+        let mut ctx = HashMapContext::new();
         for (role, &node) in &self.role_nodes {
-            let _ = ctx.set_value(format!("v_{role}"), Value::from_float(node_v(node)));
+            let _ = ctx.set_value(format!("v_{role}"), Value::Float(node_v(node)));
         }
         for (k, v) in &self.params.0 {
             if let Some(f) = v.as_f64() {
-                let _ = ctx.set_value(k.clone(), Value::from_float(f));
+                let _ = ctx.set_value(k.clone(), Value::Float(f));
             }
         }
-        let _ = ctx.set_value("t".into(), Value::from_float(t));
-        let _ = ctx.set_value("t_in_state".into(), Value::from_float(self.t_in_state));
+        let _ = ctx.set_value("t".into(), Value::Float(t));
+        let _ = ctx.set_value("t_in_state".into(), Value::Float(self.t_in_state));
         for (i, name) in self.fsm_states.iter().enumerate() {
             let on = if i == self.state_idx { 1.0 } else { 0.0 };
-            let _ = ctx.set_value(format!("state_{name}"), Value::from_float(on));
+            let _ = ctx.set_value(format!("state_{name}"), Value::Float(on));
         }
         ctx
     }
 
     /// Evaluate FSM guards against the context; fire the first that holds.
-    fn advance_fsm(&mut self, ctx: &HashMapContext<DefaultNumericTypes>, dt: f64) {
+    fn advance_fsm(&mut self, ctx: &HashMapContext, dt: f64) {
         self.t_in_state += dt;
         if self.fsm_states.is_empty() {
             return;
@@ -1279,10 +1272,7 @@ fn set_resistor_ohms(circuit: &mut Circuit, id: DeviceId, ohms: f64) {
 }
 
 /// Evaluate a parsed expression to a number against a context.
-fn eval_number(
-    program: &EvalNode<DefaultNumericTypes>,
-    ctx: &HashMapContext<DefaultNumericTypes>,
-) -> Option<f64> {
+fn eval_number(program: &EvalNode, ctx: &HashMapContext) -> Option<f64> {
     program.eval_with_context(ctx).ok().and_then(|v| match v {
         Value::Float(f) => Some(f),
         Value::Int(i) => Some(i as f64),
@@ -1293,10 +1283,7 @@ fn eval_number(
 
 /// Evaluate a guard expression as a boolean: true for `true` or any non-zero
 /// number.
-fn guard_true(
-    program: &EvalNode<DefaultNumericTypes>,
-    ctx: &HashMapContext<DefaultNumericTypes>,
-) -> bool {
+fn guard_true(program: &EvalNode, ctx: &HashMapContext) -> bool {
     match program.eval_with_context(ctx) {
         Ok(Value::Boolean(b)) => b,
         Ok(Value::Float(f)) => f != 0.0,

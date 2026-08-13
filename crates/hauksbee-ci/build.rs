@@ -3,27 +3,129 @@
 //! warns at run time when the binary on PATH is a different build, so a stale
 //! hook is visible instead of silently diverging (see src/integrate.rs).
 //!
-//! Best-effort by design: outside a git checkout (a crates.io build, a source
-//! tarball) `GIT_HASH` is simply absent and the version string falls back to
-//! the bare crate version via `option_env!`. No build dependency, no failure
-//! mode: a missing `git` binary or repo just means no hash.
+//! Best-effort by design: outside this repository's own Git root (a crates.io
+//! build, source tarball, or vendored copy inside a consumer repo) `GIT_HASH`
+//! is absent. Never borrow the enclosing consumer repository's HEAD.
 
+use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    let out = Command::new("git")
-        .args(["rev-parse", "--short=12", "HEAD"])
+    for path in [
+        "../../Cargo.toml",
+        "../../Cargo.lock",
+        "../../crates",
+        "../../vendor",
+        "../../frontend/src",
+        "../../frontend/dist",
+        "../../.github",
+        "../../app",
+        "../../docker",
+        "../../docs",
+        "../../editors",
+        "../../evidence",
+        "../../integrations",
+        "../../licenses",
+        "../../qc",
+        "../../scripts",
+        "../../site",
+        "../../examples",
+        "../../testdata",
+        "../../README.md",
+        "../../COMPLIANCE.md",
+        "../../LICENSE",
+        "../../NOTICE",
+        "../../rust-toolchain.toml",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+    }
+    println!("cargo:rerun-if-env-changed=HAUKSBEE_SOURCE_COMMIT");
+    if let Ok(hash) = std::env::var("HAUKSBEE_SOURCE_COMMIT") {
+        if hash.len() != 40
+            || !hash
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            panic!("HAUKSBEE_SOURCE_COMMIT must be one lowercase 40-character hexadecimal commit");
+        }
+        println!("cargo:rustc-env=GIT_HASH={hash}");
+        return;
+    }
+    let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
+        .canonicalize()
+        .expect("canonical Hauksbee CI manifest directory");
+    let source_root = manifest_dir
+        .join("../..")
+        .canonicalize()
+        .expect("canonical Hauksbee source root");
+    let owns_workspace_layout = source_root
+        .join("crates/hauksbee-ci")
+        .canonicalize()
+        .ok()
+        .as_ref()
+        == Some(&manifest_dir);
+    let top = Command::new("git")
+        .args([
+            "-C",
+            source_root.to_str().unwrap(),
+            "rev-parse",
+            "--show-toplevel",
+        ])
         .output();
-    if let Ok(o) = out {
-        if o.status.success() {
+    let owns_git_root = top.ok().filter(|out| out.status.success()).and_then(|out| {
+        PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
+            .canonicalize()
+            .ok()
+    }) == Some(source_root.clone());
+    let source_is_clean = Command::new("git")
+        .args([
+            "-C",
+            source_root.to_str().unwrap(),
+            "status",
+            "--porcelain",
+            "--untracked-files=normal",
+            "--",
+        ])
+        .output()
+        .is_ok_and(|out| out.status.success() && out.stdout.is_empty());
+    if owns_workspace_layout && owns_git_root && source_is_clean {
+        let out = Command::new("git")
+            .args(["-C", source_root.to_str().unwrap(), "rev-parse", "HEAD"])
+            .output();
+        if let Ok(o) = out {
             let hash = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if !hash.is_empty() {
+            if o.status.success()
+                && hash.len() == 40
+                && hash
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
                 println!("cargo:rustc-env=GIT_HASH={hash}");
             }
         }
     }
     // Re-run when the checked-out commit changes (branch switch or new commit).
     // Harmless when the paths do not exist (non-git builds).
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
-    println!("cargo:rerun-if-changed=../../.git/refs");
+    let dot_git = source_root.join(".git");
+    if dot_git.is_file() {
+        println!("cargo:rerun-if-changed={}", dot_git.display());
+    }
+    for selector in ["--git-dir", "--git-common-dir"] {
+        if let Ok(out) = Command::new("git")
+            .args(["-C", source_root.to_str().unwrap(), "rev-parse", selector])
+            .output()
+        {
+            if out.status.success() {
+                let raw = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+                let dir = if raw.is_absolute() {
+                    raw
+                } else {
+                    source_root.join(raw)
+                };
+                for name in ["HEAD", "index", "packed-refs", "refs"] {
+                    println!("cargo:rerun-if-changed={}", dir.join(name).display());
+                }
+            }
+        }
+    }
 }

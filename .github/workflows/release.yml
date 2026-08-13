@@ -64,7 +64,7 @@
 # ============================================================================
 #
 # aarch64-linux mechanism: we build NATIVELY on GitHub's `ubuntu-24.04-arm`
-# runner (and Intel macOS on `macos-13`), matching the honest, tested,
+# runner (and Intel macOS on `macos-15-intel`), matching the honest, tested,
 # no-cross-compilation philosophy this workflow has always had. No `cross`, no
 # QEMU userland emulation. Every artifact is produced on its own architecture.
 #
@@ -84,7 +84,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag to build (e.g. v0.1.0). Used as the bundle version."
+        description: "Existing version tag to check out and build exactly (e.g. v0.1.0)."
         required: true
 
 permissions:
@@ -92,9 +92,50 @@ permissions:
   # repository-write credential; only the final publication job can write.
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  resolve-source:
+    name: capture exact release source
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - name: Resolve the requested tag once
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture and validate source identity
+        id: source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          printf '%s' "$tag" | grep -Eq '^v[0-9A-Za-z._-]+$'
+          source_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-parse "refs/tags/$tag^{commit}")"
+          [ "$source_sha" = "$tag_sha" ]
+          if [ "$EVENT_NAME" != workflow_dispatch ]; then
+            [ "$source_sha" = "$EVENT_SHA" ]
+          fi
+          version="${tag#v}"
+          workspace_version="$(sed -nE 's/^version = "([^"]+)"$/\1/p' Cargo.toml | head -1)"
+          [ "$version" = "$workspace_version" ]
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   build:
     name: build ${{ matrix.label }}
+    needs: resolve-source
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +146,7 @@ jobs:
             label: linux-aarch64
           - os: macos-latest         # Apple Silicon
             label: darwin-arm64
-          - os: macos-13             # Intel
+          - os: macos-15-intel       # Intel
             label: darwin-x86_64
     runs-on: ${{ matrix.os }}
     steps:
@@ -114,6 +155,12 @@ jobs:
       - name: Checkout hauksbee
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          # Tag-push events are bound to the immutable event SHA. Only an
+          # explicit manual dispatch resolves the requested existing tag.
+          # Preserve the local tag ref: later checks bind that tag to the
+          # immutable event SHA. Passing github.sha here fetches only a detached
+          # depth-one commit, so refs/tags/<version> cannot be verified.
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
           path: hauksbee
           persist-credentials: false
 
@@ -136,9 +183,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             hauksbee/target
-          key: release-${{ matrix.label }}-${{ hashFiles('hauksbee/Cargo.lock') }}
-          restore-keys: |
-            release-${{ matrix.label }}-
+          key: release-${{ matrix.label }}-${{ hashFiles('hauksbee/Cargo.lock', 'hauksbee/scripts/install-sims.sh', 'hauksbee/scripts/simavr-payload-provenance.sh', 'hauksbee/crates/hauksbee-mcu/build.rs') }}
 
       # ── system deps for the DEFAULT shape only ─────────────────────────────
       # The permissive shape needs nothing beyond Rust. The default shape links
@@ -166,11 +211,16 @@ jobs:
       - name: Build and install libsimavr (GPL-3.0, for the default shape)
         shell: bash
         run: |
-          chmod +x hauksbee/scripts/*.sh
           cd hauksbee
-          scripts/install-sims.sh --avr --prefix "$HOME/.hauksbee-simavr"
-          test -f "$HOME/.hauksbee-simavr/include/simavr/sim_avr.h"
-          test -f "$HOME/.hauksbee-simavr/lib/libsimavr.a"
+          simavr_commit="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' scripts/install-sims.sh | head -1)"
+          test "${#simavr_commit}" -eq 40
+          simavr_prefix="$HOME/.hauksbee-simavr/$simavr_commit"
+          bash scripts/install-sims.sh --avr --prefix "$simavr_prefix"
+          test -f "$simavr_prefix/include/simavr/sim_avr.h"
+          test -f "$simavr_prefix/lib/libsimavr.a"
+          test "$(cat "$simavr_prefix/.hauksbee-simavr-commit")" = "$simavr_commit"
+          printf 'SIMAVR_INCLUDE_DIR=%s\nSIMAVR_LIB_DIR=%s\nSIMAVR_COMMIT=%s\n' \
+            "$simavr_prefix/include" "$simavr_prefix/lib" "$simavr_commit" >> "$GITHUB_ENV"
 
       - name: Resolve version
         id: ver
@@ -180,15 +230,29 @@ jobs:
           # script body); validate before use.
           INPUT_TAG: ${{ github.event.inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
         run: |
           # Tag push -> strip refs/tags/v ; manual dispatch -> the provided tag.
           raw="${INPUT_TAG:-$REF_NAME}"
-          # Accept only a sane version slug; reject anything else.
-          if ! printf '%s' "$raw" | grep -Eq '^v?[0-9A-Za-z._-]+$'; then
+          # A release version is an existing v* tag, never a free-form label.
+          if ! printf '%s' "$raw" | grep -Eq '^v[0-9A-Za-z._-]+$'; then
             echo "refusing suspicious version string: $raw" >&2
             exit 1
           fi
+          source_sha="$(git -C hauksbee rev-parse HEAD)"
+          [ "$source_sha" = "$EXPECTED_SHA" ] || {
+            echo "checked-out source $source_sha does not match captured release source $EXPECTED_SHA" >&2
+            exit 1
+          }
+          workspace_version="$(sed -nE 's/^version = "([^"]+)"$/\1/p' hauksbee/Cargo.toml | head -1)"
+          [ "${raw#v}" = "$workspace_version" ] || {
+            echo "tag version ${raw#v} does not match workspace package $workspace_version" >&2
+            exit 1
+          }
           echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
       # ── shape 1 of 2: the DEFAULT download (avr included, GPL-3.0 binary) ──
       # No GPL guard env here, deliberately: this build is SUPPOSED to link
@@ -208,11 +272,8 @@ jobs:
           HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
           HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
           HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
+          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ runner.os == 'macOS' && '1' || '0' }}
         run: |
-          # Point build.rs at the prefix the install step used. Set here rather
-          # than in an `env:` block, which cannot expand $HOME.
-          export SIMAVR_INCLUDE_DIR="$HOME/.hauksbee-simavr/include"
-          export SIMAVR_LIB_DIR="$HOME/.hauksbee-simavr/lib"
           cd hauksbee
           scripts/bundle.sh --shape default \
             --version "${{ steps.ver.outputs.version }}" \
@@ -238,6 +299,7 @@ jobs:
           HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
           HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
           HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
+          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ runner.os == 'macOS' && '1' || '0' }}
         run: |
           chmod +x hauksbee/app/macos/build-app.sh
           cd hauksbee
@@ -295,6 +357,7 @@ jobs:
           HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
           HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
           HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
+          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ runner.os == 'macOS' && '1' || '0' }}
         run: |
           cd hauksbee
           if ! scripts/bundle.sh --shape permissive \
@@ -318,7 +381,7 @@ jobs:
       # [profile.release]), so `nm` finds zero simavr symbols in BOTH shapes and
       # would pass vacuously. `hauksbee doctor` reports which backends the build
       # can actually reach:
-      #   default    avr <TAB> builtin  <TAB> simavr linked into this binary
+      #   default    avr <TAB> builtin  <TAB> simavr linked into this binary; source commit <sha>
       #   permissive avr <TAB> disabled <TAB> compiled out; ...
       # That line is compiled-in behaviour, not a claim in a text file, and it
       # cannot say "builtin" unless libsimavr really was linked.
@@ -370,17 +433,31 @@ jobs:
               || { echo "::error::$d is missing bin/hauksbee-mcp"; fail=1; }
           done
 
-          # Version parity: every binary in this leg must come from the same
-          # commit. A tarball/app pair whose `--version` git hashes differ
-          # means one of them was packaged from stale target/release contents.
-          def_ver="$("$def/bin/hauksbee" --version)"
-          perm_ver="$("$perm/bin/hauksbee" --version)"
-          echo "default:    $def_ver"
-          echo "permissive: $perm_ver"
-          if [ "$def_ver" != "$perm_ver" ]; then
-            echo "::error title=Version mismatch::default and permissive tarballs report different versions ('$def_ver' vs '$perm_ver')."
-            fail=1
-          fi
+          # Run tracked firmware through the extracted default binary. Cargo's
+          # emulator tests prove the source harness; this catches archive,
+          # loader, dynamic-library, embedded-data and runtime-path defects in
+          # the actual artifact about to be published.
+          bash ../scripts/test-release-artifact-runtime.sh "$def/bin/hauksbee" \
+            || fail=1
+          bash ../scripts/test-release-artifact-runtime.sh "$perm/bin/hauksbee" permissive \
+            || fail=1
+
+          # Version parity: every binary in both shapes must attest this tag's
+          # exact source commit. Publisher signatures cannot detect a stale
+          # target directory assembled consistently into a signed archive.
+          expected_version="${{ steps.ver.outputs.version }}"
+          expected_sha="${{ steps.ver.outputs.source_sha }}"
+          for d in "$def" "$perm"; do
+            for b in hauksbee hauksbee-ci hauksbee-mcp; do
+              actual="$("$d/bin/$b" --version)"
+              expected="$b $expected_version (git $expected_sha)"
+              printf '%s: %s\n' "$d/bin/$b" "$actual"
+              if [ "$actual" != "$expected" ]; then
+                echo "::error title=Version mismatch::$d/bin/$b reports '$actual', expected '$expected'."
+                fail=1
+              fi
+            done
+          done
           if [ "${{ runner.os }}" = "macOS" ]; then
             # Every binary inside BOTH darwin tarballs must carry a valid
             # Developer ID signature; an unsigned darwin tarball must not be
@@ -400,12 +477,15 @@ jobs:
             appwork="$(mktemp -d)"
             ditto -x -k "hauksbee-$V-$L-app.zip" "$appwork"
             APPRES="$appwork/Hauksbee.app/Contents/Resources"
-            app_ver="$("$APPRES/bin/hauksbee" --version)"
-            echo "app:        $app_ver"
-            if [ "$app_ver" != "$def_ver" ]; then
-              echo "::error title=Version mismatch::the app bundle's hauksbee reports '$app_ver' but the default tarball reports '$def_ver'."
-              fail=1
-            fi
+            for b in hauksbee hauksbee-ci hauksbee-mcp; do
+              app_ver="$("$APPRES/bin/$b" --version)"
+              expected="$b $expected_version (git $expected_sha)"
+              echo "app $b: $app_ver"
+              if [ "$app_ver" != "$expected" ]; then
+                echo "::error title=Version mismatch::the app bundle's $b reports '$app_ver', expected '$expected'."
+                fail=1
+              fi
+            done
             test -x "$APPRES/bin/hauksbee-mcp" \
               || { echo "::error::the app zip is missing Contents/Resources/bin/hauksbee-mcp"; fail=1; }
             # The licence set must travel inside the app too.
@@ -498,6 +578,7 @@ jobs:
 
   build-windows:
     name: build windows-x86_64 (permissive)
+    needs: resolve-source
     runs-on: windows-latest
     env:
       RUSTFLAGS: -D warnings
@@ -507,6 +588,7 @@ jobs:
       - name: Checkout hauksbee
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
           path: hauksbee
           persist-credentials: false
       - name: Install Rust toolchain
@@ -528,11 +610,24 @@ jobs:
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
         run: |
           $raw = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { $env:REF_NAME }
-          if ($raw -notmatch '^v?[0-9A-Za-z._-]+$') { throw "refusing suspicious version: $raw" }
+          if ($raw -notmatch '^v[0-9A-Za-z._-]+$') { throw "refusing suspicious version: $raw" }
+          $sourceSha = (git -C hauksbee rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "could not resolve checked-out source" }
+          if ($sourceSha -ne $env:EXPECTED_SHA) {
+            throw "checked-out source $sourceSha does not match captured release source $env:EXPECTED_SHA"
+          }
           $version = $raw -replace '^v', ''
+          $workspaceVersion = ((Select-String -Path hauksbee\Cargo.toml -Pattern '^version = "([^"]+)"$' | Select-Object -First 1).Matches.Groups[1].Value)
+          if ($version -ne $workspaceVersion) {
+            throw "tag version $version does not match workspace package $workspaceVersion"
+          }
           "version=$version" >> $env:GITHUB_OUTPUT
+          "source_sha=$sourceSha" >> $env:GITHUB_OUTPUT
       - name: Install checksum-pinned Windows simulator backends
         shell: pwsh
         working-directory: hauksbee
@@ -558,21 +653,25 @@ jobs:
         working-directory: hauksbee
         run: |
           .\scripts\run-required-integrations-windows.ps1 `
-            -ExpectedSha "${{ github.sha }}" `
+            -ExpectedSha "${{ steps.ver.outputs.source_sha }}" `
             -EvidenceOut "required-integrations-windows-x86_64.json"
       - name: Build embedded web UI
         working-directory: hauksbee/frontend
+        env:
+          HAUKSBEE_RELEASE_COMMIT: ${{ steps.ver.outputs.source_sha }}
         run: |
           bun install --frozen-lockfile
           bun run build
       - name: Build permissive Windows release binaries
         working-directory: hauksbee
+        env:
+          HAUKSBEE_SOURCE_COMMIT: ${{ steps.ver.outputs.source_sha }}
         run: cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
       - name: Package and verify permissive Windows zip
         shell: pwsh
         working-directory: hauksbee
         run: |
-          .\scripts\bundle-windows.ps1 -Version "${{ steps.ver.outputs.version }}" -Out dist
+          .\scripts\bundle-windows.ps1 -Version "${{ steps.ver.outputs.version }}" -ExpectedCommit "${{ steps.ver.outputs.source_sha }}" -Out dist
           $V = "${{ steps.ver.outputs.version }}"
           $zip = "dist\hauksbee-$V-windows-x86_64-permissive.zip"
           $sum = "$zip.sha256"
@@ -589,7 +688,18 @@ jobs:
           if (-not (Test-Path (Join-Path $root "LICENSE-BINARY.txt"))) { throw "LICENSE-BINARY.txt missing" }
           $doctor = & (Join-Path $root "bin\hauksbee.exe") doctor | Out-String
           if ($doctor -notmatch '(?m)^avr\s+disabled\b') { throw "packaged Windows binary is not permissive" }
-          .\scripts\test-windows-installer.ps1 -Zip $zip -Checksum $sum -Version $V
+          $runOutput = & (Join-Path $root "bin\hauksbee.exe") run `
+            (Join-Path $root "examples\ci-specs\boards\power_resistor.kicad_pcb") `
+            --headless --plain 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or $runOutput -notmatch 'simulated .* over 2 nets' -or $runOutput -notmatch 'numerical qualification') {
+            throw "packaged Windows hauksbee did not complete the tracked static solver smoke"
+          }
+          $ciOutput = & (Join-Path $root "bin\hauksbee-ci.exe") run `
+            (Join-Path $root "examples\ci-specs\power_resistor_cool.toml") 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or $ciOutput -notmatch '2/2 assertions passed' -or $ciOutput -notmatch 'GREEN') {
+            throw "packaged Windows hauksbee-ci did not complete the tracked static spec"
+          }
+          .\scripts\test-windows-installer.ps1 -Zip $zip -Checksum $sum -Version $V -ExpectedCommit "${{ steps.ver.outputs.source_sha }}"
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -607,6 +717,7 @@ jobs:
   # inside each platform's evidence artifact before creating the GitHub Release.
   required-integrations:
     name: required firmware integrations at release SHA (${{ matrix.label }})
+    needs: resolve-source
     strategy:
       fail-fast: false
       matrix:
@@ -617,15 +728,15 @@ jobs:
             label: linux-aarch64
           - os: macos-latest
             label: darwin-arm64
-          - os: macos-13
+          - os: macos-15-intel
             label: darwin-x86_64
     runs-on: ${{ matrix.os }}
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout exact release commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
           path: hauksbee
           persist-credentials: false
 
@@ -651,11 +762,19 @@ jobs:
       - name: Run and retain same-SHA required integration evidence
         shell: bash
         env:
-          GITHUB_SHA: ${{ github.sha }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
         run: |
           cd hauksbee
+          expected_sha="$(git rev-parse HEAD)"
+          [ "$expected_sha" = "$EXPECTED_SHA" ] || {
+            echo "required-integration checkout $expected_sha does not match captured release source $EXPECTED_SHA" >&2
+            exit 1
+          }
           python3 scripts/run_required_integrations.py \
-            --expected-sha "$GITHUB_SHA" \
+            --expected-sha "$expected_sha" \
             --evidence-out "required-integrations-${{ matrix.label }}.json"
 
       - name: Upload required integration evidence
@@ -665,9 +784,95 @@ jobs:
           path: hauksbee/required-integrations-${{ matrix.label }}.json
           if-no-files-found: error
 
+  release-quality:
+    name: exact-SHA release quality gate
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          persist-credentials: false
+      - name: Bind quality gate to the immutable release event
+        id: quality-source
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          head="$(git rev-parse HEAD)"
+          [ "$head" = "$EXPECTED_SHA" ]
+          echo "source_sha=$head" >> "$GITHUB_OUTPUT"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: Install release-quality prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev libelf-dev ngspice pkg-config zlib1g-dev shellcheck
+          bash scripts/setup-ci-simavr.sh
+      - name: Rust format, licence, lint, tests, docs, and both feature shapes
+        run: |
+          export HAUKSBEE_SOURCE_COMMIT="$(git rev-parse HEAD)"
+          cargo fmt --all --check
+          python3 scripts/test-runtime-dependency-licenses.py
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+          cargo test --workspace --features avr
+          cargo check -p hauksbee-engine --no-default-features
+          cargo clippy -p hauksbee-engine --no-default-features --all-targets -- -D warnings
+          cargo test -p hauksbee-engine --no-default-features --all-targets
+          SIMAVR_INCLUDE_DIR=/nonexistent/simavr-must-not-be-linked \
+            SIMAVR_LIB_DIR=/nonexistent/simavr-must-not-be-linked \
+            cargo check --workspace --no-default-features --features renode,qemu
+          RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
+          HAUKSBEE_REQUIRE_NGSPICE=1 cargo test --release -p hauksbee-solve --test speed_gate -- --nocapture
+      - name: Offline policy, evidence, integration, and documentation contracts
+        run: |
+          python3 scripts/test-private-release-policy.py
+          python3 scripts/test-windows-port-contract.py
+          python3 scripts/test_required_integrations.py
+          python3 scripts/test-simavr-provenance.py
+          python3 -m unittest qc.tests.test_unseen_boards
+          python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
+          python3 integrations/pre-commit/test_hauksbee_ci_precommit.py
+          python3 scripts/lint-diagrams.py
+          python3 scripts/lint-docs-currency.py
+          bash integrations/github-action/test_pick_release_tag.sh
+          shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh scripts/build-release-source.sh
+          shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
+      - name: Product-app lint, unit, browser, build, and visual gates
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+          bun run lint
+          bun run test:unit
+          HAUKSBEE_RELEASE_COMMIT="$(git rev-parse HEAD)" bun run build
+          HB_EXPECT_WORKFLOW_EXPORT=1 bun run test:e2e
+          HB_LINT_SITE=0 bun run visual-lint
+      - name: Scenario QC on release binaries
+        env:
+          HAUKSBEE_SOURCE_COMMIT: ${{ steps.quality-source.outputs.source_sha }}
+        run: |
+          cargo build --release --bin hauksbee --bin hauksbee-ci
+          expected="${{ steps.quality-source.outputs.source_sha }}"
+          for binary in hauksbee hauksbee-ci; do
+            "target/release/$binary" --version | grep -F "(git $expected)" >/dev/null
+          done
+          qc/run.sh --results-dir qc/release-results
+      - name: Retain exact-SHA scenario QC evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-quality-qc-${{ steps.quality-source.outputs.source_sha }}
+          path: qc/release-results/**/report.md
+          if-no-files-found: error
+
   release:
     name: publish release
-    needs: [build, build-windows, required-integrations]
+    needs: [build, build-windows, required-integrations, release-quality]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -678,8 +883,20 @@ jobs:
       - name: Checkout (for the slug preflight)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.ref }}
           path: hauksbee
           persist-credentials: false
+
+      - name: Bind publication checkout to the immutable release event
+        env:
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          head="$(git -C hauksbee rev-parse HEAD)"
+          tag_sha="$(git -C hauksbee rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")"
+          [ "$head" = "$EVENT_SHA" ] && [ "$tag_sha" = "$EVENT_SHA" ] || {
+            echo "publication checkout/tag no longer matches immutable event $EVENT_SHA" >&2
+            exit 1
+          }
 
       # The bundles, installer and OCI labels all point at the private release
       # repository hauksbee-dev/hauksbee. This release is distributed only to
@@ -709,6 +926,8 @@ jobs:
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -exec cp {} dist/ \;
           test "$(find dist -maxdepth 1 -name 'hauksbee-ci-pcm-v*.zip' | wc -l)" -eq 1
           test "$(find dist -maxdepth 1 -name 'hauksbee-ci-pcm-v*.zip.sha256' | wc -l)" -eq 1
+          version="${GITHUB_REF_NAME#v}"
+          bash hauksbee/scripts/build-release-source.sh "$version" dist "$GITHUB_SHA"
           ls -la dist
 
       - name: Verify every manifest before publishing
@@ -730,9 +949,11 @@ jobs:
         run: |
           set -euo pipefail
           for label in linux-x86_64 linux-aarch64 darwin-arm64 darwin-x86_64; do
+            evidence="artifacts/required-integration-evidence-$label/required-integrations-$label.json"
             python3 hauksbee/scripts/run_required_integrations.py \
-              --verify-evidence "artifacts/required-integration-evidence-$label/required-integrations-$label.json" \
+              --verify-evidence "$evidence" \
               --expected-sha "$GITHUB_SHA"
+            cp "$evidence" "dist/required-integrations-$label.json"
           done
           windows_evidence="$(find artifacts/hauksbee-windows-x86_64 -name required-integrations-windows-x86_64.json -print -quit)"
           test -n "$windows_evidence"
@@ -740,16 +961,73 @@ jobs:
             --verify-evidence "$windows_evidence" \
             --expected-sha "$GITHUB_SHA" \
             --expected-platform "windows-x86_64"
+          cp "$windows_evidence" dist/required-integrations-windows-x86_64.json
+          (cd dist && for evidence in required-integrations-*.json; do sha256sum "$evidence" > "$evidence.sha256"; done)
+          test "$(find dist -maxdepth 1 -name 'required-integrations-*.json' | wc -l)" -eq 5
 
-      - name: Create / update GitHub Release
+      - name: Verify evidence checksums added after semantic validation
+        shell: bash
+        run: |
+          cd dist
+          for sum in required-integrations-*.json.sha256; do sha256sum --check "$sum"; done
+
+      - name: Refuse mutation of an existing release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          probe="$(mktemp)"
+          status=0
+          gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" >"$probe" 2>&1 || status=$?
+          http="$(sed -nE '1s#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' "$probe")"
+          case "$http" in
+            404) ;;
+            200) echo "release $GITHUB_REF_NAME already exists; refusing to replace its assets" >&2; exit 1 ;;
+            *) cat "$probe" >&2; echo "could not prove release absence (gh exit $status, HTTP ${http:-unknown})" >&2; exit 1 ;;
+          esac
+          find "$probe" -maxdepth 0 -type f -delete
+
+      - name: Stage immutable GitHub Release draft
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
+          draft: true
+          body: |
+            Source commit: `${{ github.sha }}`
+
+            Use this exact 40-character commit wherever the private installer or Action examples say `REPLACE_WITH_RELEASE_COMMIT_SHA`. Do not substitute `main` or a tag.
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.json
             dist/*.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+      - name: Publish and lock the staged release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+
+      - name: Verify GitHub's immutable release attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for asset in dist/*; do
+            for attempt in $(seq 1 12); do
+              if gh release verify-asset "$GITHUB_REF_NAME" "$asset" --repo "$GITHUB_REPOSITORY"; then
+                break
+              fi
+              [ "$attempt" -lt 12 ] || {
+                echo "GitHub did not attest immutable release asset $asset" >&2
+                exit 1
+              }
+              sleep 5
+            done
+          done
+          gh release verify "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
 
 # =============================================================================
 # Asset list a release produces:

@@ -27,4 +27,10 @@ fi
 [ "$visibility" = "private" ] \
   || fail "$repo reports visibility '$visibility', not private; refusing to publish release assets"
 
-echo "private release preflight: $repo exists, is private, and all baked repository surfaces match"
+if ! immutable_releases="$(gh api "repos/$repo/immutable-releases" --jq .enabled)"; then
+  fail "$repo does not enforce immutable releases; enable release immutability before publishing"
+fi
+[ "$immutable_releases" = true ] \
+  || fail "$repo does not enforce immutable releases; refusing replaceable release assets"
+
+echo "private release preflight: $repo is private, enforces immutable releases, and all baked repository surfaces match"

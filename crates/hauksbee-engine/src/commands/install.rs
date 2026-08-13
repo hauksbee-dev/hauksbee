@@ -19,7 +19,9 @@
 /// downloading on a guess.
 #[cfg(feature = "qemu")]
 pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
-    use hauksbee_mcu::qemu::{install, QemuArch};
+    #[cfg(not(windows))]
+    use hauksbee_mcu::qemu::install;
+    use hauksbee_mcu::qemu::QemuArch;
 
     let arches = [QemuArch::Xtensa, QemuArch::Riscv32];
     let missing: Vec<QemuArch> = arches
@@ -35,13 +37,16 @@ pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let root = install::install_root()?;
+    #[cfg(not(windows))]
+    let root = install::install_root()?.display().to_string();
+    #[cfg(windows)]
+    let root = "the current user's .hauksbee-qemu-esp directory".to_string();
     eprintln!(
         "This downloads Espressif's official prebuilt QEMU fork (GPL-2.0, \
          built and published by Espressif at https://github.com/espressif/qemu/releases)\n\
          and unpacks it into {}; it is a separate program hauksbee talks to \
          over sockets, not a part of hauksbee.",
-        root.display()
+        root
     );
     if !yes && !confirm("Proceed with download and install? [y/N] ")? {
         anyhow::bail!(
@@ -52,9 +57,13 @@ pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
     }
 
     let mut progress = |msg: &str| eprintln!("  {msg}");
-    let bins = install::install_esp_qemu(&missing, &mut progress)?;
-    for b in &bins {
-        println!("installed\t{}", b.display());
+    #[cfg(windows)]
+    crate::deps::install_esp_qemu(&mut progress).map_err(anyhow::Error::msg)?;
+    #[cfg(not(windows))]
+    install::install_esp_qemu(&missing, &mut progress)?;
+    for arch in arches {
+        let path = hauksbee_mcu::qemu::find_qemu(arch)?;
+        println!("installed\t{}", path.display());
     }
     eprintln!("Done. `hauksbee doctor --backends` will now report these as ok.");
     Ok(())
@@ -108,7 +117,9 @@ pub fn renode(yes: bool) -> anyhow::Result<()> {
 /// source of truth for the non-interactive path).
 #[cfg(feature = "qemu")]
 pub fn offer_esp_qemu_install(backends: &[String]) -> anyhow::Result<()> {
-    use hauksbee_mcu::qemu::{install, QemuArch};
+    #[cfg(not(windows))]
+    use hauksbee_mcu::qemu::install;
+    use hauksbee_mcu::qemu::QemuArch;
     use hauksbee_mcu::SocConfig;
     use std::io::IsTerminal;
 
@@ -145,16 +156,23 @@ pub fn offer_esp_qemu_install(backends: &[String]) -> anyhow::Result<()> {
         names.join(" and "),
         if names.len() == 1 { "is" } else { "are" },
     );
+    #[cfg(not(windows))]
+    let install_root = install::install_root()?.display().to_string();
+    #[cfg(windows)]
+    let install_root = "the current user's .hauksbee-qemu-esp directory".to_string();
     eprintln!(
         "hauksbee can download Espressif's official prebuilt fork (GPL-2.0) \
          from https://github.com/espressif/qemu/releases into {} now.",
-        install::install_root()?.display()
+        install_root
     );
     if !confirm("Download and install it, then continue? [y/N] ")? {
         eprintln!("Skipping install; the run will fail with install guidance.");
         return Ok(());
     }
     let mut progress = |msg: &str| eprintln!("  {msg}");
+    #[cfg(windows)]
+    crate::deps::install_esp_qemu(&mut progress).map_err(anyhow::Error::msg)?;
+    #[cfg(not(windows))]
     install::install_esp_qemu(&missing, &mut progress)?;
     eprintln!("Espressif QEMU installed; continuing the run.");
     Ok(())

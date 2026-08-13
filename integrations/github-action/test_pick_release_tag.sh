@@ -36,6 +36,19 @@ check "SOURCE" "a pinned branch is built, not swapped for latest" ""       "my-f
 check "SOURCE" "a pinned SHA likewise"                            ""       "9f1c2ab0" "main"
 check "SOURCE" "and a non-default default-ref is respected"       ""       "main" "develop"
 
+if bash "$PICK" 'v1$(id)' main main >/dev/null 2>&1; then
+  printf 'FAIL unsafe explicit version was accepted\n'
+  fails=$((fails + 1))
+else
+  printf 'ok   unsafe explicit version is refused\n'
+fi
+if bash "$PICK" '' 'v1;echo-PWN' main >/dev/null 2>&1; then
+  printf 'FAIL unsafe release ref was accepted\n'
+  fails=$((fails + 1))
+else
+  printf 'ok   unsafe release ref is refused\n'
+fi
+
 printf '\n'
 if [ "$fails" -eq 0 ]; then
   echo "all pick-release-tag tests passed"

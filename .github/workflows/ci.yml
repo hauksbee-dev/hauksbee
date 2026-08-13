@@ -32,6 +32,8 @@ jobs:
       # No toolchain pinned here on purpose: rust-toolchain.toml decides, so
       # CI and a laptop format with the same rustfmt and cannot disagree.
       - run: cargo fmt --all --check
+      - name: enforce runtime dependency licence boundary
+        run: python3 scripts/test-runtime-dependency-licenses.py
 
   clippy:
     name: cargo clippy
@@ -39,6 +41,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
       # The allow-list of known findings lives in Cargo.toml's
       # [workspace.lints.clippy]. Anything outside it fails here.
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -70,6 +79,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
       # No corpus here: these are the tests that run from the fixtures bundled
       # in testdata/. Corpus-dependent tests report as ignored, and the nightly
       # gate runs them for real with HAUKSBEE_REQUIRE_CORPUS=1.
@@ -112,11 +128,15 @@ jobs:
             -EvidenceOut "output\windows-frontdoor\required-integrations-windows-x86_64.json"
       - name: build the embedded browser front door
         working-directory: frontend
+        env:
+          HAUKSBEE_RELEASE_COMMIT: ${{ github.sha }}
         run: |
           bun install --frozen-lockfile
           bunx playwright install chromium
           bun run build
       - name: build the exact permissive Windows release binaries
+        env:
+          HAUKSBEE_SOURCE_COMMIT: ${{ github.sha }}
         run: cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
       - name: prove the release shape and real drag-and-drop journey
         shell: pwsh
@@ -191,7 +211,7 @@ jobs:
       # The action's one decision with a wrong answer available: which build of
       # hauksbee-ci a run actually used.
       - run: bash integrations/github-action/test_pick_release_tag.sh
-      - run: shellcheck integrations/github-action/*.sh
+      - run: shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh
       - run: shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
 
   release-evidence-invariants:
@@ -207,6 +227,9 @@ jobs:
       # A zero-exit integration test that printed SKIP is not release evidence.
       # Keep the runner's evidence parser under the ordinary offline CI tier.
       - run: python3 scripts/test_required_integrations.py
+      # The default bundle must bind Cargo, its installed simavr files, and its
+      # corresponding-source notice to one immutable upstream revision.
+      - run: python3 scripts/test-simavr-provenance.py
       # A repository with no release run is allowed on an ordinary PR. If the
       # canonical ledger exists, however, every reservation must terminate and
       # every retained artifact must still match its recorded digest.
@@ -220,6 +243,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
       # The //! module headers are rustdoc input, rendered by `cargo doc` and
       # published on docs.rs if the crates ever ship there. Broken intra-doc
       # links and malformed markdown rot silently unless something builds the
@@ -263,17 +293,14 @@ jobs:
         run: bun run test:unit
       - name: build the frontend
         working-directory: frontend
+        env:
+          HAUKSBEE_RELEASE_COMMIT: ${{ github.sha }}
         run: bun run build
       - name: frontend end-to-end flows
         working-directory: frontend
+        env:
+          HB_EXPECT_WORKFLOW_EXPORT: "1"
         run: bun run test:e2e
-      # The site is a separate build and is linted tolerantly: if this step
-      # fails or is skipped the app's lint still runs, and the lint reports the
-      # site as skipped rather than failing on it.
-      - name: build the site (optional)
-        continue-on-error: true
-        working-directory: site
-        run: bun install --frozen-lockfile && bun run build
       # No engine build in this job. The lint serves frontend/dist with
       # tests/visual-lint/fixture-server.ts, which replays real `hauksbee serve`
       # responses from tests/visual-lint/fixtures/ (re-record them with
@@ -284,6 +311,11 @@ jobs:
       # the page, so no surface opens the viewer's 3D tab.
       - name: visual lint
         working-directory: frontend
+        env:
+          # This repository owns the product app. The landing site is a separate
+          # repository/release surface and must retain its own final-state gate;
+          # do not silently treat an absent sibling checkout as site evidence.
+          HB_LINT_SITE: "0"
         run: bun run visual-lint
       - name: browser-test screenshots
         if: failure()
@@ -299,6 +331,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
       # No build job exists to borrow artifacts from, and the suite has to
       # measure a release build: the flows it times are sub-second in release
       # and slow enough in debug to trip its own wall-clock ceilings.
