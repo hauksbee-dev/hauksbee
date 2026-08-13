@@ -3011,7 +3011,7 @@ fn main {
         );
         for output in [&board_only, &with_firmware] {
             assert!(
-                output.contains("schematic declares the tie"),
+                output.contains("schematic names this net pair"),
                 "companion intent must survive every serve path: {output:.500}"
             );
             assert!(!output.contains("GND shorts AGND"), "{output:.500}");

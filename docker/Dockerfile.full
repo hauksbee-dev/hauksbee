@@ -21,17 +21,32 @@
 # select the right per-arch asset from TARGETARCH.
 
 # The slim image is the base. In CI both are built in the same workflow and the
-# full build references the slim build by its local stage / image tag.
+# full build consumes the exact digest emitted by that workflow's slim build.
 ARG SLIM_IMAGE=hauksbee:slim
 FROM ${SLIM_IMAGE} AS full
 
-# Versions are pinned as build args so a release is reproducible and a bump is a
-# one-line change. The Renode and ESP-QEMU asset filenames bake in the version
-# (and, for ESP-QEMU, the build date), so both knobs are separated out.
+# Backend releases and payload bytes are pinned so a rebuild cannot silently
+# substitute different emulator/tool assets. The Debian package repositories
+# used below are not a dated snapshot, so this is deliberately not a claim of
+# bit-for-bit image reproducibility; the published digest is the distribution
+# identity. The Renode and ESP-QEMU asset filenames bake in the version (and,
+# for ESP-QEMU, the build date), so both knobs are separated out.
 ARG RENODE_VERSION=1.16.1
 ARG ESP_QEMU_TAG=esp-develop-9.2.2-20260417
 ARG ESP_QEMU_FILE=esp_develop_9.2.2_20260417
+ARG ESP_QEMU_SOURCE_COMMIT=40edccac415693c5130f91c01d84176ae6008566
 ARG FREEROUTING_VERSION=1.9.0
+ARG FREEROUTING_SOURCE_COMMIT=c88ad67e6d7cdb83ad52589a84e43ef9fe1e8620
+ARG RENODE_AMD64_SHA256=00e113cdbd0f5354cf2f64bbe3f5a070d8958409542fca66e45ac97d982938c0
+ARG RENODE_ARM64_SHA256=fff3a098c96ed0a4ffbdff3f028c9c5fde432db09587c7bd7c99406180f90007
+ARG QEMU_XTENSA_AMD64_SHA256=0eecb2a34a5586c0e59110f77b9343b7b336e82fdb0e1a30e1dc1bab8a547e35
+ARG QEMU_XTENSA_ARM64_SHA256=00de5985094c14e47d1b38464a006b8ed64fd0fa7a289c56da24f3a329f65339
+ARG QEMU_RISCV32_AMD64_SHA256=547f03e04701a92cbb699f7f7d015adc1f5b5ef93cbb94c0dd9b7107e2d84e77
+ARG QEMU_RISCV32_ARM64_SHA256=a9f7b98636008edcf7a11c96f10b3a3ec83c2a890fc54c3e3ceb3ec9edace427
+ARG FREEROUTING_SHA256=9084a4888937a7f31f857ecc12aa7a37407f51160e4d2892dff9c9bb47ae3102
+ARG RENODE_LICENSE_SHA256=f81b19ff9bc4b30fae51a59452ed227cbf35af683c50e7e5b443fd4eb04881c7
+ARG QEMU_LICENSE_SHA256=6f04ae8364d0079a192b14635f4b1da294ce18724c034c39a6a41d1b09df6100
+ARG FREEROUTING_LICENSE_SHA256=fe3eea6c599e23a00c08c5f5cb2320c30adc8f8687db5fcec9b79a662c53ff6b
 
 # buildx provides TARGETARCH automatically; declaring it lets us consume it to
 # pick the amd64 vs arm64 release asset for the prebuilt backends.
@@ -39,6 +54,11 @@ ARG TARGETARCH
 
 # Root for the install steps; the runtime user is restored at the end.
 USER root
+
+# Every download is piped into a checksum verifier. Make failures on either
+# side of those pipelines fatal instead of inheriting /bin/sh's last-command
+# status.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Runtime libraries the prebuilt backends need:
 #   Renode (-dotnet portable)  libicu72, libgssapi-krb5-2 (bundles its runtime)
@@ -50,6 +70,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
         default-jre-headless \
+        git \
         libgcrypt20 \
         libglib2.0-0 \
         libgssapi-krb5-2 \
@@ -57,18 +78,29 @@ RUN apt-get update \
         libpixman-1-0 \
         libslirp0 \
         xz-utils \
+    && resolve_tag() { \
+         repo="$1"; tag="$2"; \
+         resolved="$(git ls-remote "$repo" "refs/tags/$tag^{}" | awk 'NR == 1 { print $1 }')"; \
+         if [ -z "$resolved" ]; then resolved="$(git ls-remote "$repo" "refs/tags/$tag" | awk 'NR == 1 { print $1 }')"; fi; \
+         printf '%s' "$resolved"; \
+       } \
+    && test "$(resolve_tag https://github.com/espressif/qemu.git "$ESP_QEMU_TAG")" = "$ESP_QEMU_SOURCE_COMMIT" \
+    && test "$(resolve_tag https://github.com/freerouting/freerouting.git "v$FREEROUTING_VERSION")" = "$FREEROUTING_SOURCE_COMMIT" \
+    && apt-get purge -y git \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Renode: the self-contained -dotnet portable bundles its own .NET runtime, so
 # no system mono is needed, and it has both amd64 and arm64 builds.
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      arm64) rslug="linux-arm64-portable-dotnet" ;; \
-      amd64) rslug="linux-portable-dotnet" ;; \
+      arm64) rslug="linux-arm64-portable-dotnet"; rsha="${RENODE_ARM64_SHA256}" ;; \
+      amd64) rslug="linux-portable-dotnet"; rsha="${RENODE_AMD64_SHA256}" ;; \
       *) echo "unsupported TARGETARCH '${TARGETARCH}' for Renode" >&2; exit 1 ;; \
     esac; \
     curl -fsSL -o /tmp/renode.tar.gz \
       "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.${rslug}.tar.gz"; \
+    printf '%s  %s\n' "$rsha" /tmp/renode.tar.gz | sha256sum -c -; \
     mkdir -p /opt/renode; \
     tar -xzf /tmp/renode.tar.gz -C /opt/renode --strip-components=1; \
     ln -s /opt/renode/renode /usr/local/bin/renode; \
@@ -79,13 +111,15 @@ RUN set -eux; \
 # /opt/qemu/bin, which HAUKSBEE_QEMU_DIR points the backend at.
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      arm64) qslug="aarch64-linux-gnu" ;; \
-      amd64) qslug="x86_64-linux-gnu" ;; \
+      arm64) qslug="aarch64-linux-gnu"; xsha="${QEMU_XTENSA_ARM64_SHA256}"; rsha="${QEMU_RISCV32_ARM64_SHA256}" ;; \
+      amd64) qslug="x86_64-linux-gnu"; xsha="${QEMU_XTENSA_AMD64_SHA256}"; rsha="${QEMU_RISCV32_AMD64_SHA256}" ;; \
       *) echo "unsupported TARGETARCH '${TARGETARCH}' for Espressif QEMU" >&2; exit 1 ;; \
     esac; \
     for soc in xtensa riscv32; do \
       curl -fsSL -o /tmp/qemu.tar.xz \
         "https://github.com/espressif/qemu/releases/download/${ESP_QEMU_TAG}/qemu-${soc}-softmmu-${ESP_QEMU_FILE}-${qslug}.tar.xz"; \
+      if [ "$soc" = xtensa ]; then qsha="$xsha"; else qsha="$rsha"; fi; \
+      printf '%s  %s\n' "$qsha" /tmp/qemu.tar.xz | sha256sum -c -; \
       tar -xJf /tmp/qemu.tar.xz -C /opt; \
       rm /tmp/qemu.tar.xz; \
     done; \
@@ -96,17 +130,54 @@ RUN set -eux; \
 # writes the SES and exits, which is why it is pinned (newer 2.x stalls).
 RUN curl -fsSL -o /opt/freerouting-${FREEROUTING_VERSION}.jar \
       "https://github.com/freerouting/freerouting/releases/download/v${FREEROUTING_VERSION}/freerouting-${FREEROUTING_VERSION}.jar" \
+    && printf '%s  %s\n' "$FREEROUTING_SHA256" "/opt/freerouting-${FREEROUTING_VERSION}.jar" | sha256sum -c - \
     && ln -s /opt/freerouting-${FREEROUTING_VERSION}.jar /opt/freerouting.jar
 
-# licenses is GPL-3.0-only, matching the slim base: the hauksbee binaries in
-# this image are the default (avr) shape, statically linking GPL-3.0
-# libsimavr, and this image additionally bundles GPL-licensed tools
-# (freerouting is GPL-3.0; the Espressif QEMU fork is GPL-2.0). The licence
-# files live in /usr/share/doc/hauksbee/, inherited from the slim base.
+# Exact upstream licence texts for every bundled simulator/tool. These are
+# downloaded from the same immutable release refs as the binaries, hash-checked
+# before staging, and retained beside Hauksbee's own notices.
+RUN set -eux; \
+    mkdir -p /usr/share/doc/hauksbee/third-party; \
+    curl -fsSL -o /usr/share/doc/hauksbee/third-party/RENODE-LICENSE \
+      "https://raw.githubusercontent.com/renode/renode/v${RENODE_VERSION}/LICENSE"; \
+    printf '%s  %s\n' "$RENODE_LICENSE_SHA256" /usr/share/doc/hauksbee/third-party/RENODE-LICENSE | sha256sum -c -; \
+    curl -fsSL -o /usr/share/doc/hauksbee/third-party/QEMU-COPYING \
+      "https://raw.githubusercontent.com/espressif/qemu/${ESP_QEMU_TAG}/COPYING"; \
+    printf '%s  %s\n' "$QEMU_LICENSE_SHA256" /usr/share/doc/hauksbee/third-party/QEMU-COPYING | sha256sum -c -; \
+    curl -fsSL -o /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE \
+      "https://raw.githubusercontent.com/freerouting/freerouting/v${FREEROUTING_VERSION}/LICENSE"; \
+    printf '%s  %s\n' "$FREEROUTING_LICENSE_SHA256" /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE | sha256sum -c -
+
+# GPL corresponding-source offer for the two bundled GPL tools. The exact
+# public source refs are named for immediate network access; the written offer
+# remains valid for at least three years and is available to any recipient if
+# an upstream host ever disappears.
+RUN printf '%s\n' \
+      'CORRESPONDING SOURCE OFFER' \
+      '' \
+      'Hauksbee and libsimavr (GPL-3.0 combined binaries),' \
+      'Espressif QEMU (GPL-2.0-only), and freerouting (GPL-3.0) are covered.' \
+      '' \
+      'Espressif QEMU (GPL-2.0-only):' \
+      "  https://github.com/espressif/qemu/tree/${ESP_QEMU_SOURCE_COMMIT}" \
+      'freerouting (GPL-3.0):' \
+      "  https://github.com/freerouting/freerouting/tree/${FREEROUTING_SOURCE_COMMIT}" \
+      '' \
+      'For at least three years after this image version is distributed,' \
+      'Hauksbee will provide any recipient the complete corresponding source' \
+      'for those exact builds on a durable medium for no more than the physical' \
+      'cost of transfer. Request it at security@hauksbee.dev and name the image' \
+      'digest. Preserve this offer when redistributing the image.' \
+      > /usr/share/doc/hauksbee/third-party/SOURCE-OFFER.txt
+
+# The image contains separately licensed works: Hauksbee/libsimavr and
+# freerouting under GPL-3.0, Espressif QEMU under GPL-2.0, and Renode under MIT.
+# Exact upstream texts and the corresponding-source offer are retained under
+# /usr/share/doc/hauksbee/third-party.
 LABEL org.opencontainers.image.title="hauksbee (full)" \
       org.opencontainers.image.description="hauksbee slim plus Renode, the Espressif QEMU fork, and freerouting: STM32 / ESP32 co-sim and production autorouting." \
       org.opencontainers.image.source="https://github.com/hauksbee-dev/hauksbee" \
-      org.opencontainers.image.licenses="GPL-3.0-only"
+      org.opencontainers.image.licenses="GPL-3.0-only AND GPL-2.0-only AND MIT"
 
 # Wire the backend discovery env vars so the tools are found with no setup:
 #   HAUKSBEE_RENODE       full path to the renode launcher
@@ -117,6 +188,14 @@ ENV HAUKSBEE_RENODE=/usr/local/bin/renode \
     HAUKSBEE_QEMU_XTENSA=/opt/qemu/bin/qemu-system-xtensa \
     HAUKSBEE_QEMU_RISCV32=/opt/qemu/bin/qemu-system-riscv32 \
     FREEROUTING_JAR=/opt/freerouting.jar
+
+# Retain the small, compiled external-backend fixtures used to prove the final
+# image can do more than execute each tool's --version/help path.
+COPY --chown=hauksbee:hauksbee hauksbee/testdata/boards/stm32_bluepill_demo.kicad_pcb /opt/hauksbee/external-smoke/stm32.kicad_pcb
+COPY --chown=hauksbee:hauksbee hauksbee/testdata/firmware/stm32_blinky/blinky.elf /opt/hauksbee/external-smoke/stm32.elf
+COPY --chown=hauksbee:hauksbee hauksbee/testdata/boards/esp32_devkit_demo.kicad_pcb /opt/hauksbee/external-smoke/esp32.kicad_pcb
+COPY --chown=hauksbee:hauksbee hauksbee/testdata/firmware/esp32_blinky/flash.bin /opt/hauksbee/external-smoke/esp32-flash.bin
+COPY --chown=hauksbee:hauksbee hauksbee/examples/board-as-code/blinky.board /opt/hauksbee/external-smoke/blinky.board
 
 USER hauksbee
 WORKDIR /work

@@ -83,7 +83,9 @@ crossterm = { workspace = true }
 # bound context (pin voltages, active state, params) with no need for a scripting
 # language's functions/loops/closures, and evalexpr has no I/O, filesystem, or
 # network surface. default-features off drops rand/regex/serde we don't use.
-evalexpr = { version = "13", default-features = false }
+# 11.3.1 is the final MIT-licensed line. evalexpr 12+ changed to AGPL-3.0-only,
+# which is incompatible with the Apache-2.0 permissive binary contract.
+evalexpr = { version = "=11.3.1", default-features = false }
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }

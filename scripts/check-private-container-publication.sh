@@ -29,22 +29,32 @@ if [ "$repo_visibility" != private ]; then
     exit 1
 fi
 
-if ! package_visibility="$(gh api "$package" --jq .visibility)"; then
-    if [ "$phase" = probe ]; then
-        # GitHub creates a new container package private by default. The
-        # workflow is allowed to push only a FROM-scratch marker here, then
-        # immediately runs the strict `before` check. An API outage or token
-        # problem can therefore cause an inert push, but never a product push.
+set +e
+package_response="$(gh api --include "$package" 2>&1)"
+package_status=$?
+set -e
+http_status="$(printf '%s\n' "$package_response" \
+    | awk '/^HTTP\/[0-9.]+ [0-9][0-9][0-9]/{status=$2} END{print status}')"
+if [ "$package_status" -ne 0 ]; then
+    if [ "$phase" = probe ] && [ "$http_status" = 404 ]; then
+        # Bootstrap only after GitHub authenticated the request and returned an
+        # exact package absence. Transport, auth, rate-limit, and parse failures
+        # leave visibility unknown and must never authorize a registry mutation.
         echo "bootstrap_required=true"
         if [ -n "${GITHUB_OUTPUT:-}" ]; then
             echo "bootstrap_required=true" >> "$GITHUB_OUTPUT"
         fi
-        echo "private container publication probe: package is absent or unverifiable; an inert bootstrap is required"
+        echo "private container publication probe: authenticated API reports the package absent; an inert bootstrap is required"
         exit 0
     fi
-    echo "error: cannot verify GHCR package visibility; no usable image may be published" >&2
+    echo "error: cannot verify GHCR package visibility (HTTP ${http_status:-unknown}); no image may be published" >&2
     exit 1
 fi
+package_visibility="$(printf '%s\n' "$package_response" | sed -n '/^{/,$p' \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["visibility"])')" || {
+    echo "error: GHCR package response did not contain a visibility value" >&2
+    exit 1
+}
 if [ "$package_visibility" != private ]; then
     echo "error: GHCR package is not private (reported: $package_visibility); no usable image may be published" >&2
     exit 1

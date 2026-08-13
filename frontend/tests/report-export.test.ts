@@ -19,7 +19,7 @@ import type { WebReport } from '../src/types/report'
 // a second or two on its own, and paying it inside a 5s test body is how a real
 // assertion becomes a flaky timeout.
 let browser: Browser
-beforeAll(async () => { browser = await chromium.launch({ headless: true }) })
+beforeAll(async () => { browser = await chromium.launch({ headless: true }) }, 30_000)
 afterAll(async () => { await browser?.close() })
 
 /** A report carrying, in every string field a board can influence, something
@@ -138,6 +138,55 @@ test('an exported report fetches nothing', () => {
   expect(html).not.toMatch(/url\(\s*["']?https?:/i)
   expect(html).not.toContain('@import')
 })
+
+test('wide evidence tables scroll inside a phone-width report, not the page', async () => {
+  const report: WebReport = {
+    ...hostile,
+    board_name: 'x'.repeat(300),
+    sections: [{
+      title: 'hostile width',
+      verdict: 'one finding',
+      findings: [{
+        level: 'serious',
+        what: 'w'.repeat(300),
+        why: 'y'.repeat(300),
+        fix: 'f'.repeat(300),
+      }],
+    }],
+    evidence: Array.from({ length: 24 }, (_, i) => ({
+      assertion: `${'unbroken-user-controlled-assertion'.repeat(12)}-${i}`,
+      status: 'qualified',
+      assumptions: ['a-very-long-machine-readable-source-identifier'],
+    })),
+  }
+  const page = await browser.newPage({ viewport: { width: 360, height: 780 } })
+  try {
+    await page.setContent(buildReportHtml({ ...input, report }), { waitUntil: 'load' })
+    const width = await page.evaluate(() => ({
+      page: document.documentElement.scrollWidth,
+      viewport: document.documentElement.clientWidth,
+      tables: [...document.querySelectorAll<HTMLElement>('.scroll-x')].map(node => ({
+        scroll: node.scrollWidth,
+        viewport: node.clientWidth,
+      })),
+      heading: (() => {
+        const node = document.querySelector<HTMLElement>('h1')!
+        return { scroll: node.scrollWidth, viewport: node.clientWidth }
+      })(),
+      prose: [...document.querySelectorAll<HTMLElement>('.what,.gloss')].map(node => ({
+        scroll: node.scrollWidth,
+        viewport: node.clientWidth,
+      })),
+    }))
+    expect(width.page).toBeLessThanOrEqual(width.viewport + 1)
+    expect(width.tables.some(table => table.scroll > table.viewport)).toBe(true)
+    expect(width.heading.scroll).toBeLessThanOrEqual(width.heading.viewport + 1)
+    expect(width.prose.length).toBeGreaterThan(0)
+    expect(width.prose.every(node => node.scroll <= node.viewport + 1)).toBe(true)
+  } finally {
+    await page.close()
+  }
+}, 30_000)
 
 test('it still carries the report it is an export of', () => {
   const html = buildReportHtml(input)

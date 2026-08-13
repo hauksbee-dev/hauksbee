@@ -73,7 +73,9 @@ lets a genuine brownout on a weak supply be trusted as a real failure.
 | `watchy_v15_display_res.toml` / `_undriven.toml` | `boot-coverage` on the real Watchy v1.5 e-paper RES# net (ESP32 QEMU backend) | PASS / FAIL |
 | `pic_programmer_schematic.toml` | schematic-stage CI: assert a `.kicad_sch` before any PCB exists | PASS |
 
-The boot-coverage and brownout specs reference firmware/netlists under
-`testdata/`, so run them from a hauksbee repo checkout (not the binary bundle).
+The binary bundle rewrites `boot_gate_pass.toml` beside its small packaged AVR
+fixture, so that PASS example runs directly from an extracted default bundle.
+`boot_gate_fail.toml`, the brownout specs, and the other firmware-heavy examples
+still reference `testdata/`; run those from a hauksbee repository checkout.
 The Watchy specs need an ESP32 QEMU (`HAUKSBEE_QEMU_XTENSA`); run
 [`scripts/doctor.sh`](../../scripts/doctor.sh) to see what is present.

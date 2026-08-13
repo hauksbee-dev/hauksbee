@@ -63,6 +63,7 @@ from your platform's secret manager; this example assumes it is already in
 
 ```bash
 (
+  set +x
   export DOCKER_CONFIG="$(mktemp -d)"
   cleanup() {
     docker logout ghcr.io >/dev/null 2>&1 || true
@@ -135,24 +136,29 @@ published image instead of downloading a release binary or compiling from
 source. Set `use-image: true`, and optionally pick the image:
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
   with:
     repository: hauksbee-dev/hauksbee
-    ref: v0.1.0
+    ref: REPLACE_WITH_RELEASE_COMMIT_SHA
     path: .hauksbee-action
     token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
     persist-credentials: false
 - uses: ./.hauksbee-action/integrations/github-action
   with:
     hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
+    hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
+    hauksbee-version: v0.1.0
     spec: ci/watchy.toml
     use-image: true
-    # default is ghcr.io/hauksbee-dev/hauksbee:slim; use :full for ESP32 / STM32
-    # co-sim or autorouting.
-    image: ghcr.io/hauksbee-dev/hauksbee:full
+    # Use the digest in the matching `container-digests-<tag>` prerelease's
+    # `hauksbee-<version>-docker-digests.txt` asset. Select the full
+    # digest for ESP32 / STM32 co-sim or autorouting.
+    image: ghcr.io/hauksbee-dev/hauksbee@sha256:REPLACE_WITH_RELEASE_IMAGE_DIGEST
 ```
 
-When `use-image` is true the Action mounts the checkout at `/work`, runs the
+When `use-image` is true the Action requires an immutable digest, verifies that
+digest against `hauksbee-version`'s immutable Docker manifest, verifies its OCI
+source revision equals `hauksbee-ref`, mounts the checkout at `/work`, runs the
 container as the runner user so the JUnit XML is writable, and publishes the
 results to the Checks tab exactly as the binary path does. When it is false,
 the Action keeps its existing behaviour: prefer a prebuilt release binary, fall
@@ -181,18 +187,24 @@ The build is **multi-stage from source**, not a repackaged release tarball:
    `avr` feature links it.
 2. A `rust:bookworm` stage builds `hauksbee` and `hauksbee-ci` with
    `cargo build --release` and strips them.
-3. A `debian:bookworm-slim` runtime stage `COPY`s in just the two binaries and
-   the model db (simavr is statically linked into the binaries); the shared
-   libraries it still needs, `libelf1` and `zlib1g`, come from apt.
+3. A `debian:bookworm-slim` runtime stage `COPY`s in the two binaries, model
+   db, and exact Hauksbee + simavr corresponding-source archives under
+   `/usr/share/doc/hauksbee/source/`; the shared libraries it still needs,
+   `libelf1` and `zlib1g`, come from apt. Source access therefore travels with
+   the private image and does not depend on separate repository permission.
 
 This choice of multi-stage from source over consuming `scripts/bundle.sh`'s
 tarball has two reasons. First, each architecture builds natively under
 buildx (`linux/amd64` and `linux/arm64`), with no cross-compilation and no
 dependency on a release tarball existing first. Second, simavr compiles per
 arch the same way, so the linked-in AVR backend is the one that actually ran
-on that arch. The full image then builds `FROM` the pushed slim image and
+on that arch. The full image then builds `FROM` the just-pushed slim manifest
+by its immutable digest (never by a concurrently mutable version tag) and
 layers the prebuilt Renode / Espressif QEMU / freerouting downloads on top,
-selecting the right per-arch asset from `TARGETARCH`.
+selecting the right per-arch asset from `TARGETARCH`. Every backend archive is
+checked against the repository-recorded SHA-256 before extraction; exact
+upstream license texts are independently hash-checked and retained under
+`/usr/share/doc/hauksbee/third-party/`.
 
 ### Build context
 
@@ -227,6 +239,7 @@ git clone https://github.com/hauksbee-dev/hauksbee.git ctx/hauksbee
 
 # 2. Build the slim image for your host arch.
 docker build \
+  --build-arg SOURCE_COMMIT="$(git -C ctx/hauksbee rev-parse HEAD)" \
   -f ctx/hauksbee/docker/Dockerfile.slim \
   -t hauksbee:slim \
   ctx

@@ -8,11 +8,14 @@ this page is the answer without the reasoning.
 | Artifact | Licence | Obligation if you redistribute |
 |---|---|---|
 | This source tree | Apache-2.0 | Retain `LICENSE` and `NOTICE`, state changes, keep attribution notices |
-| `hauksbee-<ver>-<target>.tar.gz` (default binary download) | GPL-3.0 | Full GPL-3.0 terms, including offering corresponding source |
-| `hauksbee-<ver>-<target>-permissive.tar.gz` | Apache-2.0 | Retain `LICENSE` and `NOTICE`; no GPL obligations |
-| `Hauksbee.app` (macOS app zip) | GPL-3.0 | Same as the default binary: the app contains the default shape |
-| `ghcr.io/hauksbee-dev/hauksbee:slim` and `:full` | GPL-3.0-only | Full GPL-3.0 terms; the `:full` image also carries GPL-2.0 and GPL-3.0 tools |
-| External simulator backends (Renode, Espressif QEMU) | MIT / GPL-2.0, not distributed by us | None from us: they are separately installed and run as separate processes |
+| `hauksbee-<ver>-source.tar.gz` | Mixed source licences as recorded per component | Complete same-release Corresponding Source for the default tarballs/app: exact Hauksbee, locked Cargo registry, and simavr trees |
+| `hauksbee-<ver>-<target>.tar.gz` (default binary download) | GPL-3.0 with MIT dependency notice | Full GPL-3.0 terms, including offering corresponding source; retain `LICENSE-EVALEXPR-MIT.txt` |
+| `hauksbee-<ver>-<target>-permissive.tar.gz` | Apache-2.0 with MIT dependency notice | Retain `LICENSE`, `NOTICE`, and `LICENSE-EVALEXPR-MIT.txt`; no GPL obligations |
+| `Hauksbee.app` (macOS app zip) | GPL-3.0 with MIT dependency notice | Same as the default binary; retain `LICENSE-EVALEXPR-MIT.txt` |
+| `hauksbee-<ver>-<target>-permissive-app.zip` (local builder only) | Apache-2.0 with MIT dependency notice | Retain `LICENSE`, `NOTICE`, and `LICENSE-EVALEXPR-MIT.txt`; no GPL obligations |
+| `ghcr.io/hauksbee-dev/hauksbee:slim` | GPL-3.0-only with MIT dependency notice | Full GPL-3.0 terms; retain the enclosed notices and corresponding-source archives |
+| `ghcr.io/hauksbee-dev/hauksbee:full` | GPL-3.0-only AND GPL-2.0-only AND MIT | Retain the component texts under `/usr/share/doc/hauksbee/`; GPL terms apply to the corresponding bundled components |
+| Separately installed simulator backends | Renode: MIT; Espressif QEMU: GPL-2.0 | The tarballs/apps do not redistribute them; the full container does, with their exact license texts |
 
 Running any of these imposes nothing. GPL-3.0 constrains distribution, not use.
 Every obligation below is triggered by redistributing or embedding, not by
@@ -30,32 +33,50 @@ and statically linking GPL-3.0 code makes the resulting binary a combined work,
 so the binary is GPL-3.0 even though the source stays Apache-2.0. If you
 redistribute this download, or ship it inside a product, GPL-3.0 applies to
 you, including the obligation to offer the corresponding source. The tarball
-encloses the full GPL-3.0 text as `LICENSE-GPL-3.0.txt` and names the exact
-hauksbee commit and pinned simavr tag it was built from.
+encloses the full GPL-3.0 text as `LICENSE-GPL-3.0.txt`, names the exact
+Hauksbee and simavr commits, and points to the checksummed
+`hauksbee-<ver>-source.tar.gz` asset published beside it. That source asset
+contains the exact Hauksbee tree, every locked Cargo registry package compiled
+into the binaries, and the exact simavr source tree.
 
 **The permissive download.** The `-permissive` tarball is built with
 `--no-default-features --features renode,qemu`. It contains no AVR backend, no
 libsimavr, and no GPL code linked or embedded, so the binary is Apache-2.0.
 This is the download to take if you are redistributing, repackaging, or
 embedding hauksbee. It trades away AVR co-simulation for that. Release CI
+also rejects AGPL runtime dependencies. The expression evaluator is pinned to
+the final MIT line, evalexpr 11.3.1, and its exact notice travels as
+`LICENSE-EVALEXPR-MIT.txt` in every binary artifact.
+Release CI
 verifies the shape behaviourally, by running the binary's own `doctor` output
 and refusing to publish a build whose report contradicts its label, so a
 feature-graph change cannot silently ship GPL code under the Apache-2.0 name.
 
-**The macOS app.** `Hauksbee.app` wraps the default shape, so the app zip is
-GPL-3.0 on the same reasoning as the default tarball. There is no permissive
-app shape. Separate from licensing: every macOS release binary is signed with
-a Developer ID identity; the app is notarised with the ticket stapled, and
-the tarball binaries are notarised from launch onward, with Gatekeeper
-confirming their ticket online on first run. Mechanics:
+**The macOS app.** The app published by release automation wraps the default
+shape, so its zip is GPL-3.0 on the same reasoning as the default tarball. The
+builder also exposes a distinctly named `-permissive-app.zip` local,
+non-release app shape: it uses the same Apache-2.0 Renode/QEMU feature set as
+the permissive tarball, contains no AVR/libsimavr backend, and carries no GPL
+obligations. Release automation does not publish that local variant. Separate
+from licensing: every published macOS release binary is signed with a
+Developer ID identity; the app is notarised with the ticket stapled, and the
+tarball binaries are notarised from launch onward, with Gatekeeper confirming
+their ticket online on first run. Mechanics:
 [`app/macos/SIGNING.md`](app/macos/SIGNING.md).
 
-**The Docker images.** Both published images are labelled
-`org.opencontainers.image.licenses="GPL-3.0-only"`. The hauksbee binaries
-inside are the default shape, statically linking libsimavr. The `:full` image
-additionally bundles freerouting (GPL-3.0) and the Espressif QEMU fork
-(GPL-2.0). Pulling and running an image is use, not distribution;
-re-publishing an image derived from these carries the GPL-3.0 terms.
+**The Docker images.** The slim image is labelled GPL-3.0-only because its
+Hauksbee binaries are the default shape, statically linking libsimavr. The
+`:full` image is a collection of separately licensed components: those same
+binaries and freerouting under GPL-3.0, Espressif QEMU under GPL-2.0, and
+Renode under MIT. Its OCI label enumerates that mixed set, and exact upstream
+license texts are retained under `/usr/share/doc/hauksbee/third-party/` after
+hash verification. The exact Hauksbee tree, complete locked Cargo registry
+sources, and simavr tree used by the offline release build are enclosed under
+`/usr/share/doc/hauksbee/source/`; the full image inherits those archives and
+adds the exact-source references and notices for its separately bundled tools.
+`SOURCE-OFFER.txt` also carries Hauksbee's three-year written offer. Pulling and
+running an image is use, not distribution;
+re-publishing it must preserve the applicable component terms and notices.
 
 **`LICENSE-BINARY.txt`, the per-artifact contract.** Every release tarball
 carries a `LICENSE-BINARY.txt` whose first line states the licence of the

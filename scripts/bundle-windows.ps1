@@ -12,6 +12,9 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string]$ExpectedCommit,
     [string]$TargetDir = "target\release",
     [string]$Out = "dist"
 )
@@ -36,11 +39,12 @@ $outPath = if ([IO.Path]::IsPathRooted($Out)) {
 $base = "hauksbee-$Version-windows-x86_64-permissive"
 $requiredBinaries = @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")
 function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVersion) {
-    $output = & $Path --version 2>&1 | Out-String
+    $output = (& $Path --version 2>&1 | Out-String).Trim()
     $exitCode = $LASTEXITCODE
     $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
     $escapedVersion = [regex]::Escape($ExpectedVersion)
-    if ($exitCode -ne 0 -or $output -notmatch "(?m)^$escapedName $escapedVersion(?:\s|$)") {
+    $escapedCommit = [regex]::Escape($ExpectedCommit)
+    if ($exitCode -ne 0 -or $output -notmatch "(?m)^$escapedName $escapedVersion \(git $escapedCommit\)$") {
         throw "$Name does not identify release version $ExpectedVersion`: $output"
     }
 }
@@ -74,6 +78,20 @@ try {
     foreach ($item in @("db", "examples", "integrations")) {
         Copy-Item -LiteralPath (Join-Path $repoRoot $item) -Destination (Join-Path $rootDir $item) -Recurse
     }
+    $ciSpecs = Join-Path $rootDir "examples\ci-specs"
+    New-Item -ItemType Directory -Path $ciSpecs -Force | Out-Null
+    Copy-Item -Path (Join-Path $repoRoot "crates\hauksbee-ci\examples\*") -Destination $ciSpecs -Recurse
+    foreach ($privateSpec in @(
+        "tarski_brownout.toml",
+        "tarski_brownout_repaired.toml",
+        "watchy_v15_display_res.toml",
+        "watchy_v15_display_res_undriven.toml",
+        "pic_programmer_schematic.toml"
+    )) {
+        Remove-Item -LiteralPath (Join-Path $ciSpecs $privateSpec) -Force -ErrorAction SilentlyContinue
+    }
+    # Windows is permissive-only, so the boot-gate firmware spec is an example
+    # rather than a runtime smoke and remains checkout-relative by design.
     $scriptsDir = Join-Path $rootDir "scripts"
     New-Item -ItemType Directory -Path $scriptsDir | Out-Null
     foreach ($script in @("get-hauksbee.ps1", "install-sims-windows.ps1")) {
@@ -82,17 +100,19 @@ try {
     foreach ($item in @("LICENSE", "NOTICE")) {
         Copy-Item -LiteralPath (Join-Path $repoRoot $item) -Destination $rootDir
     }
+    Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\\evalexpr-MIT.txt") `
+        -Destination (Join-Path $rootDir "LICENSE-EVALEXPR-MIT.txt")
 
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText(
         (Join-Path $rootDir "LICENSE-BINARY.txt"),
-        "Apache-2.0 binary`r`n`r`nThis Windows x86_64 build disables the GPL-3.0 AVR/libsimavr backend. Renode and Espressif QEMU support remain compiled in; availability is reported by hauksbee doctor.`r`n",
+        "Apache-2.0 binary`r`n`r`nThis Windows x86_64 build disables the GPL-3.0 AVR/libsimavr backend. Renode and Espressif QEMU support remain compiled in; availability is reported by hauksbee doctor.`r`nevalexpr 11.3.1 is MIT-licensed; retain LICENSE-EVALEXPR-MIT.txt.`r`n",
         $utf8
     )
     [IO.File]::WriteAllText((Join-Path $rootDir "VERSION"), "$Version`r`n", $utf8)
     [IO.File]::WriteAllText(
         (Join-Path $rootDir "README-BUNDLE.txt"),
-        "Hauksbee $Version for Windows x86_64 (permissive shape).`r`nRun bin\hauksbee.exe --help or scripts\get-hauksbee.ps1 -Permissive.`r`nInstall the pinned external emulators with scripts\install-sims-windows.ps1.`r`nAVR co-simulation is not compiled into this artifact; use a supported Unix default bundle or build libsimavr under MSYS2 to unlock it.`r`n",
+        "Hauksbee $Version for Windows x86_64 (permissive shape).`r`nRun bin\hauksbee.exe --help. For another authenticated install, invoke scripts\get-hauksbee.ps1 with this release tag and exact source commit from the immutable release notes.`r`nInstall the pinned external emulators with scripts\install-sims-windows.ps1.`r`nAVR co-simulation is not compiled into this artifact; use a supported Unix default bundle or build libsimavr under MSYS2 to unlock it.`r`n",
         $utf8
     )
 

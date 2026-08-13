@@ -26,10 +26,15 @@ users take the installer line below.
 
 ```bash
 (
+  set -o pipefail
+  set +x
   export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
+  export HAUKSBEE_INSTALLER_COMMIT=REPLACE_WITH_RELEASE_COMMIT_SHA
+  export HAUKSBEE_INSTALLER_VERSION=REPLACE_WITH_RELEASE_TAG
   printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
-    | curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh \
-    | bash
+    | curl -q --config - -fsSL "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.sh?ref=$HAUKSBEE_INSTALLER_COMMIT" \
+    | python3 -c 'import base64,json,sys; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["content"]).decode())' \
+    | bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION"
 )
 ```
 

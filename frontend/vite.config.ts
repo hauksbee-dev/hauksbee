@@ -13,6 +13,10 @@ export default defineConfig({
     // The version the app reports (and pins the published GitHub action to),
     // read from package.json here so no source file carries a copy of it.
     __APP_VERSION__: JSON.stringify(pkg.version),
+    // A released web bundle is built from a clean tagged commit. Emitting that
+    // immutable object ID lets generated consumer workflows fetch the exact
+    // private Action code instead of trusting a movable Git tag with a token.
+    __RELEASE_COMMIT__: JSON.stringify(process.env.HAUKSBEE_RELEASE_COMMIT || ''),
   },
   server: {
     proxy: {

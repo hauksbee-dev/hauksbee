@@ -1,7 +1,59 @@
 use std::env;
+use std::fmt::Write as _;
+use std::fs::File;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
+fn sha256(path: &Path) -> String {
+    let mut file =
+        File::open(path).unwrap_or_else(|e| panic!("could not hash {}: {e}", path.display()));
+    let mut hash = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .unwrap_or_else(|e| panic!("could not hash {}: {e}", path.display()));
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+    }
+    let mut output = String::with_capacity(64);
+    for byte in hash.finalize() {
+        write!(&mut output, "{byte:02x}").unwrap();
+    }
+    output
+}
+
+fn installed_simavr_headers(root: &Path) -> Vec<PathBuf> {
+    fn visit(dir: &Path, out: &mut Vec<PathBuf>) {
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("could not enumerate {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry
+                .unwrap_or_else(|e| panic!("could not enumerate {}: {e}", dir.display()))
+                .path();
+            if path.is_dir() {
+                visit(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "h") {
+                out.push(path);
+            }
+        }
+    }
+
+    let mut headers = Vec::new();
+    visit(root, &mut headers);
+    headers.sort();
+    headers
+}
+
 fn main() {
+    // Explicit rerun directives below disable Cargo's default package-wide
+    // tracking. bindgen reads this local umbrella header, so it must remain an
+    // explicit input alongside the installed simavr header tree.
+    println!("cargo:rerun-if-changed=wrapper.h");
     // The simavr link + bindgen step is only needed for the `avr` backend.
     // When that feature is off (e.g. a renode-only build on a machine without
     // libsimavr), skip it entirely so the crate still compiles.
@@ -26,6 +78,68 @@ fn main() {
         env::var("SIMAVR_INCLUDE_DIR").unwrap_or_else(|_| format!("{default_prefix}/include"));
     println!("cargo:rerun-if-env-changed=SIMAVR_LIB_DIR");
     println!("cargo:rerun-if-env-changed=SIMAVR_INCLUDE_DIR");
+    println!("cargo:rerun-if-env-changed=SIMAVR_COMMIT");
+
+    // CI and release builds place an immutable source marker beside the exact
+    // headers/archive. Make that identity a Cargo input and embed it into the
+    // crate, so a path-stable target cache cannot silently retain an object
+    // linked against different GPL corresponding source.
+    if let Ok(expected_commit) = env::var("SIMAVR_COMMIT") {
+        if expected_commit.len() != 40 || !expected_commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+            panic!("SIMAVR_COMMIT must be one 40-character hexadecimal Git commit");
+        }
+        let include_root = std::fs::canonicalize(&include_dir)
+            .unwrap_or_else(|e| panic!("could not resolve SIMAVR_INCLUDE_DIR {include_dir}: {e}"));
+        let lib_root = std::fs::canonicalize(&lib_dir)
+            .unwrap_or_else(|e| panic!("could not resolve SIMAVR_LIB_DIR {lib_dir}: {e}"));
+        let prefix = include_root.parent().unwrap_or(Path::new("/"));
+        let lib_prefix = lib_root.parent().unwrap_or(Path::new("/"));
+        if prefix != lib_prefix {
+            panic!(
+                "SIMAVR_INCLUDE_DIR and SIMAVR_LIB_DIR must share one prefix when SIMAVR_COMMIT attests the linked source (got {} and {})",
+                include_root.display(),
+                lib_root.display()
+            );
+        }
+        let marker = prefix.join(".hauksbee-simavr-commit");
+        println!("cargo:rerun-if-changed={}", marker.display());
+        let installed_commit = std::fs::read_to_string(&marker)
+            .unwrap_or_else(|e| panic!("could not read {}: {e}", marker.display()));
+        if installed_commit.trim() != expected_commit {
+            panic!(
+                "simavr provenance mismatch: build requested {expected_commit}, but {} records {}",
+                marker.display(),
+                installed_commit.trim()
+            );
+        }
+        let payload_record = prefix.join(".hauksbee-simavr-payload.sha256");
+        println!("cargo:rerun-if-changed={}", payload_record.display());
+        let archive = lib_root.join("libsimavr.a");
+        println!("cargo:rerun-if-changed={}", archive.display());
+        let mut payload_lines = Vec::new();
+        for header in installed_simavr_headers(&include_root.join("simavr")) {
+            println!("cargo:rerun-if-changed={}", header.display());
+            let relative = header.strip_prefix(prefix).unwrap_or_else(|_| {
+                panic!(
+                    "simavr header escaped {}: {}",
+                    prefix.display(),
+                    header.display()
+                )
+            });
+            payload_lines.push(format!("{}  {}", sha256(&header), relative.display()));
+        }
+        payload_lines.push(format!("{}  lib/libsimavr.a", sha256(&archive)));
+        let expected_payload = payload_lines.join("\n");
+        let recorded_payload = std::fs::read_to_string(&payload_record)
+            .unwrap_or_else(|e| panic!("could not read {}: {e}", payload_record.display()));
+        if recorded_payload.trim() != expected_payload {
+            panic!(
+                "simavr payload digest mismatch under {}: installed headers/archive are not the bytes recorded after the pinned build",
+                prefix.display()
+            );
+        }
+        println!("cargo:rustc-env=HAUKSBEE_SIMAVR_COMMIT={expected_commit}");
+    }
 
     // Preflight: the `avr` feature links a SYSTEM libsimavr (static) and runs
     // bindgen over its headers. If simavr is not installed, the raw failure is a

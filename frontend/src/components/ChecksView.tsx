@@ -3,7 +3,7 @@ import { parse as parseToml } from 'smol-toml'
 import type { ArtifactProvenance, EvidenceAssumption, EvidenceMap, QueuedCheck, WebReport } from '../types/report'
 import type { SelectedComponent } from './SelectionCard'
 import { PlusIcon } from './Icons'
-import { specStemFor, workflowYaml } from '../lib/ci-workflow'
+import { specStemFor, workflowExportAvailable, workflowYaml } from '../lib/ci-workflow'
 import { downloadText } from '../lib/report-export'
 import { ArriveOnce, EmptyState, StaggerItem, ValueSettle, VerdictBadge, ARRIVE, LEAVE } from '../motion'
 import { refusalLines, type RefusalContract } from '../lib/refusal-contract'
@@ -711,7 +711,7 @@ export function ChecksView({
   const download = (name: string, contents: string) =>
     downloadText(name, contents, 'text/plain;charset=utf-8')
 
-  const workflowYml = workflowYaml(specStem)
+  const workflowYml = workflowExportAvailable ? workflowYaml(specStem) : null
 
   const netOptions = report.nets ?? []
   const result = run?.response ?? null
@@ -1312,13 +1312,21 @@ export function ChecksView({
                   {/* pre-wrap: the long `paths:` lines soft-wrap at spaces
                       instead of clipping at the card's right edge (the copied
                       text keeps its real newlines either way). */}
-                  <pre className="hb-code p-3 overflow-x-auto whitespace-pre-wrap text-[11px] leading-relaxed">
-                    {workflowYml}
-                  </pre>
-                  <button type="button" className="hb-btn hb-press mt-2 px-3 py-1.5 text-[12px]"
-                    onClick={() => download('hauksbee-ci.yml', workflowYml)}>
-                    Download hauksbee-ci.yml
-                  </button>
+                  {workflowYml ? (
+                    <>
+                      <pre className="hb-code p-3 overflow-x-auto whitespace-pre-wrap text-[11px] leading-relaxed">
+                        {workflowYml}
+                      </pre>
+                      <button type="button" className="hb-btn hb-press mt-2 px-3 py-1.5 text-[12px]"
+                        onClick={() => download('hauksbee-ci.yml', workflowYml)}>
+                        Download hauksbee-ci.yml
+                      </button>
+                    </>
+                  ) : (
+                    <div className="text-[12px] leading-relaxed" style={{ color: 'var(--warn)' }}>
+                      This development build has no immutable release commit, so it will not export a credential-bearing workflow. Install a released Hauksbee build first.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

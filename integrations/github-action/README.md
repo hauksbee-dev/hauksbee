@@ -26,25 +26,29 @@ permissions:
   checks: write   # lets the action publish the JUnit results to the Checks tab
 
 steps:
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
   - name: Fetch the private hauksbee Action
-    uses: actions/checkout@v4
+    uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
     with:
       repository: hauksbee-dev/hauksbee
-      ref: v0.1.0
+      ref: REPLACE_WITH_RELEASE_COMMIT_SHA
       path: .hauksbee-action
       token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
       persist-credentials: false
   - uses: ./.hauksbee-action/integrations/github-action
     with:
       hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
+      hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
+      hauksbee-version: v0.1.0
       spec: ci/power-up.toml          # your checked-in hauksbee-ci spec
       junit: hauksbee-ci-results.xml   # JUnit XML written here (optional)
 ```
 
-Pin the private checkout's `ref` to a released tag, not `main`: a tag names the
-exact Action code your pipeline runs. Stricter still is a full commit SHA,
-which no tag move can redirect. Repositories owned by the same GitHub
+Pin the private checkout's `ref` to the release's full commit SHA, never
+`main` or a tag: a tag can move after review, while an object ID cannot redirect
+the credential-bearing Action code. Pass the same SHA as `hauksbee-ref` and the
+human release tag as `hauksbee-version`; the Action refuses assets whose tag
+does not resolve to that SHA. Repositories owned by the same GitHub
 organisation may alternatively use the direct `owner/repo/path@ref` form after
 an administrator enables private Action sharing, but the explicit checkout
 above is the portable cross-repository credential contract.
@@ -102,10 +106,10 @@ list of what was found, rather than guessing.
 | `hauksbee-repo`    | no       | `hauksbee-dev/hauksbee`       | owner/name of the hauksbee repo (release download + fallback build).         |
 | `hauksbee-token`   | yes      | -                        | Fine-grained PAT or GitHub App installation token authorised for the private repository with Contents: read; add Packages: read for `use-image`. |
 | `registry-user`    | no       | derived                  | GHCR username for `use-image`; App installation tokens derive `x-access-token`, PATs derive `github.actor`. Set it when a PAT belongs to another user. |
-| `hauksbee-version` | no       | (empty)                  | Release version to download a prebuilt binary from; empty auto-detects.     |
+| `hauksbee-version` | with `use-image`; otherwise no | (empty) | Release version for a prebuilt binary or image. Image mode uses its immutable Docker digest record; non-image mode can auto-detect. |
 | `prefer-prebuilt` | no       | `true`                   | Download a prebuilt release binary when available, else build from source.  |
 | `use-image`       | no       | `false`                  | Run from the published Docker image instead of a binary; skips the download and build paths entirely. |
-| `image`           | no       | `ghcr.io/hauksbee-dev/hauksbee:slim` | Image to run when `use-image` is true. Use `ghcr.io/hauksbee-dev/hauksbee:full` for STM32 / ESP32 co-sim or autorouting. |
+| `image`           | no | `ghcr.io/hauksbee-dev/hauksbee:slim` | `slim`/`full` selector or immutable canonical digest. The Action resolves selectors through the selected release's immutable Docker manifest and verifies its OCI revision. |
 
 The source fallback deliberately builds `--no-default-features --features
 renode,qemu`, because stock hosted runners do not carry the GPL system
@@ -142,7 +146,7 @@ The two-workflow reporting pattern is:
     hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
     spec: ci/power-up.toml
     publish-report: false
-- uses: actions/upload-artifact@v4
+- uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
   if: always()
   with:
     name: hauksbee-ci-results
@@ -165,7 +169,7 @@ jobs:
   report:
     runs-on: ubuntu-latest
     steps:
-      - uses: mikepenz/action-junit-report@v4
+      - uses: mikepenz/action-junit-report@db71d41eb79864e25ab0337e395c352e84523afe # v4.3.1
         with:
           commit: ${{ github.event.workflow_run.head_sha }}
           report_paths: "**/hauksbee-ci-results*.xml"
@@ -186,13 +190,15 @@ jobs:
    asset (`hauksbee-<version>-<os>-<arch>.tar.gz`, produced by
    `.github/workflows/release.yml`). It maps the runner to the right
    os-arch label and uses `hauksbee-version`, or the release that matches a
-   tagged `hauksbee-ref`, or the latest release. The downloaded bundle is
-   cached keyed on the resolved release tag, so a warm run skips even the
-   download. No compile, runs in seconds.
+   tagged `hauksbee-ref`, or the latest release. Private archives are verified
+   and extracted in per-job runner storage; they are deliberately never put in
+   the consuming repository's restorable Actions cache. No compile is needed
+   when a matching immutable release asset exists.
 3. **Falls back to building from source** only when no matching prebuilt asset
    exists: it checks hauksbee out into `.hauksbee/` at `hauksbee-ref`, installs a
-   stable Rust toolchain, caches `~/.cargo` and `.hauksbee/target` (keyed on the
-   ref and `Cargo.lock`), and builds the needed binary in release.
+   stable Rust toolchain, caches only public Cargo registry/git downloads, and
+   builds the needed binary in release. The private source build output is not
+   cached where fork workflows could restore it.
 4. Runs your specs (or the board check). Because `GITHUB_ACTIONS` is set, the
    binary emits `::error` / `::notice` annotations inline, and the JUnit XML
    is published to the Checks tab via `mikepenz/action-junit-report` (unless

@@ -117,8 +117,7 @@ use crate::models::{BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity};
 use crate::source::{AcStim, PwlPoint, SourceKind};
 use crate::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId};
 use evalexpr::{
-    build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
-    Node as EvalNode, Value,
+    build_operator_tree, ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1015,13 +1014,8 @@ fn braced_inner(tok: &str) -> Option<&str> {
 /// Evaluate an already-parsed expression tree against a parameter environment.
 /// Every identifier the expression references must resolve (case-insensitively)
 /// in `env`, or it is a line-numbered "undefined parameter" error.
-fn eval_tree(
-    tree: &EvalNode<DefaultNumericTypes>,
-    env: &ParamEnv,
-    line: usize,
-    raw: &str,
-) -> Result<f64, SpiceError> {
-    let mut ctx = HashMapContext::<DefaultNumericTypes>::new();
+fn eval_tree(tree: &EvalNode, env: &ParamEnv, line: usize, raw: &str) -> Result<f64, SpiceError> {
+    let mut ctx = HashMapContext::new();
     for ident in tree.iter_variable_identifiers() {
         let key = ident.to_ascii_lowercase();
         let val = env.get(&key).ok_or_else(|| SpiceError::Syntax {
@@ -1029,7 +1023,7 @@ fn eval_tree(
             msg: format!("expression references undefined parameter `{ident}`"),
             text: raw.into(),
         })?;
-        let _ = ctx.set_value(ident.to_string(), Value::from_float(*val));
+        let _ = ctx.set_value(ident.to_string(), Value::Float(*val));
     }
     match tree.eval_with_context(&ctx) {
         Ok(Value::Float(f)) => Ok(f),
@@ -1121,7 +1115,7 @@ fn eval_scalar(line: usize, s: &str, raw: &str, env: &ParamEnv) -> Result<f64, S
     if let Some(v) = parse_value_number(inner) {
         return Ok(v);
     }
-    match build_operator_tree::<DefaultNumericTypes>(&float_force_literals(inner)) {
+    match build_operator_tree(&float_force_literals(inner)) {
         Ok(tree) => eval_tree(&tree, env, line, raw),
         Err(_) => Err(SpiceError::BadNumber {
             line,
@@ -1137,8 +1131,8 @@ fn eval_scalar(line: usize, s: &str, raw: &str, env: &ParamEnv) -> Result<f64, S
 /// expression, element values use `{...}` for expressions by convention.
 fn eval_value(line: usize, tok: &str, raw: &str, env: &ParamEnv) -> Result<f64, SpiceError> {
     if let Some(inner) = braced_inner(tok) {
-        let tree = build_operator_tree::<DefaultNumericTypes>(&float_force_literals(inner))
-            .map_err(|e| SpiceError::Syntax {
+        let tree =
+            build_operator_tree(&float_force_literals(inner)).map_err(|e| SpiceError::Syntax {
                 line,
                 msg: format!("malformed expression `{{{inner}}}`: {e}"),
                 text: raw.into(),
@@ -1200,7 +1194,7 @@ fn resolve_params(cards: &[ParamCard], base: &ParamEnv) -> Result<ParamEnv, Spic
                 progressed = true;
                 continue;
             }
-            match build_operator_tree::<DefaultNumericTypes>(&float_force_literals(inner)) {
+            match build_operator_tree(&float_force_literals(inner)) {
                 Ok(tree) => {
                     let deps: Vec<String> = tree
                         .iter_variable_identifiers()

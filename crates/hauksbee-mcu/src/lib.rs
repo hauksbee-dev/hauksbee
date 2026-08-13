@@ -135,6 +135,22 @@ pub use qemu::{QemuBackend, QemuConfig};
 
 pub use soc::{Backend, SocConfig, SocError};
 
+/// Immutable simavr source revision linked into a provenance-bound AVR build.
+/// Ordinary local system-library builds may not carry this optional identity;
+/// release and CI builds require it and expose it through `doctor --backends`.
+#[cfg(feature = "avr")]
+pub const SIMAVR_BUILD_COMMIT: Option<&str> = option_env!("HAUKSBEE_SIMAVR_COMMIT");
+
+/// Human-readable provenance for the built-in AVR backend. Shared by CLI and
+/// MCP so the two public capability surfaces cannot drift.
+#[cfg(feature = "avr")]
+pub fn simavr_build_detail() -> String {
+    SIMAVR_BUILD_COMMIT.map_or_else(
+        || "simavr linked into this binary (source commit not embedded)".to_string(),
+        |commit| format!("simavr linked into this binary; source commit {commit}"),
+    )
+}
+
 #[cfg(test)]
 mod firmware_guard_tests {
     use super::validate_firmware_path;

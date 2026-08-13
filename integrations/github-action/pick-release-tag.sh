@@ -19,14 +19,23 @@ DEFAULT_REF="${3-main}"
 # An explicit version wins over everything. Accept it with or without the v.
 if [ -n "$VERSION" ]; then
   case "$VERSION" in
-    v*) printf '%s\n' "$VERSION" ;;
-    *)  printf 'v%s\n' "$VERSION" ;;
+    v*) release="$VERSION" ;;
+    *)  release="v$VERSION" ;;
   esac
+  printf '%s' "$release" | grep -Eq '^v[0-9A-Za-z._-]+$' || {
+    echo "unsafe hauksbee-version: $VERSION" >&2
+    exit 2
+  }
+  printf '%s\n' "$release"
   exit 0
 fi
 
 # A ref that is itself a release tag names the release it wants.
 if printf '%s' "$REF" | grep -Eq '^v[0-9]'; then
+  printf '%s' "$REF" | grep -Eq '^v[0-9A-Za-z._-]+$' || {
+    echo "unsafe Hauksbee release ref: $REF" >&2
+    exit 2
+  }
   printf '%s\n' "$REF"
   exit 0
 fi

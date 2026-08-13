@@ -8,11 +8,16 @@
 # of the new download is verified.
 #
 # Usage:
-#   ( export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
+#   ( set -o pipefail
+#     set +x
+#     export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
+#     export HAUKSBEE_INSTALLER_COMMIT=REPLACE_WITH_RELEASE_COMMIT_SHA
+#     export HAUKSBEE_INSTALLER_VERSION=REPLACE_WITH_RELEASE_TAG
 #     printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
-#       curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash )
+#       curl -q --config - -fsSL "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.sh?ref=$HAUKSBEE_INSTALLER_COMMIT" |
+#       python3 -c 'import base64,json,sys; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["content"]).decode())' | bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION" )
 #   With flags through the pipe:
-#     printf ... | curl --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
+#     printf ... | curl -q --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
 #   Or run locally:
 #     bash scripts/get-hauksbee.sh [--version v0.1.0] [--prefix ~/.local] [--permissive]
 #
@@ -36,6 +41,9 @@
 #                          fine-grained PAT or GitHub App installation token
 #                          with Contents: read on hauksbee-dev/hauksbee.
 #   GITHUB_TOKEN           Accepted as a CI-compatible fallback.
+# Credentials must never become xtrace output. This intentionally overrides an
+# inherited `SHELLOPTS=xtrace` or an explicit `bash -x` before reading them.
+set +x
 set -euo pipefail
 
 REPO="hauksbee-dev/hauksbee"
@@ -43,6 +51,9 @@ REPO="hauksbee-dev/hauksbee"
 # host or the local contract server used by the regression test.
 API_BASE="${HAUKSBEE_API_BASE:-https://api.github.com/repos/${REPO}}"
 PRIVATE_TOKEN="${HAUKSBEE_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+# The credential authorizes API reads only. Keep the captured value shell-local
+# and prevent every downloaded binary/child process from inheriting it.
+unset HAUKSBEE_GITHUB_TOKEN GITHUB_TOKEN GH_TOKEN
 
 VERSION=""
 PREFIX="${HOME}/.local"
@@ -64,11 +75,16 @@ re-run: an existing install is only overwritten once the checksum of the new
 download is verified.
 
 Usage:
-  ( export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
+  ( set -o pipefail
+    set +x
+    export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
+    export HAUKSBEE_INSTALLER_COMMIT=REPLACE_WITH_RELEASE_COMMIT_SHA
+    export HAUKSBEE_INSTALLER_VERSION=REPLACE_WITH_RELEASE_TAG
     printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
-      curl --config - -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash )
+      curl -q --config - -fsSL "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.sh?ref=$HAUKSBEE_INSTALLER_COMMIT" |
+      python3 -c 'import base64,json,sys; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["content"]).decode())' | bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION" )
   With flags through the pipe:
-    printf ... | curl --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
+    printf ... | curl -q --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
   Or run locally:
     bash scripts/get-hauksbee.sh [--version v0.1.0] [--prefix ~/.local] [--permissive]
 
@@ -143,12 +159,16 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required to parse authenticated GitHub release metadata safely." >&2
   exit 1
 fi
+if ! command -v gh >/dev/null 2>&1; then
+  echo "GitHub CLI (gh) is required to verify signed release provenance." >&2
+  exit 1
+fi
 
 # Feed the authorization header through curl's config stdin. Keeping the token
 # out of curl's argv prevents it appearing in process listings or shell traces.
 curl_private() {
   printf 'header = "Authorization: Bearer %s"\n' "$PRIVATE_TOKEN" \
-    | curl --config - "$@"
+    | curl -q --config - "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -214,12 +234,16 @@ echo "Detected platform: ${OS}/${ARCH} -> asset suffix: ${ASSET_SUFFIX}"
 fetch_release() {
   curl_private -fsSL \
     -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    -H 'X-GitHub-Api-Version: 2026-03-10' \
     "$1"
 }
 
 release_tag() {
   python3 -c 'import json,sys; value=json.load(sys.stdin).get("tag_name"); value or sys.exit(1); print(value)'
+}
+
+release_is_immutable() {
+  python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("immutable") is True else 1)'
 }
 
 release_asset_url() {
@@ -254,6 +278,10 @@ else
     echo "The GitHub API response did not identify the requested release ${VERSION}." >&2
     exit 1
   fi
+fi
+if ! printf '%s' "$RELEASE_JSON" | release_is_immutable; then
+  echo "Release ${VERSION} is not immutable; refusing replaceable private assets." >&2
+  exit 1
 fi
 
 # Strip a leading 'v' to match the asset naming convention used in bundle.sh
@@ -290,9 +318,20 @@ done
 TMPDIR_BASE="${TMPDIR:-/tmp}"
 TMPDIR_BASE="${TMPDIR_BASE%/}"
 TMPDIR_WORK="$(mktemp -d "${TMPDIR_BASE}/get-hauksbee.XXXXXX")"
-trap 'rm -rf "${TMPDIR_WORK}"' EXIT
-# An interrupt mid-staging must not leave .hauksbee.new.$$ files behind.
-trap 'rm -rf "${TMPDIR_WORK}"; cleanup_staged 2>/dev/null || true; exit 130' INT TERM
+TXN_DIR=""
+INSTALL_COMMITTED=1
+cleanup_on_exit() {
+  if [ -n "$TXN_DIR" ] && [ "$INSTALL_COMMITTED" -eq 0 ]; then
+    rollback_install 2>/dev/null || true
+  fi
+  find "$TMPDIR_WORK" -depth -mindepth 1 -delete 2>/dev/null || true
+  rmdir "$TMPDIR_WORK" 2>/dev/null || true
+  if [ -n "${INSTALL_LOCK:-}" ]; then
+    release_install_lock 2>/dev/null || true
+  fi
+}
+trap cleanup_on_exit EXIT
+trap 'exit 130' INT TERM
 
 TARBALL_PATH="${TMPDIR_WORK}/${TARBALL_NAME}"
 CHECKSUM_PATH="${TMPDIR_WORK}/${CHECKSUM_NAME}"
@@ -341,6 +380,21 @@ echo "Verifying checksum..."
   fi
 )
 
+# The checksum catches corruption, while the repository's immutable-release
+# attestation binds the archive bytes to the protected tag and release.
+RELEASE_SHA="$(GH_TOKEN="$PRIVATE_TOKEN" gh api "repos/${REPO}/commits/${VERSION}" --jq .sha)"
+[[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "Could not resolve ${VERSION} to one immutable source commit." >&2
+  exit 1
+}
+if [ -n "${HAUKSBEE_INSTALLER_COMMIT:-}" ] \
+  && [ "$HAUKSBEE_INSTALLER_COMMIT" != "$RELEASE_SHA" ]; then
+  echo "Installer commit $HAUKSBEE_INSTALLER_COMMIT does not match release $VERSION ($RELEASE_SHA)." >&2
+  exit 1
+fi
+GH_TOKEN="$PRIVATE_TOKEN" gh release verify-asset "$VERSION" "$TARBALL_PATH" \
+  --repo "$REPO" >/dev/null
+
 # ---------------------------------------------------------------------------
 # Extract binaries
 # ---------------------------------------------------------------------------
@@ -360,34 +414,136 @@ if [ -x "${BIN_DIR}/hauksbee-mcp" ]; then
   BINARIES="${BINARIES} hauksbee-mcp"
 fi
 
+# Prove the authenticated archive can actually start and identifies the one
+# immutable release before touching any live destination. This keeps a healthy
+# existing installation continuously available when an asset is malformed,
+# unloadable, or internally mixed despite otherwise valid release metadata.
+for b in ${BINARIES}; do
+  actual_version="$("${BIN_DIR}/$b" --version 2>&1 || true)"
+  expected_version="$b ${VERSION#v} (git $RELEASE_SHA)"
+  if [ "$actual_version" != "$expected_version" ]; then
+    echo "ERROR: staged $b reports '$actual_version', expected '$expected_version'; existing install left untouched." >&2
+    exit 1
+  fi
+done
+
 # ---------------------------------------------------------------------------
 # Install to PREFIX/bin
 # ---------------------------------------------------------------------------
 INSTALL_DIR="${PREFIX}/bin"
 mkdir -p "${INSTALL_DIR}"
 
-# Two phases so the install is all-or-nothing: stage every binary under a
-# temp name INSIDE the final directory first (same filesystem, so the later
-# mv is an atomic rename), then rename them into place. A failure mid-way
-# through staging leaves the existing install untouched; it can never leave a
-# mixed old/new pair.
-STAGED=""
-cleanup_staged() {
-  for _s in ${STAGED}; do rm -f "${_s}"; done
+# Serialize installers and recover one interrupted transaction before staging
+# another. SIGKILL/power loss cannot run traps, so the durable journal is part
+# of the startup protocol, not merely EXIT cleanup.
+INSTALL_LOCK="${INSTALL_DIR}/.hauksbee-install.lock"
+LOCK_OWNED=0
+LOCK_TOKEN="$$-${RANDOM:-0}-$(date +%s)"
+acquire_install_lock() {
+  candidate_lock="${INSTALL_LOCK}.candidate-${LOCK_TOKEN}"
+  printf '%s\n%s\n' "$$" "$LOCK_TOKEN" > "$candidate_lock"
+  while :; do
+    # A hard link publishes the already-complete owner record atomically. The
+    # candidate lives beside the lock, so link(2) cannot cross filesystems.
+    if ln "$candidate_lock" "$INSTALL_LOCK" 2>/dev/null; then
+      find "$candidate_lock" -maxdepth 0 -type f -delete
+      LOCK_OWNED=1
+      return
+    fi
+    if [ ! -e "$INSTALL_LOCK" ]; then
+      find "$candidate_lock" -maxdepth 0 -type f -delete 2>/dev/null || true
+      echo "This install prefix cannot atomically acquire $INSTALL_LOCK; refusing instead of spinning or replacing without ownership." >&2
+      exit 1
+    fi
+    owner="$(sed -n '1p' "$INSTALL_LOCK" 2>/dev/null || true)"
+    if ! [[ "$owner" =~ ^[0-9]+$ ]]; then
+      find "$candidate_lock" -maxdepth 0 -type f -delete 2>/dev/null || true
+      echo "Install lock $INSTALL_LOCK has no valid owner PID; refusing ambiguous recovery." >&2
+      exit 1
+    fi
+    # kill -0 can fail with EPERM for a live process owned by another user.
+    # ps supplies the independent existence check; unknown remains owned.
+    if kill -0 "$owner" 2>/dev/null \
+        || ps -p "$owner" -o pid= 2>/dev/null | grep -Eq '[0-9]'; then
+      find "$candidate_lock" -maxdepth 0 -type f -delete 2>/dev/null || true
+      echo "Another hauksbee installer (pid $owner) owns $INSTALL_LOCK; refusing concurrent replacement." >&2
+      exit 1
+    fi
+    find "$candidate_lock" -maxdepth 0 -type f -delete 2>/dev/null || true
+    echo "Install lock owner pid $owner is absent, but automatic stale-lock reclamation is unsafe under concurrent installers." >&2
+    echo "Inspect $INSTALL_LOCK and remove that one file explicitly before retrying." >&2
+    exit 1
+  done
+}
+release_install_lock() {
+  [ "$LOCK_OWNED" -eq 1 ] || return 0
+  [ "$(sed -n '2p' "$INSTALL_LOCK" 2>/dev/null || true)" = "$LOCK_TOKEN" ] || {
+    echo "Install lock ownership changed unexpectedly; refusing to delete it." >&2
+    LOCK_OWNED=0
+    return 1
+  }
+  find "$INSTALL_LOCK" -maxdepth 0 -type f -delete 2>/dev/null || true
+  LOCK_OWNED=0
+}
+recover_transaction() {
+  journal="$1"
+  if [ -e "$journal/committed" ]; then
+    find "$journal" -depth -mindepth 1 -delete 2>/dev/null || true
+    rmdir "$journal" 2>/dev/null || true
+    return
+  fi
+  journal_binaries="$(find "$journal" -maxdepth 1 -type f \( -name 'old-*' -o -name 'installing-*' \) -print \
+    | sed -E 's#^.*/(old|installing)-##' | sort -u)"
+  for b in ${journal_binaries}; do
+    if [ -e "$journal/old-$b" ]; then
+      find "$INSTALL_DIR/$b" -maxdepth 0 -type f -delete 2>/dev/null || true
+      mv -f "$journal/old-$b" "$INSTALL_DIR/$b"
+    elif [ -e "$journal/installing-$b" ]; then
+      find "$INSTALL_DIR/$b" -maxdepth 0 -type f -delete 2>/dev/null || true
+    fi
+  done
+  find "$journal" -depth -mindepth 1 -delete 2>/dev/null || true
+  rmdir "$journal" 2>/dev/null || true
+}
+acquire_install_lock
+orphan_journals="$(find "$INSTALL_DIR" -maxdepth 1 -type d -name '.hauksbee-install.*' -print)"
+orphan_count="$(printf '%s\n' "$orphan_journals" | sed '/^$/d' | wc -l | tr -d ' ')"
+[ "$orphan_count" -le 1 ] || {
+  echo "Multiple interrupted install journals exist; refusing ambiguous recovery." >&2
+  release_install_lock
+  exit 1
+}
+if [ "$orphan_count" -eq 1 ]; then
+  recover_transaction "$orphan_journals"
+fi
+if [ "${HAUKSBEE_TEST_EXIT_AFTER_RECOVERY:-}" = 1 ]; then
+  exit 75
+fi
+
+# One recoverable transaction directory lives on the destination filesystem.
+# Old binaries remain there until every replacement starts successfully.
+TXN_DIR="$(mktemp -d "${INSTALL_DIR}/.hauksbee-install.XXXXXX")"
+INSTALL_COMMITTED=0
+rollback_install() {
+  recover_transaction "$TXN_DIR"
 }
 for b in ${BINARIES}; do
-  staged="${INSTALL_DIR}/.${b}.new.$$"
-  if ! install -m 0755 "${BIN_DIR}/${b}" "${staged}"; then
+  if ! install -m 0755 "${BIN_DIR}/${b}" "$TXN_DIR/new-$b"; then
     echo "Failed to stage ${b} into ${INSTALL_DIR}; existing install left untouched." >&2
-    cleanup_staged
     exit 1
   fi
-  STAGED="${STAGED} ${staged}"
 done
 for b in ${BINARIES}; do
-  if ! mv -f "${INSTALL_DIR}/.${b}.new.$$" "${INSTALL_DIR}/${b}"; then
+  if [ -e "$INSTALL_DIR/$b" ]; then
+    mv -f "$INSTALL_DIR/$b" "$TXN_DIR/old-$b"
+  fi
+  # Record intent before the rename. If a signal lands after mv(1) succeeds
+  # but before the shell runs another command, rollback still knows that a
+  # fresh destination may need to be removed.
+  : > "$TXN_DIR/installing-$b"
+  if ! mv -f "$TXN_DIR/new-$b" "$INSTALL_DIR/$b"; then
     echo "Failed to move ${b} into place in ${INSTALL_DIR}." >&2
-    cleanup_staged
+    rollback_install
     exit 1
   fi
 done
@@ -439,10 +595,20 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Post-install smoke test: an installed binary that cannot start is a failed
-# install, not a success. The default (avr) shape links libelf dynamically,
-# and minimal Linux images do not ship it.
+# Post-install defense in depth: re-run the same probes from their final paths
+# before committing the recovery journal. The preflight above preserves the old
+# installation for malformed assets; this catches destination-filesystem or
+# rename damage. The default shape links libelf dynamically, and minimal Linux
+# images do not ship it.
 # ---------------------------------------------------------------------------
+for b in ${BINARIES}; do
+  actual_version="$("${INSTALL_DIR}/$b" --version 2>&1 || true)"
+  expected_version="$b ${VERSION#v} (git $RELEASE_SHA)"
+  if [ "$actual_version" != "$expected_version" ]; then
+    echo "ERROR: installed $b reports '$actual_version', expected '$expected_version'." >&2
+    exit 1
+  fi
+done
 if ! "${INSTALL_DIR}/hauksbee" --version >/dev/null 2>&1; then
   echo "" >&2
   echo "ERROR: installed, but ${INSTALL_DIR}/hauksbee cannot start on this system." >&2
@@ -457,6 +623,16 @@ if ! "${INSTALL_DIR}/hauksbee" --version >/dev/null 2>&1; then
   fi
   exit 1
 fi
+
+# Persist commit state before discarding backups. Recovery treats a committed
+# journal as cleanup-only, so SIGKILL/power loss during deletion can never
+# remove a verified live binary or attempt an impossible partial rollback.
+: > "$TXN_DIR/committed"
+INSTALL_COMMITTED=1
+find "$TXN_DIR" -depth -mindepth 1 -delete
+rmdir "$TXN_DIR"
+TXN_DIR=""
+release_install_lock
 
 echo ""
 echo "hauksbee ${VERSION} installed. Run: hauksbee --help"

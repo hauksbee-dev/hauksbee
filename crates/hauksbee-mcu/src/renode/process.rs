@@ -190,7 +190,11 @@ impl RenodeProcess {
 
     /// How long to wait for the Monitor port to come up after spawn.
     pub fn startup_timeout() -> Duration {
-        Duration::from_secs(30)
+        // The first launch on macOS can spend more than 30 seconds in the
+        // platform's code-signing and .NET cold-start path even though Renode
+        // is healthy. Keep this bounded, but leave enough room for that real
+        // startup rather than exhausting all three port retries prematurely.
+        Duration::from_secs(60)
     }
 
     /// The spawned Renode's OS process id (diagnostics and the reaping tests).
@@ -305,5 +309,10 @@ mod discovery_tests {
             None,
             "a directory named like the binary must not be picked up"
         );
+    }
+
+    #[test]
+    fn startup_timeout_is_a_bounded_sixty_seconds() {
+        assert_eq!(RenodeProcess::startup_timeout(), Duration::from_secs(60));
     }
 }

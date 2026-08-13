@@ -365,10 +365,10 @@ fn models_resolve_json_object() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `--version` carries the git hash the binary was built from (build.rs sets
-/// GIT_HASH; this test builds inside the repo, so it must be present).
+/// `--version` carries a Git hash only when build.rs could prove the source
+/// identity. A dirty checkout must not label its changed bytes as clean HEAD.
 #[test]
-fn version_carries_git_hash() {
+fn version_reports_only_verified_source_identity() {
     let out = Command::new(bin())
         .arg("--version")
         .output()
@@ -378,10 +378,16 @@ fn version_carries_git_hash() {
         stdout.contains(env!("CARGO_PKG_VERSION")),
         "crate version present: {stdout}"
     );
-    assert!(
-        stdout.contains("git "),
-        "git hash present when built in a checkout: {stdout}"
-    );
+    match option_env!("GIT_HASH") {
+        Some(hash) => assert!(
+            stdout.contains(&format!("git {hash}")),
+            "verified git hash reaches --version: {stdout}"
+        ),
+        None => assert!(
+            !stdout.contains("git "),
+            "unverified source bytes must not claim a clean commit: {stdout}"
+        ),
+    }
 }
 
 /// `from-code --json` without a routing flag is refused loudly (it describes a

@@ -118,9 +118,17 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         integration_job = workflow.split("  required-integrations:", 1)[1].split(
             "\n  release:", 1
         )[0]
-        self.assertIn("ref: ${{ github.sha }}", integration_job)
+        self.assertIn(
+            "ref: ${{ needs.resolve-source.outputs.source_sha }}", integration_job
+        )
+        self.assertIn(
+            "EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}",
+            integration_job,
+        )
+        self.assertIn('[ "$expected_sha" = "$EXPECTED_SHA" ]', integration_job)
         self.assertIn("scripts/run_required_integrations.py", integration_job)
-        self.assertIn('--expected-sha "$GITHUB_SHA"', integration_job)
+        self.assertIn('expected_sha="$(git rev-parse HEAD)"', integration_job)
+        self.assertIn('--expected-sha "$expected_sha"', integration_job)
         self.assertIn("--evidence-out", integration_job)
 
         release_job = workflow.split("\n  release:", 1)[1]

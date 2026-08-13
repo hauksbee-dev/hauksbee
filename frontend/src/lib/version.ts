@@ -14,6 +14,10 @@ export const APP_VERSION: string = __APP_VERSION__
 /** The release tag for this build, in the form the git tags use. */
 export const RELEASE_TAG = `v${APP_VERSION}`
 
+/** Immutable commit carrying the private Action and matching release assets. */
+export const RELEASE_COMMIT: string =
+  typeof __RELEASE_COMMIT__ === 'string' ? __RELEASE_COMMIT__ : ''
+
 /**
  * The private GitHub repository that supplies Action code and release assets.
  *
