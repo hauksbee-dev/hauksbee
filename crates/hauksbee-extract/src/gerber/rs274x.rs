@@ -22,7 +22,7 @@
 //!     thermal gaps, so a reader that discards the clears sees a solid sheet and
 //!     merges every net on the board. Admitted clear images are unioned per
 //!     uninterrupted clear pass and subtracted from every earlier copper kind;
-//!     see [`apply_clears`] for the exact painter rule.
+//!     see `apply_clears` for the exact painter rule.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 

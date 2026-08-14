@@ -73,11 +73,11 @@
 //!      holes cannot add up to one large void.
 //!    - The extent must reach 2 mm. That is a conservative floor rather than a
 //!      derived limit, set where a void is unambiguous even after clearances are
-//!      excused; see [`MIN_REFERENCE_VOID_MM`].
+//!      excused; see `MIN_REFERENCE_VOID_MM`.
 //!
 //!    Two limitations are worth stating plainly. The reference layer is taken to
 //!    be the copper layer ADJACENT to the routing layer, which is the same
-//!    assumption [`read_stackup`] already makes when it reads `H` from the first
+//!    assumption `read_stackup` already makes when it reads `H` from the first
 //!    dielectric: the stackup block names no plane layer, so neither can this. On
 //!    a stack whose adjacent layer is a signal layer with routing channels and
 //!    whose real plane is one deeper, a gap in that adjacent layer is reported,

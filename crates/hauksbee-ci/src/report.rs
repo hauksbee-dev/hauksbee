@@ -1158,9 +1158,9 @@ pub fn render_junit_error(message: &str) -> String {
 ///
 /// 1. the shortfall the check MEASURED (`why`), always preferred,
 /// 2. guidance specific to a degenerate outcome the detail describes
-///    ([`degenerate_hint`]),
+///    (`degenerate_hint`),
 /// 3. the generic per-kind pointer at the likely physical cause
-///    ([`failure_hint`]).
+///    (`failure_hint`).
 ///
 /// Every surface that prints a `why:` goes through here, so the terminal and the
 /// JUnit body cannot end up saying different things about the same failure.

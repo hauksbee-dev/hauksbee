@@ -53,7 +53,7 @@
 //! (a `tcsetattr` on the master discards bytes already written). A close+reopen
 //! completed between probes is not observable, so every host process must
 //! configure its own serial fd before writing, as ordinary serial clients do.
-//! See [`raw_via_slave`] for the failure that taught us.
+//! See `raw_via_slave` for the failure that taught us.
 //!
 //! # Buffering, and what is honestly lost
 //!
@@ -327,7 +327,7 @@ impl HostSerial {
 
     /// Bytes the host tool sent, to be injected into the firmware's UART RX.
     ///
-    /// Returns everything readable up to [`READ_BUDGET`], in order. A single host
+    /// Returns everything readable up to `READ_BUDGET`, in order. A single host
     /// `write` far larger than the emulated UART's RX fifo is fine here and must
     /// stay fine downstream: the fifo-truncation defect class is the reason
     /// `Mcu::uart_write` queues and meters rather than raising bytes at one

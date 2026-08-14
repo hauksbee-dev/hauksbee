@@ -955,12 +955,12 @@ pub(crate) fn resolve(
 ///   on the assembled board, its CS net electrically meaningless) and an
 ///   identity-refused part (nothing about the record is evidence, including
 ///   which pad is CS) both contribute nothing;
-/// - it must bind to a model, through the [`FittedComponent`]-gated [`resolve`]
+/// - it must bind to a model, through the [`FittedComponent`]-gated `resolve`
 ///   and no other door.
 ///
 /// `Some` always carries the bound model's id, and carries a `cs_net` only when
 /// that model maps a `cs` role landing on exactly one real, non-ground net
-/// ([`crate::component_evidence::role_net`] refuses a role split across two nets
+/// (`crate::component_evidence::role_net` refuses a role split across two nets
 /// rather than picking one).
 ///
 /// The id comes back EVEN WHEN there is no `cs_net`, and that separation is
