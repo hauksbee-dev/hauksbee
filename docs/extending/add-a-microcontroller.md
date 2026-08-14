@@ -233,20 +233,25 @@ never received its analog inputs cannot read as healthy.
 
 ### `[soc]`, QEMU
 
-The QEMU backend exists for the Espressif fork and the ESP32 family, which
-observes GPIO through a RAM mailbox rather than register read-back, so a bank
-carries mailbox addresses instead of a register offset.
+The QEMU backend exists for the Espressif fork and the ESP32 family. Each bank
+carries real GPIO OUT and ENABLE registers plus the legacy output/input mailbox
+addresses; paired live capabilities at `gpio_qom_path` decide whether level and
+drive direction can use MMIO.
 
 | Field | Required | Type | What it does |
 |---|---|---|---|
 | `backend` | yes | `"qemu"` | Which loader claims the file |
 | `arch` | yes | `"xtensa"` or `"riscv32"` | Which fork binary to run |
 | `machine` | yes | string | The QEMU machine name |
+| `gpio_qom_path` | yes | QOM path | Device exposing paired `gpio-out`/`gpio-enable` capabilities on patched QEMU |
 | `icount_shift` | yes | integer | The instruction-count shift the lockstep uses |
 | `frequency_hz` | yes | integer | Advisory clock |
+| `banks[].peripheral_out_reg` | yes | address | Real GPIO OUT word trusted only after the capability probe |
+| `banks[].peripheral_enable_reg` | yes | address | Real GPIO ENABLE word paired with OUT for drive direction |
+| `banks[].out_reg` / `in_reg` | yes | addresses | Firmware-mailbox fallback output and input contract |
 | `expected_e_machine` | yes | `EM_*` name | The ISA gate |
 | `mcu_label` | yes | string | The human name |
-| `[[soc.banks]]` | no | table array | `letter`, `out_reg`, `in_reg`, `width` |
+| `[[soc.banks]]` | no | table array | `letter`, peripheral/fallback addresses, `width` |
 | `[soc.i2c].buses` | no | array of strings | Mailbox bus names |
 
 ### What the loader checks, and what it does not

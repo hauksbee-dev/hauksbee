@@ -63,7 +63,7 @@
 //!     but only for word-granular memory writes (GPIO input mailbox), never for
 //!     stepping.
 //!
-//! # Coupling model (transplanted ODR-poll, via a RAM mailbox)
+//! # Coupling model (transplanted ODR-poll, register-first)
 //!
 //! Like Renode, the backend is poll-based for GPIO output: after each chunk it
 //! reads an output word over QMP (`xp /1wx`), diffs against the previous
@@ -71,16 +71,14 @@
 //! GPIO input is push-based: it writes an input word over the gdbstub `M`
 //! packet. UART is the serial socket.
 //!
-//! The one substantive difference from Renode: the Espressif QEMU `esp32.gpio`
-//! model does NOT implement read-back of `GPIO_OUT_REG` (a host read returns 0
-//! regardless of the driven level; writes to `GPIO_IN_REG` are dropped). RAM, in
-//! contrast, round-trips exactly. So the output/input words are a fixed RAM
-//! [`mailbox`] the demo firmware maintains (mirroring its GPIO output, reading
-//! injected inputs), with the identical bit layout as `GPIO_OUT_REG`. The edge
-//! synthesis is otherwise byte-for-byte the Renode ODR-poll. The real GPIO
-//! `gpio_set_level` writes still happen in the firmware; the mailbox is only the
-//! observation path the emulator's gpio model lacks. See the limitations section
-//! in docs/cosim/MCU.md.
+//! Espressif's pinned release discards `GPIO_OUT_REG` writes. Hauksbee carries a
+//! small exact-source QEMU patch that retains OUT/ENABLE state and exposes
+//! paired read-only `gpio-out`/`gpio-enable` QOM capabilities. When both live
+//! properties exist, the backend polls the real MMIO registers, so ordinary third-party ESP-IDF
+//! firmware needs no cooperation. An unpatched binary fails closed to the old
+//! output [`mailbox`] and prints the unlocking condition. GPIO input, SAR ADC,
+//! and byte-level I2C/SPI interception still use their named mailbox slots
+//! because those emulator models/hooks do not exist. See docs/cosim/MCU.md.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
@@ -111,20 +109,15 @@ type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 
 /// GPIO observation/injection mailbox in ESP32 RTC slow memory.
 ///
-/// The Espressif QEMU `esp32.gpio` peripheral model does NOT implement read-back
-/// of `GPIO_OUT_REG` (a host read of 0x3FF44004 over QMP `xp` or the gdbstub
-/// returns 0 regardless of the firmware-driven level; writes to `GPIO_IN_REG`
-/// are likewise dropped). This was verified empirically against the fork's
-/// `esp32`/`esp32s3`/`esp32c3` machines. RAM, by contrast, reads and writes back
-/// exactly over the control channel.
+/// The unpatched Espressif release does not retain `GPIO_OUT_REG`, and no family
+/// member accepts host-driven `GPIO_IN_REG`. Hauksbee's reviewed source patch
+/// retires this mailbox for GPIO output only; the backend capability-probes it
+/// and otherwise falls back here.
 ///
-/// So the GPIO exchange goes through a fixed RAM mailbox the demo firmware
-/// maintains: it mirrors its GPIO output word to `GPIO_OUT` after every change
-/// and reads injected inputs from `GPIO_IN`. The bit layout is identical to
-/// `GPIO_OUT_REG`, so the backend's edge-synthesis logic is unchanged: it polls
-/// a word and diffs it, exactly the Renode ODR-poll pattern, only at a RAM
-/// address instead of a peripheral register. `MAGIC` lets the backend confirm
-/// the firmware is mailbox-aware before trusting the channel.
+/// The demo firmware keeps the compatibility exchange: it mirrors output into
+/// `GPIO_OUT`, reads injected inputs from `GPIO_IN`, and raises `MAGIC`. This
+/// proves old binaries and mailbox-aware firmware remain usable while ordinary
+/// firmware uses the real peripheral register on a patched build.
 ///
 /// RTC slow memory (0x5000_0000, 8 KiB, uncached, fixed) is chosen because a
 /// minimal app never touches it, the address is stable, and it survives across
@@ -246,9 +239,10 @@ pub mod mailbox {
 
 /// One GPIO bank's observation addresses, generic over ESP32 family member.
 ///
-/// The addresses are the RAM mailbox words (see [`mailbox`]), not the GPIO
-/// peripheral registers, because the QEMU fork's gpio model does not expose
-/// register read-back. The bit layout still matches GPIO_OUT_REG.
+/// `out_reg` remains the RAM-mailbox fallback (see [`mailbox`]);
+/// `peripheral_out_reg` is the real GPIO register used only after the backend
+/// proves the running QEMU carries Hauksbee's stateful GPIO patch. Both words
+/// use the GPIO_OUT bit layout, so edge synthesis is identical on either path.
 ///
 /// Plain-data register-offset carrier, so a new part declares its mailbox
 /// addresses instead of adding branches to the backend; serde-derivable so it
@@ -261,6 +255,13 @@ pub struct GpioBank {
     pub letter: char,
     /// Address of this bank's output-mirror word (firmware -> host).
     pub out_reg: u32,
+    /// Real GPIO peripheral OUT register. Read only when the QOM capability
+    /// probe succeeds; an old/unpatched fork continues to use `out_reg`.
+    pub peripheral_out_reg: u32,
+    /// Real GPIO peripheral ENABLE register, paired with
+    /// `peripheral_out_reg`. It makes drive direction authoritative on the
+    /// patched model instead of treating an input pin's output latch as driven.
+    pub peripheral_enable_reg: u32,
     /// Address of this bank's input-injection word (host -> firmware).
     pub in_reg: u32,
     /// Number of valid bits in this bank.
@@ -297,11 +298,24 @@ pub struct QemuConfig {
     pub expected_e_machine: u16,
     /// Human-readable MCU/board name for arch-mismatch error messages.
     pub mcu_label: String,
+    /// QOM path of the GPIO device. The Hauksbee QEMU patch exposes paired
+    /// read-only `gpio-out` and `gpio-enable` properties here; both must be
+    /// present for real peripheral level and drive-direction observation.
+    pub gpio_qom_path: String,
     /// QOM paths of the machine's I2C buses, searched for an emulated I2C device
     /// matching a modeled sensor's address so the engine can push readings into
     /// it (e.g. the ESP32 machine's built-in `tmp105` on `i2c0`). Empty disables
     /// the I2C-device bridge.
     pub i2c_buses: Vec<String>,
+}
+
+/// The source from which GPIO output edges are observed in this QEMU process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpioOutputObservation {
+    /// Real ESP32 GPIO_OUT MMIO state from a capability-probed patched model.
+    PeripheralRegisters,
+    /// Legacy RTC-slow-RAM word maintained by cooperating firmware.
+    FirmwareMailbox,
 }
 
 impl QemuConfig {
@@ -550,6 +564,10 @@ fn run_window(seconds: f64, boot_complete: bool) -> Duration {
     Duration::from_secs_f64(s)
 }
 
+fn observable_gpio_changes(prev: u32, new: u32, prev_enable: u32, enable: u32) -> u32 {
+    ((new ^ prev) | (enable & !prev_enable)) & enable
+}
+
 /// Espressif-QEMU-backed [`Mcu`].
 pub struct QemuBackend {
     config: QemuConfig,
@@ -575,6 +593,12 @@ pub struct QemuBackend {
 
     /// Last-read OUT register per bank letter, for edge synthesis.
     last_out: HashMap<char, u32>,
+    /// Last-read real GPIO ENABLE register per bank. Populated only on the
+    /// patched peripheral path; mailbox fallback keeps direction unobservable.
+    last_enable: HashMap<char, u32>,
+    /// Capability-probed GPIO observation source. Never inferred from a QEMU
+    /// version string: only the live QOM property unlocks peripheral reads.
+    gpio_output_observation: GpioOutputObservation,
     /// Current driven IN register per bank letter (what we poke for inputs).
     in_shadow: HashMap<char, u32>,
     /// If set, only these bank letters are polled each chunk.
@@ -582,15 +606,10 @@ pub struct QemuBackend {
     on_pin_change: Option<Box<dyn FnMut(PinId, bool, u64) + Send>>,
     on_uart: Option<Box<dyn FnMut(u8) + Send>>,
     firmware_loaded: bool,
-    /// True once the firmware has raised the mailbox [`mailbox::MAGIC`] word,
-    /// i.e. `app_main` is running. Gates the boot-only run-window floor (see
-    /// [`run_window`]): before this, every chunk is floored so the ROM +
-    /// 2nd-stage bootloader make real progress; after it, the requested chunk
-    /// time is honored exactly so the guest stays leveled with the analog
-    /// solve and the other MCUs (R8 #5). A firmware that never raises MAGIC
-    /// (unmodified vendor firmware, not mailbox-aware) keeps the floor
-    /// forever, identical to the pre-fix behaviour, and the only honest
-    /// option: without the handshake there is no boot signal to gate on.
+    /// True once mailbox-aware firmware raises [`mailbox::MAGIC`], or ordinary
+    /// firmware produces an enabled real-GPIO transition on the capability-
+    /// probed patched model. Gates the boot-only run-window floor (see
+    /// [`run_window`]); without either signal the conservative floor remains.
     boot_complete: bool,
     /// Virtual time advanced so far, in cycles-equivalent.
     cycles: u64,
@@ -759,7 +778,43 @@ impl QemuBackend {
 
         let uart = UartSocket::connect(uart_port, Duration::from_secs(10))?;
 
+        let gpio_output_observation = match (
+            qmp.qom_get(&config.gpio_qom_path, "gpio-out"),
+            qmp.qom_get(&config.gpio_qom_path, "gpio-enable"),
+        ) {
+            (Ok(out), Ok(enable))
+                if out.parse::<u32>().is_ok() && enable.parse::<u32>().is_ok() =>
+            {
+                GpioOutputObservation::PeripheralRegisters
+            }
+            _ => {
+                eprintln!(
+                    "QEMU GPIO output limitation: '{}' has no stateful GPIO register \
+                     read-back. Output observation requires firmware to maintain the \
+                     Hauksbee mailbox at {:#010x}. GPIO input and SAR ADC also remain \
+                     explicit mailbox contracts; I2C/SPI byte interception does too.",
+                    config.mcu_label,
+                    mailbox::BASE,
+                );
+                GpioOutputObservation::FirmwareMailbox
+            }
+        };
+
         let last_out = config.banks.iter().map(|b| (b.letter, 0u32)).collect();
+        let initial_enable =
+            if gpio_output_observation == GpioOutputObservation::PeripheralRegisters {
+                0
+            } else {
+                // The legacy mailbox has levels but no direction. Treat every bit
+                // as eligible for level-edge synthesis without fabricating a
+                // first-poll "newly enabled" edge for every pin.
+                u32::MAX
+            };
+        let last_enable = config
+            .banks
+            .iter()
+            .map(|b| (b.letter, initial_enable))
+            .collect();
         let in_shadow = config.banks.iter().map(|b| (b.letter, 0u32)).collect();
 
         Ok(QemuBackend {
@@ -772,6 +827,8 @@ impl QemuBackend {
             process,
             _flash_temp: flash_temp,
             last_out,
+            last_enable,
+            gpio_output_observation,
             in_shadow,
             active_ports: None,
             on_pin_change: None,
@@ -798,41 +855,73 @@ impl QemuBackend {
         Self::new(QemuConfig::esp32(), flash_image)
     }
 
-    /// Read one bank's output-mirror word from the RAM mailbox, preferring QMP
-    /// `xp`, falling back to the gdbstub on a parse failure.
+    /// Read one bank's selected output word, preferring QMP `xp` and falling
+    /// back to the gdbstub on a parse failure. The live QOM capability probe,
+    /// not the configured address alone, decides between peripheral and
+    /// mailbox so an unpatched QEMU never yields a false zero register trace.
     fn read_out(&mut self, bank: &GpioBank) -> Result<u32> {
-        match self.qmp.read_u32(bank.out_reg) {
+        let addr = match self.gpio_output_observation {
+            GpioOutputObservation::PeripheralRegisters => bank.peripheral_out_reg,
+            GpioOutputObservation::FirmwareMailbox => bank.out_reg,
+        };
+        match self.qmp.read_u32(addr) {
             Ok(v) => Ok(v),
             Err(qmp_err) => {
                 if let Err(death) = self
                     .process
                     .ensure_running("reading a GPIO output word over QMP")
                 {
-                    return Err(death).context(format!(
-                        "QMP GPIO read at {:#x} failed: {qmp_err:#}",
-                        bank.out_reg
-                    ));
+                    return Err(death)
+                        .context(format!("QMP GPIO read at {:#x} failed: {qmp_err:#}", addr));
                 }
                 match self.gdb.as_mut() {
-                    Some(gdb) => gdb.read_u32(bank.out_reg).with_context(|| {
+                    Some(gdb) => gdb.read_u32(addr).with_context(|| {
                         format!(
                             "QMP GPIO read at {:#x} failed ({qmp_err:#}); \
                              gdb fallback failed too",
-                            bank.out_reg
+                            addr
                         )
                     }),
                     None => Err(qmp_err).context(format!(
                         "QMP GPIO read at {:#x} failed and no gdbstub fallback is attached",
-                        bank.out_reg
+                        addr
                     )),
                 }
             }
         }
     }
 
-    /// Poll the relevant banks' OUT registers, diff against the snapshot, fire
-    /// per-bit edges for the wired pins.
-    fn poll_gpio_edges(&mut self) -> Result<()> {
+    /// Read one real GPIO ENABLE word after the paired QOM capability succeeds.
+    fn read_enable(&mut self, bank: &GpioBank) -> Result<u32> {
+        let addr = bank.peripheral_enable_reg;
+        match self.qmp.read_u32(addr) {
+            Ok(v) => Ok(v),
+            Err(qmp_err) => {
+                if let Err(death) = self
+                    .process
+                    .ensure_running("reading a GPIO enable word over QMP")
+                {
+                    return Err(death).context(format!(
+                        "QMP GPIO enable read at {addr:#x} failed: {qmp_err:#}"
+                    ));
+                }
+                match self.gdb.as_mut() {
+                    Some(gdb) => gdb.read_u32(addr).with_context(|| {
+                        format!(
+                            "QMP GPIO enable read at {addr:#x} failed ({qmp_err:#}); gdb fallback failed too"
+                        )
+                    }),
+                    None => Err(qmp_err).context(format!(
+                        "QMP GPIO enable read at {addr:#x} failed and no gdbstub fallback is attached"
+                    )),
+                }
+            }
+        }
+    }
+
+    /// Poll the relevant banks' OUT/ENABLE registers, diff against the
+    /// snapshot, and fire per-bit edges for pins actually configured as output.
+    fn poll_gpio_edges(&mut self) -> Result<bool> {
         let banks: Vec<GpioBank> = match &self.active_ports {
             Some(active) => self
                 .config
@@ -847,11 +936,23 @@ impl QemuBackend {
         // no icount here, so this is coarse and every edge this poll shares it;
         // `cycle_exact()` is false (05 §1.1). Snapshot before the callback borrow.
         let cyc = self.cycles;
+        let mut observed_change = false;
         for bank in &banks {
             let new = self.read_out(bank)?;
+            let enable =
+                if self.gpio_output_observation == GpioOutputObservation::PeripheralRegisters {
+                    self.read_enable(bank)?
+                } else {
+                    // Mailbox firmware publishes only levels. Preserve the old
+                    // behavior while reporting direction as unobservable.
+                    u32::MAX
+                };
             let prev = *self.last_out.get(&bank.letter).unwrap_or(&0);
-            if new != prev {
-                let changed = new ^ prev;
+            let prev_enable = *self.last_enable.get(&bank.letter).unwrap_or(&0);
+            let level_changed = new ^ prev;
+            if level_changed != 0 || enable != prev_enable {
+                observed_change = true;
+                let changed = observable_gpio_changes(prev, new, prev_enable, enable);
                 if let Some(cb) = &mut self.on_pin_change {
                     for bit in 0..bank.width {
                         if (changed >> bit) & 1 != 0 {
@@ -868,9 +969,10 @@ impl QemuBackend {
                     }
                 }
                 self.last_out.insert(bank.letter, new);
+                self.last_enable.insert(bank.letter, enable);
             }
         }
-        Ok(())
+        Ok(observed_change)
     }
 
     /// Drain UART bytes the firmware emitted and dispatch them.
@@ -958,11 +1060,21 @@ impl QemuBackend {
             }
         }
 
-        self.poll_gpio_edges()?;
+        let gpio_activity = self.poll_gpio_edges()?;
         // Service the mailbox bus cells while the guest is paused (05 §5.2),
         // so a firmware spin-waiting on RSP_SEQ proceeds next chunk.
         self.service_bus_mailbox()?;
         self.pump_uart_out()?;
+        // Unmodified firmware deliberately has no mailbox MAGIC. With the
+        // patched GPIO model, a real enabled peripheral transition is direct
+        // guest activity and is therefore a valid end-of-boot signal;
+        // this retires the boot-floor dependency on cooperating firmware too.
+        if !self.boot_complete
+            && self.gpio_output_observation == GpioOutputObservation::PeripheralRegisters
+            && gpio_activity
+        {
+            self.boot_complete = true;
+        }
         // A child that died after replying to `stop` must make this chunk fail,
         // even if a buffered/fallback read happened to return stale state.
         self.process
@@ -1224,6 +1336,11 @@ impl QemuBackend {
         self.boot_complete
     }
 
+    /// Which live GPIO output observation path this backend selected.
+    pub fn gpio_output_observation(&self) -> GpioOutputObservation {
+        self.gpio_output_observation
+    }
+
     /// Write a guest physical word (gdbstub `M` packet). See [`Self::debug_read_u32`].
     pub fn debug_write_u32(&mut self, addr: u32, val: u32) -> Result<()> {
         self.write_guest_u32(addr, val)
@@ -1346,6 +1463,29 @@ impl Mcu for QemuBackend {
     /// backend drives QEMU, not a per-part property. See [`TIMING_LIMITATION`].
     fn timing_limitation(&self) -> Option<String> {
         Some(TIMING_LIMITATION.to_string())
+    }
+
+    fn pins_configured_output(&self) -> Vec<PinId> {
+        if self.gpio_output_observation != GpioOutputObservation::PeripheralRegisters {
+            return Vec::new();
+        }
+        let mut pins = Vec::new();
+        for bank in &self.config.banks {
+            let enabled = *self.last_enable.get(&bank.letter).unwrap_or(&0);
+            for bit in 0..bank.width {
+                if enabled & (1u32 << bit) != 0 {
+                    pins.push(PinId {
+                        port: bank.letter,
+                        bit,
+                    });
+                }
+            }
+        }
+        pins
+    }
+
+    fn drive_direction_observable(&self) -> bool {
+        self.gpio_output_observation == GpioOutputObservation::PeripheralRegisters
     }
 
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
@@ -1616,13 +1756,43 @@ mod tests {
     }
 
     #[test]
+    fn gpio_change_mask_respects_real_drive_enable() {
+        assert_eq!(
+            observable_gpio_changes(0, 0, 0, 1 << 4),
+            1 << 4,
+            "newly enabling a LOW output must publish its driven level"
+        );
+        assert_eq!(
+            observable_gpio_changes(0, 1 << 2, 0, 1 << 2),
+            1 << 2,
+            "newly enabling a HIGH output must publish its driven level"
+        );
+        assert_eq!(
+            observable_gpio_changes(0, 1 << 7, 0, 0),
+            0,
+            "an input pin's OUT latch is not a driven edge"
+        );
+    }
+
+    #[test]
+    fn mailbox_level_diff_does_not_fabricate_enable_edges() {
+        assert_eq!(observable_gpio_changes(0, 0, u32::MAX, u32::MAX), 0);
+        assert_eq!(
+            observable_gpio_changes(0, 1 << 4, u32::MAX, u32::MAX),
+            1 << 4
+        );
+    }
+
+    #[test]
     fn esp32_config_shape() {
         let c = QemuConfig::esp32();
         assert_eq!(c.machine, "esp32");
         assert_eq!(c.arch, QemuArch::Xtensa);
         assert_eq!(c.banks.len(), 1);
-        // GPIO is observed through the RAM mailbox (the gpio model has no
-        // register read-back).
+        assert_eq!(c.gpio_qom_path, "/machine/soc/gpio");
+        assert_eq!(c.banks[0].peripheral_out_reg, 0x3ff4_4004);
+        assert_eq!(c.banks[0].peripheral_enable_reg, 0x3ff4_4020);
+        // The old mailbox remains an explicit fallback for unpatched QEMU.
         assert_eq!(c.banks[0].out_reg, mailbox::GPIO_OUT);
         assert_eq!(c.banks[0].in_reg, mailbox::GPIO_IN);
     }
@@ -1632,6 +1802,9 @@ mod tests {
         let c = QemuConfig::esp32c3();
         assert_eq!(c.arch, QemuArch::Riscv32);
         assert_eq!(c.machine, "esp32c3");
+        assert_eq!(c.gpio_qom_path, "/machine/gpio");
+        assert_eq!(c.banks[0].peripheral_out_reg, 0x6000_4004);
+        assert_eq!(c.banks[0].peripheral_enable_reg, 0x6000_4020);
         assert_eq!(c.banks[0].out_reg, mailbox::GPIO_OUT);
     }
 

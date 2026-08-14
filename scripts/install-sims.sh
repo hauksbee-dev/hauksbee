@@ -10,7 +10,7 @@
 # recorded sha256 and checking the result after install.
 #
 # Usage:
-#   scripts/install-sims.sh [--renode-only | --qemu-only | --avr]
+#   scripts/install-sims.sh [--renode-only | --qemu-only | --qemu-patched-source | --avr]
 #                           [--prefix DIR] [--check] [--help]
 #
 # Flags:
@@ -18,6 +18,12 @@
 #                    --avr because simavr is GPL-3.0; see below).
 #   --renode-only    Install Renode only.
 #   --qemu-only      Install Espressif QEMU only.
+#   --qemu-patched-source
+#                    Build the exact pinned Espressif QEMU source with the
+#                    reviewed GPIO-register-state patch. This is the route for
+#                    observing unmodified ESP32 firmware GPIO without a RAM
+#                    mailbox. Requires git, a C toolchain, Meson/Ninja,
+#                    pkg-config, glib, libgcrypt, and libslirp.
 #   --avr            Install libsimavr (AVR co-sim) only. Installs libelf, then
 #                    clones + builds + installs simavr from source into the
 #                    prefix hauksbee-mcu's build.rs links against.
@@ -76,6 +82,7 @@ source "$VERSIONS_FILE"
 DO_RENODE=1
 DO_QEMU=1
 DO_AVR=0          # opt-in: simavr is GPL-3.0, so it is not installed by default
+BUILD_PATCHED_QEMU=0
 CHECK_ONLY=0
 REQUIRE_PINNED=0
 EMIT_REQUIRED_PATHS=0
@@ -85,6 +92,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --renode-only)  DO_QEMU=0; DO_AVR=0; shift ;;
     --qemu-only)    DO_RENODE=0; DO_AVR=0; shift ;;
+    --qemu-patched-source)
+                    DO_RENODE=0; DO_QEMU=1; DO_AVR=0; BUILD_PATCHED_QEMU=1; shift ;;
     --avr|--avr-only) DO_RENODE=0; DO_QEMU=0; DO_AVR=1; shift ;;
     --prefix)       PREFIX_OVERRIDE="${2:?--prefix needs a directory}"; shift 2 ;;
     --prefix=*)     PREFIX_OVERRIDE="${1#*=}"; shift ;;
@@ -95,6 +104,10 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument '$1' (try --help)" ;;
   esac
 done
+
+if [ "$BUILD_PATCHED_QEMU" -eq 1 ] && { [ "$CHECK_ONLY" -eq 1 ] || [ "$REQUIRE_PINNED" -eq 1 ]; }; then
+  die "--qemu-patched-source builds a local source tree and cannot be combined with --check or --require-pinned"
+fi
 
 if [ "$EMIT_REQUIRED_PATHS" -eq 1 ] && [ "$REQUIRE_PINNED" -ne 1 ]; then
   die "--emit-required-paths requires --require-pinned"
@@ -335,7 +348,8 @@ find_qemu_bin() {
     candidates+=("$HAUKSBEE_QEMU_DIR/bin/$name")
   fi
 
-  # 3. Conventional unpacked location (current name first, legacy as fallback).
+  # 3. Hauksbee-patched source build first, then ordinary unpacked locations.
+  candidates+=("$HOME/.hauksbee-qemu-esp-patched/qemu/bin/$name")
   candidates+=("$HOME/.hauksbee-qemu-esp/qemu/bin/$name")
   candidates+=("$HOME/.galvani-qemu-esp/qemu/bin/$name")
 
@@ -378,6 +392,36 @@ is_esp_qemu_fork() {
   "$bin" -machine help 2>/dev/null | grep -qi 'esp32'
 }
 
+# Prove the live machine exposes Hauksbee's stateful GPIO capability. A string
+# in the executable is not evidence: instantiate the real esp32 machine and
+# ask QOM for its properties. The blank flash never executes because -S pauses
+# CPUs before the first instruction.
+qemu_has_stateful_gpio() {
+  local bin="$1" machine="$2" qom_path="$3" probe_dir scratch response
+  make_tmpdir probe_dir
+  scratch="$probe_dir/blank-flash.bin"
+  dd if=/dev/zero of="$scratch" bs=1048576 count=4 2>/dev/null \
+    || die "could not create the GPIO capability probe flash"
+  response="$(
+    printf '%s\n' \
+      '{"execute":"qmp_capabilities"}' \
+      "{\"execute\":\"qom-list\",\"arguments\":{\"path\":\"$qom_path\"}}" \
+      '{"execute":"quit"}' \
+      | "$bin" -S -display none -machine "$machine" \
+          -drive "file=$scratch,if=mtd,format=raw,snapshot=on" \
+          -qmp stdio -serial null -monitor none 2>/dev/null
+  )" || return 1
+  printf '%s' "$response" | grep -Eq '"name"[[:space:]]*:[[:space:]]*"gpio-out"' \
+    && printf '%s' "$response" | grep -Eq '"name"[[:space:]]*:[[:space:]]*"gpio-enable"'
+}
+
+qemu_pair_has_stateful_gpio() {
+  local xtensa_bin="$1" riscv_bin="$2"
+  qemu_has_stateful_gpio "$xtensa_bin" esp32 /machine/soc/gpio \
+    && qemu_has_stateful_gpio "$xtensa_bin" esp32s3 /machine/soc/gpio \
+    && qemu_has_stateful_gpio "$riscv_bin" esp32c3 /machine/gpio
+}
+
 # ── find ESP-IDF idf_tools.py ─────────────────────────────────────────────────
 find_idf_tools_py() {
   # Check canonical locations in order.
@@ -392,6 +436,7 @@ find_idf_tools_py() {
 
 # ── temp dir management ───────────────────────────────────────────────────────
 TMPDIR_CREATED=()
+PATCHED_QEMU_LOCK=""
 make_tmpdir() {
   local out_var="$1"
   local created
@@ -416,6 +461,18 @@ cleanup_tmpdir() {
   done
   TMPDIR_CREATED=()
 }
+cleanup_patched_qemu_lock() {
+  local owner=""
+  [ -n "${PATCHED_QEMU_LOCK:-}" ] || return 0
+  if [ -f "$PATCHED_QEMU_LOCK/pid" ]; then
+    owner="$(sed -n '1p' "$PATCHED_QEMU_LOCK/pid" 2>/dev/null || true)"
+  fi
+  if [ "$owner" = "$$" ]; then
+    unlink "$PATCHED_QEMU_LOCK/pid" 2>/dev/null || true
+    rmdir "$PATCHED_QEMU_LOCK" 2>/dev/null || true
+  fi
+  PATCHED_QEMU_LOCK=""
+}
 REQUIRED_MOUNTPOINT=""
 cleanup_required_mount() {
   if [ -n "${REQUIRED_MOUNTPOINT:-}" ]; then
@@ -431,6 +488,7 @@ cleanup_required_mount() {
 cleanup_installer() {
   local original_status="${1:-$?}" cleanup_status=0
   cleanup_required_mount || cleanup_status=$?
+  cleanup_patched_qemu_lock
   cleanup_tmpdir
   if [ "$original_status" -ne 0 ]; then
     return "$original_status"
@@ -824,6 +882,141 @@ install_renode() {
 }
 
 # ── install Espressif QEMU ────────────────────────────────────────────────────
+acquire_patched_qemu_lock() {
+  local lock="$HOME/.hauksbee-qemu-esp-patched.install-lock"
+  local owner="" attempt quarantined
+  for attempt in 1 2 3 4 5; do
+    : "$attempt"
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s\n' "$$" > "$lock/pid"
+      PATCHED_QEMU_LOCK="$lock"
+      return 0
+    fi
+    owner="$(sed -n '1p' "$lock/pid" 2>/dev/null || true)"
+    if [ -z "$owner" ]; then
+      sleep 0.1
+      continue
+    fi
+    if kill -0 "$owner" 2>/dev/null; then
+      die "patched QEMU install is already running as process $owner ($lock)"
+    fi
+    quarantined="${lock}.stale.${owner}.$$"
+    if mv "$lock" "$quarantined" 2>/dev/null; then
+      warn "Recovered stale patched-QEMU install lock from process $owner"
+      if have trash; then
+        trash "$quarantined" 2>/dev/null || true
+      fi
+    fi
+  done
+  die "could not acquire patched QEMU install lock: $lock"
+}
+
+patched_qemu_payload_matches() {
+  local marker="$1" xtensa_bin="$2" riscv_bin="$3"
+  local want_xtensa want_riscv got_xtensa got_riscv
+  want_xtensa="$(awk -F= '$1 == "xtensa_sha256" { print $2; exit }' "$marker")"
+  want_riscv="$(awk -F= '$1 == "riscv32_sha256" { print $2; exit }' "$marker")"
+  [ -n "$want_xtensa" ] && [ -n "$want_riscv" ] || return 1
+  got_xtensa="$(sha256_file "$xtensa_bin" 2>/dev/null || true)"
+  got_riscv="$(sha256_file "$riscv_bin" 2>/dev/null || true)"
+  [ "$got_xtensa" = "$want_xtensa" ] && [ "$got_riscv" = "$want_riscv" ]
+}
+
+install_qemu_patched_source() {
+  local patch_file patch_sha marker target source_root candidate
+  local xtensa_bin riscv_bin configured_sha
+  patch_file="$SCRIPT_DIR/qemu-patches/esp32-gpio-register-state.patch"
+  [ -f "$patch_file" ] || die "reviewed QEMU GPIO patch missing: $patch_file"
+  [ -n "${QEMU_COMMIT:-}" ] || die "QEMU_COMMIT is not pinned in $VERSIONS_FILE"
+  patch_sha="$(sha256_file "$patch_file")" \
+    || die "cannot hash the reviewed QEMU GPIO patch"
+  target="$HOME/.hauksbee-qemu-esp-patched"
+  marker="$target/.hauksbee-qemu-source"
+  acquire_patched_qemu_lock
+
+  if [ -f "$marker" ] \
+      && grep -Fx "commit=$QEMU_COMMIT" "$marker" >/dev/null \
+      && grep -Fx "patch_sha256=$patch_sha" "$marker" >/dev/null \
+      && [ -x "$target/qemu/bin/qemu-system-xtensa" ] \
+      && [ -x "$target/qemu/bin/qemu-system-riscv32" ] \
+      && patched_qemu_payload_matches \
+        "$marker" \
+        "$target/qemu/bin/qemu-system-xtensa" \
+        "$target/qemu/bin/qemu-system-riscv32" \
+      && qemu_pair_has_stateful_gpio \
+        "$target/qemu/bin/qemu-system-xtensa" \
+        "$target/qemu/bin/qemu-system-riscv32"; then
+    ok "Pinned patched Espressif QEMU already installed at $target"
+    return 0
+  fi
+  if [ -e "$target" ]; then
+    die "$target exists but does not prove commit $QEMU_COMMIT plus patch $patch_sha. Move it aside, then rerun; refusing to overwrite an unidentified QEMU tree."
+  fi
+
+  for tool in git cc pkg-config; do
+    have "$tool" || die "$tool is required for --qemu-patched-source"
+  done
+  make_tmpdir source_root
+  mkdir -p "$source_root/qemu"
+  git -C "$source_root/qemu" init -q
+  git -C "$source_root/qemu" remote add origin https://github.com/espressif/qemu.git
+  log "Espressif QEMU: fetching exact source commit $QEMU_COMMIT ..."
+  git -C "$source_root/qemu" fetch -q --depth 1 origin "$QEMU_COMMIT" \
+    || die "could not fetch Espressif QEMU commit $QEMU_COMMIT"
+  git -C "$source_root/qemu" checkout -q --detach FETCH_HEAD
+  configured_sha="$(git -C "$source_root/qemu" rev-parse HEAD)"
+  [ "$configured_sha" = "$QEMU_COMMIT" ] \
+    || die "Espressif QEMU source mismatch: got $configured_sha, expected $QEMU_COMMIT"
+  git -C "$source_root/qemu" apply --check "$patch_file" \
+    || die "reviewed GPIO patch does not apply cleanly to $QEMU_COMMIT"
+  git -C "$source_root/qemu" apply "$patch_file"
+
+  log "Espressif QEMU: building the patched Xtensa and RISC-V system binaries ..."
+  info "  This is a local GPL-2.0 QEMU source build; Hauksbee does not distribute the resulting binary."
+  (
+    cd "$source_root/qemu"
+    ./configure \
+      --target-list=xtensa-softmmu,riscv32-softmmu \
+      --disable-docs --disable-werror --disable-gnutls \
+      --enable-gcrypt --enable-slirp
+    ninja -C build qemu-system-xtensa qemu-system-riscv32
+  ) || die "patched Espressif QEMU build failed; install the dependencies named by configure and retry"
+
+  xtensa_bin="$source_root/qemu/build/qemu-system-xtensa"
+  riscv_bin="$source_root/qemu/build/qemu-system-riscv32"
+  [ -x "$xtensa_bin" ] && [ -x "$riscv_bin" ] \
+    || die "patched QEMU build finished without both required system binaries"
+  is_esp_qemu_fork "$xtensa_bin" || die "patched Xtensa binary has no esp32 machine"
+  is_esp_qemu_fork "$riscv_bin" || die "patched RISC-V binary has no esp32 machine"
+  qemu_pair_has_stateful_gpio "$xtensa_bin" "$riscv_bin" \
+    || die "patched QEMU built, but an ESP32/-S3/-C3 live GPIO object lacks gpio-out/gpio-enable"
+
+  candidate="$(mktemp -d "$HOME/.hauksbee-qemu-esp-patched.candidate.XXXXXX")"
+  TMPDIR_CREATED+=("$candidate")
+  mkdir -p "$candidate/qemu/bin"
+  cp "$xtensa_bin" "$candidate/qemu/bin/qemu-system-xtensa"
+  cp "$riscv_bin" "$candidate/qemu/bin/qemu-system-riscv32"
+  chmod +x "$candidate/qemu/bin/qemu-system-xtensa" "$candidate/qemu/bin/qemu-system-riscv32"
+  printf 'tag=%s\ncommit=%s\npatch_sha256=%s\nxtensa_sha256=%s\nriscv32_sha256=%s\n' \
+    "$QEMU_VERSION" \
+    "$QEMU_COMMIT" \
+    "$patch_sha" \
+    "$(sha256_file "$candidate/qemu/bin/qemu-system-xtensa")" \
+    "$(sha256_file "$candidate/qemu/bin/qemu-system-riscv32")" \
+    > "$candidate/.hauksbee-qemu-source"
+  qemu_pair_has_stateful_gpio \
+    "$candidate/qemu/bin/qemu-system-xtensa" \
+    "$candidate/qemu/bin/qemu-system-riscv32" \
+    || die "staged patched QEMU failed its live three-machine GPIO capability recheck"
+
+  if ! mv "$candidate" "$target"; then
+    die "could not commit the patched QEMU tree to $target"
+  fi
+  ok "Patched Espressif QEMU installed: $target"
+  info "  commit: $QEMU_COMMIT"
+  info "  patch:  $patch_sha"
+}
+
 install_qemu() {
   log "Espressif QEMU: checking for existing install..."
 
@@ -1073,7 +1266,11 @@ elif [ "$DO_RENODE" -eq 1 ]; then
 fi
 
 if [ "$REQUIRE_PINNED" -eq 0 ] && [ "$DO_QEMU" -eq 1 ]; then
-  install_qemu
+  if [ "$BUILD_PATCHED_QEMU" -eq 1 ]; then
+    install_qemu_patched_source
+  else
+    install_qemu
+  fi
   printf '\n'
 fi
 

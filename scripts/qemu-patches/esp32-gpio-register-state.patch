@@ -1,0 +1,145 @@
+diff --git a/hw/gpio/esp32_gpio.c b/hw/gpio/esp32_gpio.c
+index 4fea1f5..60a67da 100644
+--- a/hw/gpio/esp32_gpio.c
++++ b/hw/gpio/esp32_gpio.c
+@@ -26,6 +26,18 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+     Esp32GpioState *s = ESP32_GPIO(opaque);
+     uint64_t r = 0;
+     switch (addr) {
++    case A_GPIO_OUT:
++        r = s->gpio_out[0];
++        break;
++    case A_GPIO_OUT1:
++        r = s->gpio_out[1];
++        break;
++    case A_GPIO_ENABLE:
++        r = s->gpio_enable[0];
++        break;
++    case A_GPIO_ENABLE1:
++        r = s->gpio_enable[1];
++        break;
+     case A_GPIO_STRAP:
+         r = s->strap_mode;
+         break;
+@@ -39,6 +51,49 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+ static void esp32_gpio_write(void *opaque, hwaddr addr,
+                        uint64_t value, unsigned int size)
+ {
++    Esp32GpioState *s = ESP32_GPIO(opaque);
++    uint32_t v = value;
++
++    switch (addr) {
++    case A_GPIO_OUT:
++        s->gpio_out[0] = v;
++        break;
++    case A_GPIO_OUT_W1TS:
++        s->gpio_out[0] |= v;
++        break;
++    case A_GPIO_OUT_W1TC:
++        s->gpio_out[0] &= ~v;
++        break;
++    case A_GPIO_OUT1:
++        s->gpio_out[1] = v;
++        break;
++    case A_GPIO_OUT1_W1TS:
++        s->gpio_out[1] |= v;
++        break;
++    case A_GPIO_OUT1_W1TC:
++        s->gpio_out[1] &= ~v;
++        break;
++    case A_GPIO_ENABLE:
++        s->gpio_enable[0] = v;
++        break;
++    case A_GPIO_ENABLE_W1TS:
++        s->gpio_enable[0] |= v;
++        break;
++    case A_GPIO_ENABLE_W1TC:
++        s->gpio_enable[0] &= ~v;
++        break;
++    case A_GPIO_ENABLE1:
++        s->gpio_enable[1] = v;
++        break;
++    case A_GPIO_ENABLE1_W1TS:
++        s->gpio_enable[1] |= v;
++        break;
++    case A_GPIO_ENABLE1_W1TC:
++        s->gpio_enable[1] &= ~v;
++        break;
++    default:
++        break;
++    }
+ }
+ 
+ static const MemoryRegionOps uart_ops = {
+@@ -49,6 +104,10 @@ static const MemoryRegionOps uart_ops = {
+ 
+ static void esp32_gpio_reset_hold(Object *obj, ResetType type)
+ {
++    Esp32GpioState *s = ESP32_GPIO(obj);
++
++    memset(s->gpio_out, 0, sizeof(s->gpio_out));
++    memset(s->gpio_enable, 0, sizeof(s->gpio_enable));
+ }
+ 
+ static void esp32_gpio_realize(DeviceState *dev, Error **errp)
+@@ -67,6 +126,20 @@ static void esp32_gpio_init(Object *obj)
+                           TYPE_ESP32_GPIO, 0x1000);
+     sysbus_init_mmio(sbd, &s->iomem);
+     sysbus_init_irq(sbd, &s->irq);
++
++    /*
++     * Read-only QOM mirrors let a controller distinguish this stateful model
++     * from older Espressif binaries whose GPIO writes were discarded.  They
++     * are diagnostics only; firmware still drives the real MMIO registers.
++     */
++    object_property_add_uint32_ptr(obj, "gpio-out", &s->gpio_out[0],
++                                   OBJ_PROP_FLAG_READ);
++    object_property_add_uint32_ptr(obj, "gpio-out1", &s->gpio_out[1],
++                                   OBJ_PROP_FLAG_READ);
++    object_property_add_uint32_ptr(obj, "gpio-enable", &s->gpio_enable[0],
++                                   OBJ_PROP_FLAG_READ);
++    object_property_add_uint32_ptr(obj, "gpio-enable1", &s->gpio_enable[1],
++                                   OBJ_PROP_FLAG_READ);
+ }
+ 
+ static Property esp32_gpio_properties[] = {
+diff --git a/include/hw/gpio/esp32_gpio.h b/include/hw/gpio/esp32_gpio.h
+index 163b41a..b95c777 100644
+--- a/include/hw/gpio/esp32_gpio.h
++++ b/include/hw/gpio/esp32_gpio.h
+@@ -9,7 +9,25 @@
+ #define ESP32_GPIO_GET_CLASS(obj)   OBJECT_GET_CLASS(Esp32GpioClass, obj, TYPE_ESP32_GPIO)
+ #define ESP32_GPIO_CLASS(klass)     OBJECT_CLASS_CHECK(Esp32GpioClass, klass, TYPE_ESP32_GPIO)
+ 
+-REG32(GPIO_STRAP, 0x0038)
++/*
++ * The classic ESP32, ESP32-S3 and ESP32-C3 use the same low-bank GPIO
++ * register offsets.  The classic/S3 parts also expose a high bank for GPIOs
++ * 32 and above.  Keep these names local to the device model so firmware MMIO
++ * writes have one source of truth and host reads observe the same state.
++ */
++REG32(GPIO_OUT,          0x0004)
++REG32(GPIO_OUT_W1TS,     0x0008)
++REG32(GPIO_OUT_W1TC,     0x000c)
++REG32(GPIO_OUT1,         0x0010)
++REG32(GPIO_OUT1_W1TS,    0x0014)
++REG32(GPIO_OUT1_W1TC,    0x0018)
++REG32(GPIO_ENABLE,       0x0020)
++REG32(GPIO_ENABLE_W1TS,  0x0024)
++REG32(GPIO_ENABLE_W1TC,  0x0028)
++REG32(GPIO_ENABLE1,      0x002c)
++REG32(GPIO_ENABLE1_W1TS, 0x0030)
++REG32(GPIO_ENABLE1_W1TC, 0x0034)
++REG32(GPIO_STRAP,        0x0038)
+ 
+ #define ESP32_STRAP_MODE_FLASH_BOOT 0x12
+ #define ESP32_STRAP_MODE_UART_BOOT  0x0f
+@@ -20,6 +38,8 @@ typedef struct Esp32GpioState {
+     MemoryRegion iomem;
+     qemu_irq irq;
+     uint32_t strap_mode;
++    uint32_t gpio_out[2];
++    uint32_t gpio_enable[2];
+ } Esp32GpioState;
+ 
+ typedef struct Esp32GpioClass {

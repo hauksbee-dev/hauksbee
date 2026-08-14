@@ -439,9 +439,12 @@ icount_shift = 2
 frequency_hz = 240_000_000
 expected_e_machine = "EM_XTENSA"
 mcu_label = "weird"
+gpio_qom_path = "/machine/soc/gpio"
 [[soc.banks]]
 letter = "0"
 out_reg = 0x5000_0000
+peripheral_out_reg = 0x3ff4_4004
+peripheral_enable_reg = 0x3ff4_4020
 in_reg = 0x5000_0004
 width = 32
 "#;

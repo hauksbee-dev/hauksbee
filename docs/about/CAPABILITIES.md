@@ -415,13 +415,14 @@ Shipped named configs:
 | `QemuConfig::esp32s3()` | `esp32s3` | Xtensa LX7 (240 MHz) | **Wiring proven**: binds `qemu:esp32s3`, machine boots (blank flash), QMP/gdbstub/UART connect, lockstep steps. App proof pending an S3 flash image (needs esp-idf's esp32s3 toolchain) |
 | `QemuConfig::esp32c3()` | `esp32c3` | RISC-V RV32IMC (160 MHz) | **Proven**: UART boot, GPIO toggle, solved LED current |
 
-GPIO observation goes through a RAM mailbox in RTC slow memory
-(`0x5000_0000`). The Espressif QEMU `esp32.gpio` model does not implement
-read-back of `GPIO_OUT_REG` (verified empirically: host reads return 0). The
-demo firmware mirrors its GPIO output word to the mailbox. The backend diffs
-that word and synthesizes edges. This is the only ESP32-specific wrinkle. The
-edge synthesis is otherwise identical to the Renode ODR-poll. GPIO input is
-pushed over the gdbstub `M` packet.
+On the reviewed source build, GPIO observation reads the emulator's retained
+low-bank OUT and ENABLE state through paired, live-probed `gpio-out` and
+`gpio-enable` QOM properties. The backend therefore observes ordinary firmware
+outputs and direction without a mailbox; edge synthesis remains poll-based like
+Renode's ODR path. The pinned unpatched prebuilt still falls back loudly to the
+legacy RTC-slow-memory output mailbox at `0x5000_0000`. GPIO input remains a
+separate firmware contract pushed over the gdbstub `M` packet, and GPIO 32+
+remains outside the proved descriptor bank.
 
 ADC injection is not modeled by the Espressif QEMU fork. This is a documented
 no-op.

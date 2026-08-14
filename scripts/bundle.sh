@@ -364,6 +364,10 @@ done
 for s in required-simulator-versions.env renode-checksums.txt espressif-qemu-checksums.txt; do
   install -m 0644 "$HAUKSBEE_ROOT/scripts/$s" "$ROOTDIR/scripts/$s"
 done
+mkdir -p "$ROOTDIR/scripts/qemu-patches"
+install -m 0644 \
+  "$HAUKSBEE_ROOT/scripts/qemu-patches/esp32-gpio-register-state.patch" \
+  "$ROOTDIR/scripts/qemu-patches/esp32-gpio-register-state.patch"
 # Examples: ship the specs, boards and READMEs (skip any scratch dirs).
 mkdir -p "$ROOTDIR/examples"
 cp -R "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/." "$ROOTDIR/examples/ci-specs"

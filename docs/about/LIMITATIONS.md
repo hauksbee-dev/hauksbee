@@ -321,21 +321,16 @@ What remains open:
   per chunk, surfacing through the standard `on_i2c`/`on_spi` trait callbacks.
   Unmodified vendor firmware's real-controller bus traffic stays host-invisible
   until the fork grows a peripheral hook.
-- **QEMU ESP32 GPIO** is observed through a firmware RAM mailbox because the
-  fork's `esp32.gpio` model has no `GPIO_OUT_REG` read-back. Empirically
-  confirmed on the latest build (QEMU 9.2.2 `esp_develop`, 2026-06-30): a host
-  read of `GPIO_OUT_REG` (0x3FF44004) returns 0 via QMP `xp`, gdbstub `m`,
-  *and* `qom-get` (the `esp32.gpio` object exposes no value property), and a
-  host *write* to those registers is discarded. The model is write-effect-only
-  with no host-visible state, while a RAM address round-trips perfectly. The
-  only real fix is a ~15-line device-model patch to the fork's
-  `hw/gpio/esp32_gpio.c` (store and return `GPIO_OUT`/`ENABLE`, handling the
-  W1TS/W1TC aliases) plus a rebuild. The exact registers and the matching
-  backend change are specified. Shipping the register-read backend path
-  *without* a patched QEMU to validate it against would violate the
-  no-unvalidatable-fixes rule, so it stays open. (The loader probes the current
-  `~/.hauksbee-qemu-esp` first, with the legacy `~/.galvani-qemu-esp` kept as a
-  fallback so existing installs keep resolving.)
+- **QEMU ESP32 GPIO output** is register-backed only on Hauksbee's reviewed
+  exact-source build. Espressif's pinned prebuilt discards `GPIO_OUT_REG` state,
+  so the backend fails closed to the firmware RAM mailbox there. Run
+  `scripts/install-sims.sh --qemu-patched-source` to fetch the pinned commit,
+  apply the carried OUT/ENABLE + W1TS/W1TC patch, build both architectures, and
+  live-probe paired `gpio-out`/`gpio-enable` QOM properties on ESP32, ESP32-S3,
+  and ESP32-C3 before install. With that capability, ordinary third-party
+  firmware's real GPIO levels and output direction are visible. GPIO input is
+  still a firmware mailbox contract, GPIO32+ remains outside the one shipped
+  descriptor bank, and SAR ADC/I2C/SPI gaps below are unchanged.
 
 ### KiCad 10 boards: exact native-DRC parity remains unvalidated
 

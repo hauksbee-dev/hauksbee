@@ -1,12 +1,9 @@
 # Classic ESP32 (Xtensa LX6 dual-core), 240 MHz, single 32-bit GPIO bank for
 # pins 0..31 (the demo and most products use only low pins).
 #
-# GPIO is observed through a RAM mailbox, NOT a GPIO register: the Espressif QEMU
-# fork's esp32.gpio model does not implement read-back of GPIO_OUT_REG (a host
-# read returns 0 regardless of the driven level). So out_reg/in_reg are the RTC
-# slow-memory mailbox words the demo firmware maintains (see qemu::mailbox); the
-# bit layout still matches GPIO_OUT_REG, so the backend's edge synthesis is
-# unchanged. 0x5000_0000 = mailbox GPIO_OUT, 0x5000_0004 = mailbox GPIO_IN.
+# GPIO output prefers the real peripheral register when the live QOM object
+# proves Hauksbee's stateful QEMU patch; out_reg is the firmware-mailbox fallback
+# for an unpatched fork. Input remains a named mailbox contract.
 [soc]
 backend = "qemu"
 arch = "xtensa"
@@ -15,10 +12,13 @@ icount_shift = 2
 frequency_hz = 240_000_000
 expected_e_machine = "EM_XTENSA"
 mcu_label = "ESP32 (Xtensa LX6)"
+gpio_qom_path = "/machine/soc/gpio"
 
 [[soc.banks]]
 letter = "0"
 out_reg = 0x5000_0000
+peripheral_out_reg = 0x3ff4_4004
+peripheral_enable_reg = 0x3ff4_4020
 in_reg = 0x5000_0004
 width = 32
 

@@ -10,8 +10,9 @@
 //! Discovery order, per architecture, is:
 //!   1. an explicit env override (`HAUKSBEE_QEMU_XTENSA` / `HAUKSBEE_QEMU_RISCV32`),
 //!   2. a generic `HAUKSBEE_QEMU_DIR` pointing at the fork's `bin/`,
-//!   3. the conventional unpacked location `~/.hauksbee-qemu-esp/qemu/bin/`
-//!      (or the legacy `~/.galvani-qemu-esp/qemu/bin/`),
+//!   3. the exact-source patched location
+//!      `~/.hauksbee-qemu-esp-patched/qemu/bin/`, then the conventional
+//!      `~/.hauksbee-qemu-esp/qemu/bin/` (or legacy Galvani path),
 //!   4. the esp-idf tools install: `$IDF_TOOLS_PATH/tools/qemu-*/.../bin/`
 //!      when set, else `~/.espressif/tools/qemu-*/.../bin/` (the idf_tools.py
 //!      default on every OS), plus `C:\Espressif\tools\...` on Windows (the
@@ -94,7 +95,9 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
     }
 
     if let Some(home) = home_dir() {
-        // 3. Conventional unpacked location (what the docs tell you to use).
+        // 3. Hauksbee's exact-source GPIO-patched build first, then ordinary
+        //    unpacked locations. The backend still probes the live QOM object;
+        //    path priority alone never claims the patch is present.
         //    `.hauksbee-qemu-esp` is the current name; `.galvani-qemu-esp` is
         //    kept as a fallback for installs predating the galvani->hauksbee
         //    rename, so an existing unpacked fork keeps resolving.
@@ -123,7 +126,9 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
          `hauksbee install esp-qemu`, or in the app use Install on the \
          Environment page. Manual routes: unpack the fork's prebuilt binary \
          (https://github.com/espressif/qemu/releases) to \
-         ~/.hauksbee-qemu-esp/qemu, set {} to the binary, or install it via \
+         ~/.hauksbee-qemu-esp/qemu, build Hauksbee's reviewed GPIO-state patch \
+         with `scripts/install-sims.sh --qemu-patched-source`, set {} to the \
+         binary, or install it via \
          esp-idf `idf_tools.py install qemu-xtensa qemu-riscv32`. Homebrew's \
          mainline qemu-system-xtensa has no esp32 machine and will not work.",
         arch.env_override()
@@ -135,6 +140,7 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
 /// tests can exercise the Windows `.exe` shape on any OS.
 fn home_candidates(home: &std::path::Path, file: &str) -> Vec<PathBuf> {
     vec![
+        home.join(".hauksbee-qemu-esp-patched/qemu/bin").join(file),
         home.join(".hauksbee-qemu-esp/qemu/bin").join(file),
         home.join(".galvani-qemu-esp/qemu/bin").join(file),
     ]
@@ -423,17 +429,20 @@ mod discovery_tests {
     /// The conventional home layouts produce the exact candidate paths, for
     /// both the Unix and the Windows (`.exe`) file names, on any OS.
     #[test]
-    fn home_layouts_cover_current_legacy_and_windows_names() {
+    fn home_layouts_cover_patched_current_legacy_and_windows_names() {
         let home = tempfile::tempdir().unwrap();
         for file in ["qemu-system-xtensa", "qemu-system-xtensa.exe"] {
             let cands = home_candidates(home.path(), file);
             assert_eq!(
                 cands,
                 vec![
+                    home.path()
+                        .join(".hauksbee-qemu-esp-patched/qemu/bin")
+                        .join(file),
                     home.path().join(".hauksbee-qemu-esp/qemu/bin").join(file),
                     home.path().join(".galvani-qemu-esp/qemu/bin").join(file),
                 ],
-                "current location first, legacy rename fallback second"
+                "reviewed patched build first, then current and legacy upstream installs"
             );
         }
     }
