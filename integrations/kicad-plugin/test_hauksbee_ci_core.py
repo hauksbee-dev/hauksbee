@@ -91,10 +91,29 @@ def test_run_ci_spec_error_surfaces_stderr():
 
 
 def test_find_binary_prefers_explicit_then_env(monkeypatch=None):
-    # Explicit path that exists and is executable wins.
-    assert core.find_binary("/definitely/not/here") is None or True
-    # PATH fallback returns None when absent (no hauksbee-ci on test PATH).
-    # (We do not assert a concrete path to stay environment-independent.)
+    # An invalid explicit path is authoritative: silently falling through to a
+    # stale checkout/PATH build would defeat the provenance choice the caller
+    # made and can turn a commit gate into a check of the wrong bytes.
+    assert core.find_binary("/definitely/not/here") is None
+
+    with tempfile.TemporaryDirectory() as d:
+        fake = os.path.join(d, "hauksbee-ci")
+        with open(fake, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\n")
+        os.chmod(fake, 0o755)
+        assert core.find_binary(fake) == fake
+
+        previous = os.environ.get("HAUKSBEE_CI_BIN")
+        try:
+            os.environ["HAUKSBEE_CI_BIN"] = fake
+            assert core.find_binary() == fake
+            os.environ["HAUKSBEE_CI_BIN"] = os.path.join(d, "missing")
+            assert core.find_binary() is None
+        finally:
+            if previous is None:
+                os.environ.pop("HAUKSBEE_CI_BIN", None)
+            else:
+                os.environ["HAUKSBEE_CI_BIN"] = previous
 
 
 def test_format_report_readable():

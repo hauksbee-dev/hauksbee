@@ -170,10 +170,24 @@ def find_binary(explicit: Optional[str] = None) -> Optional[str]:
     both exist and differ, a warning says which one runs and where the other
     lives (the same contract scripts/ci.sh has).
     """
-    candidates = [explicit, os.environ.get("HAUKSBEE_CI_BIN")]
-    for c in candidates:
-        if c and os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
+    # An explicit override is authoritative. Falling through to a checkout or
+    # PATH binary when it is misspelled can run a different build than the one
+    # the user deliberately selected, which is especially unsafe in a commit
+    # gate. Treat an invalid override as unavailable and let the caller fail
+    # closed with its normal remediation message.
+    if explicit is not None:
+        return (
+            explicit
+            if os.path.isfile(explicit) and os.access(explicit, os.X_OK)
+            else None
+        )
+    configured = os.environ.get("HAUKSBEE_CI_BIN")
+    if configured is not None:
+        return (
+            configured
+            if os.path.isfile(configured) and os.access(configured, os.X_OK)
+            else None
+        )
     on_path = shutil.which("hauksbee-ci")
     checkout_build = _checkout_build()
     if checkout_build:
