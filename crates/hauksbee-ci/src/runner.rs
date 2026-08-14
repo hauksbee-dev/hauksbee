@@ -208,7 +208,7 @@ pub struct RunOutcome {
     /// strict result; these are not advisory warnings.
     pub timing_refusals: Vec<String>,
     /// Nets that name themselves a supply, carry a rail's worth of parts, and
-    /// nothing powers. See [`dead_rails`]: the operating point around one is
+    /// nothing powers. See `dead_rails`: the operating point around one is
     /// fiction, so every analog number in this outcome has to be read knowing
     /// they were dead.
     pub dead_rails: Vec<String>,

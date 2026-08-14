@@ -640,7 +640,7 @@ impl QemuBackend {
     ///   its bootloader sits where THIS chip's ROM reads it (a wrong-chip
     ///   image otherwise boot-loops forever with no diagnostic);
     /// - a bare app ELF, the artifact a user's build actually produces: the
-    ///   merged image is built from it in-process (see [`flashimage`]) with
+    ///   merged image is built from it in-process (see `flashimage`) with
     ///   the default bootloader + partition table, exactly what
     ///   `esptool merge_bin` would have produced on the build machine.
     pub fn new(config: QemuConfig, flash_image: &Path) -> Result<Self> {

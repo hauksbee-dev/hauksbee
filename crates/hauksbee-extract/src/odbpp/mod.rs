@@ -21,8 +21,8 @@
 //!
 //! It arrives as a directory, a `.tgz` (the spec's form, and Altium's and
 //! Cadence's default) or a `.zip` (KiCad's default). All three are normalized to
-//! one in-memory file map first; see [`tree`], which also bounds how much an
-//! archive may inflate to ([`tree::MAX_INFLATED_BYTES`]) — a `.tgz` of
+//! one in-memory file map first; see `tree`, which also bounds how much an
+//! archive may inflate to (`tree::MAX_INFLATED_BYTES`) — a `.tgz` of
 //! compressible text is a natural decompression bomb, and one measured at 400 KiB
 //! expanded to 400 MiB.
 //!
@@ -100,7 +100,7 @@
 //!
 //! And it escapes the characters ODB++ restricts in a name, so a hierarchical
 //! net `Net-(U4-LNA_IN/RF)` is written `Net-(U4-LNA_IN{slash}RF)`. That is undone
-//! ([`crate::unescape_kicad_name`]) but ONLY when `misc/info` says KiCad wrote
+//! (`crate::unescape_kicad_name`) but ONLY when `misc/info` says KiCad wrote
 //! the job, because the brace tokens are KiCad's convention and not the format's.
 
 pub(crate) mod records;

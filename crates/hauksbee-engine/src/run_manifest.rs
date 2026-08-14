@@ -70,7 +70,7 @@ impl ManifestInput {
 #[derive(Debug, Clone)]
 pub struct ManifestRequest {
     pub tool: ToolIdentity,
-    /// Exact argv, including argv[0], but excluding `--emit-manifest` and its
+    /// Exact argv, including `argv[0]`, but excluding `--emit-manifest` and its
     /// output path. Replay must not attempt to overwrite its source evidence.
     pub command: Vec<String>,
     pub options: BTreeMap<String, serde_json::Value>,
@@ -507,7 +507,7 @@ pub fn board_sidecar_inputs(board: &Path, role_prefix: &str) -> Vec<ManifestInpu
 
 /// Verify and execute a manifest through one of the two fixed run binaries.
 /// The document cannot nominate an arbitrary program: only `hauksbee` and
-/// `hauksbee-ci` are accepted, and argv[0] must agree with the signed tool name.
+/// `hauksbee-ci` are accepted, and `argv[0]` must agree with the signed tool name.
 pub fn reproduce(path: &Path) -> Result<()> {
     let manifest = RunManifest::read_verified(path)?;
     if !matches!(manifest.tool.name.as_str(), "hauksbee" | "hauksbee-ci") {

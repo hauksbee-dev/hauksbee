@@ -133,7 +133,7 @@ impl BindReport {
     /// with nothing at runtime to tell the two apart. Naming them puts the
     /// invented basis on the record.
     ///
-    /// Scoped to active devices ([`is_active_fallback_device`]) on purpose.
+    /// Scoped to active devices (`is_active_fallback_device`) on purpose.
     /// Generic passive fallbacks (`c_fallback`, `r_fallback`) carry no invented
     /// breakdown ratings for a verdict to rest on, and they bind on nearly every
     /// board, so warning about them would bury this channel in noise. Their
@@ -253,7 +253,7 @@ impl BindReport {
 
     /// All warnings raised during binding.
     ///
-    /// [`Assumption::PARTIAL_MODEL_MARKER`] is stripped here: it is routing for
+    /// `Assumption::PARTIAL_MODEL_MARKER` is stripped here: it is routing for
     /// `BoardEvidence::from_bound`, which lifts a partial-model warning into an
     /// assumption so it reaches `--plain` and `--json` too, and it has no business
     /// in the printed line.

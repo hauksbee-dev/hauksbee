@@ -46,7 +46,7 @@
 //!   - `machine`, `mcu_label`, `frequency_hz`, always present on the structs.
 //!     `platform_repl` is inline source above rather than the plan's bare stock
 //!     path, because a Renode part must declare its own core clock and be held
-//!     to it: see [`check_clock_declarations`].
+//!     to it: see `check_clock_declarations`.
 //!   - `watchdog_limitation`, the per-part watchdog coverage statement, and
 //!     `timing_limitation`, its per-part timing twin (the F103's deliberate
 //!     TIMx-at-72MHz divergence).

@@ -1409,7 +1409,7 @@ fn warn_if_nets_are_fragmented(board: &ExtractedBoard) {
 }
 
 /// Reverse-extract from a gerber job `.zip`. Extracts to a temp dir and
-/// delegates to [`from_gerber_dir_named`].
+/// delegates to `from_gerber_dir_named`.
 ///
 /// The board is named after the ARCHIVE, never after the extraction directory.
 /// The extraction directory has to be unique per call (two concurrent analyses
