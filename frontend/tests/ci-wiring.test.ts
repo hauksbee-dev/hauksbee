@@ -53,6 +53,7 @@ describe('frontend release gates', () => {
     const generated = workflowYaml('power-up')
     expect(generated).toContain('permissions:\n  contents: read\n  checks: write')
     expect(generated).toContain('cancel-in-progress: true')
+    expect(generated).toContain('timeout-minutes: 45')
     expect(generated.match(/persist-credentials: false/g)).toHaveLength(2)
     expect(generated).toContain("publish-report: ${{ github.event_name != 'pull_request'")
     expect(generated).toContain('ref: 0123456789abcdef0123456789abcdef01234567')

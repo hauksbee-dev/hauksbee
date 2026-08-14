@@ -278,6 +278,7 @@ fn github_workflow_yaml_for(
          jobs:\n\
          \x20 hauksbee:\n\
          \x20   runs-on: ubuntu-latest\n\
+         \x20   timeout-minutes: 45\n\
          \x20   steps:\n\
          \x20     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n\
          \x20       with:\n\
@@ -775,7 +776,7 @@ pub fn github_action_write(cwd: &Path, path: &Path) -> anyhow::Result<String> {
         bail!(
             "not inside a git repository (no .git found walking up from {}); \
              a GitHub workflow only does anything inside one, so run this from \
-             the repo you want it in (or pass an absolute --write path)",
+             the repo you want it in",
             cwd.display()
         );
     };
@@ -1066,6 +1067,7 @@ mod tests {
             "{yaml}"
         );
         assert!(yaml.contains("cancel-in-progress: true"), "{yaml}");
+        assert!(yaml.contains("timeout-minutes: 45"), "{yaml}");
         assert!(
             yaml.contains("uses: ./.hauksbee-action/integrations/github-action"),
             "{yaml}"

@@ -47,6 +47,13 @@ export type ResumeResult =
   /** Nothing to restore: the record is gone, or its report never fitted. */
   | { kind: 'unavailable'; reason: string }
 
+/** Firmware bytes are deliberately not copied into browser storage. A saved
+ *  firmware-backed report therefore cannot honestly become a fresh run from
+ *  the board bytes alone, even when the live server still retains that board. */
+export function canReanalyzeSavedSession(session: Pick<SavedSession, 'firmwareName'>): boolean {
+  return session.firmwareName === null
+}
+
 /** The board file for `name`, IF this server still has it.
  *
  *  `/boards/{name}` serves the CURRENT live session's own board file and
@@ -161,7 +168,9 @@ export function useSessions(opts: {
     const saved = loadSession(id)
     if (!saved) return { kind: 'unavailable', reason: 'that session is no longer in this browser' }
     setResumeDismissed(true)
-    const file = await refetchServerBoard(saved.board.fileName)
+    const file = canReanalyzeSavedSession(saved)
+      ? await refetchServerBoard(saved.board.fileName)
+      : null
     if (file) {
       setCurrentSessionId(saved.id)
       setCurrentId(saved.id)
@@ -171,8 +180,9 @@ export function useSessions(opts: {
     if (!saved.report) {
       return {
         kind: 'unavailable',
-        reason: 'the report for that session was too large to keep, so there is nothing to show '
-          + 'without the board file',
+        reason: saved.firmwareName
+          ? `this run used ${saved.firmwareName}, whose bytes were not stored. Re-drop the board and firmware to run it again`
+          : 'the report for that session was too large to keep, so there is nothing to show without the board file',
       }
     }
     setCurrentSessionId(saved.id)

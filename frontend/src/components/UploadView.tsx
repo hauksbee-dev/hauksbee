@@ -81,13 +81,16 @@ function ReportSkeleton() {
   )
 }
 
-export function UploadView({ session, onOpenLive, sessions, onResume }: {
+export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailable = true }: {
   session: BoardSession
   /** Open the live session already running server-side (mounts the sim). */
   onOpenLive?: () => void
   /** Saved sessions, for the resume offer. */
   sessions?: SessionsState
   onResume?: (id: string) => void
+  /** The permissive/Windows binary has no in-process AVR backend, so its first
+   *  screen must not advertise an AVR firmware sample it cannot execute. */
+  avrAvailable?: boolean
 }) {
   const {
     busy, uploadError, uploadNotice, dismissNotice, firmwareFile, schematicFile,
@@ -323,7 +326,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume }: {
               {/* One deliberate row of three, or a clean stack when the column
                   is too narrow for it. Never a two-then-one rag. */}
               <div className="sample-row mt-3">
-                {SAMPLES.map(s => (
+                {SAMPLES.filter(s => avrAvailable || !s.firmware).map(s => (
                   // A card that rises 1 px on hover and sinks 1 px on press.
                   // The press tracking is the substance here, not the movement:
                   // it releases when the pointer leaves the card mid-press, when
@@ -402,7 +405,8 @@ export function UploadView({ session, onOpenLive, sessions, onResume }: {
           {/* Privacy reassurance */}
           {!busy && (
             <div className="mt-5 text-center text-[12px]" style={{ color: 'var(--silk-faint)' }}>
-              Runs entirely on this machine, nothing is uploaded.
+              Board analysis stays on this machine. Datasheet extraction is the only off-machine
+              feature, and it asks for explicit consent before sending a PDF.
             </div>
           )}
         </div>

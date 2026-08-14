@@ -164,7 +164,7 @@ fn init_out_accepts_a_directory_or_a_file_path() {
         .arg("init")
         .arg(&board)
         .arg("--out")
-        .arg(format!("{}/", out_dir.display()))
+        .arg("ci/")
         .current_dir(dir.path())
         .output()
         .expect("binary runs");
@@ -176,6 +176,11 @@ fn init_out_accepts_a_directory_or_a_file_path() {
     let spec_path = out_dir.join("blinky.toml");
     assert!(spec_path.exists(), "--out dir/ places <stem>.toml inside");
     assert!(Spec::load(&spec_path).is_ok(), "and it loads");
+    let generated = std::fs::read_to_string(&spec_path).expect("read generated spec");
+    assert!(
+        generated.contains("#   hauksbee-ci run ci/blinky.toml"),
+        "the file's own copy-paste command names its actual path:\n{generated}"
+    );
 
     // --out <dir> with NO trailing slash and no such directory yet: still a
     // directory. This is the first command a repo runs, the guidance printed

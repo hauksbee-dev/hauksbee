@@ -988,26 +988,54 @@ jobs:
           cd dist
           for sum in required-integrations-*.json.sha256; do sha256sum --check "$sum"; done
 
-      - name: Refuse mutation of an existing release
+      - name: Reconcile exact release state
+        id: release-state
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           probe="$(mktemp)"
+          trap 'find "$probe" -maxdepth 0 -type f -delete 2>/dev/null || true' EXIT
           status=0
           gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" >"$probe" 2>&1 || status=$?
           http="$(sed -nE '1s#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' "$probe")"
           case "$http" in
-            404) ;;
-            200) echo "release $GITHUB_REF_NAME already exists; refusing to replace its assets" >&2; exit 1 ;;
+            404)
+              echo "already-published=false" >> "$GITHUB_OUTPUT"
+              ;;
+            200)
+              draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq .draft)"
+              immutable="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq .immutable)"
+              body="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq .body)"
+              case "$body" in
+                *"Source commit: \`$GITHUB_SHA\`"*) ;;
+                *) echo "existing release is not bound to source commit $GITHUB_SHA; refusing mutation" >&2; exit 1 ;;
+              esac
+              if [ "$draft" = true ]; then
+                # An interrupted prior run may leave its exact-SHA draft. It is
+                # still mutable, so discard the partial asset set and restage
+                # all local verified bytes from scratch.
+                gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes
+                echo "already-published=false" >> "$GITHUB_OUTPUT"
+              elif [ "$immutable" = true ]; then
+                # Publishing is one-way. A rerun after a transient attestation
+                # failure performs verification only; it never mutates assets.
+                echo "already-published=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "existing release is published but mutable; refusing it" >&2
+                exit 1
+              fi
+              ;;
             *) cat "$probe" >&2; echo "could not prove release absence (gh exit $status, HTTP ${http:-unknown})" >&2; exit 1 ;;
           esac
-          find "$probe" -maxdepth 0 -type f -delete
 
       - name: Stage immutable GitHub Release draft
+        if: steps.release-state.outputs.already-published != 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
+          target_commitish: ${{ github.sha }}
           body: |
             Source commit: `${{ github.sha }}`
 
@@ -1016,11 +1044,13 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.json
+            dist/*.md
             dist/*.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
 
       - name: Publish and lock the staged release
+        if: steps.release-state.outputs.already-published != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

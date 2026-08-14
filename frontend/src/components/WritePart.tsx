@@ -67,9 +67,13 @@ value_re = ${valueRe}
 
 type CheckState =
   | { phase: 'idle' }
-  | { phase: 'checking' }
-  | { phase: 'ok'; summary: string }
-  | { phase: 'bad'; error: string }
+  | { phase: 'checking'; body: string; format: Format }
+  | { phase: 'ok'; summary: string; body: string; format: Format }
+  | { phase: 'bad'; error: string; body: string; format: Format }
+
+export function isModelCheckCurrent(check: CheckState, body: string, format: Format): boolean {
+  return check.phase !== 'idle' && check.body === body && check.format === format
+}
 
 export function WritePart({ onSaved, suggested }: { onSaved?: () => void; suggested?: WebOpenPart }) {
   const [open, setOpen] = useState(false)
@@ -82,31 +86,52 @@ export function WritePart({ onSaved, suggested }: { onSaved?: () => void; sugges
   const [check, setCheck] = useState<CheckState>({ phase: 'idle' })
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const timer = useRef<number | null>(null)
+  const checkEpoch = useRef(0)
 
   // Debounced, because this runs the real validator on the server and a request
   // per keystroke would queue behind itself while someone types a paragraph.
   useEffect(() => {
+    const epoch = ++checkEpoch.current
     if (!open) return
     if (timer.current) window.clearTimeout(timer.current)
-    setCheck({ phase: 'checking' })
+    const checkedBody = body
+    const checkedFormat = format
+    setCheck({ phase: 'checking', body: checkedBody, format: checkedFormat })
     timer.current = window.setTimeout(() => {
       void (async () => {
         try {
           const res = await fetch('/api/models/check', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ toml: body, format }),
+            body: JSON.stringify({ toml: checkedBody, format: checkedFormat }),
           })
           const j = (await res.json()) as { ok?: boolean; summary?: string; error?: string }
-          if (j.ok) setCheck({ phase: 'ok', summary: j.summary ?? 'valid' })
-          else setCheck({ phase: 'bad', error: j.error ?? 'the check did not say why' })
+          if (epoch !== checkEpoch.current) return
+          if (j.ok) {
+            setCheck({ phase: 'ok', summary: j.summary ?? 'valid', body: checkedBody, format: checkedFormat })
+          } else {
+            setCheck({ phase: 'bad', error: j.error ?? 'the check did not say why', body: checkedBody, format: checkedFormat })
+          }
         } catch (e) {
-          setCheck({ phase: 'bad', error: e instanceof Error ? e.message : String(e) })
+          if (epoch !== checkEpoch.current) return
+          setCheck({
+            phase: 'bad',
+            error: e instanceof Error ? e.message : String(e),
+            body: checkedBody,
+            format: checkedFormat,
+          })
         }
       })()
     }, 400)
     return () => { if (timer.current) window.clearTimeout(timer.current) }
   }, [body, format, open])
+
+  // Effects run after render. Treat a result for older text as checking even
+  // during that one-render gap, so Save can never be enabled for bytes the
+  // server has not validated.
+  const visibleCheck: CheckState = isModelCheckCurrent(check, body, format)
+    ? check
+    : { phase: 'checking', body, format }
 
   // Escape closes the editor, the same key that dismisses every other
   // in-page surface in this app (the layers panel, the fullscreen map, the add
@@ -277,16 +302,16 @@ export function WritePart({ onSaved, suggested }: { onSaved?: () => void; sugges
         data-testid="write-part-status"
         className="text-[11px] mt-2 rounded-lg px-2.5 py-2 leading-relaxed"
         style={{
-          background: check.phase === 'bad' ? 'var(--warn-bg)' : 'var(--code-bg)',
-          border: `1px solid ${check.phase === 'bad' ? 'var(--warn-border)' : 'var(--hairline)'}`,
-          color: check.phase === 'bad' ? 'var(--silk)' : 'var(--silk-dim)',
+          background: visibleCheck.phase === 'bad' ? 'var(--warn-bg)' : 'var(--code-bg)',
+          border: `1px solid ${visibleCheck.phase === 'bad' ? 'var(--warn-border)' : 'var(--hairline)'}`,
+          color: visibleCheck.phase === 'bad' ? 'var(--silk)' : 'var(--silk-dim)',
           fontFamily: 'var(--font-mono)',
         }}
       >
-        {check.phase === 'checking' && 'checking ...'}
-        {check.phase === 'ok' && check.summary}
-        {check.phase === 'bad' && check.error}
-        {check.phase === 'idle' && 'start typing to check it'}
+        {visibleCheck.phase === 'checking' && 'checking ...'}
+        {visibleCheck.phase === 'ok' && visibleCheck.summary}
+        {visibleCheck.phase === 'bad' && visibleCheck.error}
+        {visibleCheck.phase === 'idle' && 'start typing to check it'}
       </div>
 
       <div className="flex items-center gap-2 mt-2.5">
@@ -300,7 +325,7 @@ export function WritePart({ onSaved, suggested }: { onSaved?: () => void; sugges
         <button
           type="button"
           data-testid="write-part-save"
-          disabled={check.phase !== 'ok' || part.trim().length === 0}
+          disabled={visibleCheck.phase !== 'ok' || part.trim().length === 0}
           onClick={() => void save()}
           className="rounded-lg px-3.5 py-1.5 text-[12px] font-semibold cursor-pointer transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
@@ -311,7 +336,7 @@ export function WritePart({ onSaved, suggested }: { onSaved?: () => void; sugges
           Save to my models
         </button>
         )}
-        {format === 'toml' && check.phase !== 'ok' && (
+        {format === 'toml' && visibleCheck.phase !== 'ok' && (
           <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
             the model has to check clean before it can be saved
           </span>

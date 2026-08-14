@@ -158,3 +158,36 @@ test('a report-only restored session does not offer model saves it cannot re-ana
   expect(html).not.toContain('data-testid="datasheet-extract"')
   expect(html).not.toContain('data-testid="write-part-open"')
 })
+
+test('collapsed navigation keeps an accessible name for every icon button', async () => {
+  const { Sidebar } = await import('../src/components/Sidebar')
+  const html = renderToStaticMarkup(<Sidebar
+    nav={{
+      view: 'board',
+      setView: () => {},
+      checksEnabled: true,
+      simEnabled: true,
+      simRunning: false,
+      faultCount: 0,
+    }}
+    report={null}
+    boardLabel={null}
+    analyzedAt={null}
+    theme="dark"
+    onToggleTheme={() => {}}
+  />)
+  for (const label of ['Board', 'Checks', 'Live Sim', 'Environment']) {
+    expect(html).toContain(`aria-label="${label}"`)
+  }
+})
+
+test('a permissive build does not advertise the unavailable AVR sample', async () => {
+  const { UploadView } = await import('../src/components/UploadView')
+  const html = renderToStaticMarkup(<UploadView
+    session={session(realFrontdoorReport())}
+    avrAvailable={false}
+  />)
+  expect(html).toContain('Watchy')
+  expect(html).toContain('Blinky')
+  expect(html).not.toContain('Boot gate + firmware')
+})

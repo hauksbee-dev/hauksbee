@@ -11,6 +11,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { assumptionsForEvidence, describeModelSource } from '../lib/evidence'
 import { summarizeErrorBudget } from '../lib/error-budget'
 import { buildCheckUpload, buildPortableCheckSpec } from '../lib/board-upload'
+import { sessionIdFor } from '../lib/session-store'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -476,7 +477,7 @@ interface SavedChecksState {
  *  key so it remounts per board: the mount-time restore is then authoritative
  *  and one board's state can never leak into another's. */
 export function checksStorageKey(report: WebReport): string {
-  return `hauksbee.checks.${report.file_name}:${report.num_components}:${report.num_nets}`
+  return `hauksbee.checks.${sessionIdFor(report)}`
 }
 
 export function ChecksView({
