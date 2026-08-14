@@ -1,0 +1,2 @@
+# Unified-diff context lines legitimately contain a single prefix space.
+scripts/qemu-patches/*.patch -whitespace

@@ -413,10 +413,19 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
             ));
             for b in &c.banks {
                 out.push(format!(
-                    "gpio bank {}: {} pins, out mailbox {:#010x}, in mailbox {:#010x}",
-                    b.letter, b.width, b.out_reg, b.in_reg
+                    "gpio bank {}: {} pins, peripheral out {:#010x} + enable {:#010x} when capability-probed; firmware-mailbox fallback {:#010x}; input mailbox {:#010x}",
+                    b.letter,
+                    b.width,
+                    b.peripheral_out_reg,
+                    b.peripheral_enable_reg,
+                    b.out_reg,
+                    b.in_reg
                 ));
             }
+            out.push(format!(
+                "gpio capability probe: {} properties gpio-out + gpio-enable",
+                c.gpio_qom_path
+            ));
             out.push(format!("i2c buses: {}", name_list(&c.i2c_buses)));
             // Unlike the Renode branch, the watchdog statement here is a
             // property of how the backend LAUNCHES QEMU (`wdt_disable=true` for

@@ -236,6 +236,42 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             "7879b2851b446ff99e1d3910b499af278fbd76a3fa8fe5c0d379f30afa0c4ed1",
         )
 
+    def test_qemu_gpio_source_patch_is_exact_probed_and_bundled(self) -> None:
+        scripts = Path(__file__).resolve().parent
+        installer = (scripts / "install-sims.sh").read_text()
+        versions = (scripts / "required-simulator-versions.env").read_text()
+        bundle = (scripts / "bundle.sh").read_text()
+        acceptance = (scripts / "test-qemu-gpio-source-patch.sh").read_text()
+        patch = scripts / "qemu-patches" / "esp32-gpio-register-state.patch"
+
+        commit = "40edccac415693c5130f91c01d84176ae6008566"
+        self.assertIn(f'QEMU_COMMIT="{commit}"', versions)
+        self.assertIn('git -C "$source_root/qemu" fetch -q --depth 1 origin "$QEMU_COMMIT"', installer)
+        self.assertIn('git -C "$source_root/qemu" apply --check "$patch_file"', installer)
+        self.assertIn('qom-list', installer)
+        self.assertIn('"gpio-out"', installer)
+        self.assertIn('"gpio-enable"', installer)
+        self.assertIn('qemu_pair_has_stateful_gpio', installer)
+        self.assertIn('esp32s3 /machine/soc/gpio', installer)
+        self.assertIn('esp32c3 /machine/gpio', installer)
+        self.assertIn('acquire_patched_qemu_lock', installer)
+        self.assertIn('patched_qemu_payload_matches', installer)
+        self.assertIn('xtensa_sha256=%s', installer)
+        self.assertIn('riscv32_sha256=%s', installer)
+        self.assertIn("qemu-patches/esp32-gpio-register-state.patch", bundle)
+        self.assertIn('install-sims.sh" --qemu-patched-source', acceptance)
+        self.assertIn("HAUKSBEE_REQUIRE_PATCHED_QEMU=1", acceptance)
+        self.assertIn("--test qemu_gpio_register_state", acceptance)
+        self.assertTrue(patch.is_file())
+        body = patch.read_text()
+        self.assertIn('object_property_add_uint32_ptr(obj, "gpio-out"', body)
+        self.assertIn('object_property_add_uint32_ptr(obj, "gpio-enable"', body)
+        self.assertIn("case A_GPIO_OUT_W1TS:", body)
+        self.assertIn("case A_GPIO_OUT_W1TC:", body)
+        self.assertIn("case A_GPIO_ENABLE_W1TS:", body)
+        self.assertIn("case A_GPIO_ENABLE_W1TC:", body)
+        self.assertRegex(hashlib.sha256(patch.read_bytes()).hexdigest(), r"^[0-9a-f]{64}$")
+
     def test_required_macos_mount_is_owned_by_exit_and_signal_traps(self) -> None:
         installer = (Path(__file__).resolve().parent / "install-sims.sh").read_text()
         self.assertIn("cleanup_required_mount()", installer)
