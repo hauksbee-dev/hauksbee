@@ -23,6 +23,7 @@ static MCU_DIR_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // The embedded descriptor sources, via the same include_str! the crate uses.
 const STM32F103: &str = include_str!("../db/mcu/stm32f103.soc.toml");
+const STM32F072: &str = include_str!("../db/mcu/stm32f072.soc.toml");
 const STM32F4: &str = include_str!("../db/mcu/stm32f4_discovery.soc.toml");
 const NRF52840: &str = include_str!("../db/mcu/nrf52840.soc.toml");
 const FE310: &str = include_str!("../db/mcu/sifive_fe310.soc.toml");
@@ -37,6 +38,11 @@ const ESP32C3: &str = include_str!("../db/mcu/esp32c3.soc.toml");
 fn renode_descriptors_equal_constructors() {
     // Byte-equal at the struct level (RenodeConfig: PartialEq); the descriptor
     // reproduces every field the hand-written constructor set.
+    assert_eq!(
+        RenodeConfig::from_soc_toml(STM32F072).unwrap(),
+        RenodeConfig::stm32f072(),
+        "stm32f072.soc.toml must reproduce RenodeConfig::stm32f072()"
+    );
     assert_eq!(
         RenodeConfig::from_soc_toml(STM32F103).unwrap(),
         RenodeConfig::stm32f103(),
@@ -463,6 +469,10 @@ fn unknown_field_is_rejected() {
 #[test]
 fn resolve_embedded_builtins() {
     // Every built-in spec resolves and matches its constructor.
+    match SocConfig::resolve("renode:stm32f072").unwrap() {
+        SocConfig::Renode(c) => assert_eq!(c, RenodeConfig::stm32f072()),
+        other => panic!("expected Renode, got {other:?}"),
+    }
     match SocConfig::resolve("renode:stm32f103").unwrap() {
         SocConfig::Renode(c) => assert_eq!(c, RenodeConfig::stm32f103()),
         other => panic!("expected Renode, got {other:?}"),
@@ -474,8 +484,9 @@ fn resolve_embedded_builtins() {
     // The full built-in set is discoverable.
     let specs = SocConfig::builtin_specs();
     assert!(specs.contains(&"renode:rp2040"));
+    assert!(specs.contains(&"renode:stm32f072"));
     assert!(specs.contains(&"qemu:esp32"));
-    assert_eq!(specs.len(), 8);
+    assert_eq!(specs.len(), 9);
 }
 
 #[test]
@@ -504,7 +515,8 @@ fn resolve_from_override_dir_adds_a_part_as_data() {
             .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    // A brand-new part that ships in no built-in: an "stm32f072" sibling.
+    // A brand-new part that ships in no built-in, while reusing the F072's
+    // stock Renode platform underneath.
     let new_part = r#"
 [soc]
 backend = "renode"
@@ -529,7 +541,7 @@ peripheral = "gpioPortA"
 odr_offset = 0x14
 width = 16
 "#;
-    std::fs::write(dir.join("stm32f072.soc.toml"), new_part).unwrap();
+    std::fs::write(dir.join("acme_f072.soc.toml"), new_part).unwrap();
 
     // SAFETY (edition 2021): set_var is safe. The lock serializes this with
     // the other test mutating HAUKSBEE_MCU_DIR; the part resolved here is used
@@ -537,7 +549,7 @@ width = 16
     // unaffected (it just won't find its file here).
     let _env = MCU_DIR_ENV.lock().unwrap();
     std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
-    let resolved = SocConfig::resolve("renode:stm32f072");
+    let resolved = SocConfig::resolve("renode:acme_f072");
     std::env::remove_var("HAUKSBEE_MCU_DIR");
     std::fs::remove_dir_all(&dir).ok();
 

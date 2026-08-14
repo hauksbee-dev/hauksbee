@@ -1452,8 +1452,6 @@ mod tests {
 
     /// Every descriptor hauksbee ships must lint clean, so a future one cannot
     /// arrive broken: the sweep is the gate, not a spot check of the newest file.
-    /// The `examples/` descriptor the add-a-microcontroller walkthrough builds is
-    /// swept too, because a reader copies it.
     #[cfg(all(feature = "renode", feature = "qemu"))]
     #[test]
     fn every_shipped_soc_descriptor_lints_clean() {
@@ -1473,15 +1471,6 @@ mod tests {
             );
             swept += 1;
         }
-        let example = include_str!("../../../hauksbee-mcu/db/mcu/examples/stm32f072.soc.toml");
-        let (lines, findings) = lint_descriptor("stm32f072.soc.toml", example);
-        assert_eq!(
-            findings,
-            0,
-            "the walkthrough's example descriptor must lint clean:\n{}",
-            lines.join("\n")
-        );
-        swept += 1;
         assert!(
             swept >= 9,
             "the sweep must cover every descriptor, saw {swept}"

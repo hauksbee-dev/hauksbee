@@ -352,6 +352,12 @@ impl RenodeConfig {
     // bug the `tests/soc_descriptors.rs` equivalence suite catches, never a
     // runtime condition.
 
+    /// STM32F072C8/CB. See `db/mcu/stm32f072.soc.toml`.
+    pub fn stm32f072() -> Self {
+        Self::from_soc_toml(include_str!("../../db/mcu/stm32f072.soc.toml"))
+            .expect("built-in stm32f072.soc.toml is valid")
+    }
+
     /// STM32F103C8 "blue pill". See `db/mcu/stm32f103.soc.toml`.
     pub fn stm32f103() -> Self {
         Self::from_soc_toml(include_str!("../../db/mcu/stm32f103.soc.toml"))
@@ -1912,8 +1918,8 @@ impl Mcu for RenodeBackend {
             if self.adc_unmapped_warned.insert(channel) {
                 eprintln!(
                     "renode: DROPPING ADC injection for channel {channel} on '{}': \
-                     no AdcChannelMap configured (the stock Renode platform models \
-                     no ADC; supply RenodeConfig::adc_channels to enable injection)",
+                     no AdcChannelMap is configured for this channel; add [[soc.adc]] \
+                     only after verifying the platform's modeled converter",
                     self.config.machine
                 );
             }
