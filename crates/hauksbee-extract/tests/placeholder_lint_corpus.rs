@@ -162,6 +162,10 @@ fn boards_root() -> Option<PathBuf> {
     }
 }
 
+fn exclusion_reason(path: &Path, root: &Path) -> Option<String> {
+    hauksbee_testkit::not_known_good(path, root)
+}
+
 #[test]
 fn placeholder_value_is_silent_at_medium_and_above_across_corpus() {
     let Some(root) = boards_root() else { return };
@@ -185,7 +189,8 @@ fn placeholder_value_is_silent_at_medium_and_above_across_corpus() {
     // same discipline hauksbee applies to a waiver file.
     let mut excused = vec![0usize; EXCEPTIONS.len()];
     let mut exercised = 0usize;
-    let mut stack = vec![root];
+    let mut excluded = 0usize;
+    let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
@@ -193,6 +198,21 @@ fn placeholder_value_is_silent_at_medium_and_above_across_corpus() {
         for entry in rd.flatten() {
             let p = entry.path();
             if p.is_dir() {
+                // `corpus.toml` is the one authority for the set a silence gate
+                // may grade itself on. The fetch materialises that decision as a
+                // marker at the entry root. Skipping only KiCad's demo directory
+                // here let later adjudicated entries (notably emonTx V3.4.0)
+                // leak into this gate and turn a known false positive into a
+                // corpus failure.
+                if let Some(why) = exclusion_reason(&p, &root) {
+                    hauksbee_testkit::excluded(
+                        "placeholder_value corpus gate",
+                        &p.file_name().unwrap_or_default().to_string_lossy(),
+                        &why,
+                    );
+                    excluded += 1;
+                    continue;
+                }
                 // KiCad's own demonstration projects are out of scope for THIS
                 // gate, and only this one. Their whole tree uses the bare library
                 // symbol name as a value - `R` on RCAN201/RCAN202 in
@@ -262,6 +282,10 @@ fn placeholder_value_is_silent_at_medium_and_above_across_corpus() {
             }
         }
     }
+    eprintln!(
+        "placeholder_value corpus gate: scanned {exercised} board file(s), \
+         excluded {excluded} manifest entr(ies) as not known-good"
+    );
     // A walk that parsed nothing proves nothing; refuse the vacuous pass. The
     // tally is printed so a run's coverage is auditable, not inferred.
     hauksbee_testkit::scanned("placeholder_value corpus gate", exercised);
@@ -290,4 +314,27 @@ fn placeholder_value_is_silent_at_medium_and_above_across_corpus() {
         "placeholder_value fired at medium+ on known-good corpus boards (false positive(s)):\n{}",
         offenders.join("\n")
     );
+}
+
+#[test]
+fn manifest_not_known_good_marker_excludes_the_whole_entry() {
+    let root = std::env::temp_dir().join(format!(
+        "hauksbee-placeholder-known-good-{}",
+        std::process::id()
+    ));
+    let entry = root.join("vendor/revision/design");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&entry).unwrap();
+    std::fs::write(
+        root.join("vendor/revision/.hauksbee-not-known-good"),
+        "adjudicated corpus finding",
+    )
+    .unwrap();
+
+    assert_eq!(
+        exclusion_reason(&entry, &root).as_deref(),
+        Some("adjudicated corpus finding")
+    );
+
+    std::fs::remove_dir_all(&root).ok();
 }
