@@ -12,7 +12,7 @@ honest about which of them stay easy and which do not.
 
 **Adding an MCU is a welcomed contribution with a documented path, not a
 core-team activity.** The three tiers below, the checklist at the end, and the
-worked STM32F072 example all exist because the intended outcome is a pull request
+worked STM32F072 contribution all exist because the intended outcome is a pull request
 from someone who does not work on hauksbee. The last section says exactly what
 the maintainer will and will not take on afterwards.
 
@@ -285,8 +285,8 @@ offset off a running machine before trusting it.
 Validate and inspect a descriptor without an emulator, firmware or a board:
 
 ```
-$ hauksbee models lint crates/hauksbee-mcu/db/mcu/examples/stm32f072.soc.toml
-soc descriptor 'crates/hauksbee-mcu/db/mcu/examples/stm32f072.soc.toml': ok (renode:stm32f072)
+$ hauksbee models lint crates/hauksbee-mcu/db/mcu/stm32f072.soc.toml
+soc descriptor 'crates/hauksbee-mcu/db/mcu/stm32f072.soc.toml': ok (renode:stm32f072)
   part: STM32F072 (ARM Cortex-M0) on machine "f072"
   platform: @platforms/cpus/stm32f072.repl
   cpu: sysbus.cpu   clock: 8000000 Hz
@@ -323,9 +323,12 @@ Run it after every edit. The full boot is the last check, not the first.
 
 ## Tier B, worked: STM32F072 on a stock Renode platform
 
-The STM32F0 family is not one of hauksbee's shipped parts. Renode 1.16.1 ships
-`platforms/cpus/stm32f072.repl`. That is tier B, and the whole part is one file:
-`crates/hauksbee-mcu/db/mcu/examples/stm32f072.soc.toml`.
+The STM32F072 began as a part hauksbee did not ship. Renode 1.16.1 already
+shipped `platforms/cpus/stm32f072.repl`, so it was tier B: one descriptor, one
+package-faithful routing entry and a two-sided fixture. The completed
+contribution now ships at `crates/hauksbee-mcu/db/mcu/stm32f072.soc.toml` and is
+embedded in the binary. Reading the steps as history shows the path a new tier-B
+part follows; running them against the current tree checks the landed result.
 
 ### Step 1, read the platform, not the datasheet
 
@@ -521,30 +524,33 @@ peripheral is `SPI.STM32SPI`, which *is* the class behind the F4's proven
 bridges, which makes it the cheapest capability to add next, and it still needs
 the live test before it is claimed.
 
-### Step 6, install it and check it
+### Step 6, install it and check it before merging
 
 ```bash
 mkdir -p ~/.config/hauksbee/mcu
-cp crates/hauksbee-mcu/db/mcu/examples/stm32f072.soc.toml ~/.config/hauksbee/mcu/
+cp crates/hauksbee-mcu/db/mcu/stm32f072.soc.toml ~/.config/hauksbee/mcu/
 hauksbee models lint ~/.config/hauksbee/mcu/stm32f072.soc.toml
 ```
 
-`renode:stm32f072` now resolves to your file, with no recompile.
+For a new part, its `renode:<part>` name now resolves to the override with no
+recompile. The F072 itself resolves without this copy because it has graduated
+to the embedded set; the override exercise remains the same development loop.
 
 ### Step 7, route your board's part to it
 
-The descriptor alone is inert: nothing on a board says it is an F072. Add a
-routing entry, in `~/.config/hauksbee/models/` or a directory you pass with
-`--models-dir`:
+During development, the descriptor alone is inert: nothing on a board says it is
+your part. Add a routing entry in `~/.config/hauksbee/models/` or a directory you
+pass with `--models-dir`. The F072 version below is now shipped in
+`crates/hauksbee-models/db/mcu.toml`; a new contribution starts in an override:
 
 ```toml
 [[models]]
 id = "stm32f072cb"
 kind = "mcu"
-description = "STM32F072CB Cortex-M0 MCU, LQFP-48"
+description = "STM32F072C8/CB Cortex-M0 MCU, LQFP-48 or UFQFPN-48"
 
 [models.match]
-value_re = "(?i)^STM32F072C[8B]"
+value_re = "(?i)^STM32F072C(8|B)(T[67]|U[67])?$"
 
 [models.params]
 backend = "renode:stm32f072"
@@ -560,10 +566,9 @@ backend = "renode:stm32f072"
 #   "<pin>" = "vdd" / "vss"
 #
 # Take the numbers from the package pinout of the exact part, and say which
-# document they came from. The shipped entries in
-# crates/hauksbee-models/db/mcu.toml cite theirs (the STM32F103C8 map cites the
-# KiCad MCU_ST_STM32F1 symbol and ST DS5319); a pin map from the wrong package
-# variant binds firmware drives to the wrong nets, with no error.
+# document they came from. The shipped F072 entry cites ST DS9826 Rev 6 Table
+# 14; a pin map from the wrong package variant binds firmware drives to the
+# wrong nets, with no error.
 ```
 
 `hauksbee models resolve <board> --models-dir <dir>` shows which entry won for
@@ -585,7 +590,9 @@ copy:
   configured (PC6 and PA5, and *not* PA9/PA10, since `moder` does not count
   alternate-function pins). `quiet.elf` produces no edges, no bytes and no
   configured outputs. Plus the ADC round trip at three voltages across two
-  channels, with the first channel still holding its own value afterwards.
+  channels, with the first channel still holding its own value afterwards. An
+  unproven package channel is then injected and must appear in the backend's
+  dropped-channel list rather than being accepted or swallowed.
 
 Assert levels and counts, not "something happened": the alternation is what
 distinguishes a toggle from a bridge re-reporting one register value, and an exact

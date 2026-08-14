@@ -160,7 +160,7 @@ in-process AVR backend and bridged/contracted on the external emulators.
 | GPIO out (`on_pin_change`) | yes (per-edge IRQ) | yes (ODR poll over TCP) | yes (RAM-mailbox diff) |
 | GPIO in (`set_digital_in`) | yes | yes | yes (gdbstub `M` write) |
 | UART (`uart_write` / `on_uart`) | yes | yes | yes (serial socket) |
-| ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write), and only where a descriptor declares one: `renode:rp2040` inputs 0..3 do, and the STM32F103/F4/nRF52/FE310 descriptors do not, because those platforms model no ADC peripheral at all (verified live). An injection with no map is DROPPED and surfaced on every report surface that actually runs the external backend (run text, `--plain`, `--json`, hauksbee-ci, and the TUI pane), never silently. The synchronous web front door refuses external-emulator runs before these scheduler signals exist and points to live/CLI co-sim instead. Absence is per platform rather than a property of Renode: the STM32F0 family's stock platform does model an ADC with a `SetDefaultValue` hook, so a descriptor for one can map channels without vendoring anything. See "ADC / bus coverage by platform" | yes, RAM-mailbox count slots (firmware contract) |
+| ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write), and only where a descriptor declares one: `renode:stm32f072` inputs 0..7 and `renode:rp2040` inputs 0..3 are live-proven. STM32F103/F4/nRF52/FE310 model no ADC peripheral in their stock platforms, so injections there are DROPPED and surfaced on every report surface that runs the external backend (run text, `--plain`, `--json`, hauksbee-ci, and the TUI pane), never silently. The synchronous web front door refuses external-emulator runs before these scheduler signals exist and points to live/CLI co-sim instead. See "ADC / bus coverage by platform" | yes, RAM-mailbox count slots (firmware contract) |
 | I2C slave models (`on_i2c`) | yes (TWI decode) | yes on platforms whose descriptor names controllers (STM32F103/F4 `i2c1`, nRF52840 `twi0`/`twi1`); a slave bound on a controller-less platform is recorded as UNEXERCISED on every report surface that runs that backend, and a CI `peripheral` assertion against it FAILS | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
 | SPI slave models (`on_spi`) | yes | yes on platforms with named controllers (STM32F103 `spi1` via `extra_repl`, F4 `spi2`/`spi3`, nRF52840 `spi2`); controller-less platforms get the same UNEXERCISED recording/surfacing | yes, RAM-mailbox bus cells (firmware contract) |
 | Drive direction (`pins_configured_output`) | yes (DDR hooks) | yes on dir-mapped platforms: STM32F103 (CRL/CRH), STM32F4 (MODER), nRF52840 (DIR), polled alongside the ODR; RP2040/FE310 carry no verified dir map and stay direction-blind | no (mailbox carries levels only) |
@@ -185,9 +185,10 @@ the Monitor TCP channel: I2C/SPI slaves are real Renode peripherals
 (generated C# bridges that call back into the engine), and ADC counts are
 injected per chunk through a per-platform recipe
 (`RenodeConfig::adc_channels`): either a modeled ADC's feed command or a
-`WriteDoubleWord` into the result word the firmware reads. The stock
-STM32F103/F4/nRF52/FE310 configs ship no map, because those Renode
-platforms model no ADC peripheral. hauksbee records an unmapped channel's
+`WriteDoubleWord` into the result word the firmware reads. The shipped F072
+config feeds its stock modeled converter; the stock STM32F103/F4/nRF52/FE310
+configs ship no map, because those Renode platforms model no ADC peripheral.
+hauksbee records an unmapped channel's
 injections as DROPPED and surfaces them on all four batch report surfaces: the
 run text, `--plain`, `--json` (`CosimJson.adc_dropped` + a coverage note), and
 all hauksbee-ci formats, naming the channel, MCU, and board net, so a batch run
@@ -221,6 +222,7 @@ Every number is measured on this host, not derived from a datasheet.
 | Backend | ratio | how it is measured |
 |---------|-------|--------------------|
 | `simavr:atmega328p` | **1.00x, exact** | cycle-exact by construction: 80,000 cycles per 5 ms chunk is 16.000 MHz, and one `_delay_ms(5)` toggle per chunk |
+| `renode:stm32f072` | **unmeasured; timing claims qualified** | its reset-default 8 MHz is declared and load-checked, but the stock RCC is a stub and no two-sided clock-truth firmware gate exists |
 | `renode:rp2040` | **1.00x** | stock pico-sdk firmware, 20 ms of virtual time per `sleep_ms(20)` |
 | `renode:stm32f103` | **1.00x** (was 9.09x fast) | `tests/clock_truth.rs`, a SysTick-timed 100 ms half-period |
 | `renode:stm32f4_discovery` | **1.00x** (was 4.51x fast) | same gate |
@@ -366,7 +368,7 @@ silence is what makes the warning worth reading.
 | `renode:stm32f103` | **resets once, then the core does not resume** | measured: the heartbeat stops at the timeout and the boot marker flips a second time, then 450 ms of silence where the part would reboot every 50 ms |
 | `renode:nrf52840` | **never fires** | measured: RUNSTATUS reads 1 and CRV reads back a correct 32768 Hz reload, and 1.000 s of simulated time gives zero resets where the part gives twenty |
 | `qemu:esp32` / `-s3` / `-c3` | **disabled on purpose** | the backend passes `wdt_disable=true` for the timer groups at launch |
-| `renode:stm32f4_discovery`, `renode:sifive_fe310`, `renode:rp2040` | **unverified** | nobody has run a starved watchdog to the timeout on these parts, and the two that were measured disagree with each other, so neither can be inferred |
+| `renode:stm32f072`, `renode:stm32f4_discovery`, `renode:sifive_fe310`, `renode:rp2040` | **unverified** | nobody has run a starved watchdog to the timeout on these parts, and the two that were measured disagree with each other, so neither can be inferred |
 
 Disabling the ESP32 watchdogs is the right call and stays: co-simulation pauses
 the guest at every chunk boundary while the analog side solves, and a running
@@ -535,6 +537,7 @@ that command rather than to the report surfaces.
 | Platform | ADC injection map | I2C controllers | SPI controllers |
 |----------|-------------------|-----------------|-----------------|
 | `simavr:atmega328p` | exact (in-process, always) | native TWI decode | native |
+| `renode:stm32f072` | inputs 0..7 through the stock `STM32F0_ADC` `SetDefaultValue` feed, proven end-to-end against firmware ADC reads on channels 0 and 3; package inputs 8/9 remain unmapped and drop + warn | none (unverified `STM32F7_I2C` bridge) | none (unverified `STM32SPI` bridge) |
 | `renode:stm32f103` | **none**: stock `stm32f103.repl` models no ADC (verified live); injections drop + warn | `i2c1` | `spi1` (via `extra_repl`) |
 | `renode:stm32f4_discovery` | **none**: same reason | `i2c1` | `spi2`, `spi3` (see below) |
 | `renode:nrf52840` | **none**: the live repl models no ADC/SAADC | `twi0`, `twi1` (live-verified: bridge registers on both) | `spi2` (live-verified registration) |
@@ -551,15 +554,23 @@ registration that follows then panics. So the F4 descriptor omits `extra_repl`
 and binds bridges to the already-existing `spi2`/`spi3`
 (`crates/hauksbee-mcu/db/mcu/stm32f4_discovery.soc.toml`).
 
-Why no ADC map on the stock Renode platforms: Renode 1.16.1's shipped
-STM32F1/F4/nRF52840 platform descriptions register no ADC peripheral at all,
-and Renode's
+Why no ADC map on the remaining stock Renode platforms: Renode 1.16.1's
+shipped STM32F1/F4/nRF52840 platform descriptions register no ADC peripheral
+at all, and Renode's
 `Analog.STM32_ADC` speaks the F0/L0 register layout. Registering it at an
 F1/F4 address would let firmware read a wrongly-laid-out peripheral (fake
 fidelity), and inventing a RAM result word is a firmware contract, not the
 real converter. So the honest state is: no map, loud drop, warning on every
 surface. A board that knows where its counts must land supplies
 `[[soc.adc]]` in its own descriptor (`$HAUKSBEE_MCU_DIR`, no recompile).
+
+The F072 is the counterexample: stock `stm32f0.repl` registers
+`Analog.STM32F0_ADC`, whose `SetDefaultValue` method accepts a voltage and a
+channel. `renode_stm32f072.rs` feeds 1.650 V and 0.825 V into channel 0 and 3.300
+V into channel 3, then observes the firmware's own conversions return 0x800,
+0x400 and 0xfff. It separately injects unsupported package channel 8 and proves
+the loud dropped-channel record. That is a modeled converter path, not a RAM
+contract or a register-layout substitution.
 
 RP2040 is the exception because its platform is not Renode's. Its ADC model is
 vendored alongside the rest of the SoC (see the support-bundle section below)
@@ -741,6 +752,7 @@ configure.
 | Architecture | Backend | Emulator / platform | End-to-end proof |
 |--------------|---------|---------------------|--------------------------|
 | ATmega328P (AVR) | `simavr:atmega328p` | libsimavr (in-process) | **Proven** (pre-existing AVR demo) |
+| STM32F072C8/CB (Cortex-M0) | `renode:stm32f072` | Renode `stm32f072.repl` / `stm32f0.repl` | **GPIO/UART/ADC proven**: alternating PC6 GPIO, exact USART1 banner, two-sided quiet firmware, and stock-converter ADC injection on channels 0 and 3; the built-in 48-pin model resolves the corpus BMS MCU. Timing and watchdog fidelity remain explicitly unverified. |
 | STM32F103 (Cortex-M3, blue pill) | `renode:stm32f103` | Renode `stm32f103.repl` | **Proven**: "hello from stm32", R1 current via solver, PC13 toggles |
 | ESP32 (Xtensa LX6) | `qemu:esp32` | Espressif QEMU `esp32` | **Proven**: "hello from esp32", R1 = 3.727 mA via solver, GPIO4 27 toggles, run-to-run stable |
 | ESP32-C3 (RISC-V RV32IMC) | `qemu:esp32c3` | Espressif QEMU `esp32c3` | **Proven**: "hello from esp32", R1 = 3.727 mA via solver, GPIO4 32 toggles |
@@ -1266,9 +1278,9 @@ on a RISC-V core, proving the backend stays ISA-agnostic.
 
 - **ADC injection needs a per-platform map on Renode.** Renode's ADC
   peripheral API is per-SoC (`FeedSample` / `SetDefaultValue` vary by
-  family), and the stock STM32F103/F4/nRF52/FE310 platform descriptions
-  model no ADC at all (the STM32F0 family's does, with `SetDefaultValue`,
-  so the gap is per family and not a limit of the emulator), so
+  family). The shipped STM32F072 map uses its stock modeled converter for
+  external inputs 0..7. The stock STM32F103/F4/nRF52/FE310 platform
+  descriptions model no ADC at all, so
   `set_analog_in` delivers counts only where a
   `RenodeConfig::adc_channels` recipe says how (a Monitor feed command for
   a modeled ADC, or a `WriteDoubleWord` into the result word the firmware

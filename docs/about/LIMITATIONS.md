@@ -303,15 +303,16 @@ What remains open:
   nothing stops two of them being attached, and the dispatcher would give every
   byte to the first. Resolving the CS nets is the fix, and it is what the
   `--check` co-sim coverage points at.
-- **Default Renode ADC maps.** `set_analog_in` injects for real through a
-  per-platform `AdcChannelMap` (validated against a live Renode 1.16.1), but no
-  *default* map ships for the stock STM32/nRF52/FE310 configs: those Renode
-  platform descriptions model no ADC peripheral, and Renode's
-  `Analog.STM32_ADC` speaks the F0/L0 register layout, so pretending it is an
-  F1 ADC would be fake fidelity. Unmapped channels drop loudly (once-per-channel
-  stderr warning, plus all four batch report surfaces, though not the TUI). A
-  board that knows where its counts land adds `[[soc.adc]]` to its own
-  descriptor, no recompile.
+- **Renode ADC coverage is per platform.** `set_analog_in` injects for real
+  through a per-platform `AdcChannelMap` (validated against live Renode 1.16.1).
+  The shipped STM32F072 descriptor maps external inputs 0..7 through the stock
+  F0 converter and proves channels 0 and 3 through firmware reads; package
+  inputs 8/9 remain unmapped. STM32F103/F4/nRF52/FE310 still have no default map
+  because those stock platforms model no ADC peripheral, and putting the F0/L0
+  `Analog.STM32_ADC` at an F1/F4 address would be fake fidelity. Unmapped
+  channels drop loudly: once-per-channel stderr plus every batch report and the
+  TUI. A board that knows where its counts must land can add `[[soc.adc]]` to its
+  own descriptor, no recompile.
 - **QEMU ESP32 SAR ADC** is not modeled by the Espressif QEMU fork, a
   silicon-model gap, so `set_analog_in` writes the count into a RAM-mailbox
   slot instead, a firmware contract like the GPIO mailbox below. Only

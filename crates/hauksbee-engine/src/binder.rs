@@ -1440,6 +1440,19 @@ fn mcu_backend_string(comp: &Component, model: &ModelEntry) -> String {
 fn route_mcu_family_str(s: &str) -> Option<McuFamilyRoute> {
     for token in family_tokens(s) {
         let compact = token.replace(['-', '_', ' '], "");
+        // The F072 descriptor is package-independent, but it is not a generic
+        // STM32F0 core. Route only the silicon family it actually models; an
+        // F030/F091 must remain unresolved instead of silently running on the
+        // F072 machine. Exact-before-family ordering is load-bearing.
+        if compact.starts_with("STM32F072") {
+            return Some(McuFamilyRoute::Backend {
+                family: "STM32F072",
+                backend: "renode:stm32f072",
+            });
+        }
+        if compact.starts_with("STM32F0") {
+            return Some(McuFamilyRoute::NoPlatform { family: "STM32F0" });
+        }
         if compact.starts_with("STM32F4") {
             return Some(McuFamilyRoute::Backend {
                 family: "STM32F4",
@@ -7731,6 +7744,23 @@ mod mcu_route_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn only_stm32f072_uses_the_f072_machine() {
+        assert!(matches!(
+            route_mcu_family_str("STM32F072CBT6"),
+            Some(McuFamilyRoute::Backend {
+                family: "STM32F072",
+                backend: "renode:stm32f072"
+            })
+        ));
+        for sibling in ["STM32F030C8T6", "STM32F091CBT6"] {
+            assert!(matches!(
+                route_mcu_family_str(sibling),
+                Some(McuFamilyRoute::NoPlatform { family: "STM32F0" })
+            ));
+        }
     }
 }
 

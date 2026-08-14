@@ -447,6 +447,94 @@ max_voltage_v = 6.0       # Maximum operating voltage
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
+id = "stm32f072c"
+kind = "mcu"
+description = "STM32F072C8/CB Cortex-M0 MCU, LQFP-48 or UFQFPN-48"
+
+[models.match]
+# `C` is the 48-pin line; C8 and CB differ only in flash size. T6/T7 are
+# LQFP-48 and U6/U7 are UFQFPN-48. Both packages share one numbered pin map in
+# ST DS9826 Rev 6, Table 14. Larger R/V variants must not bind through it.
+value_re = "(?i)^STM32F072C(8|B)(T[67]|U[67])?$"
+mpn_re   = "(?i)^STM32F072C(8|B)(T[67]|U[67])?"
+
+[models.params]
+backend = "renode:stm32f072"
+
+[models.pins]
+# STMicroelectronics DS9826 Rev 6, Table 14, LQFP48/UFQFPN48 column. The
+# package has ADC_IN0..9. The shipped Renode descriptor has live-proven feed
+# recipes for channels 0..7; PB0/PB1 retain their real adc8/adc9 roles so an
+# attempted use drops loudly as uncovered rather than disappearing.
+"1"  = "vbat"
+"2"  = "pc13"
+"3"  = "pc14_osc32_in"
+"4"  = "pc15_osc32_out"
+"5"  = "pf0_osc_in"
+"6"  = "pf1_osc_out"
+"7"  = "reset"
+"8"  = "vssa"
+"9"  = "vdda"
+"10" = "pa0_adc0"
+"11" = "pa1_adc1"
+"12" = "pa2_adc2"
+"13" = "pa3_adc3"
+"14" = "pa4_adc4"
+"15" = "pa5_adc5"
+"16" = "pa6_adc6"
+"17" = "pa7_adc7"
+"18" = "pb0_adc8"
+"19" = "pb1_adc9"
+"20" = "pb2"
+"21" = "pb10_i2c2_scl"
+"22" = "pb11_i2c2_sda"
+"23" = "vss"
+"24" = "vdd"
+"25" = "pb12"
+"26" = "pb13"
+"27" = "pb14"
+"28" = "pb15"
+"29" = "pa8"
+"30" = "pa9_usart1_tx"
+"31" = "pa10_usart1_rx"
+"32" = "pa11_usb_dm"
+"33" = "pa12_usb_dp"
+"34" = "pa13_swdio"
+"35" = "vss2"
+"36" = "vddio2"
+"37" = "pa14_swclk"
+"38" = "pa15"
+"39" = "pb3"
+"40" = "pb4"
+"41" = "pb5"
+"42" = "pb6_i2c1_scl"
+"43" = "pb7_i2c1_sda"
+"44" = "boot0"
+"45" = "pb8_i2c1_scl"
+"46" = "pb9_i2c1_sda"
+"47" = "vss3"
+"48" = "vdd2"
+
+[models.ratings]
+# DS9826 Rev 6, Table 21 (operating supply) and Table 22 (current): 3.6 V
+# maximum operating supply, 25 mA per I/O, 80 mA across all I/O pins.
+max_pin_current_a = 0.025
+max_current_a = 0.08
+max_voltage_v = 3.6
+
+# RM0091 Rev 10 sec. 2.5 and DS9826 Table 14: BOOT0 is a dedicated input with
+# no stated internal bias. Low selects main flash; high selects system memory
+# with nBOOT1's option-byte state. Firmware cannot repair a bad reset sample.
+[[models.straps]]
+role = "boot0"
+level = "low"
+boot_select = true
+internal_pull = "none"
+note = "BOOT0 low boots main flash; high selects system memory depending on nBOOT1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
 id = "stm32f103c8"
 kind = "mcu"
 description = "STM32F103C8 Cortex-M3 MCU (blue pill), LQFP-48"
