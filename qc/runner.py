@@ -170,7 +170,11 @@ class Session:
 
     def redact(self, text: str) -> str:
         """Make a transcript comparable between machines and runs."""
-        return text.replace(str(self.work), "<WORK>").replace(str(REPO), "<REPO>")
+        return (
+            text.replace(str(self.bin_dir), str(displayed_bin_dir(self.bin_dir)))
+            .replace(str(self.work), "<WORK>")
+            .replace(str(REPO), "<REPO>")
+        )
 
 
 def uncomment_toml_block(path: Path, marker: str) -> None:
@@ -436,20 +440,24 @@ def binary_versions(bin_dir: Path) -> dict[str, str]:
     return versions
 
 
+def displayed_bin_dir(bin_dir: Path) -> Path:
+    """Render a stable transcript path for repository and extracted binaries."""
+    try:
+        relative_bin_dir = bin_dir.resolve().relative_to(REPO.resolve())
+        return Path("<REPO>") / relative_bin_dir
+    except ValueError:
+        return Path("<EXTERNAL-BIN-DIR>")
+
+
 def write_report(
     results: list[ScenarioResult], out_dir: Path, bin_dir: Path, versions: dict[str, str]
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.md"
-    try:
-        relative_bin_dir = bin_dir.resolve().relative_to(REPO.resolve())
-        displayed_bin_dir = Path("<REPO>") / relative_bin_dir
-    except ValueError:
-        displayed_bin_dir = Path("<EXTERNAL-BIN-DIR>")
     lines = [
         "# Scenario QC report",
         "",
-        f"Binaries: `{displayed_bin_dir}`",
+        f"Binaries: `{displayed_bin_dir(bin_dir)}`",
         f"hauksbee version: `{versions['hauksbee']}`",
         f"hauksbee-ci version: `{versions['hauksbee-ci']}`",
         "",
