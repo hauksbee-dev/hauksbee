@@ -250,7 +250,44 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
                 Some(layers::GbrJobRole::Drill { .. }) => LayerRole::Drill,
                 Some(layers::GbrJobRole::Outline) => LayerRole::Outline,
                 Some(layers::GbrJobRole::Ignored) => LayerRole::Ignored,
-                None => layers::classify(&path),
+                None => {
+                    let inferred = layers::classify(&path);
+                    if inferred == LayerRole::Unknown {
+                        // A KiCad user may rename an inner copper layer, and the
+                        // exported film follows that label: `GND_Cu.gbr` says
+                        // neither "inner" nor a stack number. The film itself
+                        // still carries the authoritative X2 declaration
+                        // `%TF.FileFunction,Copper,L<n>,Inr*%`. We used to read
+                        // that declaration only AFTER filename classification,
+                        // so the file was discarded before it could identify
+                        // itself and a six-layer board reconstructed from its
+                        // two outer films.
+                        //
+                        // Explicit layer_map and gbrjob roles remain above this
+                        // fallback. A bare `_Cu` filename is not enough: without
+                        // a valid declaration it stays Unknown, preserving the
+                        // refusal boundary for ambiguous artwork.
+                        std::fs::read_to_string(&path)
+                            .ok()
+                            .and_then(|text| {
+                                let ext = path.extension().and_then(|s| s.to_str());
+                                drill_is_gerber_format(&text, ext)
+                                    .then(|| copper_physical_layer(&text))
+                                    .flatten()
+                            })
+                            .map(|layer| LayerRole::Copper {
+                                index: (layer - 1) as usize,
+                                name: path
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
+                            .unwrap_or(inferred)
+                    } else {
+                        inferred
+                    }
+                }
             }
         });
         match role {
@@ -306,6 +343,8 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     let mut layer_prims: Vec<Vec<rs274x::CopperPrim>> = vec![Vec::new(); ordered.len()];
     let mut physical_to_stack: std::collections::HashMap<u32, usize> =
         std::collections::HashMap::new();
+    let mut physical_layer_sources: std::collections::HashMap<u32, String> =
+        std::collections::HashMap::new();
     let mut declared_physical_max: u32 = 0;
     for (role, orig_idx) in &ordered {
         let LayerRole::Copper { index, .. } = role else {
@@ -314,8 +353,15 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
         let path = &copper[*orig_idx].1;
         let text = std::fs::read_to_string(path)
             .map_err(|e| ExtractError::Xml(format!("read {}: {e}", film(path))))?;
-        if let Some(l) = copper_physical_layer(&text) {
-            physical_to_stack.insert(l, *index);
+        let x2_physical_layer = copper_physical_layer(&text);
+        if let Some(l) = x2_physical_layer {
+            register_physical_layer(
+                &mut physical_to_stack,
+                &mut physical_layer_sources,
+                l,
+                *index,
+                film(path).to_string(),
+            )?;
             declared_physical_max = declared_physical_max.max(l);
         }
         // The job manifest also states the film's physical layer, but only a
@@ -324,10 +370,16 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
         // The film's own X2 attribute wins where both exist (it is the file
         // speaking for itself); the manifest fills in for films that carry no
         // attribute.
-        if gbrjob_numbers_physical {
+        if x2_physical_layer.is_none() && gbrjob_numbers_physical {
             let base = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
             if let Some(layers::GbrJobRole::Copper { layer, .. }) = gbrjob.get(base) {
-                physical_to_stack.entry(*layer).or_insert(*index);
+                register_physical_layer(
+                    &mut physical_to_stack,
+                    &mut physical_layer_sources,
+                    *layer,
+                    *index,
+                    film(path).to_string(),
+                )?;
                 declared_physical_max = declared_physical_max.max(*layer);
             }
         }
@@ -996,17 +1048,31 @@ fn film_drill_functions(text: &str) -> FilmDrillFunctions {
 
 /// The `TF.FileFunction` attribute of a gerber film, uppercased, if it has one.
 ///
-/// Attribute lines open with `%`, and there are a handful of them among a
-/// film's many thousands of drawing commands, so only those are uppercased.
+/// File-attribute lines open with `%TF.FileFunction,` and end with `*%`; a
+/// `%TA` aperture attribute or an unterminated lookalike has no authority.
+/// There are only a handful of attributes among a film's many thousands of
+/// drawing commands, so only candidate lines are uppercased.
 /// The whole file is scanned rather than a fixed prefix: an exporter that
 /// writes a page of `G04` banner text first would otherwise push the attribute
 /// out of the window, and the reader would fall back to "says nothing" for a
 /// film that plainly states it is mechanical.
 fn film_file_function(text: &str) -> Option<String> {
-    text.lines()
-        .filter(|l| l.trim_start().starts_with('%'))
-        .map(|l| l.to_ascii_uppercase())
-        .find(|l| l.contains("FILEFUNCTION"))
+    const PREFIX: &str = "%TF.FILEFUNCTION,";
+    for line in text.lines() {
+        let line = line.trim_start();
+        if !line
+            .get(..PREFIX.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(PREFIX))
+        {
+            continue;
+        }
+        let upper = line.trim_end().to_ascii_uppercase();
+        if !upper.ends_with("*%") {
+            continue;
+        }
+        return Some(upper);
+    }
+    None
 }
 
 /// The copper layer pair a gerber-format drill film declares, read from the
@@ -1050,14 +1116,40 @@ fn copper_physical_layer(text: &str) -> Option<u32> {
     if fields.next()? != "COPPER" {
         return None;
     }
-    let digits: String = fields
-        .next()?
-        .strip_prefix('L')?
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let layer = fields.next()?.strip_prefix('L')?;
+    if layer.is_empty() || !layer.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let side = fields.next()?.trim_end_matches(['*', '%']).trim();
+    if !matches!(side, "TOP" | "INR" | "BOT" | "BOTTOM") {
+        return None;
+    }
+    let digits = layer;
     let n: u32 = digits.parse().ok()?;
     (n >= 1).then_some(n)
+}
+
+/// Register one physical copper-layer claim without allowing either X2 or a
+/// trusted job manifest to overwrite a different film's claim by iteration
+/// order. That ambiguity controls blind/buried-via attachment, so it must be a
+/// refusal whichever of the two authorities supplied the duplicate.
+fn register_physical_layer(
+    physical_to_stack: &mut std::collections::HashMap<u32, usize>,
+    physical_layer_sources: &mut std::collections::HashMap<u32, String>,
+    layer: u32,
+    stack_index: usize,
+    source: String,
+) -> Result<(), ExtractError> {
+    if let Some(previous) = physical_layer_sources.get(&layer) {
+        return Err(ExtractError::Gerber(format!(
+            "two copper films declare physical layer L{layer}: {previous} and {source}. \
+             Fix the films' TF.FileFunction or .gbrjob attributes, or supply a layer_map.txt; \
+             choosing either one would make blind-via connectivity depend on file order"
+        )));
+    }
+    physical_layer_sources.insert(layer, source);
+    physical_to_stack.insert(layer, stack_index);
+    Ok(())
 }
 
 /// Turn a 1-based X2 layer pair into inclusive 0-based stack indices, rejecting
