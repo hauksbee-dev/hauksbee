@@ -103,7 +103,10 @@ export const APP_SURFACES: Surface[] = [
     id: 'datasheet-extract-form',
     what: 'datasheet extraction past the consent gate: part number, kind, file jack',
     async reach(page) {
-      await page.locator('[data-testid^="extract-start-"]').first().click()
+      // Dispatch directly: the narrow phone layout scrolls and replaces this
+      // row as the active card mounts, which can make Playwright keep waiting
+      // for a now-detached click target even though the click already landed.
+      await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
       // The consent gate renders once /api/models/extract/ready answers, and a
       // real engine answers it by asking codex whether it is logged in, which
       // is slow. Wait for the gate before looking for its button, or the flow
@@ -126,8 +129,18 @@ export const APP_SURFACES: Surface[] = [
       const close = page.locator('[data-testid="extract-close"]')
       if (await close.count() > 0) await close.first().click()
       await page.locator('[data-testid="write-part-open"]').scrollIntoViewIfNeeded()
+      const opener = await page.locator('[data-testid="write-part-open"]').textContent()
+      if (!opener?.includes('Write U1 yourself')) {
+        throw new Error(`manual model editor did not name its selected part: ${opener}`)
+      }
       await page.click('[data-testid="write-part-open"]')
       await page.waitForSelector('[data-testid="write-part-toml"]')
+      const name = await page.locator('[data-testid="write-part-name"]').inputValue()
+      const starter = await page.locator('[data-testid="write-part-toml"]').inputValue()
+      if (name !== 'XLOGIC9999' || !starter.includes('id = "u1_xlogic9999"') ||
+          !starter.includes('kind = "choose_kind"') || !starter.includes('value_re = "^XLOGIC9999$"')) {
+        throw new Error(`manual model editor did not scaffold the selected U1: name=${name}, starter=${starter}`)
+      }
       // The validator is debounced 400ms; wait for its verdict to land so the
       // status row is measured with real text in it.
       await page.waitForSelector('[data-testid="write-part-status"]')
@@ -175,9 +188,12 @@ export const APP_SURFACES: Surface[] = [
     id: 'ci-setup',
     what: 'the GitHub CI setup: the workflow YAML and both download buttons',
     async reach(page) {
-      await page.locator('button', { hasText: 'Set up GitHub CI' }).first().click()
-      await page.waitForSelector('.hb-code')
-      await page.locator('.hb-code').last().scrollIntoViewIfNeeded()
+      const panel = page.locator('[data-testid="ci-setup-panel"]')
+      if (!(await panel.isVisible())) {
+        await page.locator('button', { hasText: 'Set up GitHub CI' }).first().click()
+      }
+      await panel.waitFor({ state: 'visible' })
+      await panel.scrollIntoViewIfNeeded()
       await settle(page)
     },
   },

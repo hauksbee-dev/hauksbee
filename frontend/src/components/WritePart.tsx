@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { WebOpenPart } from '../types/report'
 
 // Write a part by hand, in hauksbee's native TOML, with the real validator
 // answering as you type.
@@ -37,8 +38,32 @@ description = "what this part is, in a few words"
 
 # Which parts on a board this entry claims. Regexes over the value field.
 [models.match]
-value = ["^10k$"]
+value_re = "^10k$"
 `
+
+function starterFor(part?: WebOpenPart): string {
+  if (!part) return STARTER
+  const value = part.value.trim()
+  const id = `${part.reference}_${value || 'part'}`
+    .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const description = JSON.stringify(`${value || part.reference}: describe what this part does`)
+  const valueRe = JSON.stringify(`^${escaped}$`)
+  const passive = /^[RCL]\d+$/i.test(part.reference)
+  const kind = passive ? 'passive' : 'choose_kind'
+  const choice = passive
+    ? '# Passive reference prefix inferred; verify it against the datasheet.'
+    : '# A reference like U3 does not identify behavior. Replace choose_kind.'
+  return `[[models]]
+id = "${id || 'my_part'}"
+kind = "${kind}"
+${choice}
+description = ${description}
+
+[models.match]
+value_re = ${valueRe}
+`
+}
 
 type CheckState =
   | { phase: 'idle' }
@@ -46,14 +71,14 @@ type CheckState =
   | { phase: 'ok'; summary: string }
   | { phase: 'bad'; error: string }
 
-export function WritePart({ onSaved }: { onSaved?: () => void }) {
+export function WritePart({ onSaved, suggested }: { onSaved?: () => void; suggested?: WebOpenPart }) {
   const [open, setOpen] = useState(false)
   const [format, setFormat] = useState<Format>('toml')
-  const [toml, setToml] = useState(STARTER)
+  const [toml, setToml] = useState(() => starterFor(suggested))
   const [spice, setSpice] = useState(SPICE_STARTER)
   const body = format === 'toml' ? toml : spice
   const setBody = format === 'toml' ? setToml : setSpice
-  const [part, setPart] = useState('')
+  const [part, setPart] = useState(() => suggested?.value.trim() ?? '')
   const [check, setCheck] = useState<CheckState>({ phase: 'idle' })
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const timer = useRef<number | null>(null)
@@ -115,7 +140,7 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
       const j = (await res.json()) as { ok?: boolean; path?: string; error?: string }
       if (j.ok === false) setSaveMsg(j.error ?? 'the save failed and did not say why')
       else {
-        setSaveMsg(`Saved to ${j.path ?? 'your model directory'}. Re-analyze the board to use it.`)
+        setSaveMsg(`Saved to ${j.path ?? 'your model directory'}. Re-analyzing this board now.`)
         onSaved?.()
       }
     } catch (e) {
@@ -136,7 +161,7 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
           color: 'var(--silk-dim)',
         }}
       >
-        Write a part yourself
+        {suggested ? `Write ${suggested.reference} yourself` : 'Write a part yourself'}
       </button>
     )
   }
@@ -183,6 +208,7 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
 
       {format === 'toml' ? (
         <p className="text-[11px] mb-2 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+          {suggested && <>Starting from {suggested.reference} ({suggested.value}). </>}
           Hauksbee's own model format, and the one the binder and the checks reason
           about directly. `id` names the entry, `kind` says what sort of device it is,
           and `[models.match]` decides which parts on a board it claims. Everything is

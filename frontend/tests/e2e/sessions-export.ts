@@ -320,16 +320,7 @@ async function main() {
   await page.click('[data-testid="session-resume-open"]')
   await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 30_000 })
   const reanalyzed = await page.locator('[data-testid="restored-notice"]').count() === 0
-  if (reanalyzed) {
-    note('this server still had the board loaded, so Resume re-ran it for real '
-      + '(the report-only path is exercised by the second reload below)')
-  } else {
-    ok('a restored report says so, on the report, for as long as it is up',
-      // innerText renders text-transform, and the label is `uppercase`.
-      /restored from a saved session/i.test(await page.locator('[data-testid="restored-notice"]').innerText()))
-    ok('and it offers the one thing that fixes it',
-      await page.locator('[data-testid="restored-redrop"]').count() === 1)
-  }
+  ok('the live /boards route returns retained bytes and Resume re-runs them', reanalyzed)
   await shoot(page, '06-resumed-report')
 
   await page.click('[data-testid="nav-checks"]')
@@ -352,10 +343,8 @@ async function main() {
   const rh = readFileSync(restoredHtml, 'utf8')
   ok('a restored session still exports a full report',
     rh.includes('[[assert]]') && /class="card"/.test(rh))
-  if (!reanalyzed) {
-    ok('and the export says the report came out of storage',
-      /restored from a saved browser session/i.test(rh))
-  }
+  ok('the re-analyzed export is not mislabeled as a stored report',
+    !/restored from a saved browser session/i.test(rh))
 
   // ── 6. Named sessions: a second board, switch, rename, delete ───────────
   step('named sessions: a second board, the switcher, rename and delete')

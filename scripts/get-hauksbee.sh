@@ -394,6 +394,26 @@ if [ -n "${HAUKSBEE_INSTALLER_COMMIT:-}" ] \
 fi
 GH_TOKEN="$PRIVATE_TOKEN" gh release verify-asset "$VERSION" "$TARBALL_PATH" \
   --repo "$REPO" >/dev/null
+GH_TOKEN="$PRIVATE_TOKEN" gh release verify-asset "$VERSION" "$CHECKSUM_PATH" \
+  --repo "$REPO" >/dev/null
+
+validate_release_archive() {
+  local archive="$1" member line kind
+  while IFS= read -r member; do
+    case "$member" in
+      /*|\\*|[A-Za-z]:*|../*|*/../*|*/..) echo "Unsafe archive path: $member" >&2; return 1 ;;
+    esac
+  done < <(tar -tzf "$archive")
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    kind="${line:0:1}"
+    case "$kind" in -|d) ;; *) echo "Unsafe archive member type: $line" >&2; return 1 ;; esac
+  done < <(tar -tvzf "$archive")
+}
+validate_release_archive "$TARBALL_PATH" || {
+  echo "Release archive contains a traversal, link, or special-file member; refusing extraction." >&2
+  exit 1
+}
 
 # ---------------------------------------------------------------------------
 # Extract binaries
@@ -492,14 +512,14 @@ recover_transaction() {
     rmdir "$journal" 2>/dev/null || true
     return
   fi
-  journal_binaries="$(find "$journal" -maxdepth 1 -type f \( -name 'old-*' -o -name 'installing-*' \) -print \
+  journal_binaries="$(find "$journal" -maxdepth 1 \( -type f -o -type l \) \( -name 'old-*' -o -name 'installing-*' \) -print \
     | sed -E 's#^.*/(old|installing)-##' | sort -u)"
   for b in ${journal_binaries}; do
-    if [ -e "$journal/old-$b" ]; then
-      find "$INSTALL_DIR/$b" -maxdepth 0 -type f -delete 2>/dev/null || true
+    if [ -e "$journal/old-$b" ] || [ -L "$journal/old-$b" ]; then
+      find "$INSTALL_DIR/$b" -maxdepth 0 \( -type f -o -type l \) -delete 2>/dev/null || true
       mv -f "$journal/old-$b" "$INSTALL_DIR/$b"
-    elif [ -e "$journal/installing-$b" ]; then
-      find "$INSTALL_DIR/$b" -maxdepth 0 -type f -delete 2>/dev/null || true
+    elif [ -e "$journal/installing-$b" ] || [ -L "$journal/installing-$b" ]; then
+      find "$INSTALL_DIR/$b" -maxdepth 0 \( -type f -o -type l \) -delete 2>/dev/null || true
     fi
   done
   find "$journal" -depth -mindepth 1 -delete 2>/dev/null || true

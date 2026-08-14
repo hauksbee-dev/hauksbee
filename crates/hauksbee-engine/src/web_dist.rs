@@ -32,17 +32,24 @@ fn checkout_dist() -> PathBuf {
 /// Locate the directory of built web assets to serve, or `None` if there is
 /// none to serve (the serve handlers then print their build-the-frontend hint).
 pub fn resolve_web_dist() -> Option<PathBuf> {
+    let mut embedded_only = false;
     // (a) Explicit override always wins, if it points at a real directory.
     if let Some(raw) = std::env::var_os("HAUKSBEE_WEB_DIST") {
-        let p = PathBuf::from(raw);
-        if p.is_dir() {
-            return Some(p);
+        if raw == ":embedded:" {
+            // Release clean-room tests need to prove the binary's payload even
+            // while the build checkout (and its live dist) still exists.
+            embedded_only = true;
+        } else {
+            let p = PathBuf::from(raw);
+            if p.is_dir() {
+                return Some(p);
+            }
         }
     }
 
     // (b) A source checkout serves its live dist directly (fresher than embed).
     let checkout = checkout_dist();
-    if checkout.is_dir() {
+    if !embedded_only && checkout.is_dir() {
         return Some(checkout);
     }
 
@@ -61,6 +68,7 @@ pub fn resolve_web_dist() -> Option<PathBuf> {
 /// build without the feature never references `rust_embed`.
 #[cfg(feature = "embed-web")]
 mod embedded {
+    use sha2::{Digest, Sha256};
     use std::path::{Path, PathBuf};
 
     /// The built web app, compiled into the binary. `boards3d/` is EXCLUDED: it
@@ -102,10 +110,28 @@ mod embedded {
             .unwrap_or(false)
     }
 
+    /// Stable identity of the actual embedded payload. Package versions are
+    /// not unique build identities: a local rebuild or corrected private
+    /// artifact can legitimately keep the same semver while changing JS.
+    fn embedded_digest() -> Option<String> {
+        let mut paths: Vec<_> = WebAssets::iter().map(|p| p.into_owned()).collect();
+        paths.sort();
+        let mut hash = Sha256::new();
+        for path in paths {
+            let file = WebAssets::get(&path)?;
+            hash.update(path.as_bytes());
+            hash.update([0]);
+            hash.update(file.data.as_ref());
+            hash.update([0]);
+        }
+        let digest = hash.finalize();
+        Some(digest[..12].iter().map(|b| format!("{b:02x}")).collect())
+    }
+
     /// Extract the embedded web app to a versioned cache dir and return it.
     ///
-    /// The dir is versioned by `CARGO_PKG_VERSION`, so a new binary version
-    /// re-extracts into a fresh directory and never reuses an old extraction.
+    /// The dir is keyed by package version AND embedded payload digest, so a
+    /// same-version rebuild cannot accidentally serve an older cached UI.
     /// Extraction is idempotent and cheap on subsequent runs: an existing,
     /// non-empty versioned dir is returned as-is without touching the disk.
     ///
@@ -116,7 +142,9 @@ mod embedded {
     /// panics).
     pub fn extract() -> Option<PathBuf> {
         let base = cache_root().join("hauksbee");
-        let dir = base.join(concat!("web-", env!("CARGO_PKG_VERSION")));
+        let payload = embedded_digest()?;
+        let cache_name = format!("web-{}-{payload}", env!("CARGO_PKG_VERSION"));
+        let dir = base.join(&cache_name);
 
         // Fast path: a previous run already extracted this version.
         if dir_non_empty(&dir) {
@@ -124,11 +152,7 @@ mod embedded {
         }
 
         // Stage into a process-private temp dir, then rename atomically.
-        let tmp = base.join(format!(
-            "web-{}.tmp-{}",
-            env!("CARGO_PKG_VERSION"),
-            std::process::id()
-        ));
+        let tmp = base.join(format!("{cache_name}.tmp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
 
         for path in WebAssets::iter() {

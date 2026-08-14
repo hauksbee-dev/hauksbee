@@ -27,6 +27,8 @@ permissions:
 
 steps:
   - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+    with:
+      persist-credentials: false
   - name: Fetch the private hauksbee Action
     uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
     with:
@@ -88,9 +90,11 @@ SI, the USB-C check, gated strictly, with inline annotations:
 ### Auto-detection
 
 With no `spec`, `specs`, or `board` at all, the action detects what to run:
-exactly one `*.toml` in `ci/` runs as a spec; failing that, exactly one
-`*.kicad_pcb` in the repo runs as a check. Anything ambiguous fails with a
-list of what was found, rather than guessing.
+exactly one Hauksbee TOML spec (a file with a top-level `board` key) in `ci/`
+or the repository root runs as a spec. With no spec, exactly one supported
+board file (`.kicad_pcb`, `.kicad_sch`, `.net`, `.brd`, `.PcbDoc`, `.d356` or
+`.board`) runs as a check. Anything ambiguous fails with a list of what was
+found, rather than silently changing which gate runs.
 
 ## Inputs
 
@@ -101,7 +105,7 @@ list of what was found, rather than guessing.
 | `board`           | no       | -                        | Board file for `mode: check`.                                               |
 | `mode`            | no       | `auto`                   | `spec` runs hauksbee-ci; `check` runs `hauksbee run <board> --check --strict`; `auto` infers, or detects when nothing is given. |
 | `junit`           | no       | `hauksbee-ci-results.xml` | JUnit XML output path; empty to skip.                                       |
-| `publish-report`  | no       | `true`                   | Publish the JUnit XML to the Checks tab. Set `false` on fork PRs (see below). |
+| `publish-report`  | no       | `true`                   | Publish the JUnit XML to the Checks tab. Set `false` only in a trusted job that lacks `checks: write`; fork PRs fail earlier because the private read token is withheld. |
 | `hauksbee-ref`     | no       | `main`                   | git ref of hauksbee to build hauksbee-ci from (fallback build).               |
 | `hauksbee-repo`    | no       | `hauksbee-dev/hauksbee`       | owner/name of the hauksbee repo (release download + fallback build).         |
 | `hauksbee-token`   | yes      | -                        | Fine-grained PAT or GitHub App installation token authorised for the private repository with Contents: read; add Packages: read for `use-image`. |
@@ -137,10 +141,11 @@ For trusted PRs, publishing the JUnit report also needs `checks: write`. If a
 workflow intentionally lacks that permission, the hardware check can still run
 with `publish-report: false` and a separate trusted workflow can publish XML.
 
-The two-workflow reporting pattern is:
+For a trusted same-repository PR whose check job deliberately has no
+`checks: write`, the two-workflow reporting pattern is:
 
 ```yaml
-# hauksbee-ci.yml (pull_request; runs with the fork's read-only token)
+# hauksbee-ci.yml (pull_request; trusted same-repository branches only)
 - uses: ./.hauksbee-action/integrations/github-action
   with:
     hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
@@ -178,6 +183,8 @@ jobs:
 
 (`mikepenz/action-junit-report` fetches the artifact itself on
 `workflow_run` events; see its docs for the artifact-name knobs.)
+This does not make an untrusted fork runnable: fork PRs receive no private
+Hauksbee credential and stop before producing the XML, by design.
 
 ## How it works
 
@@ -208,5 +215,7 @@ jobs:
 All third-party actions used internally are pinned to full commit SHAs.
 
 To make the prebuilt path available, push a `vX.Y.Z` tag so the release
-workflow attaches binaries. Until a release exists the action simply builds
-from source, so it works on day one with no release published.
+workflow attaches binaries. Before a release exists the Action can still build
+the Renode/QEMU or static-check paths from source. AVR co-simulation needs the
+prebuilt bundle or image described above; it fails explicitly rather than
+presenting a source-only run as equivalent.

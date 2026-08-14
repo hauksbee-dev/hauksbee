@@ -99,6 +99,9 @@ export interface BoardSession {
    *  loaded. No-op when nothing is staged. */
   clearFirmware: () => void
   clearSchematic: () => void
+  /** Re-run the exact current board and staged companions, e.g. after a model
+   *  is saved, without making the user upload the board again. */
+  reanalyzeCurrent: () => void
   runSample: (s: SampleSpec) => void
   resetFlow: () => void
   /** Put a saved session's report back on screen with no file behind it. */
@@ -319,6 +322,11 @@ export function useBoardSession(opts: {
     setSchematicFile(file)
     if (lastBoardFile.current) void analyze(lastBoardFile.current, firmwareFile, file)
   }, [analyze, busy, firmwareFile])
+
+  const reanalyzeCurrent = useCallback(() => {
+    if (busy || !lastBoardFile.current) return
+    void analyze(lastBoardFile.current, firmwareFile, schematicFile)
+  }, [analyze, busy, firmwareFile, schematicFile])
 
   const clearFirmware = useCallback(() => {
     // Removing the firmware is a real change to what was analysed, not just a
@@ -641,6 +649,7 @@ export function useBoardSession(opts: {
     handleSchematic,
     clearFirmware,
     clearSchematic,
+    reanalyzeCurrent,
     runSample: (s: SampleSpec) => void runSample(s),
     resetFlow,
     restoreReport,

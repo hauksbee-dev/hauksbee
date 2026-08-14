@@ -84,6 +84,25 @@ if (-not $privateToken) {
     exit 1
 }
 
+function Assert-SafeZip([string]$Archive) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+    try {
+        foreach ($entry in $zip.Entries) {
+            $normalized = $entry.FullName -replace '\\', '/'
+            if ($normalized.StartsWith('/') -or $normalized -match '(^|/)\.\.(/|$)' -or $normalized -match '^[A-Za-z]:') {
+                throw "unsafe ZIP entry in $Archive`: $($entry.FullName)"
+            }
+            $unixType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
+            if ($unixType -notin @(0, 0x4000, 0x8000)) {
+                throw "unsafe ZIP member type in $Archive`: $($entry.FullName)"
+            }
+        }
+    } finally {
+        $zip.Dispose()
+    }
+}
+
 if (-not $Prefix) {
     $Prefix = Join-Path $env:LOCALAPPDATA "hauksbee"
 }
@@ -206,18 +225,20 @@ function Recover-StaleBackup([string]$Target) {
     $parent = Split-Path -Parent $Target
     $leaf = Split-Path -Leaf $Target
     $backups = @(Get-ChildItem -LiteralPath $parent -Filter "$leaf.install-backup-*" -Directory -ErrorAction SilentlyContinue)
-    if (Test-Path -LiteralPath $Target) {
-        foreach ($stale in $backups) {
-            Remove-Item -LiteralPath $stale.FullName -Recurse -Force
-        }
-        return
-    }
     if ($backups.Count -gt 1) {
         throw "multiple interrupted-install backups exist for $Target; refusing to guess which is authoritative"
     }
     if ($backups.Count -eq 1) {
+        $committed = Join-Path $backups[0].FullName ".hauksbee-install-committed"
+        if ((Test-Path -LiteralPath $Target) -and (Test-Path -LiteralPath $committed)) {
+            Remove-Item -LiteralPath $backups[0].FullName -Recurse -Force -ErrorAction SilentlyContinue
+            return
+        }
+        if (Test-Path -LiteralPath $Target) {
+            Remove-Item -LiteralPath $Target -Recurse -Force
+        }
         Move-Item -LiteralPath $backups[0].FullName -Destination $Target
-        Write-Warning "Recovered the previous installation after an interrupted tree swap."
+        Write-Warning "Rolled back an installation interrupted before final acceptance."
     }
 }
 
@@ -246,11 +267,40 @@ function Replace-Tree([string]$Staging, [string]$Target) {
             }
             throw
         }
-        if ($movedOld -and (Test-Path -LiteralPath $backup)) {
-            Remove-Item -LiteralPath $backup -Recurse -Force
+        return [pscustomobject]@{ Target = $Target; Backup = $backup; Lock = $lock }
+    } catch {
+        $lock.Dispose()
+        throw
+    }
+}
+
+function Mark-TreeReplaceCommitted($Transaction) {
+    if (Test-Path -LiteralPath $Transaction.Backup) {
+        New-Item -ItemType File -Path (Join-Path $Transaction.Backup ".hauksbee-install-committed") -Force | Out-Null
+    }
+}
+
+function Complete-TreeReplace($Transaction) {
+    try {
+        if (Test-Path -LiteralPath $Transaction.Backup) {
+            Remove-Item -LiteralPath $Transaction.Backup -Recurse -Force -ErrorAction SilentlyContinue
         }
     } finally {
-        $lock.Dispose()
+        $Transaction.Lock.Dispose()
+    }
+}
+
+function Undo-TreeReplace($Transaction) {
+    try {
+        if (Test-Path -LiteralPath $Transaction.Target) {
+            Remove-Item -LiteralPath $Transaction.Target -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $Transaction.Backup) {
+            Remove-Item -LiteralPath (Join-Path $Transaction.Backup ".hauksbee-install-committed") -Force -ErrorAction SilentlyContinue
+            Move-Item -LiteralPath $Transaction.Backup -Destination $Transaction.Target
+        }
+    } finally {
+        $Transaction.Lock.Dispose()
     }
 }
 
@@ -327,6 +377,7 @@ try {
     # Extract binaries
     # -----------------------------------------------------------------------
     Write-Host "Extracting binaries..."
+    Assert-SafeZip $zipPath
     Expand-Archive -Path $zipPath -DestinationPath $workDir
 
     # Same layout as the tarballs: <base>/bin/<binary>, with .exe on Windows.
@@ -355,7 +406,17 @@ try {
     foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
         Assert-BinaryVersion (Join-Path $installStaging $binary) $binary $VersionBare
     }
-    Replace-Tree $installStaging $installDir
+    $installTransaction = Replace-Tree $installStaging $installDir
+    try {
+        foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
+            Assert-BinaryVersion (Join-Path $installDir $binary) $binary $VersionBare
+        }
+        Mark-TreeReplaceCommitted $installTransaction
+        Complete-TreeReplace $installTransaction
+        $installTransaction = $null
+    } finally {
+        if ($installTransaction) { Undo-TreeReplace $installTransaction }
+    }
 
     Write-Host ""
     Write-Host "Installed:"

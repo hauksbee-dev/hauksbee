@@ -86,12 +86,14 @@ try {
         "tarski_brownout_repaired.toml",
         "watchy_v15_display_res.toml",
         "watchy_v15_display_res_undriven.toml",
-        "pic_programmer_schematic.toml"
+        "pic_programmer_schematic.toml",
+        "olimex_wifi_burst_transient.toml",
+        "boot_gate_pass.toml"
     )) {
         Remove-Item -LiteralPath (Join-Path $ciSpecs $privateSpec) -Force -ErrorAction SilentlyContinue
     }
-    # Windows is permissive-only, so the boot-gate firmware spec is an example
-    # rather than a runtime smoke and remains checkout-relative by design.
+    # Windows is permissive-only. Do not ship checkout/corpus-relative specs
+    # whose boards or AVR firmware are absent from this archive.
     $scriptsDir = Join-Path $rootDir "scripts"
     New-Item -ItemType Directory -Path $scriptsDir | Out-Null
     foreach ($script in @("get-hauksbee.ps1", "install-sims-windows.ps1")) {
