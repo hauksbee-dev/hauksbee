@@ -618,8 +618,8 @@ fi
 # Post-install defense in depth: re-run the same probes from their final paths
 # before committing the recovery journal. The preflight above preserves the old
 # installation for malformed assets; this catches destination-filesystem or
-# rename damage. The default shape links libelf dynamically, and minimal Linux
-# images do not ship it.
+# rename damage. Current release builds link libelf statically; retaining the
+# final-path probes also catches older/private assets and other loader failures.
 # ---------------------------------------------------------------------------
 for b in ${BINARIES}; do
   actual_version="$("${INSTALL_DIR}/$b" --version 2>&1 || true)"
