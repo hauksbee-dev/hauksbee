@@ -163,6 +163,26 @@ pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
     std::sync::Arc::new(move |name, contents, firmware| launch(name, contents, firmware, None))
 }
 
+/// Retain the exact uploaded text behind `/boards/{name}` for an honest saved-
+/// session re-run. In particular, Board-as-Code evidence authenticates the DSL
+/// bytes, not the compiled KiCad layout used internally by the solver.
+fn resumable_board_file(
+    name: &str,
+    contents: &[u8],
+    kind: crate::board_input::InputKind,
+) -> Option<(String, String)> {
+    use crate::board_input::InputKind;
+    if !matches!(
+        kind,
+        InputKind::Text | InputKind::Schematic | InputKind::BoardCode
+    ) {
+        return None;
+    }
+    std::str::from_utf8(contents)
+        .ok()
+        .map(|text| (name.to_string(), text.to_string()))
+}
+
 pub fn schematic_live_launcher() -> hauksbee_server::frontdoor::SchematicLiveLauncher {
     use hauksbee_server::frontdoor::LiveLaunch;
     use std::io::Write as _;
@@ -175,6 +195,7 @@ pub fn schematic_live_launcher() -> hauksbee_server::frontdoor::SchematicLiveLau
          -> Result<LiveLaunch, String> {
             let norm =
                 crate::board_input::from_bytes(name, contents).map_err(|e| e.web_message())?;
+            let board_file = resumable_board_file(name, contents, norm.kind);
             let board_is_eagle = norm
                 .layout_text
                 .as_deref()
@@ -255,7 +276,7 @@ pub fn schematic_live_launcher() -> hauksbee_server::frontdoor::SchematicLiveLau
             Ok(LiveLaunch {
                 engine: Box::new(engine),
                 board_name: name.to_string(),
-                board_file: norm.layout_text.map(|t| (name.to_string(), t)),
+                board_file,
                 keepalive,
             })
         },
@@ -413,6 +434,25 @@ pub fn dist_stale_message(dist_dir: &Path, source_paths: &[PathBuf]) -> Option<S
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn saved_board_code_session_retains_the_authenticated_source_bytes() {
+        let source = "board demo { outline rect(0mm, 0mm, 20mm, 10mm) }";
+        let retained = resumable_board_file(
+            "demo.board",
+            source.as_bytes(),
+            crate::board_input::InputKind::BoardCode,
+        )
+        .expect("text Board-as-Code can be retained");
+        assert_eq!(retained.0, "demo.board");
+        assert_eq!(retained.1, source);
+        assert!(resumable_board_file(
+            "fabrication.zip",
+            b"PK\x03\x04",
+            crate::board_input::InputKind::Gerber,
+        )
+        .is_none());
+    }
 
     #[test]
     fn shipped_web_analyzer_keeps_uploaded_eagle_schematic_as_context() {

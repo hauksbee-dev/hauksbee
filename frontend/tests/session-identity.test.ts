@@ -42,12 +42,47 @@ test('legacy reports without inventory keep the old stable identity', () => {
 })
 
 test('a firmware-backed saved report never masquerades as a fresh board-only run', () => {
-  expect(canReanalyzeSavedSession({ firmwareName: 'boot.hex', schematicName: null })).toBe(false)
-  expect(canReanalyzeSavedSession({ firmwareName: null, schematicName: 'board.kicad_sch' })).toBe(false)
-  expect(canReanalyzeSavedSession({ firmwareName: null, schematicName: null })).toBe(true)
+  expect(canReanalyzeSavedSession({ firmwareName: 'boot.hex', schematicName: null, report: report() })).toBe(false)
+  expect(canReanalyzeSavedSession({ firmwareName: null, schematicName: 'board.kicad_sch', report: report() })).toBe(false)
+  expect(canReanalyzeSavedSession({ firmwareName: null, schematicName: null, report: report() })).toBe(true)
 })
 
-test('a saved session authenticates re-fetched board bytes with the layout hash', () => {
+test('a legacy schematic session without schematicName still restores report-only', () => {
+  const legacy = report('a'.repeat(64))
+  legacy.inventory!.push({
+    path: 'board.kicad_sch', kind: 'ki_cad_schematic', role: 'schematic', sha256: 'b'.repeat(64),
+  })
+  expect(canReanalyzeSavedSession({ firmwareName: null, schematicName: undefined, report: legacy })).toBe(false)
+})
+
+test('a primary schematic is not mistaken for a missing companion', () => {
+  const primary = report('a'.repeat(64))
+  primary.file_name = 'board.kicad_sch'
+  primary.inventory = [{
+    path: 'board.kicad_sch', kind: 'ki_cad_schematic', role: 'schematic', sha256: 'a'.repeat(64),
+  }]
+  expect(canReanalyzeSavedSession({ firmwareName: null, schematicName: null, report: primary })).toBe(true)
+  expect(expectedBoardSha256(primary, primary.file_name)).toBe('a'.repeat(64))
+})
+
+test('an authenticated netlist can resume from the exact retained bytes', () => {
+  const netlist = report('a'.repeat(64))
+  netlist.file_name = 'board.d356'
+  netlist.inventory = [{
+    path: 'board.d356', kind: 'ipc_d_356', role: 'netlist', sha256: 'c'.repeat(64),
+  }]
+  expect(expectedBoardSha256(netlist, netlist.file_name)).toBe('c'.repeat(64))
+})
+
+test('resume fails closed when no filename selects between two authenticated inputs', () => {
+  const ambiguous = report('a'.repeat(64))
+  ambiguous.inventory!.push({
+    path: 'companion.kicad_sch', kind: 'ki_cad_schematic', role: 'schematic', sha256: 'b'.repeat(64),
+  })
+  expect(expectedBoardSha256(ambiguous, 'renamed.kicad_pcb')).toBeNull()
+})
+
+test('a saved session authenticates re-fetched board bytes with the primary input hash', () => {
   expect(expectedBoardSha256(report('A'.repeat(64)), 'board.kicad_pcb')).toBe('a'.repeat(64))
   expect(expectedBoardSha256(report(), 'board.kicad_pcb')).toBeNull()
 })
