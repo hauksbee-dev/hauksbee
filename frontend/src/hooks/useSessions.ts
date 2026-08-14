@@ -51,25 +51,36 @@ export type ResumeResult =
  *  firmware-backed report therefore cannot honestly become a fresh run from
  *  the board bytes alone, even when the live server still retains that board. */
 export function canReanalyzeSavedSession(
-  session: Pick<SavedSession, 'firmwareName' | 'schematicName'>,
+  session: Pick<SavedSession, 'firmwareName' | 'schematicName' | 'report'>,
 ): boolean {
-  return session.firmwareName === null && !session.schematicName
+  const basename = (path: string) => path.split(/[\\/]/).pop()?.toLowerCase() ?? ''
+  const primaryName = basename(session.report?.file_name ?? '')
+  const legacyCompanionSchematic = (session.report?.inventory ?? []).some(artifact =>
+    (artifact.role === 'schematic' || /schematic/i.test(artifact.kind ?? ''))
+      && basename(artifact.path) !== primaryName,
+  )
+  return session.firmwareName === null && !session.schematicName && !legacyCompanionSchematic
 }
 
-/** The authenticated layout digest that identifies the board bytes behind a
- * saved report. A filename is only a label: the live server may now have a
+/** The authenticated primary-input digest that identifies the bytes behind a
+ * saved report. Layouts, netlists, and primary schematics are all accepted at
+ * intake; a filename is only a label because the live server may now have a
  * different revision open under the same name. */
 export function expectedBoardSha256(
   report: WebReport | null,
   fileName: string,
 ): string | null {
-  const layout = (report?.inventory ?? []).filter(artifact =>
-    artifact.role === 'layout' && /^[0-9a-f]{64}$/i.test(artifact.sha256 ?? ''),
+  const primaryInputs = (report?.inventory ?? []).filter(artifact =>
+    ['layout', 'netlist', 'schematic'].includes(artifact.role)
+      && /^[0-9a-f]{64}$/i.test(artifact.sha256 ?? ''),
   )
-  if (layout.length === 0) return null
+  if (primaryInputs.length === 0) return null
   const basename = (path: string) => path.split(/[\\/]/).pop()?.toLowerCase() ?? ''
-  const exact = layout.find(artifact => basename(artifact.path) === basename(fileName))
-  return (exact ?? layout[0]).sha256!.toLowerCase()
+  const exact = primaryInputs.find(artifact => basename(artifact.path) === basename(fileName))
+  if (exact) return exact.sha256!.toLowerCase()
+  // Legacy reports sometimes kept one authenticated input under a normalized
+  // path. One candidate is still unambiguous; two are not safe to guess between.
+  return primaryInputs.length === 1 ? primaryInputs[0].sha256!.toLowerCase() : null
 }
 
 export async function boardBytesMatchExpected(

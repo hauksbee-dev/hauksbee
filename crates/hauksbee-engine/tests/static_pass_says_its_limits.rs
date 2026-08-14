@@ -48,10 +48,17 @@ fn a_clean_report_names_the_faults_it_cannot_see() {
         text.contains("brownout") || text.contains("sags on inrush"),
         "and name the kind of fault it cannot see, not just gesture at it:\n{text}"
     );
-    assert!(
-        text.contains("hauksbee-ci init"),
-        "and give the command that reaches them:\n{text}"
-    );
+    if cfg!(feature = "avr") {
+        assert!(
+            text.contains("hauksbee-ci init"),
+            "and give the command that reaches them:\n{text}"
+        );
+    } else {
+        assert!(
+            text.contains("does not include its co-simulation backend"),
+            "and name why this build cannot reach firmware checks:\n{text}"
+        );
+    }
 }
 
 #[test]
@@ -59,10 +66,22 @@ fn the_advice_matches_whether_a_processor_bound() {
     // Telling someone to boot firmware on a board with no processor is advice
     // that wastes their time and costs trust in the rest of the report.
     let with_mcu = plain_check("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb");
-    assert!(
-        with_mcu.contains("processor hauksbee can emulate"),
-        "blinky binds an ATmega328P, so firmware co-sim is on the table:\n{with_mcu}"
-    );
+    if cfg!(feature = "avr") {
+        assert!(
+            with_mcu.contains("co-simulation support in this build"),
+            "an AVR-capable build can offer Blinky firmware co-sim:\n{with_mcu}"
+        );
+        assert!(with_mcu.contains("hauksbee-ci run <spec>"), "{with_mcu}");
+    } else {
+        assert!(
+            with_mcu.contains("does not include its co-simulation backend"),
+            "a permissive build must name its AVR capability boundary:\n{with_mcu}"
+        );
+        assert!(
+            !with_mcu.contains("hauksbee-ci run <spec>"),
+            "a build without AVR must not recommend an impossible firmware run:\n{with_mcu}"
+        );
+    }
 
     let without = plain_check("testdata/boards/button_pullup.kicad_pcb");
     assert!(
