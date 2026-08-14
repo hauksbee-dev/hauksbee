@@ -136,16 +136,16 @@ hauksbee's checks are calibrated to stay quiet on hardware that is fine, and the
 board corpus is how that is measured. A new or changed check earns its place by
 being run against the corpus and shown not to fire on boards known to be good.
 Several checks have that pinned as a silence gate that goes red on any fire; the
-placeholder-value gate, for instance, sweeps 470 board files across four
+placeholder-value gate, for instance, sweeps 328 known-good board files across four
 extraction paths and demands zero medium-or-high findings that are not a recorded,
 dated exception. Add one for your check if it is the kind that can cry wolf.
 
 A silence gate's input set is hardware known to be fine, which is narrower than
-the corpus. Four entries are fetched and parsed for format coverage but excluded
-from the silence gates, and `corpus.toml` says why per entry: KiCad's own demo
-projects and the CATs Eurosynth modules were never manufactured products, and the
-Olimex ESP32-PoE and Duet 2 boards did ship but the shorts check fires on them
-with the finding not yet adjudicated. Each exclusion is printed per board as a
+the corpus. Eight entries are fetched and parsed for format coverage but excluded
+from the silence gates, and `corpus.toml` says why per entry: reference designs,
+abandoned attempts, adjudicated true findings, and measured false positives are
+valuable regression inputs but cannot all serve as evidence that a check stayed
+quiet on known-good hardware. Each exclusion is printed per board as a
 `NOT KNOWN-GOOD` line beside the `SCANNED` counts, because a gate that quietly
 narrowed its own input set is the same failure as one that scanned nothing.
 
@@ -190,11 +190,11 @@ Adding a board means adding all of it: the upstream, a full commit sha, the
 licence **as you read it in the upstream's own bytes at that revision**, the
 `axes` it covers, and at least one `expect` path. A licence you inferred from the
 vendor's other repositories is not established; set `license_confirmed = false`
-and it stays out of the default fetch until somebody establishes it. Two entries
+and it stays out of the default fetch until somebody establishes it. Three entries
 are in that state today for exactly that reason.
 
-Expect 47 of the manifest's 50 entries, which is 302 layout files, 507 schematics,
-41 netlists and 606 gerber films in 531 MB. The three skipped by default are the
+Expect 50 of the manifest's 53 entries, which is 305 layout files, 514 schematics,
+41 netlists and 615 Gerber film files in 541 MB. The three skipped by default are the
 two ClockworkPi uConsole boards and the SparkFun MicroMod nRF52840, whose licences
 could not be established; `--include-unconfirmed` fetches them if you read the
 manifest and decide for yourself. A corpus test whose boards are absent skips and

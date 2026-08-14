@@ -1,11 +1,11 @@
 # The board corpus: what it is, and which gate reads which part of it
 
-`corpus.toml` pins 50 upstream boards and `scripts/fetch-corpus.sh` materialises
+`corpus.toml` pins 53 upstream boards and `scripts/fetch-corpus.sh` materialises
 them. This records what a clean fetch lands, measured rather than asserted, and
 which gate reads each entry, because an entry no gate reads is a board that costs
 bandwidth and buys nothing.
 
-Everything below was measured on a fetch into an empty directory on 2026-08-04, on
+Everything below was measured on a fetch into an empty directory on 2026-08-14, on
 macOS, with the manifest at the revision this file ships with. Re-measure rather
 than adjust arithmetic: `scripts/fetch-corpus.sh --dir <empty>` prints the totals,
 and `python3 scripts/check-corpus.py --dir <that>` confirms the manifest still
@@ -15,15 +15,15 @@ describes it.
 
 | | |
 | --- | --- |
-| Manifest entries | 50 |
-| Fetched by default | 47 |
+| Manifest entries | 53 |
+| Fetched by default | 50 |
 | Skipped, licence not established | 3 |
-| Board directories on disk | 47 |
-| Layout files (`.kicad_pcb`, `.brd`, `.PcbDoc`) | 302 |
-| Schematic files (`.kicad_sch`, `.sch`, `.SchDoc`) | 507 |
+| Board directories on disk | 50 |
+| Layout files (`.kicad_pcb`, `.brd`, `.PcbDoc`) | 305 |
+| Schematic files (`.kicad_sch`, `.sch`, `.SchDoc`) | 514 |
 | Netlists (`.net`) | 41 |
-| Gerber films and drill files | 603 films, 138 drills |
-| Total size | 531 MB |
+| Gerber film files | 615 |
+| Total size | 541 MB |
 
 The three skipped entries are the two ClockworkPi uConsole gerber sets and the
 SparkFun MicroMod nRF52840. `--include-unconfirmed` fetches them.
@@ -37,13 +37,13 @@ Eagle XML file, the OLE2 signature on an Altium one.
 | Format | Files |
 | --- | --- |
 | KiCad, file version 4 and 2016-2017 (KiCad 4 and 5 era) | 55 layouts |
-| KiCad, 2021 (KiCad 6) | 7 layouts, 18 schematics |
+| KiCad, 2021 (KiCad 6) | 8 layouts, 23 schematics |
 | KiCad, 2022-2023 (KiCad 6 and 7) | 47 layouts, 80 schematics |
 | KiCad, 2023-2024 (KiCad 7 and 8) | 14 layouts, 45 schematics |
 | KiCad, 2024-2025 (KiCad 8 and 9) | 24 layouts, 77 schematics |
 | KiCad, 2026 (KiCad 10) | 1 layout, 1 schematic |
 | KiCad legacy `.sch` | 131 schematics |
-| Eagle XML, 6.4 through 9.6.2 | 20 layouts, 16 schematics |
+| Eagle XML, 6.4 through 9.6.2 | 22 layouts, 18 schematics |
 | Eagle binary, pre-6 | 35 layouts, 35 schematics |
 | Altium OLE2 | 3 layouts, 11 schematics |
 
@@ -61,7 +61,7 @@ parse; a **named gate** asks for one board by path and covers only that.
 | Gate | Reads | Boards covered |
 | --- | --- | --- |
 | `drc_corpus::corpus_boards_have_no_true_shorts` | sweep, layouts | 116 |
-| `placeholder_lint_corpus` | sweep, four extraction paths | 470 |
+| `placeholder_lint_corpus` | sweep, four extraction paths | 328 known-good board files |
 | `models::corpus_coverage_ratchet` | sweep, layouts | bind rate over the whole set |
 | `si_ampacity_ripple::famous_corpus_has_no_ampacity_or_ripple_findings` | sweep, layouts | whole known-good set |
 | `altium_corpus::fetched_altium_boards_extract_and_are_short_clean` | sweep, `.PcbDoc` | 3 |
@@ -90,7 +90,7 @@ maintainer-only Altium family behaves the same way, gated on
 ## What the silence gates decline to grade themselves on
 
 A silence gate's claim is "the checks stay quiet on hardware that is fine", so its
-input set is hardware known to be fine, which is narrower than the corpus. Four
+input set is hardware known to be fine, which is narrower than the corpus. Eight
 entries carry `known_good = false` in `corpus.toml` with the reason recorded per
 entry. They are still fetched, still parsed, still counted for format coverage.
 Every exclusion prints a `NOT KNOWN-GOOD` line beside the `SCANNED` counts.
@@ -101,6 +101,10 @@ Every exclusion prints a `NOT KNOWN-GOOD` line beside the `SCANNED` counts.
 | `cats_eurosynth` | DIY community modules by one maintainer. Copper contacts on three of the 88: `GND` to `RESET` on Baby 8 at -0.125 to -0.200 mm, `GND` to `Net-(D4-Pad1)` on Envelope Follower Main at seven places across both layers, `GND` to `Net-(R14-Pad2)` on HAGIWO 4Ch Sampler at -0.058 mm. Unadjudicated. |
 | `olimex_esp32_poe` | Shipped for years. Rev L1: three `+3V3` to `+3.3V` contacts on B.Cu clustered at x=95.7-96.3, y=123.4-123.9, tightest -0.011 mm, where a 1.016 mm `+3.3V` track crosses the filled `+3V3` pour, and no part joins the two nets anywhere on the board. Rev M2: `/+5V_USB` to `Net-(D7-A)` at -0.508 mm. Read from KiCad's own stored fill polygons, so the geometry in the file is real; whether the fabricated board has it turns on whether that stored fill is current with the tracks. Unadjudicated. |
 | `duet2` | Shipped for years. `FAN2-` to `5V_EXT` on B.Cu at -0.254 mm on Duet2 v1.05. A fan return meeting the external 5 V input would be a real defect rather than a naming artefact, which is why it needs adjudication and not an exception. |
+| `emontx3` | Both GND/AGND contacts are real copper and the schematic declares the tie, but it carries no board-local coordinate authority for either contact. They remain serious; the entry is owned by the two-sided known-fault gate rather than a silence sweep. |
+| `emontx3_v340` | The shipped Gerber export disproves the top-layer GND/AGND merge inferred from overlapping near-zero-isolate pour outlines; the bottom-layer contact is real. This measured false positive stays as a regression input. |
+| `odrive_v2` | The directory contains an abandoned Altium attempt with a real GND/AGND short alongside the final board. It remains format coverage, but a directory-level silence claim would be false. |
+| `mwgen_g1` | KiCad's own DRC confirms six pad-overlap shorts forbidden by the project's rules. It remains a useful RF/placement-collision input, not silence evidence. |
 
 Excluding a board is not a way to make a gate green. It is a claim about the board,
 it has to be stated, and `scripts/check-corpus.py` fails on `known_good = false`
