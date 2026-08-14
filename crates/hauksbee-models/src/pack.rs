@@ -288,6 +288,7 @@ mod behavioral_gate_tests {
         let _ = std::fs::remove_dir_all(&base);
 
         let bad = "[[models]]\nid = \"badconv\"\nkind = \"digital\"\n\
+            [models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
             [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"out\"\n\
             in_pin = \"in\"\nvout_setpoint = nan\nefficiency = 0.9\n";
         let dir = base.join("bad");
@@ -305,6 +306,7 @@ mod behavioral_gate_tests {
 
         // A well-formed converter loads fine.
         let good = "[[models]]\nid = \"okconv\"\nkind = \"digital\"\n\
+            [models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
             [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"out\"\n\
             in_pin = \"in\"\nvout_setpoint = 3.3\nefficiency = 0.9\n";
         let dir = base.join("good");
