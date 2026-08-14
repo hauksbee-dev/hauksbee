@@ -109,6 +109,9 @@ fi
 if [ -z "$TARGET" ]; then
   TARGET="darwin-$(uname -m)"
 fi
+GIT_SHA="$(cd "$HAUKSBEE_ROOT" && git rev-parse HEAD 2>/dev/null || echo unknown)"
+[[ "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]] \
+  || die "could not resolve the exact source commit for the app bundle"
 
 SRC="$(hauksbee_target_bin)"
 if [ "$DO_BUILD" -eq 1 ]; then
@@ -123,6 +126,10 @@ if [ "$DO_BUILD" -eq 1 ]; then
 fi
 for bin in hauksbee hauksbee-ci hauksbee-mcp; do
   [ -x "$SRC/$bin" ] || die "$SRC/$bin missing (build first, or drop --no-build)."
+  actual_version="$("$SRC/$bin" --version 2>&1 || true)"
+  expected_version="$bin $VERSION (git $GIT_SHA)"
+  [ "$actual_version" = "$expected_version" ] \
+    || die "$SRC/$bin reports '$actual_version', expected '$expected_version'; rebuild from this exact checkout before assembling the app."
 done
 
 if [ "$PERMISSIVE" -eq 1 ]; then
@@ -153,7 +160,6 @@ cp "$HAUKSBEE_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$HAUKSBEE_ROOT/NOTICE"  "$APP/Contents/Resources/NOTICE"
 cp "$HAUKSBEE_ROOT/licenses/evalexpr-MIT.txt" \
   "$APP/Contents/Resources/LICENSE-EVALEXPR-MIT.txt"
-GIT_SHA="$(cd "$HAUKSBEE_ROOT" && git rev-parse HEAD 2>/dev/null || echo unknown)"
 doctor_avr="$("$APP/Contents/Resources/bin/hauksbee" doctor --backends \
   | awk -F '\t' '$1 == "avr" { print; exit }')"
 if [ "$PERMISSIVE" -eq 1 ]; then
