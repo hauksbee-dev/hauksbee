@@ -353,7 +353,7 @@ struct ModelsNewArgs {
     /// an IC scaffold stays deliberately invalid until you choose its behavior.
     #[arg(long, value_name = "KIND")]
     kind: Option<String>,
-    /// Where to write the scaffold. Default: ./<id>.toml in the current
+    /// Where to write the scaffold. Default: `./<id>.toml` in the current
     /// directory. Refuses to overwrite.
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
@@ -389,7 +389,7 @@ struct ModelsExtractArgs {
     #[arg(long)]
     model: Option<String>,
     /// Base URL for --backend api (an OpenAI-compatible endpoint).
-    /// Default: HAUKSBEE_LLM_BASE_URL, then https://api.openai.com/v1.
+    /// Default: HAUKSBEE_LLM_BASE_URL, then <https://api.openai.com/v1>.
     #[arg(long, value_name = "URL")]
     api_base: Option<String>,
     /// NAME of the environment variable holding the api key (default:
@@ -499,7 +499,7 @@ impl From<SerialTransportArg> for hauksbee_mcu::hostserial::HostSerialTransport 
 }
 
 /// `run`'s after-help paragraph; a function because the docs pointer renders
-/// through [`hauksbee_ir::docs_url`] at runtime.
+/// through [`hauksbee_ir::docs_url()`] at runtime.
 fn run_after_help() -> String {
     format!(
         "TRANSIENT / BROWNOUT analysis (a rail sagging under a load step, WiFi burst, or \
@@ -512,7 +512,7 @@ fn run_after_help() -> String {
 }
 
 /// `sim`'s after-help line; a function because the compatibility-statement
-/// pointer renders through [`hauksbee_ir::docs_url`] at runtime.
+/// pointer renders through [`hauksbee_ir::docs_url()`] at runtime.
 fn sim_after_help() -> String {
     format!(
         "The drift-tested SPICE compatibility statement (every supported and refused card): {}",
@@ -521,7 +521,7 @@ fn sim_after_help() -> String {
 }
 
 /// `--json`'s long help; a function because the schema docs pointer renders
-/// through [`hauksbee_ir::docs_url`] at runtime.
+/// through [`hauksbee_ir::docs_url()`] at runtime.
 fn json_flag_long_help() -> String {
     format!(
         "Emit machine-readable JSON instead of the box-drawing tables, for any of \

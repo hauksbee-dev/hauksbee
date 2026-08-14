@@ -36,9 +36,9 @@
 //! | Namespaced or bare element names | all / converters | matching on the **local name** |
 //! | `<LogicalNetPin>` instead of `<PinRef>` inside `<LogicalNet>` | Zuken CR5000 | both element names accepted |
 //! | `<PadStack net><LayerPad><PinRef/>` instead of `<LayerFeature><Set net><Pad>` | Altium | both containers accepted |
-//! | Names prefixed with the step (`bd-sample:IC11`) | Zuken | [`strip_names`] |
-//! | Names prefixed with a tag (`CMP:U1`, `NET:GND`) | KiCad | [`strip_prefix_tag`] |
-//! | `{slash}`-escaped names | KiCad | [`crate::unescape_kicad_name`], gated on the producer |
+//! | Names prefixed with the step (`bd-sample:IC11`) | Zuken | `strip_names` |
+//! | Names prefixed with a tag (`CMP:U1`, `NET:GND`) | KiCad | `strip_prefix_tag` |
+//! | `{slash}`-escaped names | KiCad | `crate::unescape_kicad_name`, gated on the producer |
 //! | `<Pin name="1" number="0.0">` — `number` is an ORDINAL | Zuken | `name` preferred over `number` |
 //! | `<Pin>` with neither `name` nor `number` | Allegro 16.6 | ignored rather than treated as a nameless pin |
 //! | Placement on `<Xform x y>` rather than `<Location>` | converters | both read |

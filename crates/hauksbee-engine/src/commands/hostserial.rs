@@ -34,7 +34,7 @@
 //! under heavy load simulated *microseconds* apart, and timing-sensitive
 //! verdicts (the NEP EEPROM gate) inverted with load.
 //!
-//! The mapping [`PacedInbox`] implements is *scaled reaction time*: an anchor
+//! The mapping `PacedInbox` implements is *scaled reaction time*: an anchor
 //! `(sim, wall)` is planted at the first attachment and moved at every
 //! firmware->host emission, and an inbound chunk observed at wall time `w` is
 //! due at `anchor_sim + scale * (w - anchor_wall)` — the host's own reaction

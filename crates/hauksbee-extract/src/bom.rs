@@ -62,7 +62,7 @@ pub enum BomError {
     )]
     Empty { name: String },
 
-    /// Nothing in the first [`MAX_BANNER_LINES`] lines looks like a BOM header.
+    /// Nothing in the first `MAX_BANNER_LINES` lines looks like a BOM header.
     #[error(
         "{name} does not read as a bill of materials: no row in its first {looked} \
          lines has a reference-designator column beside a value, part-number, \

@@ -23,7 +23,7 @@ use hauksbee_models::{ModelLibrary, Pack, PackStore};
 /// ok" and "the board binds it" can never disagree; a `[soc]` table lints as an
 /// MCU descriptor through the same loader a co-simulation uses, plus the checks
 /// the loader leaves to author intent, plus an inspection of what the descriptor
-/// will actually do (see [`lint_soc`]).
+/// will actually do (see `lint_soc`).
 pub fn lint(file: &Path) -> anyhow::Result<()> {
     // A board file handed to `models lint` used to fall into the TOML parser,
     // which dumped the whole one-line board file as error context. Detect it

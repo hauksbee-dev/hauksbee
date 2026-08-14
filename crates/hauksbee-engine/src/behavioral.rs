@@ -30,7 +30,7 @@
 //!   solver-implicit `Device::Behavioral`: Newton evaluates it at every
 //!   iterate, so the law's conductance is in the Jacobian and a clamp on a
 //!   floating net cannot blow the chunk-to-chunk relaxation up (see
-//!   [`LawStamp`]). Every other law (voltage laws, state-gated laws,
+//!   `LawStamp`). Every other law (voltage laws, state-gated laws,
 //!   FSM-context expressions) is a controllable `Isource` (current law) or
 //!   `Vsource`+R (voltage law) whose value is the `evalexpr` expression
 //!   evaluated against the bound pin voltages / state / params each chunk.

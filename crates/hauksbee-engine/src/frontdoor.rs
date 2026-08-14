@@ -124,7 +124,7 @@ pub struct BindSummaryWeb {
     pub critical_parts_bound: String,
     /// References of verdict-critical parts left open on the live circuit:
     /// unresolved active ICs, unresolved discrete transistors (Q prefix, the
-    /// power FETs; [`crate::result::is_verdict_critical`]), and
+    /// power FETs; `crate::result::is_verdict_critical`), and
     /// resolved-but-open active ICs. Non-empty => analog/AC/thermal on those
     /// nets is not trustworthy; the web banner must say so loudly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -166,7 +166,7 @@ impl BindSummaryWeb {
     /// and the union of verdict-critical open parts, unresolved active ICs AND
     /// unresolved discrete transistors (the power FETs on a protection path),
     /// plus resolved-but-open active ICs. The transistor half uses the same
-    /// [`crate::result::is_verdict_critical`] predicate the CLI INCONCLUSIVE
+    /// `crate::result::is_verdict_critical` predicate the CLI INCONCLUSIVE
     /// verdict uses, so the browser can never print a clean bill over an
     /// unbound FET the CLI refuses to bless.
     pub fn from_summary(s: &BindSummary) -> Self {
