@@ -123,7 +123,6 @@ if [ -n "$(git -C "$HAUKSBEE_ROOT" status --porcelain --untracked-files=normal -
   die "refusing to bundle a dirty source tree: commit or stash every tracked/untracked source change so the embedded commit identifies the bytes being packaged"
 fi
 export HAUKSBEE_SOURCE_COMMIT="$HAUKSBEE_RELEASE_COMMIT"
-export HAUKSBEE_RELEASE_TAG="v$VERSION"
 
 # Resolve the immutable simavr revision before Cargo runs. build.rs embeds this
 # value into every AVR-capable binary; discovering it only after the build would
@@ -176,6 +175,7 @@ if [ -z "$VERSION" ]; then
   VERSION="$(grep -m1 '^version' "$HAUKSBEE_ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
   [ -n "$VERSION" ] || die "could not read version from Cargo.toml; pass --version"
 fi
+export HAUKSBEE_RELEASE_TAG="v$VERSION"
 
 # Target label: a stable os-arch slug for the asset name.
 if [ -z "$TARGET" ]; then

@@ -840,6 +840,41 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         )
         self.assertNotIn(".hauksbee-provenance", action)
 
+    def test_prebuilt_platform_labels_match_release_assets(self) -> None:
+        action = (ROOT / "integrations/github-action/action.yml").read_text()
+        prebuilt = action[
+            action.index("- name: Fetch prebuilt hauksbee-ci") :
+            action.index("- name: Checkout hauksbee (fallback build)")
+        ]
+        self.assertIn("Linux/ARM64)             arch=aarch64", prebuilt)
+        self.assertIn("macOS/ARM64)             arch=arm64", prebuilt)
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("label: linux-aarch64", release)
+        self.assertIn("label: darwin-arm64", release)
+
+    def test_release_uploads_qc_report_and_can_reconcile_exact_prior_state(self) -> None:
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        stage = release[
+            release.index("- name: Reconcile exact release state") :
+            release.index("- name: Verify GitHub's immutable release attestations")
+        ]
+        self.assertIn("dist/*.md", stage)
+        self.assertIn("target_commitish: ${{ github.sha }}", stage)
+        self.assertIn("already-published=true", stage)
+        self.assertIn("gh release delete", stage)
+        self.assertIn("steps.release-state.outputs.already-published != 'true'", stage)
+
+    def test_bundle_resolves_default_version_before_exporting_release_tag(self) -> None:
+        bundle = (ROOT / "scripts/bundle.sh").read_text()
+        version = bundle.index("# Version: from the workspace Cargo.toml")
+        tag = bundle.index('export HAUKSBEE_RELEASE_TAG="v$VERSION"')
+        self.assertLess(version, tag)
+
+    def test_trusted_workflow_run_report_can_read_its_artifact(self) -> None:
+        readme = (ROOT / "integrations/github-action/README.md").read_text()
+        report = readme[readme.index("# hauksbee-ci-report.yml") :]
+        self.assertIn("permissions:\n  actions: read\n  checks: write", report)
+
     def test_registry_username_supports_pat_and_github_app_tokens(self) -> None:
         def resolve(token: str, explicit: str = "") -> subprocess.CompletedProcess[str]:
             env = os.environ.copy()

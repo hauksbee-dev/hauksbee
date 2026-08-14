@@ -107,6 +107,15 @@ if [ "$DO_BUILD" -eq 1 ]; then
   # whether from the build above or an earlier one.
   [ -d "$HAUKSBEE_ROOT/frontend/dist" ] \
     || die "frontend build reported success but frontend/dist is missing; refusing a web-less install."
+  SIMAVR_COMMIT="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' "$HAUKSBEE_ROOT/scripts/install-sims.sh" | head -1)"
+  [[ "$SIMAVR_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+    || die "scripts/install-sims.sh does not name one immutable simavr commit"
+  _simavr_prefix="$(dirname "$(dirname "$_simavr_lib")")"
+  [ "$(cat "$_simavr_prefix/.hauksbee-simavr-commit" 2>/dev/null || true)" = "$SIMAVR_COMMIT" ] \
+    || die "simavr at $_simavr_prefix is not the pinned install from scripts/install-sims.sh --avr; refusing an unattested source build"
+  "$HAUKSBEE_ROOT/scripts/simavr-payload-provenance.sh" verify "$_simavr_prefix" \
+    || die "simavr payload bytes under $_simavr_prefix do not match their recorded provenance"
+  export SIMAVR_COMMIT
   EMBED_ARGS=(--features embed-web)
   log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release, embed-web)"
   # `${arr[@]+...}` guards empty-array expansion under `set -u` on bash 3.2

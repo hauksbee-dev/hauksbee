@@ -55,6 +55,11 @@ organisation may alternatively use the direct `owner/repo/path@ref` form after
 an administrator enables private Action sharing, but the explicit checkout
 above is the portable cross-repository credential contract.
 
+Set `timeout-minutes` on every consumer job (the generated workflow uses 45).
+Spec duration and ensemble size are intentionally user-controlled; without a
+job deadline, a typo can consume the hosted runner's much larger default
+budget before GitHub stops it.
+
 See [`example-workflow.yml`](./example-workflow.yml) for a full workflow,
 including a `matrix` that runs several specs in parallel and a commented-out
 firmware-build step.
@@ -169,6 +174,7 @@ on:
     workflows: [hardware-ci]
     types: [completed]
 permissions:
+  actions: read
   checks: write
 jobs:
   report:

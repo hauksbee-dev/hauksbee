@@ -54,6 +54,7 @@ concurrency:
 jobs:
   power-up:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       # 1. Check out YOUR hardware repo (board + firmware + spec).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -97,6 +98,7 @@ jobs:
   # one merged JUnit file instead, pass `specs: ci/*.toml`.
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

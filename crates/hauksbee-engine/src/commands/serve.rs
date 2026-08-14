@@ -192,6 +192,7 @@ pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
         let startup_json = serde_json::json!({
             "preloaded": false,
             "live": true,
+            "avr": cfg!(feature = "avr"),
             // Engine version, for the Environment page's "what am I running"
             // card.
             "version": env!("CARGO_PKG_VERSION"),

@@ -239,8 +239,8 @@ export interface WebSupply {
  *  (`POST /api/live/launch`); absent on older/non-live deployments, where the
  *  report falls back to the CLI hint. */
 export type Startup =
-  | { preloaded: false; live?: boolean; version?: string }
-  | { preloaded: true; board_name: string; report: WebReport | null; live?: boolean; version?: string }
+  | { preloaded: false; live?: boolean; avr?: boolean; version?: string }
+  | { preloaded: true; board_name: string; report: WebReport | null; live?: boolean; avr?: boolean; version?: string }
 
 /** What `GET /api/live/status` returns: whether (and for which board) a live
  *  session is running server-side. The server holds ONE session globally, so

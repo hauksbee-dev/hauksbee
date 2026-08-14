@@ -27,7 +27,9 @@
 // Test code is exempt: an unwrap in a test is an assertion.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -666,6 +668,51 @@ pub fn spice_report(text: &str) -> Result<String, String> {
 /// Returns a one-line description of what the model IS on success, because
 /// "valid" alone does not tell an author whether they wrote the part they
 /// meant to.
+fn validate_model_db(db: &hauksbee_models::schema::DbFile) -> Result<Vec<String>, String> {
+    if db.models.is_empty() {
+        return Err("there is no [[models]] entry here yet".to_string());
+    }
+    let mut summaries = Vec::with_capacity(db.models.len());
+    for entry in &db.models {
+        if let Err(errors) = hauksbee_models::validation::validate(entry) {
+            return Err(format!(
+                "entry '{}': {}",
+                entry.id,
+                errors
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+        if entry.r#match.is_empty() {
+            return Err(format!(
+                "entry '{}' has no match rules (lib_id / value_re / footprint_re / mpn_re all absent); it cannot claim a board component",
+                entry.id
+            ));
+        }
+        if !entry.logic.is_empty() {
+            crate::logic::LogicComponent::compile(&entry.id, &entry.logic).map_err(|e| {
+                format!(
+                    "entry '{}': the [models.logic] block does not compile: {e}",
+                    entry.id
+                )
+            })?;
+        }
+        summaries.push(format!(
+            "{} is a {:?}{}",
+            entry.id,
+            entry.kind,
+            if entry.description.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", entry.description)
+            }
+        ));
+    }
+    Ok(summaries)
+}
+
 pub fn check(toml_text: &str) -> Result<String, String> {
     if toml_text.trim().is_empty() {
         return Err("nothing to check yet".to_string());
@@ -680,43 +727,60 @@ pub fn check(toml_text: &str) -> Result<String, String> {
     }
     let db: hauksbee_models::schema::DbFile =
         toml::from_str(toml_text).map_err(|e| format!("this is not valid model TOML: {e}"))?;
-    let entry = db
-        .models
-        .first()
-        .ok_or_else(|| "there is no [[models]] entry here yet".to_string())?;
-    if let Err(errors) = hauksbee_models::validation::validate(entry) {
-        return Err(errors
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; "));
+    let summaries = validate_model_db(&db)?;
+    if summaries.len() == 1 {
+        Ok(format!("valid: {}", summaries[0]))
+    } else {
+        Ok(format!(
+            "valid: {} model entries: {}",
+            summaries.len(),
+            summaries.join("; ")
+        ))
     }
-    if entry.r#match.is_empty() {
-        return Err(
-            "entry has no match rules (lib_id / value_re / footprint_re / mpn_re all absent); \
-             it cannot claim a board component"
-                .to_string(),
-        );
-    }
-    // Same reason save does it: a model that lints clean and fails to compile
-    // breaks at bind time, a long way from the person who wrote it.
-    if !entry.logic.is_empty() {
-        crate::logic::LogicComponent::compile(&entry.id, &entry.logic)
-            .map_err(|e| format!("the [models.logic] block does not compile: {e}"))?;
-    }
-    // Echo what the model IS, not just that it parsed. An author who typed
-    // the wrong kind gets a valid model of the wrong device, and this line is
-    // where they notice.
-    Ok(format!(
-        "valid: {} is a {:?}{}",
-        entry.id,
-        entry.kind,
-        if entry.description.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", entry.description)
+}
+
+fn existing_model_error(path: &Path) -> String {
+    format!(
+        "{} already exists. Move or delete it first if you mean to replace it; hauksbee will not overwrite a model you already have.",
+        path.display()
+    )
+}
+
+fn save_to_dir(
+    dir: &Path,
+    part: &str,
+    kind: &str,
+    toml_text: &str,
+    sensor: bool,
+) -> Result<String, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    let path = dir.join(file_name_for(part, !sensor));
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(existing_model_error(&path));
         }
-    ))
+        Err(e) => return Err(format!("could not create {}: {e}", path.display())),
+    };
+    if let Err(e) = file
+        .write_all(toml_text.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("could not write {}: {e}", path.display()));
+    }
+
+    serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "path": path.display().to_string(),
+        "provenance": PROVENANCE,
+        "kind": kind,
+        "note": format!(
+            "Saved as a draft with provenance \"{PROVENANCE}\". It binds on the next analysis. Check any assumed value before you trust a result that depends on it."
+        ),
+    }))
+    .map_err(|e| format!("could not serialise the save result: {e}"))
 }
 
 pub fn save(part: &str, kind: &str, toml_text: &str) -> Result<String, String> {
@@ -727,34 +791,7 @@ pub fn save(part: &str, kind: &str, toml_text: &str) -> Result<String, String> {
     } else {
         let db: hauksbee_models::schema::DbFile = toml::from_str(toml_text)
             .map_err(|e| format!("this is not valid model TOML, so it was not saved: {e}"))?;
-        let entry = db
-            .models
-            .first()
-            .ok_or_else(|| "there is no [[models]] entry to save".to_string())?;
-        if let Err(errors) = hauksbee_models::validation::validate(entry) {
-            return Err(format!(
-                "the model failed validation, so it was not saved: {}",
-                errors
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ));
-        }
-        if entry.r#match.is_empty() {
-            return Err(
-                "the model has no match rules (lib_id / value_re / footprint_re / mpn_re all \
-                 absent), so it cannot claim a board component and was not saved"
-                    .to_string(),
-            );
-        }
-        // The logic block is compiled through the SAME path binding uses, for
-        // the reason `hauksbee models add` does it: a model that lints clean but
-        // fails to compile is a model that breaks at bind time, far from here.
-        if !entry.logic.is_empty() {
-            crate::logic::LogicComponent::compile(&entry.id, &entry.logic)
-                .map_err(|e| format!("the model's [models.logic] block does not compile: {e}"))?;
-        }
+        validate_model_db(&db).map_err(|e| format!("{e}, so it was not saved"))?;
     }
 
     let dir = user_model_dir().ok_or_else(|| {
@@ -762,33 +799,7 @@ pub fn save(part: &str, kind: &str, toml_text: &str) -> Result<String, String> {
          yourself and put it wherever you point --models-dir."
             .to_string()
     })?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    let path = dir.join(file_name_for(part, !sensor));
-    // Never clobber. A same-named file is either an earlier draft the user kept
-    // or a model they hand-tuned, and silently overwriting the second one loses
-    // work no undo can recover.
-    if path.exists() {
-        return Err(format!(
-            "{} already exists. Move or delete it first if you mean to replace it; \
-             hauksbee will not overwrite a model you already have.",
-            path.display()
-        ));
-    }
-    std::fs::write(&path, toml_text)
-        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
-
-    serde_json::to_string(&serde_json::json!({
-        "ok": true,
-        "path": path.display().to_string(),
-        "provenance": PROVENANCE,
-        "kind": kind,
-        "note": format!(
-            "Saved as a draft with provenance \"{PROVENANCE}\". It binds on the next analysis. \
-             Check any assumed value before you trust a result that depends on it."
-        ),
-    }))
-    .map_err(|e| format!("could not serialise the save result: {e}"))
+    save_to_dir(&dir, part, kind, toml_text, sensor)
 }
 
 #[cfg(test)]
@@ -910,6 +921,50 @@ max_current_a = 0.5 # Source: absolute maximum ratings
             err.contains("not saved"),
             "the refusal says nothing was written: {err}"
         );
+    }
+
+    #[test]
+    fn concurrent_saves_never_overwrite_the_first_draft() {
+        use std::sync::{Arc, Barrier};
+
+        let temp = tempfile::tempdir().expect("model save tempdir");
+        let dir = Arc::new(temp.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(2));
+        let mut threads = Vec::new();
+        for description in ["first", "second"] {
+            let dir = Arc::clone(&dir);
+            let barrier = Arc::clone(&barrier);
+            threads.push(std::thread::spawn(move || {
+                let draft = format!(
+                    "[[models]]\nid = \"race\"\nkind = \"passive\"\ndescription = \"{description}\"\n[models.match]\nvalue_re = \"^10k$\"\n"
+                );
+                barrier.wait();
+                (draft.clone(), save_to_dir(&dir, "race", "passive", &draft, false))
+            }));
+        }
+        let outcomes = threads
+            .into_iter()
+            .map(|thread| thread.join().expect("save thread"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            outcomes.iter().filter(|(_, result)| result.is_ok()).count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|(_, result)| result.is_err())
+                .count(),
+            1
+        );
+        let winner = outcomes
+            .iter()
+            .find(|(_, result)| result.is_ok())
+            .map(|(draft, _)| draft)
+            .expect("one writer won");
+        let saved = std::fs::read_to_string(temp.path().join("race.toml"))
+            .expect("the winning draft is complete");
+        assert_eq!(&saved, winner);
     }
 
     /// The kind picker is generated from this list, so an entry the extractor

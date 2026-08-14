@@ -48,6 +48,11 @@ Point it at any PCB design and it will:
 
 ## Quickstart
 
+> **Private release candidate:** downloads become runnable only after the
+> launch checklist publishes the named private tag and source commit. Invited
+> testers need a `Contents: read` token. Until then, build from source below;
+> never replace the pinned placeholders with `main`.
+
 **Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/hauksbee-dev/hauksbee/releases), unzip, and double-click it. It opens your browser on the drop-zone. Drop a board file and read the report. No terminal at any point. No board of your own yet? The same page carries three one-click samples under "No board handy? Try a sample", so the app's first run needs no file either. Released apps are signed and notarised, so Gatekeeper accepts a plain double-click. The full signing story is under the installer below.
 
 Windows x86_64 ships the same browser front door as a native permissive zip. It

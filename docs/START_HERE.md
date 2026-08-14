@@ -11,16 +11,22 @@ now fails a test instead.
 
 ## Install and first run
 
+> **Private release candidate:** the download commands below become runnable
+> only after the launch checklist publishes the named private tag and commit.
+> Invited testers also need a `Contents: read` token. Until then, use the
+> source-build route below; do not substitute `main` for either placeholder.
+
 **On a Mac, no terminal needed:** download `Hauksbee.app` (the
 `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the
 [releases page](https://github.com/hauksbee-dev/hauksbee/releases). Unzip it and
 double-click it. Your browser opens on the drop-zone. Drop a board and read
 the report. Released apps are signed and notarised, so Gatekeeper accepts a
 plain double-click; the full signing story is under the installer below
-(mechanics: [`app/macos/SIGNING.md`](../app/macos/SIGNING.md)). The app works
-on macOS only today. Windows support is tracked separately in
-[`release-and-licensing.md`](about/release-and-licensing.md), and Linux
-users take the installer line below.
+(mechanics: [`app/macos/SIGNING.md`](../app/macos/SIGNING.md)). The double-click
+app is macOS-only. Windows x86_64 ships a native permissive zip with the same
+browser front door but without AVR/libsimavr; Linux users take the installer
+line below. Exact platform differences are in
+[`release-and-licensing.md`](about/release-and-licensing.md).
 
 **From a terminal**, use either the one-line installer:
 
