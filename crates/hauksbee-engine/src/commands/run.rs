@@ -122,6 +122,19 @@ fn input_kind_name(kind: crate::board_input::InputKind) -> &'static str {
     }
 }
 
+/// The bytes served for a preloaded browser session must be the same primary
+/// input bytes authenticated by the report. Board-as-Code uses compiled KiCad
+/// text internally, but a saved `.board` session can only resume from its DSL.
+fn preloaded_board_file(
+    board_url: &str,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    layout_text: &str,
+) -> (String, String) {
+    crate::commands::common::resumable_board_file(board_url, raw, input_kind)
+        .unwrap_or_else(|| (board_url.to_string(), layout_text.to_string()))
+}
+
 fn valid_digest(digest: &str) -> Option<String> {
     (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| digest.to_string())
@@ -2058,10 +2071,11 @@ fn run_inner(
     })
     .to_string();
 
+    let served_board_file = preloaded_board_file(&board_url, &raw, input_kind, &text);
     crate::commands::common::serve(
         engine,
         cfg.port,
-        Some((board_url, text)),
+        Some(served_board_file),
         startup_json,
         cfg.open,
         cfg.no_open,
@@ -2365,6 +2379,27 @@ mod sibling_scope_tests {
             names.iter().all(|n| !n.contains('/')),
             "names only, no paths: {names:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod preloaded_board_file_tests {
+    use super::preloaded_board_file;
+    use crate::board_input::InputKind;
+
+    #[test]
+    fn board_code_route_serves_the_authenticated_dsl_not_compiled_layout() {
+        let source = "board demo { outline rect(0mm, 0mm, 20mm, 10mm) }";
+        let compiled = "(kicad_pcb (version 20240108))";
+        let (url, served) = preloaded_board_file(
+            "/boards/demo.board",
+            source.as_bytes(),
+            InputKind::BoardCode,
+            compiled,
+        );
+        assert_eq!(url, "/boards/demo.board");
+        assert_eq!(served, source);
+        assert_ne!(served, compiled);
     }
 }
 
