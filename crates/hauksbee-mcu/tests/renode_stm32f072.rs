@@ -1,8 +1,8 @@
-//! The STM32F072 example descriptor: the tier-B walkthrough's own proof.
+//! The shipped STM32F072 descriptor: the tier-B walkthrough's own proof.
 //!
-//! `db/mcu/examples/stm32f072.soc.toml` is the file
+//! `db/mcu/stm32f072.soc.toml` is the file
 //! `docs/extending/add-a-microcontroller.md` walks a reader through writing, for
-//! a part hauksbee does not ship on a Renode platform that already exists. This
+//! a part added on a Renode platform that already exists. This
 //! suite is what the guide points at when it says a contribution needs a
 //! two-sided test, so it has to hold itself to that bar.
 //!
@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 /// The example descriptor, read through the same `include_str!` the shipped
 /// built-ins use, so a syntax error is a compile error rather than a test that
 /// silently reads nothing.
-const F072: &str = include_str!("../db/mcu/examples/stm32f072.soc.toml");
+const F072: &str = include_str!("../db/mcu/stm32f072.soc.toml");
 
 fn firmware(name: &str) -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -52,7 +52,7 @@ fn firmware(name: &str) -> Option<PathBuf> {
 /// reports zero edges forever, and a bad `dir` offset reports a mask of zero,
 /// which suppresses every edge instead of erroring.
 #[test]
-fn f072_example_descriptor_loads_with_the_verified_offsets() {
+fn f072_shipped_descriptor_loads_with_the_verified_offsets() {
     let c = RenodeConfig::from_soc_toml(F072).expect("the example descriptor must load");
 
     assert_eq!(c.machine, "f072");
@@ -79,6 +79,18 @@ fn f072_example_descriptor_loads_with_the_verified_offsets() {
          loader cross-checks against frequency_hz"
     );
     assert_eq!(c.frequency_hz, 8_000_000);
+    assert!(
+        c.watchdog_limitation
+            .as_deref()
+            .is_some_and(|s| s.contains("not been starved")),
+        "the shipped part must not claim unmeasured watchdog fidelity"
+    );
+    assert!(
+        c.timing_limitation
+            .as_deref()
+            .is_some_and(|s| s.contains("no two-sided clock-truth gate")),
+        "the shipped part must not claim unmeasured timing fidelity"
+    );
 
     // Six ports, A..F, all at the F0/F4 layout. 0x0C here would be the F1's
     // offset and would observe the wrong register on this part.
@@ -126,33 +138,15 @@ fn f072_example_descriptor_loads_with_the_verified_offsets() {
     assert_eq!(c.spi_extra_repl, None);
 }
 
-/// The example resolves through the product path when it is installed as an
-/// override, which is how a reader of the walkthrough actually uses it: no
-/// recompile, no entry in the embedded built-in list.
+/// The shipped descriptor resolves through the same product path a board uses.
 ///
 /// `stm32f072` is resolved by no other test in this binary, so the
 /// `HAUKSBEE_MCU_DIR` write here cannot collide with a parallel resolve of a
 /// different part.
 #[test]
-fn f072_example_resolves_from_an_override_dir() {
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee-f072-example-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("stm32f072.soc.toml"), F072).unwrap();
-
-    // SAFETY (edition 2021): set_var is safe.
-    std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
+fn f072_descriptor_resolves_as_a_builtin() {
     let resolved = hauksbee_mcu::SocConfig::resolve("renode:stm32f072");
-    std::env::remove_var("HAUKSBEE_MCU_DIR");
-    std::fs::remove_dir_all(&dir).ok();
-
-    match resolved.expect("an installed example must resolve") {
+    match resolved.expect("the shipped F072 must resolve") {
         hauksbee_mcu::SocConfig::Renode(c) => assert_eq!(c.machine, "f072"),
         #[allow(unreachable_patterns)]
         other => panic!("expected a Renode config, got {other:?}"),
@@ -161,7 +155,7 @@ fn f072_example_resolves_from_an_override_dir() {
 
 // ── (2) Live Renode, two-sided ───────────────────────────────────────────────
 
-/// Bring up an F072 from the example descriptor with `name`d firmware, or skip
+/// Bring up an F072 from the shipped descriptor with `name`d firmware, or skip
 /// with the reason.
 macro_rules! f072_or_skip {
     ($mcu:ident, $elf:literal) => {
@@ -176,7 +170,7 @@ macro_rules! f072_or_skip {
             );
             return;
         };
-        let config = RenodeConfig::from_soc_toml(F072).expect("load the example descriptor");
+        let config = RenodeConfig::from_soc_toml(F072).expect("load the shipped descriptor");
         let mut $mcu = RenodeBackend::new(config).expect("spawn Renode with the F072 platform");
         $mcu.load_firmware(&elf).expect("load the fixture ELF");
     };
@@ -341,4 +335,10 @@ fn f072_adc_injection_reaches_the_firmware() {
         still.contains("adc0=00000400"),
         "feeding channel 3 must not disturb channel 0; got {still:?}"
     );
+
+    // ADC_IN8 exists on the 48-pin package, but is deliberately outside the
+    // shipped map until its feed is live-proven. The backend must record that
+    // drop rather than accepting or silently swallowing it.
+    mcu.set_analog_in(8, 1.0);
+    assert_eq!(mcu.adc_dropped_channels(), vec![8]);
 }

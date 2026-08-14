@@ -994,6 +994,10 @@ fn validate_controllers(bus: &'static str, controllers: &[String]) -> Result<(),
 /// by the `backend:part` spec [`SocConfig::resolve`] accepts.
 const EMBEDDED: &[(&str, &str)] = &[
     (
+        "renode:stm32f072",
+        include_str!("../db/mcu/stm32f072.soc.toml"),
+    ),
+    (
         "renode:stm32f103",
         include_str!("../db/mcu/stm32f103.soc.toml"),
     ),

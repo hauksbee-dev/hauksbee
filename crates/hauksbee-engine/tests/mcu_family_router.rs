@@ -82,6 +82,49 @@ fn stm32f4_without_db_model_routes_to_renode_and_derives_gpio_roles() {
 }
 
 #[test]
+fn shipped_stm32f072_model_binds_the_exact_backend_and_adc_roles() {
+    let board = board_with(component(
+        "U5",
+        "STM32F072CB",
+        "MCU_ST_STM32F0:STM32F072CBTx",
+        vec![
+            pin("10", Some(1), "PA0"),
+            pin("13", Some(2), "PA3"),
+            pin("18", Some(3), "PB0"),
+            pin("44", Some(4), "BOOT0"),
+            pin("24", Some(5), "VDD"),
+            pin("23", Some(6), "VSS"),
+        ],
+    ));
+
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+
+    assert_eq!(bound.mcus.len(), 1);
+    let mcu = &bound.mcus[0];
+    assert_eq!(mcu.backend, "renode:stm32f072");
+    assert_eq!(
+        mcu.pad_roles.get("10").map(String::as_str),
+        Some("pa0_adc0")
+    );
+    assert_eq!(
+        mcu.pad_roles.get("13").map(String::as_str),
+        Some("pa3_adc3")
+    );
+    assert_eq!(
+        mcu.pad_roles.get("18").map(String::as_str),
+        Some("pb0_adc8")
+    );
+    assert_eq!(mcu.adc_nets.len(), 3);
+    assert!(mcu.adc_nets.contains_key(&0));
+    assert!(mcu.adc_nets.contains_key(&3));
+    assert!(mcu.adc_nets.contains_key(&8));
+    assert!(matches!(
+        bound.report.rows[0].outcome,
+        BindOutcome::Mcu { ref backend } if backend == "renode:stm32f072"
+    ));
+}
+
+#[test]
 fn explicit_models_dir_model_wins_over_family_router_backend_and_pins() {
     let dir = std::env::temp_dir().join(format!("hauksbee_router_override_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);

@@ -1,16 +1,12 @@
-# STM32F072 (ARM Cortex-M0): the worked example of
-# docs/extending/add-a-microcontroller.md, tier B.
+# STM32F072 (ARM Cortex-M0): a shipped tier-B descriptor and the worked example
+# in docs/extending/add-a-microcontroller.md.
 #
-# Tier B is "a part hauksbee does not ship, on an emulator platform that already
-# exists". Renode 1.16.1 carries platforms/cpus/stm32f072.repl (which includes
-# stm32f0.repl), so no peripheral model has to be written or vendored: the whole
-# part is this one file.
-#
-# This descriptor lives under db/mcu/examples/ rather than db/mcu/, and is NOT in
-# the embedded built-in list. It is the example a reader copies, and the fixture
-# tests/renode_stm32f072.rs loads. Promoting it to a shipped part means adding it
-# to `EMBEDDED` in src/soc.rs and a [[models]] kind = "mcu" routing entry in
-# crates/hauksbee-models/db/mcu.toml.
+# Tier B is "a part added on an emulator platform that already exists". Renode
+# 1.16.1 carries platforms/cpus/stm32f072.repl (which includes stm32f0.repl), so
+# no peripheral model has to be written or vendored: the whole backend is this
+# one file. It is embedded in the binary and routed from the exact STM32F072C8/CB
+# 48-pin model in crates/hauksbee-models/db/mcu.toml. The fixture
+# tests/renode_stm32f072.rs proves both the data and the live machine.
 #
 # WHY THE F0 IS A DIFFERENT PART, NOT AN F103 WITH A NEW NAME
 # ---------------------------------------------------------------------------
@@ -102,6 +98,11 @@ uart = "sysbus.usart1"
 frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "STM32F072 (ARM Cortex-M0)"
+# The stock platform's RCC is a stub and this part has no clock-truth or
+# starved-watchdog gate. GPIO/UART/ADC are live-proven below; timing and reboot
+# fidelity are not allowed to borrow that proof.
+watchdog_limitation = "STM32F072 watchdog expiry and reboot behavior have not been starved and measured; do not infer silicon-equivalent watchdog recovery"
+timing_limitation = "The reset-default 8 MHz declaration is load-checked, but the stock RCC is a stub and no two-sided clock-truth gate exists; HAL clock bring-up and firmware timing are not silicon-proven"
 
 # One entry per GPIO port the platform registers. ODR at 0x14 and MODER at 0x00
 # are the STM32_GPIOPort layout, shared with the F4 family and NOT with the F1.
@@ -174,7 +175,10 @@ dir = { offset = 0x00, encoding = "moder" }
 #
 # Channels 0..7 are ADC_IN0..ADC_IN7 on PA0..PA7 (RM0091 table 13). Channel 0
 # and channel 3 are the pair proven above; the rest are the same Monitor call
-# with the channel index substituted. Channels 16, 17 and 18 (on-die
+# with the channel index substituted. The 48-pin package also exposes ADC_IN8/9
+# on PB0/PB1, but those two feeds have not been live-proven and are deliberately
+# left unmapped: using either produces the normal loud dropped-channel coverage
+# warning. Channels 16, 17 and 18 (on-die
 # temperature, VREFINT, VBAT) are NOT external nodes, so they are left unmapped
 # and take the loud once-per-channel drop rather than a fabricated count, the
 # same policy the RP2040 applies to its input 4.
