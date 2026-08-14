@@ -110,6 +110,14 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
                     println!("model '{}': ERROR: {err}", entry.id);
                 }
             }
+            if entry.r#match.is_empty() {
+                entry_findings += 1;
+                println!(
+                    "model '{}': ERROR: entry has no match rules (lib_id / value_re / \
+                     footprint_re / mpn_re all absent); it cannot claim a board component",
+                    entry.id
+                );
+            }
             // Parameter-name vocabulary (warning tier, no exit-code effect). The
             // params bag is free-form on purpose, so a misspelled key is not an
             // error, it is a key nothing reads: the entry validates and then
@@ -1220,6 +1228,17 @@ pub fn extract(
 /// part" editor is the same idea with a live validator; this is its CLI
 /// sibling.
 pub fn new(reference: &str, board_path: &Path, out: Option<&Path>) -> anyhow::Result<()> {
+    new_with_kind(reference, board_path, out, None)
+}
+
+/// Variant used by the CLI when the author supplies an explicit device kind.
+/// The compatibility wrapper above keeps the public Rust API additive.
+pub fn new_with_kind(
+    reference: &str,
+    board_path: &Path,
+    out: Option<&Path>,
+    kind_override: Option<&str>,
+) -> anyhow::Result<()> {
     let board = crate::board_input::from_path(board_path)?.board;
     let Some(comp) = board
         .components
@@ -1245,7 +1264,25 @@ pub fn new(reference: &str, board_path: &Path, out: Option<&Path>) -> anyhow::Re
         );
     };
 
-    let kind = guess_kind(&comp.reference);
+    let kind_override = kind_override.map(str::trim).filter(|kind| !kind.is_empty());
+    if let Some(kind) = kind_override {
+        if !hauksbee_models::validation::KIND_NAMES.contains(&kind) {
+            anyhow::bail!(
+                "unknown model kind '{kind}'. Pick one of: {}",
+                hauksbee_models::validation::KIND_NAMES.join(", ")
+            );
+        }
+    }
+    let guessed_kind = guess_kind(&comp.reference);
+    let kind = kind_override.or(guessed_kind).unwrap_or("choose_kind");
+    let kind_note = if kind_override.is_some() {
+        "# Selected explicitly with --kind."
+    } else if guessed_kind.is_some() {
+        "# Guessed from the unambiguous reference prefix; verify it."
+    } else {
+        "# IC references do not identify behavior. Replace choose_kind, or rerun with\n\
+         # --kind <kind>; lint refuses this placeholder until you decide."
+    };
     let value = comp.value.trim();
     let id = sanitise_id(&format!("{}_{}", comp.reference, value));
     let value_re = format!("^{}$", escape_regex(value));
@@ -1258,7 +1295,8 @@ pub fn new(reference: &str, board_path: &Path, out: Option<&Path>) -> anyhow::Re
          \n\
          [[models]]\n\
          id = \"{id}\"\n\
-         # Guessed from the reference prefix; valid kinds: {kinds}.\n\
+         {kind_note}\n\
+         # Valid kinds: {kinds}.\n\
          kind = \"{kind}\"\n\
          description = \"{value} ({ref_} on {board}): describe the part\"\n\
          \n\
@@ -1281,6 +1319,7 @@ pub fn new(reference: &str, board_path: &Path, out: Option<&Path>) -> anyhow::Re
         board = board_path.display(),
         id = id,
         kind = kind,
+        kind_note = kind_note,
         kinds = hauksbee_models::validation::KIND_NAMES.join(", "),
         value_re = value_re,
     );
@@ -1316,21 +1355,21 @@ pub fn new(reference: &str, board_path: &Path, out: Option<&Path>) -> anyhow::Re
     Ok(())
 }
 
-/// Kind guess from a reference designator's alpha prefix. A guess, labelled
-/// as one in the template; `digital` is the honest default for an unknown IC.
-fn guess_kind(reference: &str) -> &'static str {
+/// Kind guess from an unambiguous reference-designator prefix. An IC's `U`
+/// prefix says nothing about its behavior, so it deliberately has no guess.
+fn guess_kind(reference: &str) -> Option<&'static str> {
     let prefix: String = reference
         .chars()
         .take_while(|c| c.is_ascii_alphabetic())
         .collect::<String>()
         .to_ascii_uppercase();
     match prefix.as_str() {
-        "R" | "C" | "L" | "FB" | "Y" | "XTAL" | "RN" | "RV" => "passive",
-        "D" | "CR" | "ZD" | "VD" | "VR" | "LED" => "diode",
-        "Q" | "T" => "bjt_npn",
-        "J" | "P" | "X" | "JP" | "TP" | "CN" | "H" | "MP" => "connector",
-        "SW" | "S" => "analog_switch",
-        _ => "digital",
+        "R" | "C" | "L" | "FB" | "Y" | "XTAL" | "RN" | "RV" => Some("passive"),
+        "D" | "CR" | "ZD" | "VD" | "VR" | "LED" => Some("diode"),
+        "Q" | "T" => Some("bjt_npn"),
+        "J" | "P" | "X" | "JP" | "TP" | "CN" | "H" | "MP" => Some("connector"),
+        "SW" | "S" => Some("analog_switch"),
+        _ => None,
     }
 }
 
@@ -1580,11 +1619,11 @@ mcu_label = "test part"
 
     #[test]
     fn scaffold_helpers_guess_sanely() {
-        assert_eq!(guess_kind("R7"), "passive");
-        assert_eq!(guess_kind("D3"), "diode");
-        assert_eq!(guess_kind("Q1"), "bjt_npn");
-        assert_eq!(guess_kind("U5"), "digital");
-        assert_eq!(guess_kind("J2"), "connector");
+        assert_eq!(guess_kind("R7"), Some("passive"));
+        assert_eq!(guess_kind("D3"), Some("diode"));
+        assert_eq!(guess_kind("Q1"), Some("bjt_npn"));
+        assert_eq!(guess_kind("U5"), None);
+        assert_eq!(guess_kind("J2"), Some("connector"));
         assert_eq!(sanitise_id("R7_SR2HARU (rev.b)"), "r7_sr2haru_rev_b");
         assert_eq!(escape_regex("LM358(A)+"), "LM358\\(A\\)\\+");
     }

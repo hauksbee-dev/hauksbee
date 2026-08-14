@@ -123,6 +123,7 @@ if [ -n "$(git -C "$HAUKSBEE_ROOT" status --porcelain --untracked-files=normal -
   die "refusing to bundle a dirty source tree: commit or stash every tracked/untracked source change so the embedded commit identifies the bytes being packaged"
 fi
 export HAUKSBEE_SOURCE_COMMIT="$HAUKSBEE_RELEASE_COMMIT"
+export HAUKSBEE_RELEASE_TAG="v$VERSION"
 
 # Resolve the immutable simavr revision before Cargo runs. build.rs embeds this
 # value into every AVR-capable binary; discovering it only after the build would
@@ -190,18 +191,14 @@ if [ "$DO_BUILD" -eq 1 ]; then
   # Build the web front door so the release bundle self-contains the UI. The
   # embed-web feature (appended below) compiles frontend/dist INTO the binary,
   # so `hauksbee serve` works from a bare installed binary with no checkout.
-  # Guard on a JS toolchain exactly like install.sh; if none is present, fall
-  # back to any existing dist/. Gated on DO_BUILD (the --no-build path ships the
-  # already-built binaries as-is and never rebuilds the frontend).
+  # Release bytes must come from the checked-in Bun lock. Gated on DO_BUILD
+  # (the --no-build path ships the already-built binaries as-is and never
+  # rebuilds the frontend).
   if have bun; then
     log "Building web front door (frontend/dist via bun)"
-    ( cd "$HAUKSBEE_ROOT/frontend" && bun install --silent && bun run build )
-  elif have npm; then
-    log "Building web front door (frontend/dist via npm)"
-    ( cd "$HAUKSBEE_ROOT/frontend" && npm install --silent && npm run build )
+    ( cd "$HAUKSBEE_ROOT/frontend" && bun install --frozen-lockfile --silent && bun run build )
   else
-    warn "No bun/npm found; skipping the frontend build."
-    warn "Will embed the existing frontend/dist/ if present, else build without a UI."
+    die "bun not found; a release bundle must rebuild frontend/dist from the checked-in bun.lock"
   fi
 
   # Self-contain the web app: append embed-web so the built binary serves the UI
@@ -232,7 +229,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
   fi
   # `${arr[@]+...}` guards empty-array expansion under `set -u` on bash 3.2
   # (the macOS default), where a bare `"${arr[@]}"` on an empty array errors.
-  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} )
+  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --locked --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} )
 
   log "Stripping release binaries"
   for bin in hauksbee hauksbee-ci hauksbee-mcp; do
@@ -406,7 +403,8 @@ rm -f "$ROOTDIR/examples/ci-specs/tarski_brownout.toml" \
 # place they ever worked.
 rm -f "$ROOTDIR/examples/ci-specs/watchy_v15_display_res.toml" \
       "$ROOTDIR/examples/ci-specs/watchy_v15_display_res_undriven.toml" \
-      "$ROOTDIR/examples/ci-specs/pic_programmer_schematic.toml"
+      "$ROOTDIR/examples/ci-specs/pic_programmer_schematic.toml" \
+      "$ROOTDIR/examples/ci-specs/olimex_wifi_burst_transient.toml"
 BOARD_LEAK="$(find "$ROOTDIR" -iname '*tarski*' -print 2>/dev/null || true)"
 [ -z "$BOARD_LEAK" ] || die "flagship board data staged into the bundle; refusing to package:
 $BOARD_LEAK

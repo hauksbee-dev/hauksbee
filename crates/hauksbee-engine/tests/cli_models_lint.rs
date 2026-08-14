@@ -23,7 +23,8 @@ fn lint(path: &std::path::Path) -> (i32, String) {
         .output()
         .expect("hauksbee binary runs");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    (out.status.code().unwrap_or(-1), stdout)
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    (out.status.code().unwrap_or(-1), format!("{stdout}{stderr}"))
 }
 
 /// One broken fixture per validation category, with the named-error substring
@@ -90,6 +91,65 @@ fn builtin_digital_db_lints_clean() {
         );
     }
     assert!(out.contains(": clean"), "clean summary line:\n{out}");
+}
+
+#[test]
+fn lint_refuses_a_model_with_no_real_match_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stale-editor.toml");
+    std::fs::write(
+        &path,
+        "[[models]]\nid = \"test_r\"\nkind = \"passive\"\n[models.match]\nvalue = [\"^10k$\"]\n",
+    )
+    .unwrap();
+    let (code, out) = lint(&path);
+    assert_eq!(code, 2, "a non-binding model is a lint finding:\n{out}");
+    assert!(out.contains("no match rules"), "{out}");
+}
+
+#[test]
+fn scaffold_refuses_to_guess_an_ic_behavior_from_its_reference_letter() {
+    let dir = tempfile::tempdir().unwrap();
+    let scaffold = dir.path().join("u3.toml");
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+    let made = Command::new(bin())
+        .args(["models", "new", "U3", "--board"])
+        .arg(&board)
+        .arg("--out")
+        .arg(&scaffold)
+        .output()
+        .expect("scaffold command runs");
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let text = std::fs::read_to_string(&scaffold).unwrap();
+    assert!(text.contains("kind = \"choose_kind\""), "{text}");
+    let (code, out) = lint(&scaffold);
+    assert_ne!(
+        code, 0,
+        "the undecided scaffold must not lint green:\n{out}"
+    );
+    assert!(out.contains("unknown kind 'choose_kind'"), "{out}");
+
+    let explicit = dir.path().join("u3-vreg.toml");
+    let made = Command::new(bin())
+        .args(["models", "new", "U3", "--board"])
+        .arg(&board)
+        .args(["--kind", "vreg", "--out"])
+        .arg(&explicit)
+        .output()
+        .expect("explicit scaffold command runs");
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let text = std::fs::read_to_string(explicit).unwrap();
+    assert!(text.contains("kind = \"vreg\""), "{text}");
+    assert!(!text.contains("kind = \"digital\""), "{text}");
 }
 
 /// A file with neither [sensor] nor [[models]] is a usage error (exit 1),

@@ -120,13 +120,28 @@ function Assert-QemuVersion([string]$Path) {
     }
 }
 
+function New-VerifiedSnapshot($Asset, [string]$Path) {
+    $snapshot = Join-Path ([IO.Path]::GetTempPath()) "$($Asset.Name).snapshot-$([guid]::NewGuid().ToString('N'))"
+    $complete = $false
+    try {
+        Copy-Item -LiteralPath $Path -Destination $snapshot
+        Assert-Hash $snapshot $Asset.Sha256
+        $complete = $true
+        return $snapshot
+    } finally {
+        if (-not $complete -and (Test-Path -LiteralPath $snapshot)) {
+            Remove-Item -LiteralPath $snapshot -Force
+        }
+    }
+}
+
 function Get-PinnedAsset($Asset) {
     New-Item -ItemType Directory -Path $CacheDir -Force | Out-Null
     $path = Join-Path $CacheDir $Asset.Name
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         try {
             Assert-Hash $path $Asset.Sha256
-            return $path
+            return New-VerifiedSnapshot $Asset $path
         } catch {
             $quarantine = "$path.corrupt-$([guid]::NewGuid().ToString('N'))"
             Move-Item -LiteralPath $path -Destination $quarantine
@@ -142,7 +157,26 @@ function Get-PinnedAsset($Asset) {
             Remove-Item -LiteralPath $partial -Force
         }
     }
-    return $path
+    return New-VerifiedSnapshot $Asset $path
+}
+
+function Assert-SafeZip([string]$Archive) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+    try {
+        foreach ($entry in $zip.Entries) {
+            $normalized = $entry.FullName -replace '\\', '/'
+            if ($normalized.StartsWith('/') -or $normalized -match '(^|/)\.\.(/|$)' -or $normalized -match '^[A-Za-z]:') {
+                throw "unsafe ZIP entry in $Archive`: $($entry.FullName)"
+            }
+            $unixType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
+            if ($unixType -notin @(0, 0x4000, 0x8000)) {
+                throw "unsafe ZIP member type in $Archive`: $($entry.FullName)"
+            }
+        }
+    } finally {
+        $zip.Dispose()
+    }
 }
 
 function Assert-SafeTar([string]$Archive) {
@@ -171,18 +205,20 @@ function Recover-StaleBackup([string]$Target) {
     $parent = Split-Path -Parent $Target
     $leaf = Split-Path -Leaf $Target
     $backups = @(Get-ChildItem -LiteralPath $parent -Filter "$leaf.install-backup-*" -Directory -ErrorAction SilentlyContinue)
-    if (Test-Path -LiteralPath $Target) {
-        foreach ($stale in $backups) {
-            Remove-Item -LiteralPath $stale.FullName -Recurse -Force
-        }
-        return
-    }
     if ($backups.Count -gt 1) {
         throw "multiple interrupted-install backups exist for $Target; refusing to guess which is authoritative"
     }
     if ($backups.Count -eq 1) {
+        $committed = Join-Path $backups[0].FullName ".hauksbee-install-committed"
+        if ((Test-Path -LiteralPath $Target) -and (Test-Path -LiteralPath $committed)) {
+            Remove-Item -LiteralPath $backups[0].FullName -Recurse -Force -ErrorAction SilentlyContinue
+            return
+        }
+        if (Test-Path -LiteralPath $Target) {
+            Remove-Item -LiteralPath $Target -Recurse -Force
+        }
         Move-Item -LiteralPath $backups[0].FullName -Destination $Target
-        Write-Warning "Recovered the previous simulator tree after an interrupted swap."
+        Write-Warning "Rolled back a simulator install interrupted before final acceptance."
     }
 }
 
@@ -209,11 +245,40 @@ function Replace-Tree([string]$Staging, [string]$Target) {
             }
             throw
         }
-        if ($movedOld -and (Test-Path -LiteralPath $backup)) {
-            Remove-Item -LiteralPath $backup -Recurse -Force
+        return [pscustomobject]@{ Target = $Target; Backup = $backup; Lock = $lock }
+    } catch {
+        $lock.Dispose()
+        throw
+    }
+}
+
+function Mark-TreeReplaceCommitted($Transaction) {
+    if (Test-Path -LiteralPath $Transaction.Backup) {
+        New-Item -ItemType File -Path (Join-Path $Transaction.Backup ".hauksbee-install-committed") -Force | Out-Null
+    }
+}
+
+function Complete-TreeReplace($Transaction) {
+    try {
+        if (Test-Path -LiteralPath $Transaction.Backup) {
+            Remove-Item -LiteralPath $Transaction.Backup -Recurse -Force -ErrorAction SilentlyContinue
         }
     } finally {
-        $lock.Dispose()
+        $Transaction.Lock.Dispose()
+    }
+}
+
+function Undo-TreeReplace($Transaction) {
+    try {
+        if (Test-Path -LiteralPath $Transaction.Target) {
+            Remove-Item -LiteralPath $Transaction.Target -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $Transaction.Backup) {
+            Remove-Item -LiteralPath (Join-Path $Transaction.Backup ".hauksbee-install-committed") -Force -ErrorAction SilentlyContinue
+            Move-Item -LiteralPath $Transaction.Backup -Destination $Transaction.Target
+        }
+    } finally {
+        $Transaction.Lock.Dispose()
     }
 }
 
@@ -224,17 +289,23 @@ function Remove-AbandonedStaging([string]$Path) {
 }
 
 if ($Check) {
-    foreach ($asset in $selectedAssets) {
-        Assert-Hash (Join-Path $CacheDir $asset.Name) $asset.Sha256
-    }
+    $checkAssets = @{}
     $verifyRoot = Join-Path ([IO.Path]::GetTempPath()) "simulator.verify-$([guid]::NewGuid().ToString('N'))"
     $evidence = [ordered]@{ backends = [ordered]@{} }
     try {
+        foreach ($asset in $selectedAssets) {
+            $cached = Join-Path $CacheDir $asset.Name
+            Assert-Hash $cached $asset.Sha256
+            $snapshot = New-VerifiedSnapshot $asset $cached
+            $checkAssets[$asset.Name] = $snapshot
+        }
         New-Item -ItemType Directory -Path $verifyRoot | Out-Null
         if (-not $QemuOnly) {
             $rawRenode = Join-Path $verifyRoot "renode-raw"
             $expectedRenode = Join-Path $verifyRoot "renode"
-            Expand-Archive -LiteralPath (Join-Path $CacheDir $assets[0].Name) -DestinationPath $rawRenode
+            $renodeArchive = $checkAssets[$assets[0].Name]
+            Assert-SafeZip $renodeArchive
+            Expand-Archive -LiteralPath $renodeArchive -DestinationPath $rawRenode
             $top = @(Get-ChildItem -LiteralPath $rawRenode)
             $source = if ($top.Count -eq 1 -and $top[0].PSIsContainer) { $top[0].FullName } else { $rawRenode }
             New-Item -ItemType Directory -Path $expectedRenode | Out-Null
@@ -257,7 +328,7 @@ if ($Check) {
             $expectedQemu = Join-Path $verifyRoot "qemu"
             New-Item -ItemType Directory -Path $expectedQemu | Out-Null
             foreach ($asset in $assets | Where-Object { $_.Kind -eq "qemu" }) {
-                $archive = Join-Path $CacheDir $asset.Name
+                $archive = $checkAssets[$asset.Name]
                 Assert-SafeTar $archive
                 & tar -xf $archive -C $expectedQemu
                 if ($LASTEXITCODE -ne 0) { throw "could not extract $archive for verification" }
@@ -291,18 +362,20 @@ if ($Check) {
         return
     } finally {
         Remove-AbandonedStaging $verifyRoot
+        foreach ($snapshot in $checkAssets.Values) { Remove-Item -LiteralPath $snapshot -Force -ErrorAction SilentlyContinue }
     }
 }
 
 $downloaded = @{}
-foreach ($asset in $selectedAssets) { $downloaded[$asset.Name] = Get-PinnedAsset $asset }
-
 $renodeWork = Join-Path ([IO.Path]::GetTempPath()) "renode.install-staging-$([guid]::NewGuid().ToString('N'))"
 $qemuWork = Join-Path ([IO.Path]::GetTempPath()) "qemu.install-staging-$([guid]::NewGuid().ToString('N'))"
 $renodeStage = $null
 $qemuStage = $null
 try {
+    $transactions = @()
+    foreach ($asset in $selectedAssets) { $downloaded[$asset.Name] = Get-PinnedAsset $asset }
     if (-not $QemuOnly) {
+        Assert-SafeZip $downloaded[$assets[0].Name]
         Expand-Archive -LiteralPath $downloaded[$assets[0].Name] -DestinationPath $renodeWork
         $renodeExe = Get-ChildItem -LiteralPath $renodeWork -Filter Renode.exe -File -Recurse | Select-Object -First 1
         if (-not $renodeExe) { throw "Renode.exe missing from the pinned Renode archive" }
@@ -315,7 +388,7 @@ try {
         $stagedRenode = Get-ChildItem -LiteralPath $renodeStage -Filter Renode.exe -File -Recurse | Select-Object -First 1
         if (-not $stagedRenode) { throw "Renode.exe missing from the staged Renode tree" }
         Assert-RenodeVersion $stagedRenode.FullName
-        Replace-Tree $renodeStage $renodeTarget
+        $transactions += ,(Replace-Tree $renodeStage $renodeTarget)
     }
 
     if (-not $RenodeOnly) {
@@ -332,11 +405,30 @@ try {
         $qemuStage = "$qemuTarget.install-staging-$([guid]::NewGuid().ToString('N'))"
         if (Test-Path -LiteralPath $qemuStage) { Remove-Item -LiteralPath $qemuStage -Recurse -Force }
         Move-Item -LiteralPath $qemuWork -Destination $qemuStage
-        Replace-Tree $qemuStage $qemuTarget
+        $transactions += ,(Replace-Tree $qemuStage $qemuTarget)
     }
+    if (-not $QemuOnly) {
+        $installedRenode = Get-ChildItem -LiteralPath $renodeTarget -Filter Renode.exe -File -Recurse | Select-Object -First 1
+        if (-not $installedRenode) { throw "Renode.exe missing after committed install" }
+        Assert-RenodeVersion $installedRenode.FullName
+    }
+    if (-not $RenodeOnly) {
+        foreach ($binary in @("qemu-system-xtensa.exe", "qemu-system-riscv32.exe")) {
+            Assert-QemuVersion (Join-Path $qemuTarget "qemu\bin\$binary")
+        }
+    }
+    # Persist acceptance for every tree before discarding any backup. If the
+    # process dies during cleanup, recovery keeps the accepted target when it
+    # sees this marker instead of silently rolling it back on the next run.
+    foreach ($transaction in $transactions) { Mark-TreeReplaceCommitted $transaction }
+    foreach ($transaction in $transactions) { Complete-TreeReplace $transaction }
+    $transactions = @()
     Write-Host "Installed the requested checksum-pinned Windows simulator backend(s)."
 } finally {
+    [array]::Reverse($transactions)
+    foreach ($transaction in $transactions) { Undo-TreeReplace $transaction }
     foreach ($path in @($renodeStage, $qemuStage, $renodeWork, $qemuWork)) {
         Remove-AbandonedStaging $path
     }
+    foreach ($snapshot in $downloaded.Values) { Remove-Item -LiteralPath $snapshot -Force -ErrorAction SilentlyContinue }
 }

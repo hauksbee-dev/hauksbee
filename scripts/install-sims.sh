@@ -391,22 +391,30 @@ find_idf_tools_py() {
 }
 
 # ── temp dir management ───────────────────────────────────────────────────────
-TMPDIR_CREATED=""
+TMPDIR_CREATED=()
 make_tmpdir() {
-  TMPDIR_CREATED="$(mktemp -d)"
-  printf '%s' "$TMPDIR_CREATED"
+  local out_var="$1"
+  local created
+  created="$(mktemp -d)"
+  TMPDIR_CREATED+=("$created")
+  printf -v "$out_var" '%s' "$created"
 }
 cleanup_tmpdir() {
-  if [ -n "$TMPDIR_CREATED" ] && [ -d "$TMPDIR_CREATED" ]; then
+  local created
+  # Bash 3.2 treats a bare empty-array expansion as an unbound variable under
+  # `set -u`; the `+` form expands to nothing until the first temp dir exists.
+  for created in ${TMPDIR_CREATED[@]+"${TMPDIR_CREATED[@]}"}; do
+    [ -d "$created" ] || continue
     # rm is blocked in this environment; use trash if available, else leave the
     # temp files (they are in /tmp and will be reaped by the OS).
     if have trash; then
-      trash "$TMPDIR_CREATED" 2>/dev/null || true
+      trash "$created" 2>/dev/null || true
     else
       # Fall back to rm if it works; otherwise leave the temp dir.
-      rm -rf "$TMPDIR_CREATED" 2>/dev/null || true
+      rm -rf "$created" 2>/dev/null || true
     fi
-  fi
+  done
+  TMPDIR_CREATED=()
 }
 REQUIRED_MOUNTPOINT=""
 cleanup_required_mount() {
@@ -726,7 +734,7 @@ install_renode() {
   RENODE_VER="$(resolve_renode_version)"
   info "  version: $RENODE_VER"
 
-  TMPDIR="$(make_tmpdir)"
+  make_tmpdir TMPDIR
 
   case "$PLATFORM" in
     darwin)
@@ -863,7 +871,7 @@ install_qemu() {
     linux-arm64)   OS_ARCH_SUFFIX="aarch64-linux-gnu" ;;
   esac
 
-  TMPDIR="$(make_tmpdir)"
+  make_tmpdir TMPDIR
 
   for arch_info in "xtensa:qemu-xtensa" "riscv32:qemu-riscv32"; do
     qemu_arch="${arch_info%%:*}"        # xtensa | riscv32
@@ -990,7 +998,7 @@ install_avr() {
   # 2. fetch, verify, build, and install the exact reviewed simavr commit.
   have git  || die "git not found; needed to clone simavr."
   have make || die "make not found; needed to build simavr."
-  TMPDIR="$(make_tmpdir)"
+  make_tmpdir TMPDIR
   log "AVR / simavr: fetching buserror/simavr @ $SIMAVR_COMMIT ..."
   info "  into: $TMPDIR/simavr"
   git init -q "$TMPDIR/simavr" \

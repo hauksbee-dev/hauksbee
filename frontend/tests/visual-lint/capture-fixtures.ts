@@ -79,7 +79,7 @@ write('check-run.json', await (await fetch(`${base}/api/check`, { method: 'POST'
 // The model validator, on the editor's own starter TOML.
 const starter = '[[models]]\nid = "my_resistor"\nkind = "passive"\n'
   + 'description = "what this part is, in a few words"\n\n'
-  + '[models.match]\nvalue = ["^10k$"]\n'
+  + '[models.match]\nvalue_re = "^10k$"\n'
 write('models-check.json', await (await fetch(`${base}/api/models/check`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },

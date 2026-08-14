@@ -17,6 +17,7 @@ import type { SavedSession } from './lib/session-store'
 import { BOARD_ACCEPT_ATTR } from './lib/board-formats'
 import { BoardTargetIcon, PlayIcon } from './components/Icons'
 import type { QueuedCheck, Startup, WebReport } from './types/report'
+import { reportVerdictTone } from './lib/report-verdict'
 
 // One web experience (W6 §1) behind an app shell. The app asks the server how
 // it was launched (`/api/startup`) and lands accordingly:
@@ -370,10 +371,13 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
     }
   } else {
     if (reportOk && report) {
-      if (report.serious > 0) {
-        chips.push(chip(`${report.serious} serious`, 'err', () => setView('board'), 'chip-findings'))
-      } else if (report.total > 0) {
-        chips.push(chip(`${report.total} findings`, 'warn', () => setView('board'), 'chip-findings'))
+      const tone = reportVerdictTone(report)
+      if (tone === 'error') {
+        const label = report.serious > 0 ? `${report.serious} serious` : 'analysis failed'
+        chips.push(chip(label, 'err', () => setView('board'), 'chip-findings'))
+      } else if (tone === 'warning') {
+        const label = report.total > 0 ? `${report.total} findings` : 'analysis qualified'
+        chips.push(chip(label, 'warn', () => setView('board'), 'chip-findings'))
       } else {
         chips.push(chip('analysis clean', 'ok', () => setView('board'), 'chip-findings'))
       }
@@ -643,6 +647,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
               <BoardView
                 session={session}
                 onQueueCheck={queueCheck}
+                onOpenChecks={() => setView('checks')}
                 onDriveLive={driveLive}
                 simMounted={simMounted}
                 engineVersion={engineVersion}

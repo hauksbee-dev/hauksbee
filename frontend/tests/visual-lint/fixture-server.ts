@@ -31,16 +31,17 @@ const fixture = (name: string) => new Response(file(join(FIXTURES, name)), {
 })
 const json = (body: unknown, status = 200) =>
   Response.json(body, { status })
+const liveBoards = new Map<string, string>()
 
 /** Endpoints the lint's surfaces actually hit, in the shape the real server
  *  answers with. Anything else under /api returns 501 so a new fetch shows up
  *  as a loud gap rather than a silently empty panel. */
-async function uploadedBoardName(req: Request): Promise<string | null> {
+async function uploadedBoard(req: Request): Promise<{ name: string; text: string } | null> {
   const header = req.headers.get('X-Board-Filename')
-  if (header) return header
+  if (header) return { name: header, text: await req.text() }
   if (!req.headers.get('content-type')?.startsWith('multipart/form-data')) return null
   const board = (await req.formData()).get('board')
-  return board instanceof File ? board.name : null
+  return board instanceof File ? { name: board.name, text: await board.text() } : null
 }
 
 async function api(req: Request, url: URL): Promise<Response | null> {
@@ -52,7 +53,9 @@ async function api(req: Request, url: URL): Promise<Response | null> {
     // Two reports: the watchy sample (fully bound; no datasheet panel), and
     // the synthetic open-active-IC board the datasheet surfaces upload to get
     // a report that renders the "parts with no model" panel.
-    const name = await uploadedBoardName(req)
+    const uploaded = await uploadedBoard(req)
+    const name = uploaded?.name ?? null
+    if (uploaded) liveBoards.set(uploaded.name, uploaded.text)
     const which = name?.includes('open_active_ic') ? 'analyze-openparts.json' : 'analyze-watchy.json'
     const captured = await file(join(FIXTURES, which)).json() as Record<string, unknown>
     return json(withBoardIdentity(captured, name))
@@ -84,6 +87,14 @@ const server = Bun.serve({
     const url = new URL(req.url)
     const stubbed = await api(req, url)
     if (stubbed) return stubbed
+
+    if (req.method === 'GET' && url.pathname.startsWith('/boards/')) {
+      const name = decodeURIComponent(url.pathname.slice('/boards/'.length))
+      const board = liveBoards.get(name)
+      return board === undefined
+        ? new Response('board is no longer live', { status: 404 })
+        : new Response(board, { headers: { 'content-type': 'text/plain; charset=utf-8' } })
+    }
 
     // Static dist/, with index.html for anything that is not a real file (the
     // app is a single bundle with no server-side routes).

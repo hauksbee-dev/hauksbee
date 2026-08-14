@@ -48,6 +48,12 @@ if bash "$PICK" '' 'v1;echo-PWN' main >/dev/null 2>&1; then
 else
   printf 'ok   unsafe release ref is refused\n'
 fi
+if bash "$PICK" $'v1.2.3\nforged-output=1' main main >/dev/null 2>&1; then
+  printf 'FAIL newline-bearing explicit version was accepted\n'
+  fails=$((fails + 1))
+else
+  printf 'ok   newline-bearing explicit version is refused\n'
+fi
 
 printf '\n'
 if [ "$fails" -eq 0 ]; then

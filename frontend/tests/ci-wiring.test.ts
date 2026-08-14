@@ -52,6 +52,8 @@ describe('frontend release gates', () => {
     const { specStemFor, workflowYaml } = await import('../src/lib/ci-workflow')
     const generated = workflowYaml('power-up')
     expect(generated).toContain('permissions:\n  contents: read\n  checks: write')
+    expect(generated).toContain('cancel-in-progress: true')
+    expect(generated.match(/persist-credentials: false/g)).toHaveLength(2)
     expect(generated).toContain("publish-report: ${{ github.event_name != 'pull_request'")
     expect(generated).toContain('ref: 0123456789abcdef0123456789abcdef01234567')
     expect(generated).toContain('hauksbee-ref: 0123456789abcdef0123456789abcdef01234567')
@@ -103,7 +105,7 @@ describe('frontend release gates', () => {
     expect(buildRs).toContain('cargo:rustc-env=HAUKSBEE_SIMAVR_COMMIT=')
     expect(bundle).toContain('source commit $SIMAVR_COMMIT')
     expect(bundle.indexOf('export SIMAVR_COMMIT')).toBeLessThan(
-      bundle.indexOf('"$CARGO" build --release'),
+      bundle.indexOf('"$CARGO" build --locked --release'),
     )
     expect(bundle).toContain('.hauksbee-simavr-commit')
     expect(docker).toContain('/usr/local/.hauksbee-simavr-commit')

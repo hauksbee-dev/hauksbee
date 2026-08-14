@@ -649,23 +649,68 @@ fn first_line(msg: &str) -> String {
 const INSTALL_SIMS_SH: &str = include_str!("../../../scripts/install-sims.sh");
 #[cfg(not(windows))]
 const COMMON_SH: &str = include_str!("../../../scripts/common.sh");
+#[cfg(not(windows))]
+const REQUIRED_SIMULATOR_VERSIONS: &str =
+    include_str!("../../../scripts/required-simulator-versions.env");
+#[cfg(not(windows))]
+const RENODE_CHECKSUMS: &str = include_str!("../../../scripts/renode-checksums.txt");
+#[cfg(not(windows))]
+const ESPRESSIF_QEMU_CHECKSUMS: &str =
+    include_str!("../../../scripts/espressif-qemu-checksums.txt");
+#[cfg(not(windows))]
+const SIMULATOR_PROVENANCE_PY: &str = include_str!("../../../scripts/simulator-provenance.py");
+#[cfg(not(windows))]
+const SIMAVR_PAYLOAD_PROVENANCE_SH: &str =
+    include_str!("../../../scripts/simavr-payload-provenance.sh");
 #[cfg(windows)]
 const INSTALL_SIMS_WINDOWS_PS1: &str = include_str!("../../../scripts/install-sims-windows.ps1");
+
+struct MaterializedInstaller {
+    path: PathBuf,
+    _owned_dir: Option<tempfile::TempDir>,
+}
+
+impl MaterializedInstaller {
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
 
 /// A runnable `install-sims.sh` path: the on-disk copy when one exists, else
 /// the embedded copy (plus the `common.sh` it sources) written to a temp dir.
 #[cfg(not(windows))]
-fn materialize_install_sims_script() -> Result<PathBuf, String> {
+fn materialize_install_sims_script() -> Result<MaterializedInstaller, String> {
     if let Some(p) = find_install_sims_script() {
-        return Ok(p);
+        return Ok(MaterializedInstaller {
+            path: p,
+            _owned_dir: None,
+        });
     }
-    let dir = std::env::temp_dir().join(format!("hauksbee-install-sims-{}", std::process::id()));
-    std::fs::create_dir_all(&dir)
+    let owned_dir = tempfile::Builder::new()
+        .prefix("hauksbee-install-sims-")
+        .tempdir()
         .map_err(|e| format!("could not stage the bundled installer script: {e}"))?;
+    let dir = owned_dir.path();
     let script = dir.join("install-sims.sh");
-    std::fs::write(&script, INSTALL_SIMS_SH)
-        .and_then(|_| std::fs::write(dir.join("common.sh"), COMMON_SH))
-        .map_err(|e| format!("could not write the bundled installer script: {e}"))?;
+    let files = [
+        ("install-sims.sh", INSTALL_SIMS_SH),
+        ("common.sh", COMMON_SH),
+        (
+            "required-simulator-versions.env",
+            REQUIRED_SIMULATOR_VERSIONS,
+        ),
+        ("renode-checksums.txt", RENODE_CHECKSUMS),
+        ("espressif-qemu-checksums.txt", ESPRESSIF_QEMU_CHECKSUMS),
+        ("simulator-provenance.py", SIMULATOR_PROVENANCE_PY),
+        ("simavr-payload-provenance.sh", SIMAVR_PAYLOAD_PROVENANCE_SH),
+    ];
+    for (name, contents) in files {
+        if let Err(error) = std::fs::write(dir.join(name), contents) {
+            return Err(format!(
+                "could not write bundled installer sidecar {name}: {error}"
+            ));
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -673,29 +718,38 @@ fn materialize_install_sims_script() -> Result<PathBuf, String> {
             let _ = std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755));
         }
     }
-    Ok(script)
+    Ok(MaterializedInstaller {
+        path: script,
+        _owned_dir: Some(owned_dir),
+    })
 }
 
 #[cfg(windows)]
-fn materialize_install_sims_windows_script() -> Result<PathBuf, String> {
+fn materialize_install_sims_windows_script() -> Result<MaterializedInstaller, String> {
     if let Some(p) = find_named_installer("install-sims-windows.ps1") {
-        return Ok(p);
+        return Ok(MaterializedInstaller {
+            path: p,
+            _owned_dir: None,
+        });
     }
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee-install-sims-windows-{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir)
+    let owned_dir = tempfile::Builder::new()
+        .prefix("hauksbee-install-sims-windows-")
+        .tempdir()
         .map_err(|e| format!("could not stage the bundled Windows installer: {e}"))?;
-    let script = dir.join("install-sims-windows.ps1");
+    let script = owned_dir.path().join("install-sims-windows.ps1");
     std::fs::write(&script, INSTALL_SIMS_WINDOWS_PS1)
         .map_err(|e| format!("could not write the bundled Windows installer: {e}"))?;
-    Ok(script)
+    Ok(MaterializedInstaller {
+        path: script,
+        _owned_dir: Some(owned_dir),
+    })
 }
 
 /// Locate `scripts/install-sims.sh`: env override first (tests), then walking
 /// up from the executable (release bundles ship `scripts/` next to `bin/`),
-/// then from the current directory and the build-time checkout (source runs).
+/// then from the build-time checkout (source runs). It deliberately does not
+/// execute a same-named script merely because the process was launched from an
+/// arbitrary consumer directory.
 #[cfg(not(windows))]
 fn find_install_sims_script() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("HAUKSBEE_INSTALL_SIMS") {
@@ -707,9 +761,6 @@ fn find_install_sims_script() -> Option<PathBuf> {
         if let Some(dir) = exe.parent() {
             roots.push(dir.to_path_buf());
         }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        roots.push(cwd);
     }
     // The build-machine checkout (same expression web_dist uses); the is_file
     // check below makes this a no-op on any other machine.
@@ -739,9 +790,6 @@ fn find_named_installer(name: &str) -> Option<PathBuf> {
         if let Some(dir) = exe.parent() {
             roots.push(dir.to_path_buf());
         }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        roots.push(cwd);
     }
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     for root in roots {
@@ -847,7 +895,7 @@ pub(crate) fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), Str
             progress("installing checksum-pinned Espressif QEMU for Windows (about 190 MB) ...");
             let mut cmd = Command::new("powershell.exe");
             cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-                .arg(&script)
+                .arg(script.path())
                 .arg("-QemuOnly");
             return run_streaming(cmd, progress, INSTALL_TIMEOUT);
         }
@@ -875,7 +923,7 @@ pub(crate) fn install_renode(progress: &mut dyn FnMut(&str)) -> Result<(), Strin
         progress("installing checksum-pinned Renode for Windows (about 120 MB) ...");
         let mut cmd = Command::new("powershell.exe");
         cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-            .arg(&script)
+            .arg(script.path())
             .arg("-RenodeOnly");
         run_streaming(cmd, progress, INSTALL_TIMEOUT)
     }
@@ -891,7 +939,7 @@ pub(crate) fn install_renode(progress: &mut dyn FnMut(&str)) -> Result<(), Strin
         let script = materialize_install_sims_script()?;
         progress("installing Renode (about an 80 MB download) ...");
         let mut cmd = Command::new("bash");
-        cmd.arg(&script).arg("--renode-only");
+        cmd.arg(script.path()).arg("--renode-only");
         run_streaming(cmd, progress, INSTALL_TIMEOUT)
     }
 }

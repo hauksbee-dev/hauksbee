@@ -94,11 +94,13 @@ To install everything at once (Renode + QEMU, optionally AVR), run:
 scripts/install-sims.sh
 ```
 
-That is all it takes. The script detects your OS and architecture, resolves
-the latest release through the GitHub API, downloads the portable builds,
-places them exactly where hauksbee auto-discovers them, and verifies the
-result. Re-running is safe: if a backend is already present, the script
-skips it.
+That is all it takes. The script detects your OS and architecture, reads the
+reviewed versions pinned beside it in `required-simulator-versions.env`,
+downloads the matching portable builds, places them exactly where hauksbee
+auto-discovers them, and verifies the result. Ordinary mode remains
+convenience-oriented: re-running skips an already discoverable backend. The
+release evidence path uses `--require-pinned`, which always authenticates a
+fresh tree against the pinned manifests.
 
 To install only one backend:
 

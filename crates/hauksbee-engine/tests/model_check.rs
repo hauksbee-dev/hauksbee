@@ -14,7 +14,7 @@ id = "test_r"
 kind = "passive"
 description = "a plain resistor"
 [models.match]
-value = ["^10k$"]
+value_re = "^10k$"
 "#;
 
 #[test]
@@ -24,6 +24,20 @@ fn a_valid_model_checks_clean_and_says_what_it_is() {
         summary.contains("test_r"),
         "the summary must name the part, so an author who typed the wrong id sees it: {summary}"
     );
+}
+
+#[test]
+fn a_model_without_a_real_match_rule_is_refused_before_save() {
+    let stale_editor_shape = r#"
+[[models]]
+id = "test_r"
+kind = "passive"
+[models.match]
+value = ["^10k$"]
+"#;
+    let err =
+        webextract::check(stale_editor_shape).expect_err("a model that cannot bind is invalid");
+    assert!(err.contains("no match rules"), "{err}");
 }
 
 #[test]

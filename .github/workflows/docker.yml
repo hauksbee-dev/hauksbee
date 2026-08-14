@@ -57,6 +57,13 @@ jobs:
       slim-digest: ${{ steps.slim.outputs.digest }}
       full-digest: ${{ steps.full.outputs.digest }}
     steps:
+      - name: Refuse publication from a non-canonical repository
+        shell: bash
+        run: |
+          [ "$GITHUB_REPOSITORY" = "hauksbee-dev/hauksbee" ] || {
+            echo "container publication may run only from hauksbee-dev/hauksbee, not $GITHUB_REPOSITORY" >&2
+            exit 1
+          }
       - name: Checkout hauksbee
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -196,6 +203,7 @@ jobs:
           provenance: false
           build-args: |
             SOURCE_COMMIT=${{ steps.ver.outputs.source_sha }}
+            VERSION=${{ steps.ver.outputs.version }}
           # build-push-action trims blank lines, so an empty slim_latest output
           # (non-tag builds) simply drops the floating tag.
           tags: |
