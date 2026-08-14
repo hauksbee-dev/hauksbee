@@ -172,8 +172,13 @@ prints a verdict rather than a data dump:
 
 ```bash
 hauksbee run --example blinky --check --plain   # every static check on a bundled board, plain-language verdict
-hauksbee-ci run --example blinky                # the same board as a CI spec: 4 assertions, GREEN or RED
+hauksbee-ci run --example blinky                # the same board as a CI spec: GREEN or RED
 ```
+
+The default AVR-capable binary runs four firmware/rail/timing assertions on
+Blinky. The Windows/permissive binary cannot honestly run AVR firmware, so the
+same zero-file command runs one static `no_faults` assertion on a bundled
+passive divider and labels the spec as permissive.
 
 Ask either binary for an example it does not carry and it names the ones it does.
 `hauksbee serve` is the third route: its landing page offers three one-click

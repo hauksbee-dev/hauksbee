@@ -1,7 +1,7 @@
 // Named sessions in localStorage: what the app remembers between visits.
 //
 // A session is everything about one board that the browser CAN keep: the
-// report the engine returned, which firmware was staged beside it, the spec the
+// report the engine returned, which firmware/schematic was staged beside it, the spec the
 // Checks builder composed, and the last run's counts. What it cannot keep is
 // the uploaded FILE. A `File` is a handle to bytes the page was granted for one
 // visit; nothing in web storage holds it, and re-obtaining it needs the user to
@@ -53,6 +53,9 @@ export interface SessionRow {
   analyzedAt: number | null
   board: SessionBoard
   firmwareName: string | null
+  /** Companion schematic/project bytes are not copied into browser storage.
+   *  Optional so sessions written by older app versions still load. */
+  schematicName?: string | null
   /** False when the report could not be stored (see `SaveOutcome`). */
   hasReport: boolean
   /** How many assertions the saved spec carries, for the switcher's subtitle. */
@@ -220,6 +223,7 @@ export function saveSession(session: SavedSession): SaveOutcome {
     analyzedAt: written.rec.analyzedAt,
     board: written.rec.board,
     firmwareName: written.rec.firmwareName,
+    schematicName: written.rec.schematicName ?? null,
     hasReport: written.rec.report !== null,
     checkCount: written.rec.checkCount,
   }

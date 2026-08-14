@@ -50,23 +50,53 @@ export type ResumeResult =
 /** Firmware bytes are deliberately not copied into browser storage. A saved
  *  firmware-backed report therefore cannot honestly become a fresh run from
  *  the board bytes alone, even when the live server still retains that board. */
-export function canReanalyzeSavedSession(session: Pick<SavedSession, 'firmwareName'>): boolean {
-  return session.firmwareName === null
+export function canReanalyzeSavedSession(
+  session: Pick<SavedSession, 'firmwareName' | 'schematicName'>,
+): boolean {
+  return session.firmwareName === null && !session.schematicName
+}
+
+/** The authenticated layout digest that identifies the board bytes behind a
+ * saved report. A filename is only a label: the live server may now have a
+ * different revision open under the same name. */
+export function expectedBoardSha256(
+  report: WebReport | null,
+  fileName: string,
+): string | null {
+  const layout = (report?.inventory ?? []).filter(artifact =>
+    artifact.role === 'layout' && /^[0-9a-f]{64}$/i.test(artifact.sha256 ?? ''),
+  )
+  if (layout.length === 0) return null
+  const basename = (path: string) => path.split(/[\\/]/).pop()?.toLowerCase() ?? ''
+  const exact = layout.find(artifact => basename(artifact.path) === basename(fileName))
+  return (exact ?? layout[0]).sha256!.toLowerCase()
+}
+
+export async function boardBytesMatchExpected(
+  bytes: Uint8Array,
+  expectedSha256: string,
+): Promise<boolean> {
+  if (!/^[0-9a-f]{64}$/i.test(expectedSha256)) return false
+  const owned = Uint8Array.from(bytes)
+  const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', owned.buffer)))
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('')
+  return digest === expectedSha256.toLowerCase()
 }
 
 /** The board file for `name`, IF this server still has it.
  *
- *  `/boards/{name}` serves the CURRENT live session's own board file and
- *  nothing else, so a hit here means the server genuinely still holds the bytes
- *  this session was about. That is the one case where a resume can be a real
- *  re-run rather than a restore, and it is worth taking: the alternative is
- *  telling someone to go and find a file the machine already has open. */
-async function refetchServerBoard(fileName: string): Promise<File | null> {
-  if (!fileName) return null
+ *  `/boards/{name}` serves the CURRENT live session's board file. The filename
+ *  is not identity, so the bytes must also match the saved report's authenticated
+ *  layout digest before this can become a real re-run rather than a restore. */
+async function refetchServerBoard(fileName: string, expectedSha256: string): Promise<File | null> {
+  if (!fileName || !/^[0-9a-f]{64}$/i.test(expectedSha256)) return null
   try {
     const res = await fetch(`/boards/${encodeURIComponent(fileName)}`)
     if (!res.ok) return null
-    const text = await res.text()
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    if (!(await boardBytesMatchExpected(bytes, expectedSha256))) return null
+    const text = new TextDecoder().decode(bytes)
     // The route retains every text board format accepted at intake, not just
     // KiCad PCB. Reject the SPA fallback and unknown extensions, but allow a
     // live Eagle/IPC/Board-as-Code session to re-run from bytes the server
@@ -91,6 +121,7 @@ async function refetchServerBoard(fileName: string): Promise<File | null> {
 export function useSessions(opts: {
   report: WebReport | null
   firmwareName: string | null
+  schematicName: string | null
   analyzedAt: number | null
   engineVersion: string | null
   spec: SpecSnapshot | null
@@ -100,7 +131,7 @@ export function useSessions(opts: {
   /** Install a stored report with no file behind it. */
   onRestoreReport: (session: SavedSession) => void
 }): SessionsState {
-  const { report, firmwareName, analyzedAt, engineVersion, spec, checks } = opts
+  const { report, firmwareName, schematicName, analyzedAt, engineVersion, spec, checks } = opts
 
   const [rows, setRows] = useState<SessionRow[]>(() => listSessions())
   const [outcome, setOutcome] = useState<SaveOutcome | null>(null)
@@ -135,6 +166,7 @@ export function useSessions(opts: {
           numNets: report.num_nets,
         },
         firmwareName,
+        schematicName,
         hasReport: true,
         checkCount: countAsserts(spec?.toml),
         report,
@@ -151,7 +183,7 @@ export function useSessions(opts: {
     return () => {
       if (timer.current) clearTimeout(timer.current)
     }
-  }, [reportOk, report, sessionId, analyzedAt, firmwareName, spec, checks, engineVersion])
+  }, [reportOk, report, sessionId, analyzedAt, firmwareName, schematicName, spec, checks, engineVersion])
 
   const rename = useCallback((id: string, name: string) => {
     renameSession(id, name)
@@ -168,8 +200,9 @@ export function useSessions(opts: {
     const saved = loadSession(id)
     if (!saved) return { kind: 'unavailable', reason: 'that session is no longer in this browser' }
     setResumeDismissed(true)
-    const file = canReanalyzeSavedSession(saved)
-      ? await refetchServerBoard(saved.board.fileName)
+    const expectedSha256 = expectedBoardSha256(saved.report, saved.board.fileName)
+    const file = canReanalyzeSavedSession(saved) && expectedSha256
+      ? await refetchServerBoard(saved.board.fileName, expectedSha256)
       : null
     if (file) {
       setCurrentSessionId(saved.id)
@@ -180,8 +213,8 @@ export function useSessions(opts: {
     if (!saved.report) {
       return {
         kind: 'unavailable',
-        reason: saved.firmwareName
-          ? `this run used ${saved.firmwareName}, whose bytes were not stored. Re-drop the board and firmware to run it again`
+        reason: saved.firmwareName || saved.schematicName
+          ? `this run used ${[saved.firmwareName, saved.schematicName].filter(Boolean).join(' and ')}, whose bytes were not stored. Re-drop the board and companion files to run it again`
           : 'the report for that session was too large to keep, so there is nothing to show without the board file',
       }
     }

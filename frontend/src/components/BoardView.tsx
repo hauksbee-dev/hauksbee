@@ -289,8 +289,8 @@ export function BoardView({
             <b style={{ fontWeight: 600 }}>{restoredFrom.sessionName}</b>, kept in this browser.
             The findings, the bind table and your composed checks are all here and can be
             exported.{' '}
-            {restoredFrom.firmwareName
-              ? <>The board file and the firmware <span style={{ fontFamily: 'var(--font-mono)' }}>{restoredFrom.firmwareName}</span> are not: </>
+            {restoredFrom.firmwareName || restoredFrom.schematicName
+              ? <>The board file and its companion files ({[restoredFrom.firmwareName, restoredFrom.schematicName].filter(Boolean).join(', ')}) are not: </>
               : 'The board file itself is not: '}
             running the checks again, or driving it live, needs{' '}
             <span style={{ fontFamily: 'var(--font-mono)' }}>{restoredFrom.boardName}</span> dropped

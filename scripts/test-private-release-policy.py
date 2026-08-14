@@ -1091,10 +1091,12 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertNotIn("SLIM_IMAGE=${{ env.IMAGE }}:slim-", workflow)
         self.assertIn('digest_tag="container-digests-${GITHUB_REF_NAME}"', workflow)
         self.assertNotIn('digest_tag="${GITHUB_REF_NAME}-docker-digests"', workflow)
-        self.assertIn('gh release create "$digest_tag" "$manifest"', workflow)
+        self.assertIn('gh release create "$digest_tag" "$manifest" --repo "$GH_REPO"', workflow)
         self.assertIn("--prerelease --latest=false", workflow)
-        self.assertIn('gh release edit "$digest_tag" --draft=false', workflow)
-        self.assertIn('gh release verify-asset "$digest_tag" "$manifest"', workflow)
+        self.assertIn('gh release edit "$digest_tag" --draft=false --repo "$GH_REPO"', workflow)
+        self.assertIn('gh release verify-asset "$digest_tag" "$manifest" --repo "$GH_REPO"', workflow)
+        self.assertIn('gh release delete "$digest_tag" --repo "$GH_REPO" --yes', workflow)
+        self.assertIn("could not prove digest release absence", workflow)
         slim = (ROOT / "docker/Dockerfile.slim").read_text()
         self.assertIn("grep -Eq '^[0-9a-f]{40}$'", slim)
         from_lines = [line for line in slim.splitlines() if line.startswith("FROM ")]
@@ -1126,7 +1128,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         )
         self.assertIn('Source commit: `${{ github.sha }}`', release)
         self.assertIn("draft: true", release)
-        self.assertIn('gh release edit "$GITHUB_REF_NAME" --draft=false', release)
+        self.assertIn(
+            'gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"',
+            release,
+        )
         self.assertIn("REPLACE_WITH_RELEASE_COMMIT_SHA", release)
 
         docker = (ROOT / ".github/workflows/docker.yml").read_text()
@@ -1220,8 +1225,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             workflow[record:promote],
         )
         self.assertIn("GH_REPO: ${{ github.repository }}", workflow[record:promote])
-        self.assertIn('isDraft', workflow[record:promote])
-        self.assertIn('gh release edit "$digest_tag" --draft=false', workflow[record:promote])
+        self.assertIn('--jq .draft', workflow[record:promote])
+        self.assertIn(
+            'gh release edit "$digest_tag" --draft=false --repo "$GH_REPO"',
+            workflow[record:promote],
+        )
         self.assertIn("recorded_slim", workflow[record:promote])
         self.assertIn("recorded_full", workflow[record:promote])
         slim_build = workflow[workflow.index("Build and push slim") : workflow.index("Build and push full")]

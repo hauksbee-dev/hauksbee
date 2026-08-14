@@ -95,6 +95,42 @@ fn every_entry_in_a_multi_model_draft_is_validated() {
     assert!(saved.contains("hidden_bad_entry"), "{saved}");
 }
 
+#[test]
+fn browser_check_and_save_reject_solver_invalid_behavioral_blocks() {
+    let bad_converter = r#"
+[[models]]
+id = "bad_converter"
+kind = "vreg"
+[models.match]
+value_re = "^BAD$"
+[models.params]
+vout = 3.3
+dropout_v = 0.2
+iq_a = 0.0001
+[models.pins]
+"1" = "in"
+"2" = "out"
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "out"
+in_pin = "in"
+vout_setpoint = 0.0
+efficiency = 0.9
+"#;
+    let checked = webextract::check(bad_converter)
+        .expect_err("the browser must run the behavioral solver-safety gate");
+    let saved = webextract::save("bad_converter", "vreg", bad_converter)
+        .expect_err("save must run the same behavioral gate");
+    assert!(
+        checked.contains("behavioral") && checked.contains("vout_setpoint"),
+        "{checked}"
+    );
+    assert!(
+        saved.contains("behavioral") && saved.contains("vout_setpoint"),
+        "{saved}"
+    );
+}
+
 /// A pasted SPICE deck must be judged by the front end that would actually run
 /// it. An earlier version asked a minimal card scanner instead and reported
 /// that a `.subckt` would not simulate; the loader flattens subcircuits at
