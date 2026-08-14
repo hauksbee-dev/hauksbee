@@ -382,15 +382,27 @@ HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-extract \
 | Board | Native nets / comps | Net-partition floor | Located-pad floor | Last measured |
 |-------|---------------------|---------------------|-------------------|---------------|
 | reform OLED | 13 / 13 | 99.0% | 85% | 100.0% over 38/38 |
-| Watchy | 84 / 84 | 99.0% | 80% | 100.0% over 262/276 = 95% |
-| LumenPnP ring-light | not recorded | 99.0% | 80% | not recorded |
-| reform trackball2 | 64 / 65 | 99.0% | 75% | 99.8% over 202/220 = 92% |
-| Corne (crkbd cherry) | not recorded | 99.0% | 70% | 74.4% located (482/648) |
-| Lily58 Pro V2 | not recorded | 98.5% | 78% | 81.0% located (687/848) |
-| reform motherboard | 681 / 522 | 99.0% | 78% | 99.7% over 1785/2184 = 82% |
+| Watchy | 84 / 84 | 99.0% | 80% | 99.7% over 262/276 = 95% |
+| LumenPnP ring-light | 13 / 24 | 99.0% | 80% | 100.0% over 63/63 |
+| reform trackball2 | 64 / 65 | 99.0% | 75% | 100.0% over 200/220 = 91% |
+| Corne (crkbd cherry) | 158 / 178 | 99.0% | 70% | 100.0% over 482/648 = 74% |
+| Lily58 Pro V2 | 240 / 310 | 98.5% | 78% | 100.0% over 687/848 = 81% |
+| reform motherboard | 681 / 522 | 99.0% | 78% | 100.0% over 1729/2184 = 79% |
 
 RP2040 minimal has its own tighter test (`rp2040_minimal_exact_nets`, floor
-99.0% over more than 150 located pads) rather than a row here.
+99.0% over more than 150 located pads) rather than a row here. The current
+KiCad 9.0.3 run recovered 100.0% over 216 of 217 pads.
+
+The SparkFun RP2040 Thing Plus panel supplies a second, exporter-independent
+oracle: its Eagle `.brd` and already-published `.GTL`/`.GBL` sit in the same
+upstream production folder. `gerber_native_partition.rs` derives placement
+probes from the native layout, matches the physical pad centres, and refuses
+any reconstructed Gerber net that contains pads from more than one native
+Eagle net. The current run covered 2,208 shared pads across 1,236 reconstructed
+nets with zero false merges. The package has no drill file, so this is
+deliberately a one-sided over-connection gate: missing barrels can split a
+native net, and this test does not relabel that known input absence as a clear-
+polarity defect.
 
 Which rows a given run actually exercises depends on your corpus. Every board
 is fetched by `scripts/fetch-corpus.sh`, but a board the fetch has not

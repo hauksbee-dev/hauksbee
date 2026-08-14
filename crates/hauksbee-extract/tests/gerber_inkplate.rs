@@ -181,12 +181,14 @@ fn inkplate6_reconstruction_count_is_stable_not_an_oracle() {
 /// a native connectivity oracle. The exact output is retained only as a
 /// deterministic whole-board regression pin.
 ///
-/// This board also ships `RP2040_Thing_Plus-Panel.brd` beside its gerbers, and this
-/// crate reads Eagle binaries, so a pin-to-net partition comparison against the
-/// native layout is the gate that would settle the count outright. It needs the
-/// per-net copper GEOMETRY to be reachable from `ReconStats` (the published set has
-/// no pick-and-place, so no pads bind and there is nothing to compare pad-wise), and
-/// that API does not exist yet. Left as the highest-value test to add in this area.
+/// This board also ships `RP2040_Thing_Plus-Panel.brd` beside its gerbers. The
+/// differential gate in `gerber_native_partition.rs` now synthesises placement
+/// probes from that native layout and checks every reconstructed net that reaches a
+/// shared pad centre against the Eagle net partition. The published set has no
+/// drill, so the gate can prove that clear-polarity reconstruction merged no native
+/// nets; it deliberately does not call gerber-side splits an error when missing
+/// barrels are sufficient to explain them. This exact count remains a separate
+/// drift pin, not a correctness oracle.
 #[test]
 fn sparkfun_rp2040_panel_count_is_stable_not_an_oracle() {
     let Some(dir) = hauksbee_testkit::corpus_board(
