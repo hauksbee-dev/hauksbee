@@ -1,8 +1,9 @@
 //! Layer-role inference from fab filenames.
 //!
-//! A gerber job ships a directory of files whose *names* are the only clue to
-//! what each one is. There is no single convention, so we recognise the common
-//! ones and let an explicit mapping file override when a board is exotic:
+//! A gerber job may ship exporter metadata (`.gbrjob`, Altium `.EXTREP` and
+//! `.LDP`) stating what its files are. Where it does not, names are the only
+//! clue. There is no single convention, so we recognise the common ones and
+//! let an explicit mapping file override when a board is exotic:
 //!
 //!   - **KiCad long names**: `board-F_Cu.gbr`, `board-B_Cu.gbr`, inner
 //!     `board-In1_Cu.gbr`.
@@ -596,6 +597,208 @@ pub fn parse_mapping(text: &str) -> std::collections::HashMap<String, LayerRole>
         map.insert(name, parsed);
     }
     map
+}
+
+/// One copper-layer token from Altium's Layer Pairs Export (`.LDP`) file.
+///
+/// Altium writes the conventional plot extensions rather than numeric X2
+/// positions: `gtl,g1,g2,gbl` means physical layers 1 through 4. Keeping the
+/// tokens typed lets the caller resolve `gbl` only after it has seen the whole
+/// declaration, instead of guessing the board depth from a filename.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LdpLayer {
+    Top,
+    Inner(u32),
+    Bottom,
+}
+
+/// What one `.LDP` row says about a drill file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LdpDrillRole {
+    /// `Some(true)` for a plated set, `Some(false)` for non-plated, and `None`
+    /// when the set name did not state either.
+    pub plated: Option<bool>,
+    /// Ordered copper layers reached by the drill set.
+    pub layers: Vec<LdpLayer>,
+}
+
+/// Parse Altium's `Layer Pairs Export File` (`.LDP`).
+///
+/// Each useful row is a pipe-delimited record such as:
+///
+/// ```text
+/// LayersSetName=Top_Bot_Plated_Thru_Holes|DrillFile=board-PTH.txt|DrillLayers=gtl,g1,g2,gbl
+/// ```
+///
+/// The returned key is a lower-cased basename because Altium commonly writes
+/// the manifest name in lower case while the ZIP member itself preserves mixed
+/// case. Incomplete or unfamiliar rows are not promoted to authority.
+pub fn parse_ldp(text: &str) -> Vec<(String, LdpDrillRole)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut set_name: Option<&str> = None;
+        let mut drill_file: Option<&str> = None;
+        let mut drill_layers: Option<&str> = None;
+        for field in line.split('|') {
+            let Some((key, value)) = field.split_once('=') else {
+                continue;
+            };
+            match key.trim().to_ascii_lowercase().as_str() {
+                "layerssetname" => set_name = Some(value.trim()),
+                "drillfile" => drill_file = Some(value.trim()),
+                "drilllayers" => drill_layers = Some(value.trim()),
+                _ => {}
+            }
+        }
+        let (Some(file), Some(layer_text)) = (drill_file, drill_layers) else {
+            continue;
+        };
+        let file = file.rsplit(['/', '\\']).next().unwrap_or(file).trim();
+        if file.is_empty() {
+            continue;
+        }
+        let mut parsed_layers = Vec::new();
+        let mut valid = true;
+        for token in layer_text.split(',').map(|s| s.trim().to_ascii_lowercase()) {
+            let layer = match token.as_str() {
+                "gtl" | "top" => Some(LdpLayer::Top),
+                "gbl" | "bottom" | "bot" => Some(LdpLayer::Bottom),
+                _ => {
+                    let number = token
+                        .strip_prefix("gp")
+                        .or_else(|| token.strip_prefix('g'))
+                        .and_then(|s| s.strip_suffix('l').or(Some(s)))
+                        .and_then(|s| s.parse::<u32>().ok());
+                    number.filter(|n| *n >= 1).map(LdpLayer::Inner)
+                }
+            };
+            match layer {
+                Some(layer) => parsed_layers.push(layer),
+                None => {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+        if !valid || parsed_layers.len() < 2 {
+            continue;
+        }
+        let compact_name: String = set_name
+            .unwrap_or("")
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect();
+        let plated = if compact_name.contains("nonplated") {
+            Some(false)
+        } else if compact_name.contains("plated") {
+            Some(true)
+        } else {
+            None
+        };
+        out.push((
+            file.to_ascii_lowercase(),
+            LdpDrillRole {
+                plated,
+                layers: parsed_layers,
+            },
+        ));
+    }
+    out
+}
+
+/// A layer role declared by an Altium Gerber Extension Report (`.EXTREP`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtRepRole {
+    Copper { index: usize },
+    Drill,
+    Outline,
+    Ignored,
+}
+
+/// Parsed `.EXTREP` authority. An extension is usable only when every row for
+/// it agrees; reports that assign the same extension to several roles (for
+/// example Altium's named-output mode where every film is `.gbr`) retain the
+/// extension in `contested` and deliberately supply no role for it.
+#[derive(Debug, Clone, Default)]
+pub struct ExtRepMetadata {
+    pub roles: std::collections::HashMap<String, ExtRepRole>,
+    pub contested: std::collections::BTreeSet<String>,
+}
+
+/// Parse the data rows of an Altium Gerber Extension Report (`.EXTREP`).
+pub fn parse_extrep(text: &str) -> ExtRepMetadata {
+    let mut out = ExtRepMetadata::default();
+    for line in text.lines().map(str::trim) {
+        if !line.starts_with('.') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let Some(extension) = fields.next() else {
+            continue;
+        };
+        let extension = extension
+            .trim_start_matches('.')
+            .trim()
+            .to_ascii_lowercase();
+        if extension.is_empty()
+            || !extension
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        let description = fields.collect::<Vec<_>>().join(" ").to_ascii_lowercase();
+        let role = if description.contains("top layer") {
+            Some(ExtRepRole::Copper { index: 0 })
+        } else if description.contains("bottom layer") {
+            Some(ExtRepRole::Copper { index: usize::MAX })
+        } else if description.contains("mid-layer") || description.contains("mid layer") {
+            let number: String = description
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            number
+                .parse::<usize>()
+                .ok()
+                .filter(|n| *n >= 1)
+                .map(|index| ExtRepRole::Copper { index })
+        } else if description.contains("profile")
+            || description == "board"
+            || description.contains("outline")
+        {
+            Some(ExtRepRole::Outline)
+        } else if description.contains("drill") {
+            Some(ExtRepRole::Drill)
+        } else if description.contains("overlay")
+            || description.contains("legend")
+            || description.contains("paste")
+            || description.contains("solder")
+            || description.contains("mask")
+            || description.contains("mechanical")
+        {
+            Some(ExtRepRole::Ignored)
+        } else {
+            None
+        };
+        let Some(role) = role else {
+            continue;
+        };
+        if out.contested.contains(&extension) {
+            continue;
+        }
+        match out.roles.get(&extension) {
+            Some(existing) if *existing != role => {
+                out.roles.remove(&extension);
+                out.contested.insert(extension);
+            }
+            _ => {
+                out.roles.insert(extension, role);
+            }
+        }
+    }
+    out
 }
 
 /// What a `.gbrjob` job file says one of its files is.
@@ -1346,6 +1549,54 @@ mod tests {
         assert_eq!(role("silk_top.art"), LayerRole::Ignored);
         assert_eq!(role("solder_bot.art"), LayerRole::Ignored);
         assert_eq!(role("paste_top.art"), LayerRole::Ignored);
+    }
+
+    #[test]
+    fn altium_ldp_names_drill_plating_and_physical_layers() {
+        let rows = parse_ldp(
+            "Layer Pairs Export File for PCB: demo.PcbDoc\n\
+             LayersSetName=Top_Bot_Plated_Thru_Holes|DrillFile=FAB/Board-PTH.TXT|DrillLayers=gtl,g1,g2,gbl\n\
+             LayersSetName=Top_Bot_NonPlated_Thru_Holes|DrillFile=Board-NPTH.txt|DrillLayers=gtl,g1,g2,gbl\n\
+             LayersSetName=broken|DrillFile=bad.txt|DrillLayers=gtl,unknown\n",
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "board-pth.txt");
+        assert_eq!(rows[0].1.plated, Some(true));
+        assert_eq!(
+            rows[0].1.layers,
+            vec![
+                LdpLayer::Top,
+                LdpLayer::Inner(1),
+                LdpLayer::Inner(2),
+                LdpLayer::Bottom
+            ]
+        );
+        assert_eq!(rows[1].0, "board-npth.txt");
+        assert_eq!(rows[1].1.plated, Some(false));
+    }
+
+    #[test]
+    fn extrep_uses_unique_extensions_and_contests_reused_ones() {
+        let report = parse_extrep(
+            "Layer Extension     Layer Description\n\
+             .GTL                Top Layer\n\
+             .G1                 Mid-Layer 1\n\
+             .GBL                Bottom Layer\n\
+             .GKO                Profile\n\
+             .GBR                Top Layer\n\
+             .gbr                Top Overlay\n",
+        );
+        assert_eq!(
+            report.roles.get("gtl"),
+            Some(&ExtRepRole::Copper { index: 0 })
+        );
+        assert_eq!(
+            report.roles.get("g1"),
+            Some(&ExtRepRole::Copper { index: 1 })
+        );
+        assert_eq!(report.roles.get("gko"), Some(&ExtRepRole::Outline));
+        assert!(!report.roles.contains_key("gbr"));
+        assert!(report.contested.contains("gbr"));
     }
 
     #[test]
