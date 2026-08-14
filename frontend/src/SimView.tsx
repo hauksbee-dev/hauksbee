@@ -178,7 +178,12 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
 
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
-  const [railOpen, setRailOpen] = useState(true)
+  // A 316 px instrument rail consumes the entire work surface on a phone.
+  // Start it collapsed there so Drive it live still lands on the board; the
+  // labelled 18 px toggle keeps every instrument one tap away.
+  const [railOpen, setRailOpen] = useState(
+    () => typeof window === 'undefined' || window.innerWidth >= 640,
+  )
   // Expand-to-viewport for the live board. Per-view, not persisted.
   const [boardFullscreen, setBoardFullscreen] = useState(false)
   // 2D/3D mode of the viewer's segmented control, so the hint chip describes

@@ -83,6 +83,18 @@ fn check_and_save_agree_about_what_is_invalid() {
     }
 }
 
+#[test]
+fn every_entry_in_a_multi_model_draft_is_validated() {
+    let second_entry_cannot_bind =
+        format!("{GOOD}\n[[models]]\nid = \"hidden_bad_entry\"\nkind = \"passive\"\n");
+    let checked = webextract::check(&second_entry_cannot_bind)
+        .expect_err("an invalid later entry must not hide behind the valid first entry");
+    let saved = webextract::save("two_models", "passive", &second_entry_cannot_bind)
+        .expect_err("save must validate the same complete document");
+    assert!(checked.contains("hidden_bad_entry"), "{checked}");
+    assert!(saved.contains("hidden_bad_entry"), "{saved}");
+}
+
 /// A pasted SPICE deck must be judged by the front end that would actually run
 /// it. An earlier version asked a minimal card scanner instead and reported
 /// that a `.subckt` would not simulate; the loader flattens subcircuits at

@@ -40,6 +40,7 @@ type Boot =
       report: WebReport | null
       boardName: string | null
       canLaunchLive: boolean
+      avrAvailable: boolean
       engineVersion: string | null
     }
 
@@ -60,6 +61,7 @@ export default function App() {
             report: startup.report,
             boardName: startup.board_name,
             canLaunchLive: startup.live === true,
+            avrAvailable: startup.avr !== false,
             engineVersion: startup.version ?? null,
           })
         } else {
@@ -68,6 +70,7 @@ export default function App() {
             report: null,
             boardName: null,
             canLaunchLive: startup.live === true,
+            avrAvailable: startup.avr !== false,
             engineVersion: startup.version ?? null,
           })
         }
@@ -76,7 +79,7 @@ export default function App() {
         // drop-a-board Board view, never the live-sim view, which would sit
         // "offline" with no way to load a board.
         if (alive) {
-          setBoot({ kind: 'ready', report: null, boardName: null, canLaunchLive: false, engineVersion: null })
+          setBoot({ kind: 'ready', report: null, boardName: null, canLaunchLive: false, avrAvailable: false, engineVersion: null })
         }
       }
     })()
@@ -99,6 +102,7 @@ export default function App() {
       preloadedReport={boot.report}
       preloadedBoardName={boot.boardName}
       canLaunchLive={boot.canLaunchLive}
+      avrAvailable={boot.avrAvailable}
       engineVersion={boot.engineVersion}
     />
   )
@@ -122,10 +126,11 @@ const VIEW_TITLES: Record<AppView, string> = {
   env: 'Environment',
 }
 
-function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersion }: {
+function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailable, engineVersion }: {
   preloadedReport: WebReport | null
   preloadedBoardName: string | null
   canLaunchLive: boolean
+  avrAvailable: boolean
   engineVersion: string | null
 }) {
   const { theme, toggleTheme } = useTheme()
@@ -658,6 +663,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
             ) : (
               <UploadView
                 session={session}
+                avrAvailable={avrAvailable}
                 onOpenLive={openLiveSession}
                 sessions={sessions}
                 onResume={resumeSession}

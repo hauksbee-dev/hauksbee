@@ -191,10 +191,11 @@ runs:
           macOS)  os=darwin ;;
           *) echo "no prebuilt for $RUNNER_OS; will build from source"; exit 0 ;;
         esac
-        case "$RUNNER_ARCH" in
-          X64)   arch=x86_64 ;;
-          ARM64) arch=arm64 ;;
-          *) echo "no prebuilt for $RUNNER_ARCH; will build from source"; exit 0 ;;
+        case "$RUNNER_OS/$RUNNER_ARCH" in
+          Linux/X64|macOS/X64)     arch=x86_64 ;;
+          Linux/ARM64)             arch=aarch64 ;;
+          macOS/ARM64)             arch=arm64 ;;
+          *) echo "no prebuilt for $RUNNER_OS/$RUNNER_ARCH; will build from source"; exit 0 ;;
         esac
         if [ "$CHOICE" = "SOURCE" ]; then
           echo "hauksbee-ref is pinned to '$REF', which is not a release tag."

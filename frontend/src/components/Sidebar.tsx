@@ -100,6 +100,7 @@ export function Sidebar({
             data-active={nav.view === item.id}
             disabled={item.disabled}
             title={item.hint}
+            aria-label={item.hint ? `${item.label}: ${item.hint}` : item.label}
             onClick={() => nav.setView(item.id)}
             aria-current={nav.view === item.id ? 'page' : undefined}
           >

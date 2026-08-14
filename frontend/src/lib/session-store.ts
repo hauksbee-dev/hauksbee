@@ -146,11 +146,18 @@ export function setCurrentSessionId(id: string | null) {
   } catch { /* nothing to do: the indicator just will not persist */ }
 }
 
-/** A stable id for a board, so re-analyzing the same file updates that board's
- *  session instead of piling up a new one per run. Deliberately the same
- *  fingerprint ChecksView keys its autosave on (file name plus the two counts),
- *  which is what makes a restored report pick its own checks back up. */
+/** A stable id for the exact analyzed inputs, so re-analyzing the same bytes
+ *  updates that session while a different revision cannot overwrite it merely
+ *  because it kept the same filename and component/net counts. Include every
+ *  authenticated input hash (board, project, schematic, firmware) so two runs
+ *  whose evidence differs never share checks. Old reports without inventory
+ *  retain the legacy fingerprint and remain resumable. */
 export function sessionIdFor(report: WebReport): string {
+  const hashes = [...new Set((report.inventory ?? [])
+    .map(artifact => artifact.sha256?.toLowerCase())
+    .filter((hash): hash is string => !!hash && /^[0-9a-f]{64}$/.test(hash)))]
+    .sort()
+  if (hashes.length > 0) return `${report.file_name}:${hashes.join('.')}`
   return `${report.file_name}:${report.num_components}:${report.num_nets}`
 }
 

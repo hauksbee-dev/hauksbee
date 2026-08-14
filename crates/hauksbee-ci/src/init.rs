@@ -75,7 +75,15 @@ pub fn init_to(board: &Path, out: Option<&Path>) -> Result<PathBuf, SpecError> {
         .filter(|d| !d.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let spec = render_spec_at(board, &spec_dir)?;
+    let run_hint = if out.is_relative() {
+        out.clone()
+    } else {
+        std::env::current_dir()
+            .ok()
+            .and_then(|cwd| relative_path(&cwd, &out))
+            .unwrap_or_else(|| out.clone())
+    };
+    let spec = render_spec_at_with_run_hint(board, &spec_dir, &run_hint.display().to_string())?;
     std::fs::write(&out, spec)
         .map_err(|e| SpecError::Io(format!("writing {}: {e}", out.display())))?;
     Ok(out)
@@ -190,6 +198,14 @@ fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
 /// file lives in `spec_dir`. Split out from [`init_to`] so it can be exercised
 /// without touching disk.
 pub fn render_spec_at(board: &Path, spec_dir: &Path) -> Result<String, SpecError> {
+    render_spec_at_with_run_hint(board, spec_dir, &format!("{}.toml", board_stem(board)))
+}
+
+fn render_spec_at_with_run_hint(
+    board: &Path,
+    spec_dir: &Path,
+    run_hint: &str,
+) -> Result<String, SpecError> {
     let extracted = runner::load_board(board)?;
     // Same layered library as a run (builtin → packs → user model dirs), so
     // the scaffold detects the MCU/supplies a run would actually bind.
@@ -290,7 +306,7 @@ pub fn render_spec_at(board: &Path, spec_dir: &Path) -> Result<String, SpecError
         s,
         "# Every line is commented with what it does. Uncomment and tune, then run:"
     );
-    let _ = writeln!(s, "#   hauksbee-ci run {stem}.toml");
+    let _ = writeln!(s, "#   hauksbee-ci run {run_hint}");
     let _ = writeln!(
         s,
         "# The board, MCU, supplies and rails below were detected from the board."

@@ -2052,6 +2052,7 @@ fn run_inner(
         // This server can also launch a live session for a NEWLY uploaded
         // board (replacing the preloaded one), same as `hauksbee serve`.
         "live": true,
+        "avr": cfg!(feature = "avr"),
         // Engine version, for the Environment page's "what am I running" card.
         "version": env!("CARGO_PKG_VERSION"),
     })
