@@ -67,8 +67,9 @@ untouched):
 
 ## Layer-role inference
 
-Filenames are the only clue to what each gerber is. We recognise the common
-conventions and fall back to an explicit mapping file:
+The fab package's own metadata is consulted before any filename guess. When a
+package has no usable metadata, we recognise the common naming conventions and
+retain an explicit mapping-file escape hatch:
 
 - **KiCad long names**: `*-F_Cu.gbr`, `*-B_Cu.gbr`, `*-In1_Cu.gbr`.
 - **Protel / Altium extensions**: `.GTL`/`.GBL` (top/bottom), `.G1L`/`.G2L`…
@@ -83,6 +84,18 @@ conventions and fall back to an explicit mapping file:
   `FilesAttributes` entry names a file's role, and a copper film's
   `Copper,L<n>` entry is its physical stack position. When present this
   outranks every name-based rule above (the mapping file still outranks it).
+- **Altium extension report** (`*.EXTREP`): a unique extension-to-description
+  row classifies that film before its filename (`.GTL = Top Layer`, for
+  example). If one extension is reused for several roles, as in named-output
+  jobs where every film is `.gbr`, the report cannot identify an individual
+  film. Hauksbee says that extension is ambiguous and falls back; it never lets
+  the last report row win.
+- **Altium layer-pairs export** (`*.LDP`): names each drill file, its
+  plated/non-plated set, and the ordered copper layers it reaches. This is the
+  span authority before filename inference, including when the drill file has
+  an opaque name. Conflicting `.LDP` rows, duplicate package basenames, or a
+  disagreement with the drill file's own explicit span refuse rather than
+  stitch an invented barrel.
 - **Mapping file** (`layer_map.txt` / `*.map`): `filename = copper:<index>`
   / `copper:bottom` / `drill` / `outline` / `ignore`, one per line.
 
@@ -220,13 +233,15 @@ is an outline feature and joins nothing, so it is neither counted nor
 stitched.
 
 **Blind and buried vias.** A via connects only the layers it spans. The span
-comes from the drill file's X2 `TF.FileFunction` layer pair
-(`Plated,1,2,PTH` is layers 1 to 2, not the whole stack), and failing that
-from a file name that encodes the pair (`-L1-L2.drl`, or KiCad's
+comes first from the drill file's X2 `TF.FileFunction` layer pair
+(`Plated,1,2,PTH` is layers 1 to 2, not the whole stack), or from the package's
+Altium `.LDP` row when the file body is silent. Only when neither speaks does a
+file name that encodes the pair supply it (`-L1-L2.drl`, or KiCad's
 `-F_Cu-In1_Cu.drl`, resolved against the copper layers this job actually
-carries). Where the copper films carry their own X2 attribute they are read
-too, because `%TF.FileFunction,Copper,L4,Bot*%` is the only thing in a gerber
-job that ties a film to a position in the real stackup.
+carries). If the file body and `.LDP` disagree, the hit stitches no layer and
+the report names the conflict. Where the copper films carry their own X2
+attribute they are read too, because `%TF.FileFunction,Copper,L4,Bot*%` ties a
+film to a position in the real stackup without relying on its name.
 
 The refusal is the important part. Treating every drill as a through-hole
 merges nets the real stackup keeps apart, which is a phantom short: the
@@ -768,15 +783,13 @@ is the all-pairs touch sweep on the densest signal layers.
   conservatively enough for subtraction (such as an unapplied transform,
   unsupported aperture block, or arc-bearing clear region/stroke) is refused and
   leaves copper standing rather than fabricating an open.
-- **Inner-layer order: the `.gbrjob` manifest is read when the job ships
-  one**, and it is authoritative: each copper film's `Copper,L<n>` entry
-  places it in the stack, so an Allegro-style plane named without a stack
-  digit and a KiCad inner film exported under the user's own label are both
-  positioned exactly. Only *without* a job file does the order fall back to
-  filename digits (`gnd02` maps to stack index 2), where a plane named
-  without a number collapses to a single default inner slot and via
-  stitching can land on the wrong pair. The mapping-file escape hatch
-  (`copper:<index>`) overrides both when it matters.
+- **Inner-layer order: exporter metadata is read before filenames.** A
+  `.gbrjob` copper entry places its film in the stack; a usable `.EXTREP`
+  extension row supplies the same role when no job entry exists. Only without
+  either does order fall back to filename digits (`gnd02` maps to stack index
+  2), where a plane named without a number collapses to a default inner slot
+  and via stitching can land on the wrong pair. The mapping-file escape hatch
+  (`copper:<index>`) deliberately overrides all package metadata.
 - **An inner film named only by its user label needs the job file (or the
   mapping file) to be classified as copper.** KiCad exports `In1.Cu` renamed
   to `GND.Cu` as `-GND_Cu.gbr`; the `.gbrjob`, when present, names it
