@@ -1536,6 +1536,7 @@ fn input_artifact_kind(
         InputKind::Schematic => (ArtifactKind::KiCadSchematic, ArtifactRole::Schematic),
         InputKind::Altium => (ArtifactKind::AltiumPcbDoc, ArtifactRole::Layout),
         InputKind::Gerber => (ArtifactKind::GerberArchive, ArtifactRole::FabArchive),
+        InputKind::Ipc356Archive => (ArtifactKind::GerberArchive, ArtifactRole::FabArchive),
         InputKind::Odb => (ArtifactKind::OdbPlusPlus, ArtifactRole::FabArchive),
         InputKind::Ipc2581 => (ArtifactKind::Ipc2581, ArtifactRole::FabArchive),
         InputKind::BoardCode => (ArtifactKind::BoardCode, ArtifactRole::Layout),
@@ -1559,6 +1560,9 @@ fn input_contributions(kind: crate::board_input::InputKind) -> Vec<Contribution>
         what: "connectivity".into(),
         detail: match kind {
             InputKind::Gerber => "connectivity reconstructed from the fabrication copper".into(),
+            InputKind::Ipc356Archive => {
+                "connectivity read from the fab archive's IPC-D-356 netlist".into()
+            }
             InputKind::Odb => "connectivity read from the ODB++ job's EDA data".into(),
             InputKind::Ipc2581 => "connectivity read from the IPC-2581 logical netlist".into(),
             _ => "component and net incidence consumed by binding and electrical checks".into(),
@@ -1727,6 +1731,30 @@ fn documented_default(warning: Option<&str>) -> Option<(String, String)> {
         return Some(("vout".into(), value));
     }
     None
+}
+
+#[cfg(test)]
+mod fab_ipc356_inventory_tests {
+    use super::*;
+    use crate::board_input::InputKind;
+
+    #[test]
+    fn fab_ipc356_keeps_archive_identity_and_names_netlist_authority() {
+        assert_eq!(
+            input_artifact_kind(Path::new("fab.zip"), InputKind::Ipc356Archive),
+            (ArtifactKind::GerberArchive, ArtifactRole::FabArchive)
+        );
+        let contributions = input_contributions(InputKind::Ipc356Archive);
+        assert!(contributions
+            .iter()
+            .any(|row| { row.what == "connectivity" && row.detail.contains("IPC-D-356") }));
+        assert!(
+            contributions
+                .iter()
+                .all(|row| row.what != "copper_geometry"),
+            "the skipped gerbers must not be recorded as consumed: {contributions:?}"
+        );
+    }
 }
 
 #[cfg(test)]

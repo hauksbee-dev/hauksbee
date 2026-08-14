@@ -116,6 +116,7 @@ fn input_kind_name(kind: crate::board_input::InputKind) -> &'static str {
         InputKind::Schematic => "kicad_schematic",
         InputKind::Altium => "altium_pcbdoc",
         InputKind::Gerber => "gerber_archive",
+        InputKind::Ipc356Archive => "fab_ipc356",
         InputKind::Odb => "odbpp",
         InputKind::Ipc2581 => "ipc2581",
         InputKind::BoardCode => "board_as_code",
