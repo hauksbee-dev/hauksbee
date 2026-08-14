@@ -716,7 +716,8 @@ fn extraction_identity(
 
 #[cfg(test)]
 mod datasheet_input_tests {
-    use super::extraction_identity;
+    use super::{extraction_identity, name_upload_limit_413, MAX_UPLOAD_BYTES};
+    use axum::{body::Body, http::StatusCode, response::Response};
 
     #[test]
     fn blank_kind_reaches_the_shared_identifier() {
@@ -729,6 +730,27 @@ mod datasheet_input_tests {
     #[test]
     fn missing_part_is_still_refused() {
         assert!(extraction_identity(None, Some("vreg".into())).is_err());
+    }
+
+    #[tokio::test]
+    async fn upload_limit_response_names_the_exact_limit() {
+        let stock = Response::builder()
+            .status(StatusCode::PAYLOAD_TOO_LARGE)
+            .body(Body::from("length limit exceeded"))
+            .unwrap();
+        let response = name_upload_limit_413(stock).await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert_eq!(
+            text,
+            format!(
+                "upload too large: this server accepts at most {} MB per request",
+                MAX_UPLOAD_BYTES / (1024 * 1024)
+            )
+        );
     }
 }
 
