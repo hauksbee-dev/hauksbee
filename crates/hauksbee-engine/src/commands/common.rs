@@ -166,7 +166,7 @@ pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
 /// Retain the exact uploaded text behind `/boards/{name}` for an honest saved-
 /// session re-run. In particular, Board-as-Code evidence authenticates the DSL
 /// bytes, not the compiled KiCad layout used internally by the solver.
-fn resumable_board_file(
+pub(crate) fn resumable_board_file(
     name: &str,
     contents: &[u8],
     kind: crate::board_input::InputKind,
