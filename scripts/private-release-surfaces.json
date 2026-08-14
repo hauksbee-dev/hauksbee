@@ -25,6 +25,7 @@
     {"path": "docs/ci/RECIPES.md", "classification": "shipped-documentation", "occurrences": 5},
     {"path": "docs/dev-plans/launch-checklist.md", "classification": "release-plan", "occurrences": 1, "scopes": ["development"]},
     {"path": "docs/dev-plans/launch-gtm-strategy.md", "classification": "release-plan", "occurrences": 2, "scopes": ["development"]},
+    {"path": "docs/dev-plans/linux-clean-room-report-2026-08-14.md", "classification": "release-evidence", "occurrences": 1, "scopes": ["development"]},
     {"path": "docs/dev-plans/public-release-cleanup-plan.md", "classification": "historical-release-plan", "occurrences": 1, "scopes": ["development"]},
     {"path": "docs/dev-plans/tasks.md", "classification": "release-ledger", "occurrences": 1, "scopes": ["development"]},
     {"path": "editors/vscode-hauksbee-board/README.md", "classification": "integration-documentation", "occurrences": 1},
