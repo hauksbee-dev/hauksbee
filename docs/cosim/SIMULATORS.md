@@ -109,6 +109,36 @@ scripts/install-sims.sh --renode-only
 scripts/install-sims.sh --qemu-only
 ```
 
+The ordinary QEMU route installs Espressif's pinned prebuilt release. That
+release boots real firmware but does not retain GPIO OUT register state, so
+output observation falls back to Hauksbee's firmware mailbox. To build the same
+pinned source with the reviewed register-state patch instead:
+
+```bash
+scripts/install-sims.sh --qemu-patched-source
+```
+
+This is an explicit local GPL-2.0 QEMU source build: the script fetches the
+exact commit recorded in `required-simulator-versions.env`, applies
+`qemu-patches/esp32-gpio-register-state.patch`, builds both system binaries,
+and instantiates live ESP32, ESP32-S3, and ESP32-C3 machines to require paired
+`gpio-out`/`gpio-enable` QOM capabilities before installing it under
+`~/.hauksbee-qemu-esp-patched`. Hauksbee distributes
+the patch and recipe, not the resulting QEMU binary. GPIO output from ordinary
+ESP-IDF firmware then reaches co-sim; GPIO input, SAR ADC, and I2C/SPI byte
+interception remain explicit mailbox contracts.
+
+In a **source checkout**, the dedicated source-patch acceptance is intentionally
+separate from the ordinary prebuilt-QEMU suite. It idempotently verifies/builds
+that exact source tree, binds the installed executable hashes in its local
+marker, then requires the live test to select the peripheral path rather than
+skip on the supported mailbox fallback. Binary release bundles carry the build
+recipe and patch, but not this Rust test harness:
+
+```bash
+scripts/test-qemu-gpio-source-patch.sh
+```
+
 To check whether hauksbee can find the simulators without installing
 anything:
 

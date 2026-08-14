@@ -264,3 +264,27 @@ fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
         "an absent limitation is a CLAIM and must be printed as one:\n{out}"
     );
 }
+
+#[cfg(feature = "qemu")]
+#[test]
+fn qemu_soc_inspection_names_register_direction_and_mailbox_boundaries() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-mcu/db/mcu/esp32.soc.toml");
+    let (code, out) = lint(&path);
+    assert_eq!(
+        code, 0,
+        "the shipped ESP32 descriptor must lint clean:\n{out}"
+    );
+    assert!(
+        out.contains("peripheral out 0x3ff44004 + enable 0x3ff44020"),
+        "real output level and direction addresses must be inspectable:\n{out}"
+    );
+    assert!(
+        out.contains("firmware-mailbox fallback 0x50000000; input mailbox 0x50000004"),
+        "the fallback and remaining input contract must stay named:\n{out}"
+    );
+    assert!(
+        out.contains("gpio capability probe: /machine/soc/gpio properties gpio-out + gpio-enable"),
+        "the live capability boundary must be inspectable:\n{out}"
+    );
+}

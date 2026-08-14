@@ -702,9 +702,9 @@ mod qemu_schema {
         pub soc: QemuSoc,
     }
 
-    /// The QEMU `[soc]` body. The ESP32 family observes GPIO through a RAM
-    /// mailbox (the fork's gpio model has no register read-back), so a bank
-    /// carries `out_reg`/`in_reg` mailbox addresses rather than an ODR offset.
+    /// The QEMU `[soc]` body. A bank carries the real GPIO OUT address plus the
+    /// legacy output/input mailbox addresses; `gpio_qom_path` is the live
+    /// capability probe that decides whether the real register is trustworthy.
     #[derive(Debug, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(super) struct QemuSoc {
@@ -715,6 +715,7 @@ mod qemu_schema {
         pub frequency_hz: u64,
         pub expected_e_machine: String,
         pub mcu_label: String,
+        pub gpio_qom_path: String,
         // `GpioBank` (letter/out_reg/in_reg/width) already derives Deserialize.
         #[serde(default)]
         pub banks: Vec<GpioBank>,
@@ -747,7 +748,10 @@ mod qemu_schema {
                 });
             }
             let arch = arch_from_name(&self.arch)?;
-            super::validate_non_empty(&[("machine", &self.machine)])?;
+            super::validate_non_empty(&[
+                ("machine", &self.machine),
+                ("gpio_qom_path", &self.gpio_qom_path),
+            ])?;
             super::validate_frequency(self.frequency_hz)?;
             let expected_e_machine = crate::elf::e_machine_from_name(&self.expected_e_machine)
                 .ok_or_else(|| SocError::UnknownEMachine(self.expected_e_machine.clone()))?;
@@ -763,6 +767,7 @@ mod qemu_schema {
                 frequency_hz: self.frequency_hz,
                 expected_e_machine,
                 mcu_label: self.mcu_label,
+                gpio_qom_path: self.gpio_qom_path,
                 i2c_buses: self.i2c.buses,
             })
         }

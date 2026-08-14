@@ -157,13 +157,13 @@ in-process AVR backend and bridged/contracted on the external emulators.
 
 | Coupling | AVR (`simavr`) | Renode (STM32/nRF/RISC-V) | QEMU (ESP32/-S3/-C3) |
 |----------|----------------|---------------------------|----------------------|
-| GPIO out (`on_pin_change`) | yes (per-edge IRQ) | yes (ODR poll over TCP) | yes (RAM-mailbox diff) |
-| GPIO in (`set_digital_in`) | yes | yes | yes (gdbstub `M` write) |
+| GPIO out (`on_pin_change`) | yes (per-edge IRQ) | yes (ODR poll over TCP) | yes (real MMIO register on capability-probed patched QEMU; named RAM-mailbox fallback on upstream prebuilt) |
+| GPIO in (`set_digital_in`) | yes | yes | firmware-mailbox contract (gdbstub `M` write) |
 | UART (`uart_write` / `on_uart`) | yes | yes | yes (serial socket) |
 | ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write), and only where a descriptor declares one: `renode:stm32f072` inputs 0..7 and `renode:rp2040` inputs 0..3 are live-proven. STM32F103/F4/nRF52/FE310 model no ADC peripheral in their stock platforms, so injections there are DROPPED and surfaced on every report surface that runs the external backend (run text, `--plain`, `--json`, hauksbee-ci, and the TUI pane), never silently. The synchronous web front door refuses external-emulator runs before these scheduler signals exist and points to live/CLI co-sim instead. See "ADC / bus coverage by platform" | yes, RAM-mailbox count slots (firmware contract) |
 | I2C slave models (`on_i2c`) | yes (TWI decode) | yes on platforms whose descriptor names controllers (STM32F103/F4 `i2c1`, nRF52840 `twi0`/`twi1`); a slave bound on a controller-less platform is recorded as UNEXERCISED on every report surface that runs that backend, and a CI `peripheral` assertion against it FAILS | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
 | SPI slave models (`on_spi`) | yes | yes on platforms with named controllers (STM32F103 `spi1` via `extra_repl`, F4 `spi2`/`spi3`, nRF52840 `spi2`); controller-less platforms get the same UNEXERCISED recording/surfacing | yes, RAM-mailbox bus cells (firmware contract) |
-| Drive direction (`pins_configured_output`) | yes (DDR hooks) | yes on dir-mapped platforms: STM32F103 (CRL/CRH), STM32F4 (MODER), nRF52840 (DIR), polled alongside the ODR; RP2040/FE310 carry no verified dir map and stay direction-blind | no (mailbox carries levels only) |
+| Drive direction (`pins_configured_output`) | yes (DDR hooks) | yes on dir-mapped platforms: STM32F103 (CRL/CRH), STM32F4 (MODER), nRF52840 (DIR), polled alongside the ODR; RP2040/FE310 carry no verified dir map and stay direction-blind | yes on the capability-probed patched build (real GPIO ENABLE); no on the mailbox fallback, which carries levels only |
 
 Drive direction is what lets a boot-state check tell a held-LOW output from
 a floating input. A backend reports it observable
@@ -636,22 +636,22 @@ chunk over RSP runs far too slow).
   espflash's elf2image + default bootloader/partition table), so the
   artifact a user's build actually produces boots directly. QEMU is killed
   on drop. The backend finds the binary through `$HAUKSBEE_QEMU_XTENSA` /
-  `$HAUKSBEE_QEMU_RISCV32`, then `$HAUKSBEE_QEMU_DIR`, then
+  `$HAUKSBEE_QEMU_RISCV32`, then `$HAUKSBEE_QEMU_DIR`, then the reviewed
+  source build under `~/.hauksbee-qemu-esp-patched/qemu/bin/`, then
   `~/.hauksbee-qemu-esp/qemu/bin/`, then the esp-idf idf_tools install,
   then `PATH` (rejecting Homebrew's mainline qemu, which has no esp32
   machine). If none is found, instantiation fails with a clear install
   message (tests skip).
 
-- **GPIO out (poll) through a RAM mailbox**: the Espressif QEMU `esp32.gpio`
-  model does **not** implement read-back of `GPIO_OUT_REG` (a host read
-  over QMP `xp` or the gdbstub returns 0 regardless of the driven level,
-  verified empirically; RAM, by contrast, round-trips exactly). So the demo
-  firmware mirrors its GPIO output word to a fixed RAM mailbox (RTC slow
-  memory, `0x5000_0000`), and the backend reads THAT word each chunk, diffs
-  it, and synthesises per-bit edges. The bit layout matches `GPIO_OUT_REG`,
-  so the edge synthesis matches the Renode ODR-poll byte-for-byte, only at
-  a RAM address. The real `gpio_set_level` writes still happen; the
-  mailbox is only the observation path the model lacks.
+- **GPIO out (poll), real register when proved**: Espressif's pinned QEMU
+  release discards `GPIO_OUT_REG` writes. The reviewed patch at
+  `scripts/qemu-patches/esp32-gpio-register-state.patch` retains OUT/ENABLE
+  state for ESP32/S3/C3 and exposes paired read-only `gpio-out`/`gpio-enable`
+  QOM properties. The backend probes both live properties and only then reads
+  the real MMIO OUT and ENABLE words.
+  Ordinary ESP-IDF firmware is therefore visible without any Hauksbee code.
+  An unpatched binary fails closed to the legacy RTC-RAM output mirror and
+  prints that mailbox requirement; the edge-diff logic is identical.
 
 - **GPIO in (push)**: the backend pokes the mailbox `hauksbee_gpio_in`
   word over the gdbstub `M` packet; the firmware reads it where it would
@@ -944,11 +944,11 @@ ESP32 parts are proven through QEMU above.
   passives and stay. If you see board-wide all-zero co-sim voltages, check
   `--report` for any passive with an absurd capacitance. See
   [`LIMITATIONS.md`](../about/LIMITATIONS.md) Fixed #4.
-- **ESP32 GPIO needs the firmware mailbox** (stock third-party firmware is
-  GPIO-invisible). The reason is empirically validated (the fork's GPIO
-  model exposes no output read-back), and we have specified the QEMU-fork
-  patch that would remove the requirement; see
-  [`LIMITATIONS.md`](../about/LIMITATIONS.md) (deferred section).
+- **ESP32 GPIO output needs the reviewed QEMU source build for arbitrary
+  firmware.** Espressif's prebuilt discards output state and therefore uses the
+  named mailbox fallback. `install-sims.sh --qemu-patched-source` removes that
+  output contract after a live capability probe. GPIO input remains a firmware
+  mailbox contract; see [`LIMITATIONS.md`](../about/LIMITATIONS.md).
 
 ## What `--firmware` accepts (and the web drop zone too)
 
@@ -1111,11 +1111,10 @@ U0TXD/U0RXD.
 
 Firmware: `testdata/firmware/esp32_blinky/`, esp-idf C app. It drives GPIO2
 HIGH at boot, toggles GPIO4 at ~5 Hz, prints `hello from esp32` on UART0
-and answers `i`/`v` commands. Because the Espressif QEMU `esp32.gpio`
-model does not expose GPIO output register read-back, the firmware mirrors
-its GPIO output word to a fixed RAM mailbox (`0x5000_0000`, RTC slow
-memory) that the backend reads; the real `gpio_set_level` writes still
-happen (see the firmware header and the limitations section).
+and answers `i`/`v` commands. It also mirrors output into the legacy mailbox so
+the same fixture proves compatibility with Espressif's unpatched prebuilt. The
+independent `esp32_native_gpio` fixture contains no mailbox at all and proves
+the patched backend observes ordinary ESP-IDF `gpio_set_level` writes.
 
 Install (two pieces, both native macOS-arm64 / Linux):
 
@@ -1128,6 +1127,8 @@ Install (two pieces, both native macOS-arm64 / Linux):
 #    (the backend also honours $HAUKSBEE_QEMU_XTENSA / $HAUKSBEE_QEMU_RISCV32.)
 #    NOTE: Homebrew's mainline qemu-system-xtensa has NO esp32 machine and is
 #    rejected by the discovery (it checks `-machine help` for esp32).
+#    For arbitrary-firmware GPIO output observation instead of the mailbox
+#    compatibility path: scripts/install-sims.sh --qemu-patched-source
 
 # 2. esp-idf, only to BUILD the firmware image (~3-5 GB, one-time):
 git clone --depth=1 --branch v5.4 https://github.com/espressif/esp-idf.git ~/esp/esp-idf
@@ -1298,18 +1299,16 @@ on a RISC-V core, proving the backend stays ISA-agnostic.
 
 ### QEMU (ESP32 family) specific limitations
 
-- **GPIO output is observed through a RAM mailbox, not the GPIO
-  register.** The Espressif QEMU `esp32.gpio` model does not implement
-  read-back of `GPIO_OUT_REG` (a host read returns 0 regardless of the
-  driven level; writes to `GPIO_IN_REG` are dropped; RAM round-trips
-  fine). So the demo firmware mirrors its GPIO output word to a fixed RAM
-  mailbox the backend reads, and reads injected inputs from it.
-  Consequence: **GPIO co-sim requires mailbox-aware firmware** (the
-  committed demo is). Arbitrary third-party ESP32 firmware would boot and
-  produce UART, but its GPIO output would not be visible to the solver
-  unless it maintained the mailbox. A cleaner future fix is a small patch
-  to the fork's gpio model to honour register read-back, which would
-  remove the mailbox requirement entirely.
+- **GPIO output no longer requires a firmware contract when the reviewed
+  source build is installed.** Run
+  `scripts/install-sims.sh --qemu-patched-source`; it fetches the exact pinned
+  Espressif commit, applies the reviewed patch, builds both architectures, and
+  live-probes paired `gpio-out`/`gpio-enable` QOM capabilities on ESP32,
+  ESP32-S3, and ESP32-C3 before committing the install. The backend then reads
+  real GPIO OUT and ENABLE state. The prebuilt upstream release remains usable,
+  but output falls back to the demo's mailbox with a named runtime limitation.
+  GPIO input is still injected through `hauksbee_gpio_in`: the fork drops writes
+  to `GPIO_IN_REG`, so arbitrary firmware cannot yet consume host-driven pins.
 
 - **No `-icount` on the Xtensa esp32 machine.** Measured: `-icount` (any
   shift, with/without `sleep=off`) prevents the esp32/esp32s3 machines from
@@ -1338,9 +1337,8 @@ on a RISC-V core, proving the backend stays ISA-agnostic.
   Temperature sensors additionally reach unmodified firmware through the
   machine's own emulated tmp105 through `set_i2c_device_temperature`.
 
-- **Mailbox bank coverage bounds which GPIOs are observable at all.** The
-  mailbox carries one output-mirror word per declared bank; the shipped
-  `esp32s3` SoC descriptor declares bank `'0'` only, so GPIO32..48 (bank
+- **Descriptor bank coverage still bounds which GPIOs are observable.** The
+  shipped `esp32s3` SoC descriptor declares bank `'0'` only, so GPIO32..48 (bank
   `'1'`: the Watchy v3's display RES/DC/CS on GPIO33/34/35 and its
   SCK/MOSI on GPIO47/48) are **not co-simulated at all**, firmware drives
   and reads of them are invisible, and the backend prints a warning naming
