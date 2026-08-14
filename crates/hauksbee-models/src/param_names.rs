@@ -12,7 +12,7 @@
 //! So this is a lint, not a schema. It names the vocabulary each kind's
 //! consumers actually read and reports anything else as a probable typo, adding
 //! the nearest known name when one is close enough to be worth naming (see
-//! [`nearest`], which stays silent rather than guess). It stays a WARNING and
+//! `nearest`, which stays silent rather than guess). It stays a WARNING and
 //! never gates an exit code, because an unknown name is not provably wrong: a
 //! genuine extension, or a param a future consumer will read, is a legitimate
 //! entry that must still lint clean enough to ship.
@@ -189,7 +189,7 @@ const CONVERTER_COMMON: &[&str] = &[
     "gnd_pin",
 ];
 
-/// The parameter names this kind's consumers read, beyond [`UNIVERSAL`].
+/// The parameter names this kind's consumers read, beyond `UNIVERSAL`.
 ///
 /// A kind with an empty slice carries no numeric physics at all (a connector
 /// models pin continuity; `Ignore` models nothing), so every param on it is
