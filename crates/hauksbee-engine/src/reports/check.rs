@@ -223,7 +223,14 @@ pub fn emit_with_schematic(
             }
             print!(
                 "{}",
-                what_this_pass_did_not_check(summary.mcu_bound, usbc.is_some())
+                what_this_pass_did_not_check(
+                    summary.mcu_bound,
+                    bound
+                        .mcus
+                        .iter()
+                        .any(|mcu| backend_is_compiled(&mcu.backend)),
+                    usbc.is_some(),
+                )
             );
         }
         OutputMode::Text => {
@@ -613,7 +620,18 @@ pub(crate) fn drc_gate_fails(
 /// even though nothing here is false. Tested against the real board: a bare
 /// upload gives a full bind and a clean report, and mentions the dynamic checks
 /// nowhere at all.
-fn what_this_pass_did_not_check(mcu_bound: bool, usbc_ran: bool) -> String {
+fn backend_is_compiled(backend: &str) -> bool {
+    let kind = backend.split_once(':').map(|(kind, _)| kind);
+    (kind == Some("simavr") && cfg!(feature = "avr"))
+        || (kind == Some("renode") && cfg!(feature = "renode"))
+        || (kind == Some("qemu") && cfg!(feature = "qemu"))
+}
+
+fn what_this_pass_did_not_check(
+    mcu_bound: bool,
+    mcu_backend_compiled: bool,
+    usbc_ran: bool,
+) -> String {
     let mut s = String::from("\n== What this pass did not check ==\n");
     s.push_str(
         "These checks read the board. They do not run it, so nothing above can \
@@ -630,12 +648,20 @@ fn what_this_pass_did_not_check(mcu_bound: bool, usbc_ran: bool) -> String {
              board. It has its own section above when there is one.\n",
         );
     }
-    if mcu_bound {
+    if mcu_bound && mcu_backend_compiled {
         s.push_str(
-            "\nThis board has a processor hauksbee can emulate, so it can boot your \
+            "\nThis board has a processor with co-simulation support in this build. \
+             With its external backend dependency installed where required, it can boot your \
              firmware against the solved circuit and assert on what happens.\n\n  \
              hauksbee-ci init <board>     scaffold a spec into the current dir\n  \
              hauksbee-ci run <spec>       run it, here or in a pipeline\n",
+        );
+    } else if mcu_bound {
+        s.push_str(
+            "\nA processor bound on this board, but this binary does not include its \
+             co-simulation backend. The static result above is still valid; do not infer \
+             that this build can boot its firmware. Use a binary that includes the matching \
+             backend before making firmware or timing claims.\n",
         );
     } else {
         s.push_str(
