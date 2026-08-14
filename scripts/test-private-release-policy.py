@@ -1530,6 +1530,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         app = (ROOT / "app/macos/build-app.sh").read_text()
         self.assertIn("hauksbee-${VERSION}-source.tar.gz", bundle)
         self.assertIn("hauksbee-${VERSION}-source.tar.gz", app)
+        self.assertIn('expected_version="$bin $VERSION (git $GIT_SHA)"', app)
+        self.assertIn("rebuild from this exact checkout before assembling the app", app)
 
         docker = (ROOT / ".github/workflows/docker.yml").read_text()
         dockerfile = (ROOT / "docker/Dockerfile.slim").read_text()
