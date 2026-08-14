@@ -23,9 +23,10 @@
 //!
 //! Both feed the same [`NormalizedBoard`], whose [`InputKind`] disambiguates
 //! the `layout_text == None` cases: an Altium board gets its DRC from the raw
-//! bytes twin ([`ExtractedBoard::altium_drc`]), while a gerber archive, an ODB++
-//! job and an IPC-2581 document have no layout file at all and their DRC/SI
-//! sections say "Not checked" instead of a vacuous green.
+//! bytes twin ([`ExtractedBoard::altium_drc`]), while a gerber archive, a fab
+//! ZIP using its IPC-D-356 netlist, an ODB++ job and an IPC-2581 document have
+//! no layout file at all and their DRC/SI sections say "Not checked" instead of
+//! a vacuous green.
 //!
 //! Two of the accepted formats can only be recognised HERE, not by the extract
 //! crate's reader registry, because the registry claims a format from bytes:
@@ -69,6 +70,9 @@ pub enum InputKind {
     Altium,
     /// A gerber fab archive (directory or zip), reverse-extracted from copper.
     Gerber,
+    /// A fab archive whose IPC-D-356 member supplied authoritative
+    /// connectivity, so copper reconstruction was deliberately not used.
+    Ipc356Archive,
     /// An ODB++ job (directory, `.tgz` or `.zip`). Like a gerber archive it has
     /// no KiCad layout text, but unlike one its connectivity is READ from the
     /// job's own EDA data rather than reconstructed from copper.
@@ -118,10 +122,11 @@ impl NormalizedBoard {
         self.kind == InputKind::Altium
     }
 
-    /// A fab/exchange input with **no KiCad layout text**: a gerber archive, an
-    /// ODB++ job or an IPC-2581 document. Clearance DRC and trace-geometry SI
-    /// must report "Not checked" for these rather than a vacuous pass, which is
-    /// what call sites use this for.
+    /// A fab/exchange input with **no KiCad layout text**: a gerber archive, a
+    /// fab ZIP using IPC-D-356 connectivity, an ODB++ job or an IPC-2581
+    /// document. Clearance DRC and trace-geometry SI must report "Not checked"
+    /// for these rather than a vacuous pass, which is what call sites use this
+    /// for.
     ///
     /// The three differ in how connectivity was obtained (reconstructed from
     /// copper for gerbers, read from the file for the other two) but not in what
@@ -129,7 +134,7 @@ impl NormalizedBoard {
     pub fn is_gerber(&self) -> bool {
         matches!(
             self.kind,
-            InputKind::Gerber | InputKind::Odb | InputKind::Ipc2581
+            InputKind::Gerber | InputKind::Ipc356Archive | InputKind::Odb | InputKind::Ipc2581
         )
     }
 
@@ -150,6 +155,7 @@ impl NormalizedBoard {
 pub fn input_kind_phrase(kind: InputKind) -> &'static str {
     match kind {
         InputKind::Gerber => "a gerber archive",
+        InputKind::Ipc356Archive => "a fab archive carrying an IPC-D-356 netlist",
         InputKind::Odb => "an ODB++ job",
         InputKind::Ipc2581 => "an IPC-2581 document",
         InputKind::Altium => "an Altium .PcbDoc",
@@ -327,15 +333,19 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
         });
     }
 
-    // A zip upload is a gerber fab archive or a zipped Board-as-Code export;
-    // route it before the text sniffer (which knows neither). A `.board`
-    // export inside wins (a fab archive never carries one); anything else is
-    // treated as a gerber job zip.
+    // A zip upload is a fab archive or a zipped Board-as-Code export; route it
+    // before the text sniffer (which knows neither). A `.board` export inside
+    // wins (a fab archive never carries one). Within a fab archive an
+    // IPC-D-356 netlist wins over gerber inference; only the remaining zips are
+    // reverse-extracted from copper.
     let mut zip_code: Option<String> = None;
     if contents.starts_with(b"PK\x03\x04") {
         match zip_board_code(file_name, contents)? {
             Some(src) => zip_code = Some(src),
             None => {
+                if let Some(norm) = ipc356_from_fab_zip(file_name, contents)? {
+                    return Ok(norm);
+                }
                 let out = gerber_from_zip_bytes(file_name, contents)?;
                 let notes = out.stats.coverage_notes();
                 return Ok(NormalizedBoard {
@@ -558,8 +568,9 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         ));
     }
 
-    // A `.zip` is a gerber fab archive or a zipped Board-as-Code export, the
-    // same two forms the web drop zone accepts.
+    // A `.zip` is a fab archive or a zipped Board-as-Code export, the same two
+    // forms the web drop zone accepts. Within a fab archive, prefer its own
+    // IPC-D-356 connectivity before falling back to gerber reconstruction.
     let is_zip = path
         .extension()
         .and_then(|e| e.to_str())
@@ -580,6 +591,9 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 },
                 path,
             ));
+        }
+        if let Some(norm) = ipc356_from_fab_zip(&file_name, &raw)? {
+            return Ok(with_name_fallback(norm, path));
         }
         let out = ExtractedBoard::from_gerber_with_stats(path).map_err(|e| {
             // A zip that is neither a gerber set nor a .board export is often
@@ -887,6 +901,84 @@ fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, Bo
     Ok(Some(src))
 }
 
+/// Prefer an IPC-D-356 netlist carried inside a fab ZIP over inferring the
+/// same package's connectivity from copper geometry.
+///
+/// This mirrors the directory path's `board_files_in` priority. The archive
+/// bytes remain the primary input for evidence hashing; the member supplies
+/// the connectivity answer and is named in a reader note. Multiple netlists
+/// are ambiguous and refuse instead of choosing by ZIP order.
+fn ipc356_from_fab_zip(
+    file_name: &str,
+    contents: &[u8],
+) -> Result<Option<NormalizedBoard>, BoardInputError> {
+    use std::io::Read;
+
+    let reader = std::io::Cursor::new(contents);
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| {
+        BoardInputError::Zip(format!(
+            "could not open '{file_name}' as a zip archive: {e}"
+        ))
+    })?;
+    let mut candidates: Vec<(usize, String)> = Vec::new();
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
+        };
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().to_string();
+        if name.starts_with("__MACOSX/")
+            || name.rsplit('/').next().is_some_and(|f| f.starts_with('.'))
+        {
+            continue;
+        }
+        if Path::new(&name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("d356"))
+        {
+            candidates.push((i, name));
+        }
+    }
+    if candidates.len() > 1 {
+        return Err(BoardInputError::Zip(format!(
+            "'{file_name}' contains more than one IPC-D-356 netlist ({}); keep only the one that belongs to this fab package",
+            candidates
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    let Some((index, member_name)) = candidates.pop() else {
+        return Ok(None);
+    };
+    let mut entry = archive.by_index(index).map_err(|e| {
+        BoardInputError::Zip(format!(
+            "could not read IPC-D-356 member '{member_name}' from '{file_name}': {e}"
+        ))
+    })?;
+    let mut member = Vec::new();
+    entry.read_to_end(&mut member).map_err(|e| {
+        BoardInputError::Zip(format!(
+            "could not read IPC-D-356 member '{member_name}' from '{file_name}': {e}"
+        ))
+    })?;
+    let board = ExtractedBoard::from_ipc_d356(&String::from_utf8_lossy(&member))
+        .map_err(|e| BoardInputError::Extract(format!("'{member_name}' in '{file_name}': {e}")))?;
+    Ok(Some(NormalizedBoard {
+        board,
+        layout_text: None,
+        raw: contents.to_vec(),
+        kind: InputKind::Ipc356Archive,
+        notes: vec![format!(
+            "Fab archive connectivity was read from its IPC-D-356 netlist '{member_name}'; gerber copper geometry was not used to infer nets."
+        )],
+    }))
+}
+
 /// Reverse-extract a gerber fab archive supplied as bytes (the web upload).
 /// `from_gerber` wants a path, so the bytes are parked in a temp file.
 ///
@@ -1013,6 +1105,7 @@ mod tests {
         include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.odb.zip");
     const IPC2581: &[u8] =
         include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.ipc2581.xml");
+    const IPC356: &[u8] = include_bytes!("../../../testdata/pic_programmer.d356");
 
     const DSL: &[u8] = br#"# Board-as-Code (hauksbee board DSL v1)
 board version 20241229
@@ -1107,6 +1200,77 @@ fn main {
             1,
             "R1 survives the zip + compile"
         );
+    }
+
+    #[test]
+    fn fab_zip_prefers_its_ipc356_netlist_on_bytes_and_path_routes() {
+        // The copper film is intentionally insufficient to reconstruct a
+        // usable board. Success therefore proves the package netlist won; it
+        // is not merely agreeing with a gerber result computed first.
+        let bytes = zip_of(&[
+            (
+                "fab/board-F_Cu.gbr",
+                b"%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,1.0*%\nD10*\nX0Y0D03*\nM02*\n",
+            ),
+            ("fab/board.d356", IPC356),
+        ]);
+        let norm = from_bytes("fab.zip", &bytes).expect("IPC-D-356 member wins");
+        assert_eq!(norm.kind, InputKind::Ipc356Archive);
+        assert!(norm.is_gerber() && !norm.is_gerber_archive());
+        assert!(norm.layout_text.is_none());
+        assert_eq!(norm.raw, bytes, "evidence authenticates the whole archive");
+        assert!(!norm.board.components.is_empty());
+        assert!(
+            norm.notes.iter().any(|note| {
+                note.contains("board.d356") && note.contains("not used to infer nets")
+            }),
+            "the authority decision is user-visible: {:?}",
+            norm.notes
+        );
+
+        let dir =
+            std::env::temp_dir().join(format!("hauksbee-bi-ipc356-zip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fab.zip");
+        std::fs::write(&path, &bytes).unwrap();
+        let path_norm = from_path(&path).expect("path ZIP uses the same authority");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(path_norm.kind, InputKind::Ipc356Archive);
+        assert_eq!(
+            path_norm.board.components.len(),
+            norm.board.components.len()
+        );
+        assert_eq!(path_norm.board.nets.len(), norm.board.nets.len());
+    }
+
+    #[test]
+    fn fab_zip_with_two_ipc356_netlists_refuses_ambiguity() {
+        let bytes = zip_of(&[("fab/a.d356", IPC356), ("fab/b.D356", IPC356)]);
+        let error = from_bytes("ambiguous.zip", &bytes).expect_err("must not choose by ZIP order");
+        let message = error.to_string();
+        assert!(message.contains("more than one IPC-D-356"), "{message}");
+        assert!(
+            message.contains("a.d356") && message.contains("b.D356"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_d356_named_zip_directory_is_not_a_netlist() {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        writer
+            .add_directory("fab/not-a-file.d356/", options)
+            .unwrap();
+        writer.start_file("fab/board-F_Cu.gbr", options).unwrap();
+        writer
+            .write_all(b"%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,1.0*%\nD10*\nX0Y0D03*\nM02*\n")
+            .unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let norm = from_bytes("fab.zip", &bytes).expect("directory entry is ignored");
+        assert_eq!(norm.kind, InputKind::Gerber);
     }
 
     #[test]
@@ -1478,12 +1642,16 @@ fn main {
         // input; naming an ODB++ job "a gerber archive" states something false
         // about where its connectivity came from.
         assert_eq!(input_kind_phrase(InputKind::Gerber), "a gerber archive");
+        assert_eq!(
+            input_kind_phrase(InputKind::Ipc356Archive),
+            "a fab archive carrying an IPC-D-356 netlist"
+        );
         assert_eq!(input_kind_phrase(InputKind::Odb), "an ODB++ job");
         assert_eq!(
             input_kind_phrase(InputKind::Ipc2581),
             "an IPC-2581 document"
         );
-        for kind in [InputKind::Odb, InputKind::Ipc2581] {
+        for kind in [InputKind::Ipc356Archive, InputKind::Odb, InputKind::Ipc2581] {
             assert!(
                 !input_kind_phrase(kind).contains("gerber"),
                 "{kind:?} must not be described as a gerber input"
