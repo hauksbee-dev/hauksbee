@@ -87,8 +87,13 @@ to get wrong.
 
 ```bash
 hauksbee run --example blinky --check --plain   # every static check, one plain-language verdict per check
-hauksbee-ci run --example blinky                # the same board as a CI spec: 4 assertions, GREEN or RED
+hauksbee-ci run --example blinky                # the same board as a CI spec: GREEN or RED
 ```
+
+The default AVR-capable binary runs four firmware/rail/timing assertions on
+Blinky. The Windows/permissive binary cannot honestly run AVR firmware, so the
+same zero-file command runs one static `no_faults` assertion on a bundled
+passive divider and labels the embedded spec accordingly.
 
 Both answer "is this board OK?" in a few lines. The second is the shape a
 pipeline gates on, so it is the better first run if CI is why you are here. Ask

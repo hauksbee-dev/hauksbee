@@ -142,6 +142,7 @@ test('a report-only restored session does not offer model saves it cannot re-ana
     sessionName: 'saved bench',
     boardName: 'blinky.kicad_pcb',
     firmwareName: null,
+    schematicName: null,
   }
   const html = renderToStaticMarkup(<BoardView
     session={restored}

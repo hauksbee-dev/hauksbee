@@ -1,9 +1,16 @@
 import { expect, test } from 'bun:test'
-import { checksStorageKey } from '../src/components/ChecksView'
-import { canReanalyzeSavedSession } from '../src/hooks/useSessions'
-import { sessionIdFor } from '../src/lib/session-store'
-import { isModelCheckCurrent } from '../src/components/WritePart'
 import type { WebReport } from '../src/types/report'
+
+Object.assign(globalThis, {
+  __APP_VERSION__: '0.1.0',
+  __RELEASE_COMMIT__: '0'.repeat(40),
+  __RELEASE_TAG__: 'v0.1.0',
+})
+
+const { checksStorageKey } = await import('../src/components/ChecksView')
+const { boardBytesMatchExpected, canReanalyzeSavedSession, expectedBoardSha256 } = await import('../src/hooks/useSessions')
+const { sessionIdFor } = await import('../src/lib/session-store')
+const { isModelCheckCurrent } = await import('../src/components/WritePart')
 
 function report(hash?: string): WebReport {
   return {
@@ -35,8 +42,24 @@ test('legacy reports without inventory keep the old stable identity', () => {
 })
 
 test('a firmware-backed saved report never masquerades as a fresh board-only run', () => {
-  expect(canReanalyzeSavedSession({ firmwareName: 'boot.hex' })).toBe(false)
-  expect(canReanalyzeSavedSession({ firmwareName: null })).toBe(true)
+  expect(canReanalyzeSavedSession({ firmwareName: 'boot.hex', schematicName: null })).toBe(false)
+  expect(canReanalyzeSavedSession({ firmwareName: null, schematicName: 'board.kicad_sch' })).toBe(false)
+  expect(canReanalyzeSavedSession({ firmwareName: null, schematicName: null })).toBe(true)
+})
+
+test('a saved session authenticates re-fetched board bytes with the layout hash', () => {
+  expect(expectedBoardSha256(report('A'.repeat(64)), 'board.kicad_pcb')).toBe('a'.repeat(64))
+  expect(expectedBoardSha256(report(), 'board.kicad_pcb')).toBeNull()
+})
+
+test('same-name replacement bytes cannot masquerade as the saved board revision', async () => {
+  const original = new TextEncoder().encode('(kicad_pcb (version 1))')
+  const replacement = new TextEncoder().encode('(kicad_pcb (version 2))')
+  const expected = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', original)))
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('')
+  expect(await boardBytesMatchExpected(original, expected)).toBe(true)
+  expect(await boardBytesMatchExpected(replacement, expected)).toBe(false)
 })
 
 test('model validation can only enable save for the exact checked text and format', () => {
