@@ -1,0 +1,10 @@
+# Permissive-build companion to the full AVR blinky example. This is embedded
+# under the same `--example blinky` name only when the binary was compiled
+# without simavr. It proves the board's static fault gate; it does not claim to
+# boot firmware or observe UART/GPIO timing.
+
+name = "passive divider static sanity (permissive build)"
+board = "boards/tolerance_divider.kicad_pcb"
+
+[[assert]]
+kind = "no_faults"

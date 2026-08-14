@@ -58,7 +58,10 @@ async function api(req: Request, url: URL): Promise<Response | null> {
     if (uploaded) liveBoards.set(uploaded.name, uploaded.text)
     const which = name?.includes('open_active_ic') ? 'analyze-openparts.json' : 'analyze-watchy.json'
     const captured = await file(join(FIXTURES, which)).json() as Record<string, unknown>
-    return json(withBoardIdentity(captured, name))
+    const layoutSha256 = uploaded
+      ? new Bun.CryptoHasher('sha256').update(uploaded.text).digest('hex')
+      : null
+    return json(withBoardIdentity(captured, name, layoutSha256))
   }
   if (p === '/api/check' && method === 'POST') return fixture('check-run.json')
   if (p === '/api/deps' && method === 'GET') return fixture('deps.json')

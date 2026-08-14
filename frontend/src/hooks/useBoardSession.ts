@@ -47,6 +47,8 @@ export interface RestoredFrom {
   boardName: string
   /** The firmware that was staged at the time, by name. */
   firmwareName: string | null
+  /** The companion schematic/project that was staged at the time, by name. */
+  schematicName: string | null
   /** The saved session's own name. */
   sessionName: string
 }
@@ -447,6 +449,7 @@ export function useBoardSession(opts: {
     setBoardFile(null)
     setBusy(null)
     setFirmwareFile(null)
+    setSchematicFile(null)
     setBoardUrl(prev => {
       if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
       return null
@@ -456,6 +459,7 @@ export function useBoardSession(opts: {
     setRestoredFrom({
       boardName: from.boardName,
       firmwareName: from.firmwareName,
+      schematicName: from.schematicName,
       sessionName: from.sessionName,
     })
   }, [clearRunState])

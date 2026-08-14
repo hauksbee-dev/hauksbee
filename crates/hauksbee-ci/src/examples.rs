@@ -20,7 +20,15 @@ struct Example {
     files: &'static [(&'static str, &'static [u8])],
 }
 
+#[cfg(feature = "avr")]
 const BLINKY_SPEC: &str = include_str!("../examples/blinky.toml");
+
+// Windows and explicitly permissive builds do not link GPL simavr. Keep the
+// same zero-file first journey useful there without pretending firmware ran:
+// the embedded name resolves to an honest static CI assertion on a passive
+// divider. Full/default builds retain the four-assertion AVR co-sim example.
+#[cfg(not(feature = "avr"))]
+const BLINKY_SPEC: &str = include_str!("../examples/blinky-permissive.toml");
 
 const EXAMPLES: &[Example] = &[Example {
     name: "blinky",
@@ -33,6 +41,10 @@ const EXAMPLES: &[Example] = &[Example {
         (
             "demo.hex",
             include_bytes!("../../../testdata/firmware/demo/demo.hex"),
+        ),
+        (
+            "boards/tolerance_divider.kicad_pcb",
+            include_bytes!("../examples/boards/tolerance_divider.kicad_pcb"),
         ),
     ],
 }];
@@ -100,9 +112,18 @@ mod tests {
                 }
             }
         }
-        // The rewrite actually fired (the embedded source uses a
-        // checkout-relative firmware path).
-        assert!(spec.contains("firmware = \"demo.hex\""), "{spec}");
+        #[cfg(feature = "avr")]
+        {
+            // The rewrite actually fired (the embedded source uses a
+            // checkout-relative firmware path).
+            assert!(spec.contains("firmware = \"demo.hex\""), "{spec}");
+            assert_eq!(spec.matches("[[assert]]").count(), 4, "{spec}");
+        }
+        #[cfg(not(feature = "avr"))]
+        {
+            assert!(!spec.contains("firmware ="), "{spec}");
+            assert_eq!(spec.matches("[[assert]]").count(), 1, "{spec}");
+        }
     }
 
     #[test]

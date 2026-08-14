@@ -377,18 +377,36 @@ jobs:
             }
           find . -maxdepth 1 -type f -name "$manifest" -delete
           is_draft=false
-          if gh release view "$digest_tag" >/dev/null 2>&1; then
-            # A retry never trusts rebuilt bytes or retargets the version. It
-            # recovers the already-published immutable record and promotes
-            # exactly the digests named there.
-            gh release download "$digest_tag" --pattern "$manifest" --dir .
-            is_draft="$(gh release view "$digest_tag" --json isDraft --jq .isDraft)"
-          else
+          probe="$(mktemp)"
+          trap 'find "$probe" -maxdepth 0 -type f -delete 2>/dev/null || true' EXIT
+          status=0
+          gh api --include "repos/$GH_REPO/releases/tags/$digest_tag" >"$probe" 2>&1 || status=$?
+          http="$(sed -nE '1s#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' "$probe")"
+          if [ "$http" = 200 ]; then
+            is_draft="$(gh api "repos/$GH_REPO/releases/tags/$digest_tag" --jq .draft)"
+            if [ "$is_draft" = true ]; then
+              # A failed create/upload can leave an exact-tag draft with no
+              # manifest at all. Drafts are still mutable: discard the whole
+              # partial record and restage the locally verified digests.
+              gh release delete "$digest_tag" --repo "$GH_REPO" --yes
+            else
+              # Published immutable records are the authority on rerun. Never
+              # retarget them to rebuilt bytes; download and verify exactly the
+              # digests already recorded.
+              gh release download "$digest_tag" --repo "$GH_REPO" --pattern "$manifest" --dir .
+            fi
+          elif [ "$http" != 404 ]; then
+            cat "$probe" >&2
+            echo "could not prove digest release absence (gh exit $status, HTTP ${http:-unknown})" >&2
+            exit 1
+          fi
+          find "$probe" -maxdepth 0 -type f -delete
+          if [ ! -f "$manifest" ]; then
             printf 'source %s\nslim %s@%s\nfull %s@%s\n' \
               "$SOURCE_SHA" "$IMAGE" "$SLIM_DIGEST" "$IMAGE" "$FULL_DIGEST" > "$manifest"
             # A separate prerelease keeps the stable binary release immutable
             # while making verified OCI digests durable and discoverable.
-            gh release create "$digest_tag" "$manifest" \
+            gh release create "$digest_tag" "$manifest" --repo "$GH_REPO" \
               --target "$SOURCE_SHA" \
               --title "Hauksbee ${VERSION} container digests" \
               --notes "Verified slim/full GHCR digests for source commit $SOURCE_SHA." \
@@ -411,10 +429,10 @@ jobs:
             exit 1
           }
           if [ "$is_draft" = true ]; then
-            gh release edit "$digest_tag" --draft=false
+            gh release edit "$digest_tag" --draft=false --repo "$GH_REPO"
           fi
           for attempt in $(seq 1 12); do
-            if gh release verify-asset "$digest_tag" "$manifest"; then break; fi
+            if gh release verify-asset "$digest_tag" "$manifest" --repo "$GH_REPO"; then break; fi
             [ "$attempt" -lt 12 ] || {
               echo "GitHub did not attest immutable digest manifest" >&2
               exit 1

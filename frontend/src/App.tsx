@@ -240,6 +240,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   const sessions = useSessions({
     report,
     firmwareName: session.firmwareFile?.name ?? session.restoredFrom?.firmwareName ?? null,
+    schematicName: session.schematicFile?.name ?? session.restoredFrom?.schematicName ?? null,
     analyzedAt: session.analyzedAt,
     engineVersion,
     spec,
@@ -252,6 +253,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
         analyzedAt: saved.analyzedAt,
         boardName: saved.board.fileName,
         firmwareName: saved.firmwareName,
+        schematicName: saved.schematicName ?? null,
         sessionName: saved.name,
       })
     },

@@ -27,7 +27,6 @@
 // Test code is exempt: an unwrap in a test is an assertion.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -699,6 +698,16 @@ fn validate_model_db(db: &hauksbee_models::schema::DbFile) -> Result<Vec<String>
                 )
             })?;
         }
+        if !entry.behavioral.is_empty() {
+            let errors = hauksbee_models::behavioral::validate_behavioral(&entry.behavioral);
+            if !errors.is_empty() {
+                return Err(format!(
+                    "entry '{}' [models.behavioral]: {}",
+                    entry.id,
+                    errors.join("; ")
+                ));
+            }
+        }
         summaries.push(format!(
             "{} is a {:?}{}",
             entry.id,
@@ -755,20 +764,23 @@ fn save_to_dir(
 ) -> Result<String, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     let path = dir.join(file_name_for(part, !sensor));
-    let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+    // Write and fsync a private file in the destination directory, then publish
+    // it with a no-clobber atomic persist. Opening the final path first exposes
+    // a partially-written TOML document to a concurrent model-library scan.
+    let mut draft = tempfile::NamedTempFile::new_in(dir)
+        .map_err(|e| format!("could not create a draft in {}: {e}", dir.display()))?;
+    if let Err(e) = draft
+        .write_all(toml_text.as_bytes())
+        .and_then(|()| draft.as_file().sync_all())
+    {
+        return Err(format!("could not write {}: {e}", path.display()));
+    }
+    match draft.persist_noclobber(&path) {
+        Ok(_) => {}
+        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(existing_model_error(&path));
         }
-        Err(e) => return Err(format!("could not create {}: {e}", path.display())),
-    };
-    if let Err(e) = file
-        .write_all(toml_text.as_bytes())
-        .and_then(|()| file.sync_all())
-    {
-        drop(file);
-        let _ = std::fs::remove_file(&path);
-        return Err(format!("could not write {}: {e}", path.display()));
+        Err(e) => return Err(format!("could not publish {}: {}", path.display(), e.error)),
     }
 
     serde_json::to_string(&serde_json::json!({
