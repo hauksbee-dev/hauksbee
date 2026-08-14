@@ -279,6 +279,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         development_only = {
             "docs/dev-plans/launch-checklist.md",
             "docs/dev-plans/launch-gtm-strategy.md",
+            "docs/dev-plans/linux-clean-room-report-2026-08-14.md",
             "docs/dev-plans/public-release-cleanup-plan.md",
             "docs/dev-plans/tasks.md",
             "frontend/capture/cards.ts",
@@ -1043,8 +1044,13 @@ class PrivateReleasePolicyTests(unittest.TestCase):
 
     def test_b3_names_the_real_qc_path_and_manual_failure_contract(self) -> None:
         tasks = (ROOT / "docs/dev-plans/tasks.md").read_text()
-        start = tasks.index("- [~] B3 ")
-        end = tasks.index("\n- [~] B4 ", start)
+        start_match = re.search(r"(?m)^- \[[ x~]\] B3 ", tasks)
+        end_match = re.search(r"(?m)^- \[[ x~]\] B4 ", tasks)
+        self.assertIsNotNone(start_match)
+        self.assertIsNotNone(end_match)
+        assert start_match is not None and end_match is not None
+        start = start_match.start()
+        end = end_match.start()
         b3 = tasks[start:end]
         self.assertIn("qc/scenarios/", b3)
         self.assertIn("qc/results/<timestamp>/report.md", b3)
