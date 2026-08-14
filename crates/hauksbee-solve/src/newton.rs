@@ -210,7 +210,7 @@ impl Workspace {
         self.bypass.as_ref().map_or((0, 0), |b| b.counters())
     }
 
-    /// Whether the most recent [`newton_solve`] committed a hysteretic
+    /// Whether the most recent `newton_solve` committed a hysteretic
     /// switch-latch flip (see the `latch_flipped` field).
     pub fn latch_flipped(&self) -> bool {
         self.latch_flipped
