@@ -1038,12 +1038,11 @@ with a link to the section of this document covering the assertion kind that
 failed, so the report points at its own documentation rather than making you
 search for it.
 
-What `github-action` writes is deliberately minimal: it runs on every push and
-pull request and takes the auto-detect path, which is the right default for a repo
-that has one spec or one board. The copy-it-yourself workflow below is the fuller
-one, with `paths:` filters so an unrelated commit does not spend a runner, and
-with the options spelled out. Start with the generated file, move to the example
-when you want the filters.
+What `github-action` writes is deliberately small but production-safe: it takes
+the auto-detect path for a repo with one spec or one board, filters out changes
+unrelated to hardware/firmware/models, and cancels a superseded run on the same
+branch. The copy-it-yourself workflow below spells out the optional inputs when
+you need a matrix or an explicit spec.
 
 - **Pre-commit (schematic or layout)**: the `repos:` entry lives in
   `integrations/pre-commit/.pre-commit-config.yaml` if you would rather paste it
@@ -1054,9 +1053,11 @@ when you want the filters.
   `spec:` or `specs:` input naming one or more hauksbee-ci TOML files, globs
   included, merged into one JUnit report) and `mode: check` (a `board:`
   input, gated with `hauksbee run <board> --check --strict`, no spec needed).
-  With neither given it auto-detects: exactly one spec in `ci/` runs as spec
-  mode, else exactly one board file runs as check mode. It publishes the
-  JUnit results to the Checks tab. See `integrations/github-action/README.md`.
+  With neither given it auto-detects: exactly one Hauksbee spec in `ci/` or the
+  repository root runs as spec mode; with no spec, exactly one supported board
+  file runs as check mode. Ambiguity fails rather than falling through to a
+  different gate. It publishes the JUnit results to the Checks tab. See
+  `integrations/github-action/README.md`.
 - **KiCad (pcbnew)**: install the pcbnew action plugin from
   `integrations/kicad-plugin` to run a spec on the open board and see the
   verdict in a dialog. eeschema has no plugin API yet (see above). Use the

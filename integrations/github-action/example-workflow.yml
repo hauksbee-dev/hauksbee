@@ -8,9 +8,9 @@
 name: hardware-ci
 
 # contents: read checks out the repo; checks: write lets the action publish
-# the JUnit results to the Checks tab. On a pull request from a FORK the token
-# is read-only regardless, so pass publish-report: false there and publish
-# from a separate workflow_run workflow (see the README).
+# the JUnit results to the Checks tab. Fork pull requests do not receive the
+# private Hauksbee read token and therefore fail closed before running; see the
+# README for the trusted same-repository reporting pattern.
 permissions:
   contents: read
   checks: write
@@ -18,14 +18,38 @@ permissions:
 on:
   push:
     paths:
+      - "ci/**"
+      - "*.toml"
+      - ".github/workflows/**"
       - "hardware/**"
       - "firmware/**"
-      - "ci/**.toml"
+      - "models/**"
+      - "**/*.kicad_pcb"
+      - "**/*.kicad_sch"
+      - "**/*.net"
+      - "**/*.brd"
+      - "**/*.PcbDoc"
+      - "**/*.d356"
+      - "**/*.board"
   pull_request:
     paths:
+      - "ci/**"
+      - "*.toml"
+      - ".github/workflows/**"
       - "hardware/**"
       - "firmware/**"
-      - "ci/**.toml"
+      - "models/**"
+      - "**/*.kicad_pcb"
+      - "**/*.kicad_sch"
+      - "**/*.net"
+      - "**/*.brd"
+      - "**/*.PcbDoc"
+      - "**/*.d356"
+      - "**/*.board"
+
+concurrency:
+  group: hauksbee-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   power-up:
@@ -33,6 +57,8 @@ jobs:
     steps:
       # 1. Check out YOUR hardware repo (board + firmware + spec).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # 2. Fetch the private Action code. HAUKSBEE_READ_TOKEN is a fine-grained
       # PAT or GitHub App installation token with Contents: read on the private
@@ -80,6 +106,8 @@ jobs:
           - ci/brownout.toml
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: hauksbee-dev/hauksbee

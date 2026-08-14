@@ -241,7 +241,7 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
         ));
     }
 
-    if !KINDS.iter().any(|(id, _)| *id == job.kind) {
+    if !job.kind.trim().is_empty() && !KINDS.iter().any(|(id, _)| *id == job.kind) {
         return Err(format!(
             "'{}' is not a component kind this extractor knows. Pick one of: {}",
             job.kind,
@@ -266,9 +266,14 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
     // aspirational.
     let out_dir = staging.path().join("draft");
 
+    let requested_kind = if job.kind.trim().is_empty() {
+        "datasheet-identified"
+    } else {
+        job.kind.as_str()
+    };
     progress(&format!(
         "Extracting a {} model for {} from {} ({} KiB).",
-        job.kind,
+        requested_kind,
         job.part,
         job.pdf_name,
         job.pdf.len() / 1024
@@ -557,7 +562,11 @@ fn build_card(job: &DatasheetJob, toml_text: &str, is_model_entry: bool) -> Mode
         ok: true,
         reference: job.reference.clone(),
         part: job.part.clone(),
-        kind: job.kind.clone(),
+        kind: if job.kind.trim().is_empty() {
+            field("kind")
+        } else {
+            job.kind.clone()
+        },
         provenance: PROVENANCE,
         model_id,
         description: field("description"),
@@ -682,6 +691,13 @@ pub fn check(toml_text: &str) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join("; "));
     }
+    if entry.r#match.is_empty() {
+        return Err(
+            "entry has no match rules (lib_id / value_re / footprint_re / mpn_re all absent); \
+             it cannot claim a board component"
+                .to_string(),
+        );
+    }
     // Same reason save does it: a model that lints clean and fails to compile
     // breaks at bind time, a long way from the person who wrote it.
     if !entry.logic.is_empty() {
@@ -724,6 +740,13 @@ pub fn save(part: &str, kind: &str, toml_text: &str) -> Result<String, String> {
                     .collect::<Vec<_>>()
                     .join("; ")
             ));
+        }
+        if entry.r#match.is_empty() {
+            return Err(
+                "the model has no match rules (lib_id / value_re / footprint_re / mpn_re all \
+                 absent), so it cannot claim a board component and was not saved"
+                    .to_string(),
+            );
         }
         // The logic block is compiled through the SAME path binding uses, for
         // the reason `hauksbee models add` does it: a model that lints clean but
@@ -826,6 +849,14 @@ max_current_a = 0.5 # Source: absolute maximum ratings
             !card.values.iter().any(|v| v.key == "notes"),
             "notes is not a value row"
         );
+    }
+
+    #[test]
+    fn an_identified_kind_is_read_back_from_the_draft() {
+        let mut identified = job();
+        identified.kind.clear();
+        let card = build_card(&identified, DRAFT, true);
+        assert_eq!(card.kind, "vreg");
     }
 
     /// An assumed value that reads like a measured one is the failure this whole

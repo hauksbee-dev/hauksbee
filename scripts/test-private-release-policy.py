@@ -12,6 +12,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import textwrap
@@ -20,6 +21,9 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from qc import runner as qc_runner
+
 LAUNCHER = ROOT / "scripts" / "make-public.sh"
 PREFLIGHT = ROOT / "scripts" / "preflight-private-release.sh"
 SURFACE_MANIFEST = ROOT / "scripts" / "private-release-surfaces.json"
@@ -30,6 +34,56 @@ REGISTRY_USER = ROOT / "integrations" / "github-action" / "resolve-registry-user
 
 
 class PrivateReleasePolicyTests(unittest.TestCase):
+    def test_retained_qc_report_never_leaks_a_local_binary_path(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            versions = {"hauksbee": "hauksbee test", "hauksbee-ci": "hauksbee-ci test"}
+            in_repo = qc_runner.write_report([], tmp / "in-repo", ROOT / "target/release", versions)
+            in_repo_text = in_repo.read_text()
+            self.assertIn("Binaries: `<REPO>/target/release`", in_repo_text)
+            self.assertNotIn(str(ROOT), in_repo_text)
+
+            external = qc_runner.write_report([], tmp / "external", tmp / "private/bin", versions)
+            external_text = external.read_text()
+            self.assertIn("Binaries: `<EXTERNAL-BIN-DIR>`", external_text)
+            self.assertNotIn(str(tmp), external_text)
+
+    def test_source_installer_never_succeeds_after_a_failed_web_build(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            fake_bin = tmp / "bin"
+            fake_bin.mkdir()
+            cargo_ran = tmp / "cargo-ran"
+
+            def executable(name: str, body: str) -> Path:
+                path = fake_bin / name
+                path.write_text("#!/bin/sh\n" + body)
+                path.chmod(0o755)
+                return path
+
+            executable("clang", "exit 0\n")
+            executable("bun", "exit 23\n")
+            cargo = executable("cargo", f": > {cargo_ran!s}\nexit 0\n")
+            simavr = tmp / "simavr" / "lib"
+            simavr.mkdir(parents=True)
+            (simavr / "libsimavr.a").write_bytes(b"contract fixture")
+
+            result = subprocess.run(
+                [str(ROOT / "scripts" / "install.sh"), "--prefix", str(tmp / "prefix")],
+                env={
+                    **os.environ,
+                    "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                    "CARGO": str(cargo),
+                    "SIMAVR_LIB_DIR": str(simavr),
+                    "NO_COLOR": "1",
+                },
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Frontend build via bun failed", result.stderr)
+            self.assertFalse(cargo_ran.exists(), "Cargo/install must not run after web failure")
+
     def test_build_provenance_never_borrows_an_enclosing_consumer_commit(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
@@ -775,8 +829,15 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertNotIn("path: .hauksbee-prebuilt", action)
         self.assertIn('cached_sha256', action)
         self.assertIn('actual_asset_sha256', action)
-        self.assertIn('dl="$RUNNER_TEMP/hauksbee-prebuilt-$platform"', action)
+        self.assertIn(
+            'dl="$(mktemp -d "$RUNNER_TEMP/hauksbee-prebuilt-$platform.XXXXXX")"',
+            action,
+        )
         self.assertLess(action.index('actual_asset_sha256='), action.index('tar -xzf "$tarball"'))
+        self.assertLess(
+            action.index('simulator-provenance.py" archive "$tarball"'),
+            action.index('tar -xzf "$tarball"'),
+        )
         self.assertNotIn(".hauksbee-provenance", action)
 
     def test_registry_username_supports_pat_and_github_app_tokens(self) -> None:
@@ -825,12 +886,13 @@ class PrivateReleasePolicyTests(unittest.TestCase):
 
         private_checkout_sources = {
             "integrations/github-action/action.yml": 1,
-            "integrations/github-action/README.md": 1,
-            "integrations/github-action/example-workflow.yml": 2,
+            "integrations/github-action/README.md": 2,
+            "integrations/github-action/example-workflow.yml": 4,
             "docs/ci/DOCKER.md": 1,
-            # One generated line plus the unit assertion that pins it.
-            "crates/hauksbee-ci/src/integrate.rs": 2,
-            "frontend/src/lib/ci-workflow.ts": 1,
+            # Both generated checkouts erase credentials; the unit assertion
+            # names the setting twice while checking the exact count.
+            "crates/hauksbee-ci/src/integrate.rs": 4,
+            "frontend/src/lib/ci-workflow.ts": 2,
         }
         for relative, expected in private_checkout_sources.items():
             text = (ROOT / relative).read_text()
@@ -1395,8 +1457,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         )
         for gate in (
             "cargo fmt --all --check",
-            "cargo clippy --workspace --all-targets -- -D warnings",
-            "cargo test --workspace",
+            "cargo clippy --locked --workspace --all-targets -- -D warnings",
+            "cargo test --locked --workspace",
             "python3 scripts/test-private-release-policy.py",
             "bun run test:unit",
             "bun run test:e2e",

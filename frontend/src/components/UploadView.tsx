@@ -6,7 +6,6 @@ import { relTime } from '../lib/rel-time'
 import { hasDefaultName } from '../lib/session-store'
 import { FirmwareJack } from './FirmwareJack'
 import { SchematicJack } from './SchematicJack'
-import { BOARD_FORMATS, acceptedVendors } from '../lib/board-formats'
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
 import { motion, useReducedMotion } from 'motion/react'
 import { CELL, INSTANT } from '../motion/tokens'
@@ -218,7 +217,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume }: {
               htmlFor="board-file"
               role="button"
               tabIndex={0}
-              aria-label="Choose a board file to analyze"
+              aria-label="Choose a board file to check"
               onKeyDown={activateOnEnterSpace('board-file')}
               {...drop.bind}
               className="drop-card block cursor-pointer px-8 py-11 text-center"
@@ -258,51 +257,22 @@ export function UploadView({ session, onOpenLive, sessions, onResume }: {
               >
                 {dragReject
                   ? 'That is not a file'
-                  : dragOver ? 'Drop to analyze' : 'Drop a board to analyze it'}
+                  : dragOver ? 'Drop to check' : 'Check my board'}
               </div>
               <div className="mt-1 text-[13px]" style={{ color: 'var(--silk-dim)' }}>
                 {dragReject
                   ? 'Drag a board file out of your file manager, or click to choose one.'
-                  : 'or click anywhere in this card to choose a file'}
+                  : 'Drop the board design from your project folder, or click anywhere in this card.'}
               </div>
 
               {/* primary action, visual only; the label handles activation */}
               <span className="hb-btn-primary inline-flex items-center gap-2 mt-6 px-5 py-2.5 rounded-lg text-sm">
-                <BoardTargetIcon size={15} /> Choose a board
+                <BoardTargetIcon size={15} /> Choose my board
               </span>
 
-              {/* Accepted formats, rendered from the one list in
-                  lib/board-formats. Hand-written before, and out of step with
-                  both the picker's `accept` attribute and the rejection card's
-                  version of the same sentence. */}
               <div className="mt-6 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-                {/* On a phone the card is narrower than "KiCad .kicad_pcb
-                    .kicad_sch" is wide, and that entry ran 46px past its edge.
-                    An extension list nobody can read whole is worth less than
-                    the vendor names, which is what `acceptedVendors` is for; the
-                    picker still accepts exactly the same set either way. */}
-                <span className="sm:hidden">{acceptedVendors()}</span>
-                <span className="hidden sm:inline">
-                  {BOARD_FORMATS.filter(f => !f.quiet).map((f, i) => (
-                    <React.Fragment key={f.vendor}>
-                      {/* The separator sits OUTSIDE the nowrap span, and is the
-                          only place a line may break. Inside it, the list became
-                          one unbreakable line that ran off the card's right edge;
-                          with no nowrap at all, a vendor was stranded at the end
-                          of a line with its extension starting the next, which
-                          reads as two entries. */}
-                      {i > 0 && ' · '}
-                      <span style={{ whiteSpace: 'nowrap' }}>
-                        {f.vendor}{' '}
-                        {f.exts.map(e => (
-                          <code key={e} className="hb-inline">{e}</code>
-                        )).reduce<React.ReactNode[]>((acc, el, j) => (
-                          j === 0 ? [el] : [...acc, ' ', el]
-                        ), [])}
-                      </span>
-                    </React.Fragment>
-                  ))}
-                </span>
+                Works with board designs from KiCad, Eagle and Altium, plus
+                manufacturing packages and Board-as-Code.
               </div>
             </motion.label>
           )}
@@ -311,21 +281,6 @@ export function UploadView({ session, onOpenLive, sessions, onResume }: {
               under the busy card so the wait is not a bare spinner on an
               otherwise empty page. */}
           {showSkeleton && <ReportSkeleton />}
-
-          {/* Firmware: a quiet secondary jack below the card */}
-          <FirmwareJack
-            firmware={firmwareFile}
-            placement="intake"
-            onFile={handleFirmware}
-            onClear={clearFirmware}
-            locked={!!busy}
-          />
-          <SchematicJack
-            schematic={schematicFile}
-            onFile={handleSchematic}
-            onClear={clearSchematic}
-            locked={!!busy}
-          />
 
           {/* Something the app did on the user's behalf. Not an error: the drop
               worked, it just went to the other slot. It says which slot and
@@ -387,6 +342,28 @@ export function UploadView({ session, onOpenLive, sessions, onResume }: {
               </div>
             </div>
           )}
+
+          {/* Companions come after the one-click first success. They stay
+              visible (rather than living behind a disclosure) so drag/drop
+              and keyboard automation can stage firmware before the board. */}
+          <div className="mt-5">
+            <div className="mb-1 text-center text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+              Optional: add firmware or a companion schematic before checking
+            </div>
+            <FirmwareJack
+              firmware={firmwareFile}
+              placement="intake"
+              onFile={handleFirmware}
+              onClear={clearFirmware}
+              locked={!!busy}
+            />
+            <SchematicJack
+              schematic={schematicFile}
+              onFile={handleSchematic}
+              onClear={clearSchematic}
+              locked={!!busy}
+            />
+          </div>
 
           {/* Prepare your own project, one line per ECAD, no jargon */}
           {!busy && (

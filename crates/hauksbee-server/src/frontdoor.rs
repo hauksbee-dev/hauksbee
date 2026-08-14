@@ -658,15 +658,9 @@ async fn datasheet_extract_handler(
             "no datasheet in the upload (expected a 'datasheet' part)",
         );
     };
-    let (part, kind) = match (parts.part, parts.kind) {
-        (Some(p), Some(k)) if !p.trim().is_empty() && !k.trim().is_empty() => (p, k),
-        _ => {
-            return sse_once(
-                "error",
-                "the extraction request needs a 'part' (the manufacturer part number) and a \
-                 'kind' (the component kind) part",
-            )
-        }
+    let (part, kind) = match extraction_identity(parts.part, parts.kind) {
+        Ok(identity) => identity,
+        Err(message) => return sse_once("error", message),
     };
     let job = DatasheetJob {
         pdf_name: parts.datasheet_name,
@@ -705,6 +699,37 @@ async fn datasheet_extract_handler(
         };
     });
     sse_response(rx)
+}
+
+fn extraction_identity(
+    part: Option<String>,
+    kind: Option<String>,
+) -> Result<(String, String), &'static str> {
+    let part = part
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("the extraction request needs a 'part' (the manufacturer part number)")?;
+    // An absent or blank kind is intentional: the shared datasheet extractor
+    // identifies it from the first pages. The browser labels the picker
+    // optional, so rejecting its default value here made the primary path fail.
+    Ok((part, kind.unwrap_or_default()))
+}
+
+#[cfg(test)]
+mod datasheet_input_tests {
+    use super::extraction_identity;
+
+    #[test]
+    fn blank_kind_reaches_the_shared_identifier() {
+        assert_eq!(
+            extraction_identity(Some("TP4054".into()), Some(String::new())).unwrap(),
+            ("TP4054".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn missing_part_is_still_refused() {
+        assert!(extraction_identity(None, Some("vreg".into())).is_err());
+    }
 }
 
 /// POST `/api/models/save`: write an accepted model card into the user's model

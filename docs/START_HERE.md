@@ -45,11 +45,13 @@ curl's argv or output. The subshell drops the exported credential after both
 private release-assets API downloads finish. The installer also needs Python 3
 to parse GitHub's authenticated release metadata.
 
-or one command that builds and installs the binaries from a checkout, then
-points it at the bundled Watchy smartwatch board.
+or build from a checkout. The first command installs the pinned AVR dependency;
+the second builds the web front door and all three binaries, then installs them.
+Both fail before installation when a prerequisite is missing.
 
 ```bash
-scripts/install.sh                                      # build hauksbee + hauksbee-ci + hauksbee-mcp onto PATH
+scripts/install-sims.sh --avr                           # once: pinned simavr + its build prerequisites
+scripts/install.sh                                      # web UI + hauksbee + hauksbee-ci + hauksbee-mcp onto PATH
 hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report --plain
 hauksbee serve                                          # web front door (long-running; Ctrl-C to stop)
 ```
@@ -67,7 +69,7 @@ the one-time fallback `xattr -d com.apple.quarantine ~/.local/bin/hauksbee
 the curl line above never carries the quarantine flag at all.
 
 Parts hauksbee does not recognise bind OPEN (simulated as disconnected) and
-are reported, never silently guessed. On the Watchy board, 59 of 67
+are reported, never silently guessed. On the Watchy board, 61 of 67
 non-ignored parts resolve, with the MCU bound, so a few warnings about
 unresolved actives are expected, and the report's bottom line explains
 exactly what they mean for the results.

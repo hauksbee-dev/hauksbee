@@ -1294,7 +1294,7 @@ export function ChecksView({
 
               {/* GitHub CI setup: the two files and where they go. */}
               {ciOpen && (
-                <div className="hb-card view-enter mt-3 px-3 py-3">
+                <div data-testid="ci-setup-panel" className="hb-card view-enter mt-3 px-3 py-3">
                   <div className="text-[13px] mb-2" style={{ color: 'var(--silk-dim)' }}>
                     Two files make this run on every push. Recommended layout: board in{' '}
                     <code className="hb-inline">hardware/</code>, firmware in <code className="hb-inline">firmware/</code>,

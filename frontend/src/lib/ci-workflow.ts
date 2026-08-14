@@ -34,9 +34,12 @@ export function workflowYaml(specStem: string): string {
 name: hardware-ci
 on:
   push:
-    paths: ["hardware/**", "firmware/**", "ci/**.toml"]
+    paths: ["ci/**", "*.toml", ".github/workflows/**", "hardware/**", "firmware/**", "models/**", "**/*.kicad_pcb", "**/*.kicad_sch", "**/*.net", "**/*.brd", "**/*.PcbDoc", "**/*.d356", "**/*.board"]
   pull_request:
-    paths: ["hardware/**", "firmware/**", "ci/**.toml"]
+    paths: ["ci/**", "*.toml", ".github/workflows/**", "hardware/**", "firmware/**", "models/**", "**/*.kicad_pcb", "**/*.kicad_sch", "**/*.net", "**/*.brd", "**/*.PcbDoc", "**/*.d356", "**/*.board"]
+concurrency:
+  group: hauksbee-\${{ github.workflow }}-\${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
   checks: write
@@ -45,6 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Fetch the private hauksbee Action
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

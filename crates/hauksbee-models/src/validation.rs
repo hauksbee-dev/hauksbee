@@ -476,6 +476,13 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
 /// legitimately-declared power/NC pin (an op-amp's `vcc`/`vee`) is fine. An
 /// empty pins map is the footprint/pin-rules inference path and is left alone.
 fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
+    if entry.kind == ComponentKind::Digital && entry.pins.is_empty() {
+        errors.push(ValidationError {
+            id: entry.id.clone(),
+            message: "digital model has no [models.pins]; without declared roles it can bind cleanly while driving and observing nothing".to_string(),
+        });
+        return;
+    }
     if entry.pins.is_empty() {
         return;
     }

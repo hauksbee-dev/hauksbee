@@ -118,10 +118,14 @@ Two downloads exist, and each says so on the tin. The default one includes the A
 **Build from source:**
 
 ```bash
-scripts/install.sh                                   # build hauksbee + hauksbee-ci + hauksbee-mcp, put them on PATH
+scripts/install-sims.sh --avr                        # once: install the pinned AVR dependency
+scripts/install.sh                                   # build the web UI + three binaries, put them on PATH
 ```
 
-Building needs Rust via rustup (the pinned toolchain builds automatically), plus `scripts/install-sims.sh --avr` for the default AVR feature, or `--no-default-features --features renode,qemu` to skip it. Details: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Building needs Rust via rustup (the pinned toolchain builds automatically), a C
+toolchain/libelf for simavr, and bun for the embedded web front door. The
+installer fails before copying binaries if any of those pieces is absent or the
+web build fails. Details: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 **Or run it in Docker** (no local toolchain needed: the slim image carries `hauksbee` + `hauksbee-ci`, the model db and AVR co-sim):
 

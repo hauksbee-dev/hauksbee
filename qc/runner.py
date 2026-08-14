@@ -441,10 +441,15 @@ def write_report(
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.md"
+    try:
+        relative_bin_dir = bin_dir.resolve().relative_to(REPO.resolve())
+        displayed_bin_dir = Path("<REPO>") / relative_bin_dir
+    except ValueError:
+        displayed_bin_dir = Path("<EXTERNAL-BIN-DIR>")
     lines = [
         "# Scenario QC report",
         "",
-        f"Binaries: `{bin_dir}`",
+        f"Binaries: `{displayed_bin_dir}`",
         f"hauksbee version: `{versions['hauksbee']}`",
         f"hauksbee-ci version: `{versions['hauksbee-ci']}`",
         "",

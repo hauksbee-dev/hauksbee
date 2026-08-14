@@ -52,34 +52,48 @@ if [ "$MODE" = "auto" ]; then
   elif [ -n "$BOARD" ]; then
     MODE=check
   else
-    # Nothing named: detect. Exactly one spec in ci/ runs as a spec; failing
-    # that, exactly one board file in the repo runs as a check. Anything else
-    # is ambiguous, so list what was found and stop.
-    ci_specs="$(compgen -G 'ci/*.toml' || true)"
+    # Nothing named: detect. Exactly one spec in ci/ OR the repository root
+    # runs as a spec. This mirrors `hauksbee-ci init`'s default destination and
+    # the pre-commit hook; silently ignoring a root spec changes a user's gate
+    # from their authored assertions to a generic board check.
+    ci_specs="$(
+      for candidate in ci/*.toml ./*.toml; do
+        [ -f "$candidate" ] || continue
+        # A repository root normally contains Cargo.toml, pyproject.toml or
+        # tool configuration. The hook already defines a Hauksbee spec as a
+        # TOML document with a top-level board key; use the same discriminator
+        # rather than treating every root TOML file as hardware CI.
+        if grep -q '^[[:space:]]*board[[:space:]]*=' "$candidate"; then
+          printf '%s\n' "${candidate#./}"
+        fi
+      done | sort -u
+    )"
     boards="$(find . \( -name .git -o -name '.hauksbee*' \) -prune \
-      -o -name '*.kicad_pcb' -print 2>/dev/null | sed 's|^\./||' | sort)"
+      -o \( -name '*.kicad_pcb' -o -name '*.kicad_sch' -o -name '*.net' \
+             -o -name '*.brd' -o -name '*.PcbDoc' -o -name '*.d356' \
+             -o -name '*.board' \) -print 2>/dev/null | sed 's|^\./||' | sort)"
     n_specs="$(printf '%s' "$ci_specs" | grep -c . || true)"
     n_boards="$(printf '%s' "$boards" | grep -c . || true)"
     if [ "$n_specs" -eq 1 ]; then
       MODE=spec
       tokens="$ci_specs"
-    elif [ "$n_boards" -eq 1 ]; then
+    elif [ "$n_specs" -eq 0 ] && [ "$n_boards" -eq 1 ]; then
       MODE=check
       BOARD="$boards"
     else
       {
         echo "hauksbee action: nothing to run, and auto-detection found no single candidate."
         if [ "$n_specs" -gt 0 ]; then
-          echo "  specs in ci/ ($n_specs):"
+          echo "  specs in ci/ or the repo root ($n_specs):"
           printf '%s\n' "$ci_specs" | sed 's/^/    /'
         else
-          echo "  no *.toml specs in ci/"
+          echo "  no Hauksbee *.toml specs (with a top-level board key) in ci/ or the repo root"
         fi
         if [ "$n_boards" -gt 0 ]; then
           echo "  board files ($n_boards):"
           printf '%s\n' "$boards" | sed 's/^/    /'
         else
-          echo "  no *.kicad_pcb board files"
+          echo "  no supported board files"
         fi
         echo "Give the action 'spec:' or 'specs:' (run hauksbee-ci specs)," \
              "or 'board:' (run hauksbee run --check --strict on the board)."
@@ -96,6 +110,10 @@ else
   [ -n "$tokens" ] || die "mode: spec needs 'spec' or 'specs'"
   [ -z "$BOARD" ] || die "mode: spec runs specs, not a board; drop 'board' or use mode: check"
 fi
+
+case "$BOARD" in
+  *$'\n'*|*$'\r'*) die "board path must be a single line" ;;
+esac
 
 # Expand any glob tokens. A pattern that matches nothing is an error, not an
 # empty run: a spec list that silently shrinks to zero would pass vacuously.
@@ -118,12 +136,16 @@ if [ "$MODE" = "spec" ]; then
   done <<<"$tokens"
 fi
 
+delimiter="HAUKSBEE_SPECS_${RANDOM}_${RANDOM}_$$"
+while printf '%s' "$expanded" | grep -Fxq "$delimiter"; do
+  delimiter="HAUKSBEE_SPECS_${RANDOM}_${RANDOM}_$$"
+done
 {
   printf 'mode=%s\n' "$MODE"
   printf 'board=%s\n' "$BOARD"
-  printf 'specs<<HAUKSBEE_SPECS\n'
+  printf 'specs<<%s\n' "$delimiter"
   printf '%s' "$expanded"
-  printf 'HAUKSBEE_SPECS\n'
+  printf '%s\n' "$delimiter"
 } >>"$OUT"
 
 if [ "$MODE" = "check" ]; then

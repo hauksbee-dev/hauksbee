@@ -31,6 +31,7 @@
   )
 
   (setup
+    (min_clearance 0.15)
     (stackup
       (layer "F.SilkS" (type "Top Silk Screen"))
       (layer "F.Paste" (type "Top Solder Paste"))

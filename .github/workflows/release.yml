@@ -104,6 +104,14 @@ jobs:
       source_sha: ${{ steps.source.outputs.source_sha }}
       version: ${{ steps.source.outputs.version }}
     steps:
+      - name: Refuse tag publication from a non-canonical repository
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          [ "$GITHUB_REPOSITORY" = "hauksbee-dev/hauksbee" ] || {
+            echo "release tags may publish only from hauksbee-dev/hauksbee, not $GITHUB_REPOSITORY" >&2
+            exit 1
+          }
       - name: Resolve the requested tag once
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -120,7 +128,10 @@ jobs:
         run: |
           set -euo pipefail
           tag="${INPUT_TAG:-$REF_NAME}"
-          printf '%s' "$tag" | grep -Eq '^v[0-9A-Za-z._-]+$'
+          [[ "$tag" =~ ^v[0-9A-Za-z._-]+$ ]] || {
+            echo "refusing suspicious tag: $tag" >&2
+            exit 1
+          }
           source_sha="$(git rev-parse HEAD)"
           tag_sha="$(git rev-parse "refs/tags/$tag^{commit}")"
           [ "$source_sha" = "$tag_sha" ]
@@ -237,7 +248,7 @@ jobs:
           # Tag push -> strip refs/tags/v ; manual dispatch -> the provided tag.
           raw="${INPUT_TAG:-$REF_NAME}"
           # A release version is an existing v* tag, never a free-form label.
-          if ! printf '%s' "$raw" | grep -Eq '^v[0-9A-Za-z._-]+$'; then
+          if [[ ! "$raw" =~ ^v[0-9A-Za-z._-]+$ ]]; then
             echo "refusing suspicious version string: $raw" >&2
             exit 1
           fi
@@ -647,7 +658,7 @@ jobs:
       - name: Verify native engine, CI, and emulator lifecycle
         shell: powershell
         working-directory: hauksbee
-        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
+        run: cargo test --locked -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
       - name: Require and retain real Windows firmware integrations
         shell: pwsh
         working-directory: hauksbee
@@ -666,7 +677,8 @@ jobs:
         working-directory: hauksbee
         env:
           HAUKSBEE_SOURCE_COMMIT: ${{ steps.ver.outputs.source_sha }}
-        run: cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
+          HAUKSBEE_RELEASE_TAG: v${{ steps.ver.outputs.version }}
+        run: cargo build --locked --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
       - name: Package and verify permissive Windows zip
         shell: pwsh
         working-directory: hauksbee
@@ -817,17 +829,17 @@ jobs:
           export HAUKSBEE_SOURCE_COMMIT="$(git rev-parse HEAD)"
           cargo fmt --all --check
           python3 scripts/test-runtime-dependency-licenses.py
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace
-          cargo test --workspace --features avr
-          cargo check -p hauksbee-engine --no-default-features
-          cargo clippy -p hauksbee-engine --no-default-features --all-targets -- -D warnings
-          cargo test -p hauksbee-engine --no-default-features --all-targets
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+          cargo test --locked --workspace --features avr
+          cargo check --locked -p hauksbee-engine --no-default-features
+          cargo clippy --locked -p hauksbee-engine --no-default-features --all-targets -- -D warnings
+          cargo test --locked -p hauksbee-engine --no-default-features --all-targets
           SIMAVR_INCLUDE_DIR=/nonexistent/simavr-must-not-be-linked \
             SIMAVR_LIB_DIR=/nonexistent/simavr-must-not-be-linked \
-            cargo check --workspace --no-default-features --features renode,qemu
-          RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
-          HAUKSBEE_REQUIRE_NGSPICE=1 cargo test --release -p hauksbee-solve --test speed_gate -- --nocapture
+            cargo check --locked --workspace --no-default-features --features renode,qemu
+          RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
+          HAUKSBEE_REQUIRE_NGSPICE=1 cargo test --locked --release -p hauksbee-solve --test speed_gate -- --nocapture
       - name: Offline policy, evidence, integration, and documentation contracts
         run: |
           python3 scripts/test-private-release-policy.py
@@ -856,7 +868,7 @@ jobs:
         env:
           HAUKSBEE_SOURCE_COMMIT: ${{ steps.quality-source.outputs.source_sha }}
         run: |
-          cargo build --release --bin hauksbee --bin hauksbee-ci
+          cargo build --locked --release --bin hauksbee --bin hauksbee-ci
           expected="${{ steps.quality-source.outputs.source_sha }}"
           for binary in hauksbee hauksbee-ci; do
             "target/release/$binary" --version | grep -F "(git $expected)" >/dev/null
@@ -869,6 +881,7 @@ jobs:
           name: release-quality-qc-${{ steps.quality-source.outputs.source_sha }}
           path: qc/release-results/**/report.md
           if-no-files-found: error
+          retention-days: 90
 
   release:
     name: publish release
@@ -928,6 +941,10 @@ jobs:
           test "$(find dist -maxdepth 1 -name 'hauksbee-ci-pcm-v*.zip.sha256' | wc -l)" -eq 1
           version="${GITHUB_REF_NAME#v}"
           bash hauksbee/scripts/build-release-source.sh "$version" dist "$GITHUB_SHA"
+          qc_report="$(find artifacts -path '*release-quality-qc-*/*/report.md' -type f -print)"
+          test "$(printf '%s\n' "$qc_report" | grep -c .)" -eq 1
+          cp "$qc_report" "dist/release-quality-qc-$GITHUB_SHA.md"
+          (cd dist && sha256sum "release-quality-qc-$GITHUB_SHA.md" > "release-quality-qc-$GITHUB_SHA.md.sha256")
           ls -la dist
 
       - name: Verify every manifest before publishing

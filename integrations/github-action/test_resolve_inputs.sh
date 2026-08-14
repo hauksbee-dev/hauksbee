@@ -30,7 +30,22 @@ run_resolve() {
 
 got_mode() { grep '^mode=' "$out" | head -n1 | cut -d= -f2-; }
 got_board() { grep '^board=' "$out" | head -n1 | cut -d= -f2-; }
-got_specs() { sed -n '/^specs<<HAUKSBEE_SPECS$/,/^HAUKSBEE_SPECS$/p' "$out" | sed '1d;$d'; }
+got_specs() {
+  local delimiter
+  delimiter="$(sed -n 's/^specs<<//p' "$out" | head -n1)"
+  awk -v start="specs<<$delimiter" -v stop="$delimiter" \
+    '$0 == start { inside=1; next } inside && $0 == stop { exit } inside' "$out"
+}
+count_output_key() {
+  local key="$1"
+  awk -v key="$key" '
+    inside && $0 == delimiter { inside=0; next }
+    inside { next }
+    /^.+<<.+$/ { split($0, fields, "<<"); delimiter=fields[2]; inside=1; next }
+    index($0, key "=") == 1 { count++ }
+    END { print count + 0 }
+  ' "$out"
+}
 
 pass() { printf 'ok   %s\n' "$1"; }
 fail() {
@@ -51,19 +66,30 @@ expect_rc() {
 # Fixture repos.
 one_spec="$work/one_spec"
 mkdir -p "$one_spec/ci"
-touch "$one_spec/ci/power-up.toml"
+printf 'board = "../board.kicad_pcb"\n' >"$one_spec/ci/power-up.toml"
+
+root_spec="$work/root_spec"
+mkdir -p "$root_spec"
+printf 'board = "board.kicad_pcb"\n' >"$root_spec/power-up.toml"
+touch "$root_spec/Cargo.toml" "$root_spec/board.kicad_pcb"
 
 one_board="$work/one_board"
 mkdir -p "$one_board/hardware"
 touch "$one_board/hardware/board.kicad_pcb"
 
+board_as_code="$work/board_as_code"
+mkdir -p "$board_as_code/hardware"
+touch "$board_as_code/hardware/blinky.board"
+
 two_specs="$work/two_specs"
 mkdir -p "$two_specs/ci"
-touch "$two_specs/ci/a.toml" "$two_specs/ci/b.toml"
+printf 'board = "../board.kicad_pcb"\n' >"$two_specs/ci/a.toml"
+printf 'board = "../board.kicad_pcb"\n' >"$two_specs/ci/b.toml"
 
 specs_and_board="$work/specs_and_board"
 mkdir -p "$specs_and_board/ci"
-touch "$specs_and_board/ci/a.toml" "$specs_and_board/ci/b.toml"
+printf 'board = "../board.kicad_pcb"\n' >"$specs_and_board/ci/a.toml"
+printf 'board = "../board.kicad_pcb"\n' >"$specs_and_board/ci/b.toml"
 touch "$specs_and_board/board.kicad_pcb"
 
 two_boards="$work/two_boards"
@@ -79,14 +105,23 @@ expect_rc "one spec in ci/ auto-detects" 0
 expect "  ...as mode spec" "spec" "$(got_mode)"
 expect "  ...naming that spec" "ci/power-up.toml" "$(got_specs)"
 
+run_resolve "$root_spec" auto "" "" ""
+expect_rc "one spec in repo root auto-detects before a board" 0
+expect "  ...root spec runs as mode spec" "spec" "$(got_mode)"
+expect "  ...naming the root spec" "power-up.toml" "$(got_specs)"
+
 run_resolve "$one_board" auto "" "" ""
 expect_rc "one board (no ci/ spec) auto-detects" 0
 expect "  ...as mode check" "check" "$(got_mode)"
 expect "  ...naming that board" "hardware/board.kicad_pcb" "$(got_board)"
 
-run_resolve "$specs_and_board" auto "" "" ""
-expect_rc "several ci/ specs fall through to the single board" 0
+run_resolve "$board_as_code" auto "" "" ""
+expect_rc "one Board-as-Code file auto-detects" 0
 expect "  ...as mode check" "check" "$(got_mode)"
+expect "  ...naming that board" "hardware/blinky.board" "$(got_board)"
+
+run_resolve "$specs_and_board" auto "" "" ""
+expect_rc "several specs never silently fall through to a board" 1
 
 run_resolve "$two_specs" auto "" "" ""
 expect_rc "several specs and no board is ambiguous: fail" 1
@@ -102,6 +137,13 @@ run_resolve "$empty" auto "x.toml" "" ""
 expect_rc "an explicit spec needs no detection" 0
 expect "  ...mode spec, passed through" "spec" "$(got_mode)"
 expect "  ...spec passed through verbatim" "x.toml" "$(got_specs)"
+
+run_resolve "$empty" spec $'foo\nHAUKSBEE_SPECS\nmode=check' "" ""
+expect_rc "a multiline spec input cannot inject a GitHub output record" 0
+expect "  ...only the resolver owns the mode output" "1" "$(count_output_key mode)"
+
+run_resolve "$empty" check "" "" $'board.kicad_pcb\nmode=spec'
+expect_rc "a multiline board path is refused" 1
 
 run_resolve "$empty" auto "" "" "b.kicad_pcb"
 expect_rc "an explicit board needs no detection" 0
@@ -144,7 +186,7 @@ expect_rc "an unknown mode: fail" 1
 
 printf '\n'
 if [ "$fails" -eq 0 ]; then
-  echo "all resolve-inputs tests passed"
+echo "all resolve-inputs tests passed"
 else
   echo "$fails failed"
   exit 1

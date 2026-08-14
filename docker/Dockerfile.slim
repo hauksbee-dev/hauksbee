@@ -94,6 +94,7 @@ FROM ${RUST_BASE} AS rust-build
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG SIMAVR_COMMIT
 ARG SOURCE_COMMIT
+ARG VERSION
 RUN printf '%s\n' "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$' \
     || { echo "SOURCE_COMMIT must be the exact 40-hex Hauksbee source revision" >&2; exit 1; }
 
@@ -123,7 +124,8 @@ ENV LIBRARY_PATH=/usr/local/lib \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     BINDGEN_EXTRA_CLANG_ARGS="-I/usr/local/include -I/usr/local/include/simavr" \
     SIMAVR_COMMIT=${SIMAVR_COMMIT} \
-    HAUKSBEE_SOURCE_COMMIT=${SOURCE_COMMIT}
+    HAUKSBEE_SOURCE_COMMIT=${SOURCE_COMMIT} \
+    HAUKSBEE_RELEASE_TAG=v${VERSION}
 
 # Use the toolchain the base image already has, ignoring rust-toolchain.toml.
 # That file lists rust-analyzer so contributors' editors follow the project pin,

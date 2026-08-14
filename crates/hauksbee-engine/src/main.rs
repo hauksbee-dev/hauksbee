@@ -348,6 +348,11 @@ struct ModelsNewArgs {
     /// The board the component sits on (any format `run` accepts).
     #[arg(long, value_name = "BOARD")]
     board: PathBuf,
+    /// Component kind when the reference prefix is ambiguous (for example U3).
+    /// If omitted, only unambiguous R/C/L/D/Q/connector prefixes are guessed;
+    /// an IC scaffold stays deliberately invalid until you choose its behavior.
+    #[arg(long, value_name = "KIND")]
+    kind: Option<String>,
     /// Where to write the scaffold. Default: ./<id>.toml in the current
     /// directory. Refuses to overwrite.
     #[arg(long, value_name = "FILE")]
@@ -1483,10 +1488,11 @@ fn main() -> anyhow::Result<()> {
                     require_intervals: args.require_model_intervals,
                 },
             ),
-            ModelsCommand::New(args) => hauksbee_engine::commands::models::new(
+            ModelsCommand::New(args) => hauksbee_engine::commands::models::new_with_kind(
                 &args.reference,
                 &args.board,
                 args.out.as_deref(),
+                args.kind.as_deref(),
             ),
             ModelsCommand::Extract(args) => hauksbee_engine::commands::models::extract(
                 &args.pdf,

@@ -44,6 +44,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::process::is_esp_fork;
 use super::QemuArch;
@@ -347,6 +348,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 /// top-level `qemu/` directory, so this yields `<root>/qemu/bin/...`. The
 /// system `tar` sniffs the compression (xz today, bz2 historically).
 pub fn unpack_archive(archive: &Path, root: &Path) -> Result<()> {
+    validate_archive_members(archive)?;
     std::fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
     let out = Command::new("tar")
         .arg("xf")
@@ -361,6 +363,60 @@ pub fn unpack_archive(archive: &Path, root: &Path) -> Result<()> {
             archive.display(),
             String::from_utf8_lossy(&out.stderr).trim()
         );
+    }
+    Ok(())
+}
+
+/// Reject traversal and link/device members before the system tar sees them.
+/// The release archive is checksum-verified when upstream publishes a digest,
+/// but a reviewed malformed archive must still not write outside staging.
+fn validate_archive_members(archive: &Path) -> Result<()> {
+    let names = Command::new("tar")
+        .args(["tf"])
+        .arg(archive)
+        .output()
+        .context("listing archive members with tar")?;
+    if !names.status.success() {
+        bail!(
+            "tar could not list {}: {}",
+            archive.display(),
+            String::from_utf8_lossy(&names.stderr).trim()
+        );
+    }
+    for raw in String::from_utf8_lossy(&names.stdout).lines() {
+        let normalized = raw.trim_start_matches("./");
+        let path = Path::new(normalized);
+        if raw.starts_with('/')
+            || raw.starts_with('\\')
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            bail!("unsafe path in {}: {raw}", archive.display());
+        }
+    }
+
+    let verbose = Command::new("tar")
+        .args(["tvf"])
+        .arg(archive)
+        .output()
+        .context("inspecting archive member types with tar")?;
+    if !verbose.status.success() {
+        bail!(
+            "tar could not inspect member types in {}",
+            archive.display()
+        );
+    }
+    for line in String::from_utf8_lossy(&verbose.stdout).lines() {
+        match line.as_bytes().first().copied() {
+            Some(b'-' | b'd') => {}
+            Some(kind) => bail!(
+                "unsafe archive member type '{}' in {} (links and special files are refused)",
+                kind as char,
+                archive.display()
+            ),
+            None => {}
+        }
     }
     Ok(())
 }
@@ -446,6 +502,133 @@ fn tempfile_dir(root: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
+struct InstallFsLock {
+    dir: PathBuf,
+    owner: String,
+}
+
+impl InstallFsLock {
+    fn acquire(parent: &Path) -> Result<Self> {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating install parent {}", parent.display()))?;
+        let dir = parent.join(".hauksbee-qemu-esp.install.lock");
+        let owner = std::process::id().to_string();
+        for _ in 0..2 {
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    if let Err(error) = std::fs::write(dir.join("pid"), &owner) {
+                        let _ = std::fs::remove_dir_all(&dir);
+                        return Err(error).context("writing QEMU install lock owner");
+                    }
+                    return Ok(Self { dir, owner });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let recorded = std::fs::read_to_string(dir.join("pid")).unwrap_or_default();
+                    if recorded.trim().is_empty() {
+                        let age = std::fs::metadata(&dir)
+                            .and_then(|meta| meta.modified())
+                            .ok()
+                            .and_then(|modified| modified.elapsed().ok())
+                            .unwrap_or_default();
+                        if age < std::time::Duration::from_secs(30) {
+                            bail!(
+                                "another Hauksbee process is initializing the Espressif QEMU install lock; wait and retry"
+                            );
+                        }
+                    }
+                    if process_is_alive(recorded.trim()) {
+                        bail!(
+                            "another Hauksbee process ({}) is installing Espressif QEMU; wait for it to finish",
+                            recorded.trim()
+                        );
+                    }
+                    let stale = parent.join(format!(
+                        ".hauksbee-qemu-esp.install.lock.stale-{}",
+                        transaction_nonce()
+                    ));
+                    std::fs::rename(&dir, &stale).context("reclaiming stale QEMU install lock")?;
+                    let _ = std::fs::remove_dir_all(stale);
+                }
+                Err(error) => return Err(error).context("acquiring QEMU install lock"),
+            }
+        }
+        bail!("could not acquire the Espressif QEMU install lock")
+    }
+}
+
+impl Drop for InstallFsLock {
+    fn drop(&mut self) {
+        let recorded = std::fs::read_to_string(self.dir.join("pid")).unwrap_or_default();
+        if recorded.trim() == self.owner {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: &str) -> bool {
+    let Ok(pid) = pid.parse::<i32>() else {
+        return false;
+    };
+    // SAFETY: kill(pid, 0) sends no signal; it is the POSIX existence probe.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn process_is_alive(pid: &str) -> bool {
+    !pid.is_empty()
+}
+
+fn transaction_nonce() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{}-{nanos}", std::process::id())
+}
+
+fn transaction_dirs(parent: &Path, prefix: &str) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(parent)
+        .with_context(|| format!("reading install parent {}", parent.display()))?
+    {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with(prefix) {
+            found.push(entry.path());
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+fn recover_interrupted_install(
+    parent: &Path,
+    root: &Path,
+    progress: &mut dyn FnMut(&str),
+) -> Result<()> {
+    for candidate in transaction_dirs(parent, ".hauksbee-qemu-esp.candidate-")? {
+        std::fs::remove_dir_all(&candidate)
+            .with_context(|| format!("removing stale candidate {}", candidate.display()))?;
+    }
+    let backups = transaction_dirs(parent, ".hauksbee-qemu-esp.backup-")?;
+    if root.exists() {
+        for backup in backups {
+            std::fs::remove_dir_all(&backup)
+                .with_context(|| format!("removing committed backup {}", backup.display()))?;
+        }
+    } else if backups.len() == 1 {
+        progress("recovering the previous QEMU install after an interrupted swap");
+        std::fs::rename(&backups[0], root).context("restoring interrupted QEMU install")?;
+    } else if backups.len() > 1 {
+        bail!(
+            "multiple interrupted QEMU backups exist under {}; refusing to guess",
+            parent.display()
+        );
+    }
+    Ok(())
+}
+
 /// Install the Espressif QEMU fork for `arches` into `~/.hauksbee-qemu-esp/`.
 ///
 /// Skips an arch whose binary discovery already accepts (idempotent). Returns
@@ -477,19 +660,86 @@ pub fn install_esp_qemu(
         return arches.iter().map(|&a| super::find_qemu(a)).collect();
     }
 
-    let plan = plan(&missing, progress)?;
+    // If either requested architecture is missing, rebuild the complete
+    // requested tree in a sibling candidate. Extracting into the live prefix
+    // would let a failed second archive corrupt an otherwise working install.
+    // The two archives merge into one `qemu/` tree. Rebuild both whenever the
+    // tree is incomplete so swapping the candidate cannot discard a sibling
+    // architecture that happened to be installed already.
+    let complete_arches = [QemuArch::Xtensa, QemuArch::Riscv32];
+    let plan = plan(&complete_arches, progress)?;
+    let parent = root
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("install root has no parent: {}", root.display()))?;
+    let _lock = InstallFsLock::acquire(parent)?;
+    recover_interrupted_install(parent, &root, progress)?;
+    let nonce = transaction_nonce();
+    let candidate = parent.join(format!(".hauksbee-qemu-esp.candidate-{nonce}"));
+    let backup = parent.join(format!(".hauksbee-qemu-esp.backup-{nonce}"));
+    std::fs::create_dir_all(&candidate)
+        .with_context(|| format!("creating install candidate {}", candidate.display()))?;
     for planned in &plan.assets {
-        install_one(planned, &root, progress)?;
+        if let Err(error) = install_one(planned, &candidate, progress) {
+            let _ = std::fs::remove_dir_all(&candidate);
+            return Err(error);
+        }
+    }
+    for &arch in &complete_arches {
+        if let Err(error) = verify_installed(arch, &candidate) {
+            let _ = std::fs::remove_dir_all(&candidate);
+            return Err(error);
+        }
+    }
+
+    if root.exists() {
+        if let Err(error) = std::fs::rename(&root, &backup) {
+            let _ = std::fs::remove_dir_all(&candidate);
+            return Err(error).with_context(|| {
+                format!(
+                    "moving existing install {} to {}",
+                    root.display(),
+                    backup.display()
+                )
+            });
+        }
+    }
+    if let Err(error) = std::fs::rename(&candidate, &root) {
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, &root);
+        }
+        let _ = std::fs::remove_dir_all(&candidate);
+        return Err(error).with_context(|| format!("committing install to {}", root.display()));
     }
     // Final acceptance through the discovery path itself, per requested arch.
-    arches
+    let accepted: Result<Vec<PathBuf>> = arches
         .iter()
         .map(|&a| {
             super::find_qemu(a).with_context(|| {
                 format!("{} still not discoverable after install", a.binary_name())
             })
         })
-        .collect()
+        .collect();
+    match accepted {
+        Ok(paths) => {
+            let _ = std::fs::remove_dir_all(&backup);
+            Ok(paths)
+        }
+        Err(error) => {
+            // Acceptance is part of the transaction. Keep the old tree until
+            // the normal discovery path has accepted the committed candidate,
+            // then restore it if that final probe rejects the new tree.
+            let _ = std::fs::remove_dir_all(&root);
+            if backup.exists() {
+                std::fs::rename(&backup, &root).with_context(|| {
+                    format!(
+                        "restoring {} after final QEMU acceptance failed: {error:#}",
+                        root.display()
+                    )
+                })?;
+            }
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]

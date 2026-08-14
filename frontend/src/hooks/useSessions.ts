@@ -60,10 +60,22 @@ async function refetchServerBoard(fileName: string): Promise<File | null> {
     const res = await fetch(`/boards/${encodeURIComponent(fileName)}`)
     if (!res.ok) return null
     const text = await res.text()
-    // The route is KiCad layout text. Anything else (an index.html from the SPA
-    // fallback, most likely) is not a board and must not be fed to the analyzer.
-    if (!/^\s*\(kicad_pcb/.test(text.slice(0, 64))) return null
-    return new File([text], fileName, { type: 'text/plain' })
+    // The route retains every text board format accepted at intake, not just
+    // KiCad PCB. Reject the SPA fallback and unknown extensions, but allow a
+    // live Eagle/IPC/Board-as-Code session to re-run from bytes the server
+    // still has instead of degrading it to report-only.
+    const compiledBoard = /^\s*\(kicad_pcb\b/i.test(text.slice(0, 128))
+    const supportedTextBoard = /\.(kicad_pcb|kicad_sch|net|brd|pcbdoc|d356|board)$/i.test(fileName)
+    const looksLikeHtml = /^\s*(?:<!doctype\s+html|<html\b)/i.test(text.slice(0, 128))
+    if ((!supportedTextBoard && !compiledBoard) || !text.trim() || looksLikeHtml) return null
+    // Board-as-Code (including zipped exports) is retained by the live server
+    // as its compiled KiCad layout. Give those bytes the extension they now
+    // have; feeding compiled text back under `.board` would try to compile the
+    // KiCad S-expression as DSL a second time.
+    const resumedName = compiledBoard && !/\.kicad_pcb$/i.test(fileName)
+      ? `${fileName.replace(/\.[^.]+$/, '')}.compiled.kicad_pcb`
+      : fileName
+    return new File([text], resumedName, { type: 'text/plain' })
   } catch {
     return null
   }

@@ -85,39 +85,37 @@ if [ "$DO_BUILD" -eq 1 ]; then
   # frontend/dist/, which is gitignored (a build artifact), so a fresh `git
   # pull` + install would otherwise keep serving a stale bundle: the classic
   # "I rebuilt but the page is old" trap. Rebuild it here so an install always
-  # ships the current UI. Skipped (with a warning) if no JS toolchain is
-  # present or the JS build fails; `serve` then falls back to any existing
-  # dist/ or the bundled note. A broken frontend toolchain must not take the
-  # whole install down with it.
+  # ships the current UI. `scripts/install.sh` promises the complete
+  # product, including `hauksbee serve`; succeeding with no web front door (or
+  # embedding a stale dist after a failed rebuild) makes the first run fail
+  # after an apparently successful install, so the source installer is
+  # deliberately fail-closed here.
   if have bun; then
     log "Building web front door (frontend/dist via bun)"
-    ( cd "$HAUKSBEE_ROOT/frontend" && bun install --silent && bun run build ) \
-      || warn "Frontend build via bun FAILED; continuing without a fresh web UI."
+    ( cd "$HAUKSBEE_ROOT/frontend" && bun install --frozen-lockfile --silent && bun run build ) \
+      || die "Frontend build via bun failed; no binaries were installed. Fix the frontend build and re-run."
   elif have npm; then
     log "Building web front door (frontend/dist via npm)"
-    ( cd "$HAUKSBEE_ROOT/frontend" && npm install --silent && npm run build ) \
-      || warn "Frontend build via npm FAILED; continuing without a fresh web UI."
+    ( cd "$HAUKSBEE_ROOT/frontend" && npm ci --silent && npm run build ) \
+      || die "Frontend build via npm failed; no binaries were installed. Fix the frontend build and re-run."
   else
-    warn "No bun/npm found; skipping the frontend build."
-    warn "Install bun (https://bun.sh) and re-run to refresh the web UI."
+    die "bun/npm not found, so the web front door cannot be built. Install bun (https://bun.sh) and re-run; no binaries were installed."
   fi
 
   # Embed the web UI into the binary (same mechanism as bundle.sh): rust-embed
   # needs frontend/dist to exist at COMPILE time, so gate on it being present,
   # whether from the build above or an earlier one.
-  EMBED_ARGS=()
-  if [ -d "$HAUKSBEE_ROOT/frontend/dist" ]; then
-    EMBED_ARGS=(--features embed-web)
-    log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release, embed-web)"
-  else
-    warn "frontend/dist is missing, so the binaries are built WITHOUT the web UI:"
-    warn "  \`hauksbee serve\` will have no web front door."
-    warn "  Fix: install bun (https://bun.sh), then re-run scripts/install.sh."
-    log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release)"
-  fi
+  [ -d "$HAUKSBEE_ROOT/frontend/dist" ] \
+    || die "frontend build reported success but frontend/dist is missing; refusing a web-less install."
+  EMBED_ARGS=(--features embed-web)
+  log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release, embed-web)"
   # `${arr[@]+...}` guards empty-array expansion under `set -u` on bash 3.2
   # (the macOS default), where a bare `"${arr[@]}"` on an empty array errors.
-  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp ${EMBED_ARGS[@]+"${EMBED_ARGS[@]}"} )
+  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --locked --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp ${EMBED_ARGS[@]+"${EMBED_ARGS[@]}"} )
+  # A checkout can also contain a stale release-bundle `bin/` directory. The
+  # build above is authoritative for a source install, so re-resolve the Cargo
+  # target after it completes rather than retaining an earlier bundle fallback.
+  SRC="$(hauksbee_target_bin)"
 else
   log "Skipping build (--no-build)"
 fi
@@ -128,16 +126,108 @@ done
 
 mkdir -p "$BINDIR"
 log "Installing into $BINDIR"
+install_lock="$BINDIR/.hauksbee-source-install.lock"
+lock_token="$$-$RANDOM-$RANDOM"
+stage="$BINDIR/.hauksbee-source-install-stage-$$-$RANDOM"
+backup="$BINDIR/.hauksbee-source-install-backup-$$-$RANDOM"
+install_committed=0
+lock_owned=0
+cleanup_install() {
+  if [ "$install_committed" -eq 0 ]; then
+    for rollback_bin in hauksbee hauksbee-ci hauksbee-mcp; do
+      if [ -e "$backup/.installing-$rollback_bin" ]; then
+        find "$BINDIR/$rollback_bin" -maxdepth 0 \( -type f -o -type l \) -delete 2>/dev/null || true
+      fi
+      if [ -e "$backup/$rollback_bin" ] || [ -L "$backup/$rollback_bin" ]; then
+        find "$BINDIR/$rollback_bin" -maxdepth 0 \( -type f -o -type l \) -delete 2>/dev/null || true
+        mv "$backup/$rollback_bin" "$BINDIR/$rollback_bin" 2>/dev/null || true
+      fi
+    done
+  fi
+  find "$stage" "$backup" -depth -delete 2>/dev/null || true
+  if [ "$lock_owned" -eq 1 ] && [ "$(sed -n '2p' "$install_lock" 2>/dev/null || true)" = "$lock_token" ]; then
+    find "$install_lock" -maxdepth 0 -type f -delete 2>/dev/null || true
+  fi
+  lock_owned=0
+}
+trap cleanup_install EXIT INT TERM
+
+recover_source_install() {
+  local stale_lock="$1" old_stage old_backup recovery_bin
+  old_stage="$(sed -n '3p' "$stale_lock" 2>/dev/null || true)"
+  old_backup="$(sed -n '4p' "$stale_lock" 2>/dev/null || true)"
+  case "$old_stage" in "$BINDIR/.hauksbee-source-install-stage-"*) ;; *) die "stale source-install lock has an unsafe stage path; inspect $install_lock" ;; esac
+  case "$old_backup" in "$BINDIR/.hauksbee-source-install-backup-"*) ;; *) die "stale source-install lock has an unsafe backup path; inspect $install_lock" ;; esac
+  if [ ! -e "$old_backup/.committed" ]; then
+    for recovery_bin in hauksbee hauksbee-ci hauksbee-mcp; do
+      if [ -e "$old_backup/.installing-$recovery_bin" ]; then
+        find "$BINDIR/$recovery_bin" -maxdepth 0 \( -type f -o -type l \) -delete 2>/dev/null || true
+      fi
+      if [ -e "$old_backup/$recovery_bin" ] || [ -L "$old_backup/$recovery_bin" ]; then
+        find "$BINDIR/$recovery_bin" -maxdepth 0 \( -type f -o -type l \) -delete 2>/dev/null || true
+        mv "$old_backup/$recovery_bin" "$BINDIR/$recovery_bin"
+      fi
+    done
+  fi
+  find "$old_stage" "$old_backup" -depth -delete 2>/dev/null || true
+  find "$stale_lock" -maxdepth 0 -type f -delete 2>/dev/null || true
+}
+
+for _lock_attempt in 1 2; do
+  lock_candidate="$BINDIR/.hauksbee-source-install.lock.candidate-$lock_token"
+  printf '%s\n%s\n%s\n%s\n' "$$" "$lock_token" "$stage" "$backup" > "$lock_candidate"
+  chmod 600 "$lock_candidate"
+  if ln "$lock_candidate" "$install_lock" 2>/dev/null; then
+    find "$lock_candidate" -maxdepth 0 -type f -delete 2>/dev/null || true
+    lock_owned=1
+    break
+  fi
+  find "$lock_candidate" -maxdepth 0 -type f -delete 2>/dev/null || true
+  lock_owner="$(sed -n '1p' "$install_lock" 2>/dev/null || true)"
+  if ! [[ "$lock_owner" =~ ^[0-9]+$ ]]; then
+    die "source-install lock has no valid owner; inspect $install_lock"
+  fi
+  if kill -0 "$lock_owner" 2>/dev/null || ps -p "$lock_owner" -o pid= 2>/dev/null | grep -Eq '[0-9]'; then
+    die "another source install (pid $lock_owner) is updating $BINDIR; wait and retry"
+  fi
+  stale_lock="$BINDIR/.hauksbee-source-install.lock.stale-$lock_token-$_lock_attempt"
+  if ! mv "$install_lock" "$stale_lock" 2>/dev/null; then
+    continue
+  fi
+  recover_source_install "$stale_lock"
+done
+[ "$lock_owned" -eq 1 ] || die "could not acquire source-install lock $install_lock"
+mkdir "$stage" "$backup"
+
+# Prepare all three destinations before changing any live command.
+for bin in hauksbee hauksbee-ci hauksbee-mcp; do
+  if [ "$USE_SYMLINK" -eq 1 ]; then
+    ln -s "$SRC/$bin" "$stage/$bin"
+  else
+    install -m 0755 "$SRC/$bin" "$stage/$bin"
+  fi
+done
 for bin in hauksbee hauksbee-ci hauksbee-mcp; do
   dest="$BINDIR/$bin"
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    [ -f "$dest" ] || [ -L "$dest" ] || die "$dest is not a file or symlink; refusing to replace it"
+    mv "$dest" "$backup/$bin"
+  fi
+done
+for bin in hauksbee hauksbee-ci hauksbee-mcp; do
+  dest="$BINDIR/$bin"
+  : > "$backup/.installing-$bin"
+  mv "$stage/$bin" "$dest"
   if [ "$USE_SYMLINK" -eq 1 ]; then
-    ln -sf "$SRC/$bin" "$dest"
     ok "$bin -> $SRC/$bin (symlink)"
   else
-    install -m 0755 "$SRC/$bin" "$dest"
     ok "$bin -> $dest"
   fi
 done
+: > "$backup/.committed"
+install_committed=1
+cleanup_install
+trap - EXIT INT TERM
 
 printf '\n'
 case ":${PATH}:" in *":${BINDIR}:"*) PATH_HAS_BINDIR=1 ;; *) PATH_HAS_BINDIR=0 ;; esac

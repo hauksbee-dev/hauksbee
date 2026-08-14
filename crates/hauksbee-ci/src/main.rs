@@ -231,7 +231,7 @@ struct CheckArgs {
 
 #[derive(Parser)]
 struct InitArgs {
-    /// Board file to scaffold a spec from (.kicad_pcb, .kicad_sch, .net, .brd, .d356).
+    /// Board file to scaffold a spec from (.kicad_pcb, .kicad_sch, .net, .brd, .PcbDoc, .d356, .board).
     /// With no argument, looks for exactly one board file in the current
     /// directory and tells you the command to run on it.
     #[arg(value_name = "BOARD")]

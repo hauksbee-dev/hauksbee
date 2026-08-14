@@ -22,7 +22,7 @@ if [ -n "$VERSION" ]; then
     v*) release="$VERSION" ;;
     *)  release="v$VERSION" ;;
   esac
-  printf '%s' "$release" | grep -Eq '^v[0-9A-Za-z._-]+$' || {
+  [[ "$release" =~ ^v[0-9A-Za-z._-]+$ ]] || {
     echo "unsafe hauksbee-version: $VERSION" >&2
     exit 2
   }
@@ -31,8 +31,8 @@ if [ -n "$VERSION" ]; then
 fi
 
 # A ref that is itself a release tag names the release it wants.
-if printf '%s' "$REF" | grep -Eq '^v[0-9]'; then
-  printf '%s' "$REF" | grep -Eq '^v[0-9A-Za-z._-]+$' || {
+if [[ "$REF" =~ ^v[0-9] ]]; then
+  [[ "$REF" =~ ^v[0-9A-Za-z._-]+$ ]] || {
     echo "unsafe Hauksbee release ref: $REF" >&2
     exit 2
   }

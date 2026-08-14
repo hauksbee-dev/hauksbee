@@ -64,6 +64,7 @@ function session(report: WebReport): BoardSession {
     handleSchematic: noop,
     clearFirmware: noop,
     clearSchematic: noop,
+    reanalyzeCurrent: noop,
     runSample: noop,
     resetFlow: noop,
     restoreReport: noop,
@@ -80,6 +81,7 @@ test('the browser renders every structured timing qualification from a frontdoor
   const html = renderToStaticMarkup(<BoardView
     session={session(realFrontdoorReport())}
     onQueueCheck={() => {}}
+    onOpenChecks={() => {}}
     onDriveLive={() => {}}
     simMounted={false}
     engineVersion="0.1.0"
@@ -94,6 +96,8 @@ test('the browser renders every structured timing qualification from a frontdoor
   expect(html).toContain('PWL replay refused on net /CLK')
   expect(html).toContain('Fallback-qualified windows')
   expect(html).toContain('0.012 V')
+  expect(html).toContain('does not prove powered behavior')
+  expect(html).toContain('Set up checks')
 
   const browser = await chromium.launch({ headless: true })
   try {
@@ -128,4 +132,29 @@ test('typed co-sim invalidity and faults cannot retain a green verdict card', ()
     },
   }
   expect(reportVerdictTone(faulted)).toBe('error')
+})
+
+test('a report-only restored session does not offer model saves it cannot re-analyze', async () => {
+  Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
+  const { BoardView } = await import('../src/components/BoardView')
+  const restored = session(realFrontdoorReport())
+  restored.restoredFrom = {
+    sessionName: 'saved bench',
+    boardName: 'blinky.kicad_pcb',
+    firmwareName: null,
+  }
+  const html = renderToStaticMarkup(<BoardView
+    session={restored}
+    onQueueCheck={() => {}}
+    onOpenChecks={() => {}}
+    onDriveLive={() => {}}
+    simMounted={false}
+    engineVersion="0.1.0"
+    spec={null}
+    checks={null}
+    sessionName="saved bench"
+  />)
+  expect(html).toContain('data-testid="restored-notice"')
+  expect(html).not.toContain('data-testid="datasheet-extract"')
+  expect(html).not.toContain('data-testid="write-part-open"')
 })

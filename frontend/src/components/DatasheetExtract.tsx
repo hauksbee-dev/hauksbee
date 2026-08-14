@@ -147,12 +147,13 @@ function ReviewCard({
   saveError,
 }: {
   card: ModelCard
-  onAccept: (toml: string) => void
+  onAccept: (toml: string, saveAs: string) => void
   onReject: () => void
   saving: boolean
   saveError: string | null
 }) {
   const [toml, setToml] = useState(card.toml)
+  const [saveAs, setSaveAs] = useState(card.part)
   const edited = toml !== card.toml
   return (
     <div data-testid="extract-review" className="mt-3">
@@ -197,10 +198,18 @@ function ReviewCard({
       <ValueTable values={card.values} />
 
       <div className="mt-3">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <span className="text-[11px]" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
-            saves as {card.file_name}
-          </span>
+        <div className="flex items-end justify-between flex-wrap gap-2">
+          <label className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+            <span className="block mb-1">Save name</span>
+            <input
+              data-testid="extract-save-as"
+              value={saveAs}
+              onChange={event => setSaveAs(event.target.value)}
+              className="hb-input text-[11px]"
+              style={{ height: 30, minWidth: 190, fontFamily: 'var(--font-mono)' }}
+              aria-label="Model save name"
+            />
+          </label>
           <span className="flex items-center">
             {edited && (
               <span className="text-[11px] mr-1" style={{ color: 'var(--warn-strong)' }}>
@@ -242,8 +251,8 @@ function ReviewCard({
         <button
           type="button"
           data-testid="extract-accept"
-          disabled={saving}
-          onClick={() => onAccept(toml)}
+          disabled={saving || saveAs.trim().length === 0}
+          onClick={() => onAccept(toml, saveAs.trim())}
           className="hb-btn-primary hb-press px-3.5 py-1 text-[12px] max-w-full"
           style={{ minHeight: 30 }}
         >
@@ -267,7 +276,13 @@ function ReviewCard({
   )
 }
 
-export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
+export function DatasheetExtract({
+  openParts,
+  onSaved,
+}: {
+  openParts: WebOpenPart[]
+  onSaved?: () => void
+}) {
   // Only a part with no model at all can be helped by drafting one. A part that
   // bound and is open on the live circuit has a model already; offering an
   // extraction there would send someone's datasheet to solve a wiring problem.
@@ -385,9 +400,9 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
     } catch (e) {
       setFlow({ step: 'failed', message: `the extraction request failed: ${e instanceof Error ? e.message : String(e)}`, log })
     }
-  }, [active, file, part, kind])
+  }, [active, file, part, kind, model])
 
-  const accept = useCallback(async (toml: string) => {
+  const accept = useCallback(async (toml: string, saveAs: string) => {
     if (flow.step !== 'review') return
     setSaving(true)
     setSaveError(null)
@@ -395,17 +410,20 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
       const res = await fetch('/api/models/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ part: flow.card.part, kind: flow.card.kind, toml }),
+        body: JSON.stringify({ part: saveAs, kind: flow.card.kind, toml }),
       })
       const result = (await res.json()) as ModelSaveResult
-      if (result.ok) setFlow({ step: 'saved', card: flow.card, result })
+      if (result.ok) {
+        setFlow({ step: 'saved', card: flow.card, result })
+        onSaved?.()
+      }
       else setSaveError(result.error ?? 'the server refused the save without saying why')
     } catch (e) {
       setSaveError(`the save request failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setSaving(false)
     }
-  }, [flow])
+  }, [flow, onSaved])
 
   if (draftable.length === 0) return null
 
@@ -495,10 +513,11 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                 type="button"
                 data-testid="extract-close"
                 onClick={close}
+                disabled={flow.step === 'running'}
                 className="hb-btn hb-press px-2.5 text-[11px]"
                 style={{ height: 24 }}
               >
-                Close
+                {flow.step === 'running' ? 'Drafting ...' : 'Close'}
               </button>
             </div>
 
@@ -701,6 +720,9 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                 <div className="mt-1.5 text-[12px] flex items-center gap-2" role="status" aria-live="polite" style={{ color: 'var(--copper-hi)' }}>
                   <span className="slot-spin" /> Drafting the model; this usually takes one to three minutes.
                 </div>
+                <div className="mt-1 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                  Keep this panel open. Closing the page cannot cancel work already sent to the model service.
+                </div>
               </div>
             )}
 
@@ -709,7 +731,7 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                 card={flow.card}
                 saving={saving}
                 saveError={saveError}
-                onAccept={toml => void accept(toml)}
+                onAccept={(toml, saveAs) => void accept(toml, saveAs)}
                 onReject={close}
               />
             )}
@@ -729,7 +751,7 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                   <div className="mt-1" style={{ color: 'var(--silk-dim)' }}>{flow.result.note}</div>
                 )}
                 <div className="mt-1" style={{ color: 'var(--silk-faint)' }}>
-                  Re-analyse the board to bind it.
+                  Re-analysing this board now so the new model can bind.
                 </div>
               </div>
             )}

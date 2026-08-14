@@ -40,6 +40,20 @@ fn main() {
         println!("cargo:rerun-if-changed={path}");
     }
     println!("cargo:rerun-if-env-changed=HAUKSBEE_SOURCE_COMMIT");
+    println!("cargo:rerun-if-env-changed=HAUKSBEE_RELEASE_TAG");
+    let release_tag = std::env::var("HAUKSBEE_RELEASE_TAG").ok();
+    if let Some(tag) = release_tag.as_deref() {
+        let version = std::env::var("CARGO_PKG_VERSION")
+            .expect("Cargo must provide CARGO_PKG_VERSION for a release-tagged build");
+        let expected = format!("v{version}");
+        if tag != expected {
+            panic!(
+                "HAUKSBEE_RELEASE_TAG must equal this package version ({})",
+                expected
+            );
+        }
+        println!("cargo:rustc-env=GIT_TAG={tag}");
+    }
     if let Ok(hash) = std::env::var("HAUKSBEE_SOURCE_COMMIT") {
         if hash.len() != 40
             || !hash
@@ -101,6 +115,26 @@ fn main() {
                     .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
             {
                 println!("cargo:rustc-env=GIT_HASH={hash}");
+            }
+        }
+        if release_tag.is_none() {
+            if let Ok(version) = std::env::var("CARGO_PKG_VERSION") {
+                let expected = format!("v{version}");
+                let tag = Command::new("git")
+                    .args([
+                        "-C",
+                        source_root.to_str().unwrap(),
+                        "describe",
+                        "--tags",
+                        "--exact-match",
+                        "HEAD",
+                    ])
+                    .output();
+                if tag.is_ok_and(|out| {
+                    out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == expected
+                }) {
+                    println!("cargo:rustc-env=GIT_TAG={expected}");
+                }
             }
         }
     }

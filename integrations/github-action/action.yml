@@ -19,7 +19,7 @@ inputs:
     required: false
     default: ""
   mode:
-    description: "What to run. 'spec' runs hauksbee-ci on spec/specs; 'check' runs hauksbee run <board> --check --strict; 'auto' (the default) infers from which inputs are set, and when neither is set detects: exactly one *.toml in ci/ runs as a spec, else exactly one *.kicad_pcb in the repo runs as a check, else the action fails listing what it found."
+    description: "What to run. 'spec' runs hauksbee-ci on spec/specs; 'check' runs hauksbee run <board> --check --strict; 'auto' infers from inputs, or detects exactly one Hauksbee spec in ci/ or the repo root, else exactly one supported board file, and fails on ambiguity."
     required: false
     default: "auto"
   junit:
@@ -228,6 +228,7 @@ runs:
           echo "asset manifest did not resolve to exactly one file for $asset_glob" >&2
           exit 1
         }
+        gh release verify-asset "$TAG" "$manifest" --repo "$REPO" >/dev/null
         expected_asset_sha256="$(awk 'NF == 2 && $1 ~ /^[0-9a-f]{64}$/ { print $1 }' "$manifest")"
         [ "$(printf '%s\n' "$expected_asset_sha256" | wc -l | tr -d ' ')" -eq 1 ] \
           && [[ "$expected_asset_sha256" =~ ^[0-9a-f]{64}$ ]] || {
@@ -236,8 +237,8 @@ runs:
         }
         # Private release archives must not enter the consumer repository's
         # Actions cache: fork workflows can restore base-branch caches.
-        archive_cache="$RUNNER_TEMP/hauksbee-private-archives/$platform"
-        mkdir -p "$archive_cache"
+        archive_cache="$(mktemp -d "$RUNNER_TEMP/hauksbee-private-archives-$platform.XXXXXX")"
+        echo "archive-dir=$archive_cache" >> "$GITHUB_OUTPUT"
         tarball="$(find "$archive_cache" -maxdepth 1 -type f -name "$asset_glob" -print -quit)"
         if [ -n "$tarball" ]; then
           cached_sha256="$(if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$tarball"; else sha256sum "$tarball"; fi | awk '{print $1}')"
@@ -263,9 +264,9 @@ runs:
         # The repository release policy is immutable. GitHub signs every asset
         # in that release, binding these exact bytes to the protected tag.
         gh release verify-asset "$TAG" "$tarball" --repo "$REPO" >/dev/null
-        dl="$RUNNER_TEMP/hauksbee-prebuilt-$platform"
-        mkdir -p "$dl"
-        find "$dl" -depth -mindepth 1 -delete
+        python3 "$GITHUB_ACTION_PATH/../../scripts/simulator-provenance.py" archive "$tarball"
+        dl="$(mktemp -d "$RUNNER_TEMP/hauksbee-prebuilt-$platform.XXXXXX")"
+        echo "extract-dir=$dl" >> "$GITHUB_OUTPUT"
         tar -xzf "$tarball" -C "$dl"
         ci_bin="$(find "$dl" -type f -path '*/bin/hauksbee-ci' -perm -111 -print -quit)"
         run_bin="$(find "$dl" -type f -path '*/bin/hauksbee' -perm -111 -print -quit)"
@@ -320,20 +321,35 @@ runs:
       working-directory: .hauksbee
       env:
         MODE: ${{ steps.resolve.outputs.mode }}
+        EXPECTED_SHA: ${{ steps.reltag.outputs.expected-sha }}
       run: |
         set -euo pipefail
         source_sha="$(git rev-parse HEAD)"
         [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked-out source identity" >&2; exit 1; }
+        if [ -n "$EXPECTED_SHA" ] && [ "$source_sha" != "$EXPECTED_SHA" ]; then
+          echo "checked-out source $source_sha does not match selected release commit $EXPECTED_SHA" >&2
+          exit 1
+        fi
         # A stock runner has no system libsimavr. Build the honest GPL-free
         # Renode + QEMU feature set; those backends still fail explicitly at
         # runtime when a spec selects an emulator that is not installed.
         if [ "$MODE" = "check" ]; then
-          HAUKSBEE_SOURCE_COMMIT="$source_sha" cargo build --release -p hauksbee-engine \
+          HAUKSBEE_SOURCE_COMMIT="$source_sha" cargo build --locked --release -p hauksbee-engine \
             --no-default-features --features renode,qemu
         else
-          HAUKSBEE_SOURCE_COMMIT="$source_sha" cargo build --release -p hauksbee-ci \
+          HAUKSBEE_SOURCE_COMMIT="$source_sha" cargo build --locked --release -p hauksbee-ci \
             --no-default-features --features renode,qemu
         fi
+        if [ "$MODE" = "check" ]; then
+          built=target/release/hauksbee
+        else
+          built=target/release/hauksbee-ci
+        fi
+        built_version="$(env -u GH_TOKEN -u GITHUB_TOKEN -u HAUKSBEE_GITHUB_TOKEN "$built" --version)"
+        [[ "$built_version" == *"(git $source_sha)"* ]] || {
+          echo "source-built binary does not attest checked-out commit $source_sha" >&2
+          exit 1
+        }
 
     # 5. Run the check. Spec mode fans every resolved spec into ONE
     #    hauksbee-ci invocation, which writes one merged JUnit file (a
@@ -430,6 +446,10 @@ runs:
           echo "::error::use-image requires an immutable release tag/version, not only a source SHA"
           exit 1
         }
+        [ "$(gh api "repos/$REPO/releases/tags/$release_tag" --jq .immutable)" = true ] || {
+          echo "::error::selected code release $release_tag is not immutable"
+          exit 1
+        }
         digest_tag="container-digests-${release_tag}"
         manifest_dir="$(mktemp -d "$RUNNER_TEMP/hauksbee-image-manifest.XXXXXX")"
         trap 'find "$manifest_dir" -depth -mindepth 1 -delete 2>/dev/null || true; rmdir "$manifest_dir" 2>/dev/null || true' EXIT
@@ -517,3 +537,17 @@ runs:
         report_paths: ${{ inputs.junit }}
         check_name: "hauksbee-ci (hardware)"
         fail_on_failure: false
+
+    - name: Cleanup private prebuilt files
+      if: ${{ always() && inputs.use-image != 'true' }}
+      shell: bash
+      env:
+        ARCHIVE_DIR: ${{ steps.prebuilt.outputs.archive-dir }}
+        EXTRACT_DIR: ${{ steps.prebuilt.outputs.extract-dir }}
+      run: |
+        for dir in "$ARCHIVE_DIR" "$EXTRACT_DIR"; do
+          [ -n "$dir" ] || continue
+          case "$dir" in "$RUNNER_TEMP"/*) ;; *) continue ;; esac
+          find "$dir" -depth -mindepth 1 -delete 2>/dev/null || true
+          rmdir "$dir" 2>/dev/null || true
+        done

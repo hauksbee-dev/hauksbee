@@ -60,7 +60,15 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
         const viewer = new Viewer3D(canvas)
         viewerRef.current = viewer
         if (glbUrl) {
-          await viewer.loadGLB(glbUrl)
+          try {
+            await viewer.loadGLB(glbUrl)
+          } catch (glbError) {
+            if (!board) throw glbError
+            // Release binaries intentionally omit the large demo GLBs. A
+            // missing optional pre-render must not disable 3D when the parsed
+            // board can produce the same honest fallback used for uploads.
+            viewer.buildFromParsedBoard(board)
+          }
         } else if (board) {
           // No exported GLB: build the model from the parsed layout itself,
           // so 3D is available for ANY board the 2D view can draw.

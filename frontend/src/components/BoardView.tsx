@@ -80,10 +80,11 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
 }
 
 export function BoardView({
-  session, onQueueCheck, onDriveLive, simMounted, engineVersion, spec, checks, sessionName,
+  session, onQueueCheck, onOpenChecks, onDriveLive, simMounted, engineVersion, spec, checks, sessionName,
 }: {
   session: BoardSession
   onQueueCheck: (check: { kind: string; net?: string; ref?: string }) => void
+  onOpenChecks: () => void
   onDriveLive: () => void
   simMounted: boolean
   /** The hauksbee that produced the report, for the exported file's provenance. */
@@ -242,6 +243,34 @@ export function BoardView({
         </div>
         </StaggerItem>
 
+        {!restoredFrom && (
+          <div
+            data-testid="static-next-step"
+            className="mt-3 rounded-lg px-4 py-2.5 text-[13px] leading-relaxed"
+            style={{ border: '1px solid var(--hairline)', borderLeft: '4px solid var(--copper)', background: 'var(--surface)', color: 'var(--silk-dim)' }}
+          >
+            <b style={{ color: 'var(--copper-hi)', fontWeight: 600 }}>Next:</b>{' '}
+            turn this report into repeatable pass/fail rules and CI.
+            This static report does not prove powered behavior, brownout, overheating, or
+            firmware timing; add firmware and run those checks before treating them as verified.
+            {boardFile && (
+              <> Terminal scaffold:{' '}
+                <code className="hb-inline break-all">hauksbee-ci init {boardFile.name}</code>.
+              </>
+            )}
+            <div className="mt-2">
+              <button
+                type="button"
+                data-testid="open-checks-next"
+                onClick={onOpenChecks}
+                className="hb-btn-primary hb-press px-3 py-1.5 text-[12px]"
+              >
+                Set up checks
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* A report that came out of storage rather than out of a run. It says
             so for as long as it is on screen, and it says which actions are
             unavailable, because everything that needs the board's bytes (a
@@ -348,8 +377,20 @@ export function BoardView({
         {/* Directly under the line that says a model is missing: the offer to
             draft one. This is the moment the user learns they need it, and the
             only moment they have the part number and the datasheet in mind. */}
-        <DatasheetExtract openParts={r.bind?.open_parts ?? []} />
-        <div className="mt-3"><WritePart /></div>
+        {!restoredFrom && (
+          <>
+            <DatasheetExtract
+              openParts={r.bind?.open_parts ?? []}
+              onSaved={session.reanalyzeCurrent}
+            />
+            <div className="mt-3">
+              <WritePart
+                onSaved={session.reanalyzeCurrent}
+                suggested={r.bind?.open_parts?.find(part => !part.bound)}
+              />
+            </div>
+          </>
+        )}
 
         {/* Top-level honesty notes. The bind-role note restates exactly what
             the amber unresolved-parts line above already says (the JSON carries
@@ -378,7 +419,7 @@ export function BoardView({
             <summary className="cursor-pointer text-sm font-semibold" style={{ color: 'var(--silk)' }}>
               Evidence &amp; limitations
               <span className="ml-2 text-[11px] font-normal tnum" style={{ color: 'var(--silk-dim)' }}>
-                {evidenceSummary.clean} clean · {evidenceSummary.qualified} qualified · {evidenceSummary.undermined} invalid
+                {evidenceSummary.clean} fully supported · {evidenceSummary.qualified} supported with limitations · {evidenceSummary.undermined} invalid
               </span>
             </summary>
             <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>

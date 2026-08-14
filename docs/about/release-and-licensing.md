@@ -208,7 +208,7 @@ has one shape rather than two: the installer always selects `-permissive`, says
 that AVR is disabled before download, and the bundle refuses any binary whose
 `doctor` output does not say the same thing.
 
-The full binary-release asset list for version `V` is 36 files:
+The full binary-release asset list for version `V` is 38 files:
 
 - 4 targets x `hauksbee-V-<suffix>.tar.gz` + `.sha256`
 - 4 targets x `hauksbee-V-<suffix>-permissive.tar.gz` + `.sha256`
@@ -217,6 +217,7 @@ The full binary-release asset list for version `V` is 36 files:
 - 1 platform-neutral KiCad PCM zip + `.sha256`
 - 1 complete Corresponding Source tarball + `.sha256`
 - 5 same-SHA required-integration JSON evidence records + `.sha256`
+- 1 exact-SHA scenario-QC report + `.sha256`
 
 ### 3.1 macOS signing, stated plainly
 
