@@ -119,20 +119,31 @@ pub fn deps_hooks() -> hauksbee_server::frontdoor::ToolHooks {
 /// never a silent fallback to board-only analysis.
 pub fn schematic_analyzer() -> hauksbee_server::frontdoor::SchematicAnalyzer {
     std::sync::Arc::new(|name, contents, firmware, schematic| {
-        let resolved = crate::board_input::from_bytes(name, contents).and_then(|norm| {
-            let board_is_eagle = norm
-                .layout_text
-                .as_deref()
-                .is_some_and(|text| text.contains("<eagle") && text.contains("<board"));
-            crate::schematic_ties::resolve_uploaded(name, &norm.board, schematic, board_is_eagle)
-                .map_err(|error| {
-                    crate::board_input::BoardInputError::Unsupported(error.to_string())
-                })
-        });
-        let ties = match resolved {
+        let norm = match crate::board_input::from_bytes(name, contents) {
+            Ok(norm) => norm,
+            Err(error) => return crate::frontdoor::unreadable_input_json(name, contents, error),
+        };
+        let board_is_eagle = norm
+            .layout_text
+            .as_deref()
+            .is_some_and(|text| text.contains("<eagle") && text.contains("<board"));
+        let ties = match crate::schematic_ties::resolve_uploaded(
+            name,
+            &norm.board,
+            schematic,
+            board_is_eagle,
+        ) {
             Ok(ties) => ties,
             Err(error) => {
-                return serde_json::json!({ "ok": false, "error": error.web_message() }).to_string()
+                // A line number in this error belongs to the companion, not
+                // the board. Localize against the bytes that parser read so
+                // the import panel can never show an unrelated board line.
+                let companion_bytes = schematic.map(|(_, raw)| raw).unwrap_or_default();
+                return crate::frontdoor::unreadable_input_json(
+                    name,
+                    companion_bytes,
+                    crate::board_input::BoardInputError::Schematic(error.to_string()),
+                );
             }
         };
         match firmware {
@@ -479,6 +490,44 @@ mod tests {
                 .is_some_and(|items| items.iter().any(|item| item["role"] == "schematic")),
             "causal uploaded schematic must appear in evidence inventory: {report}"
         );
+    }
+
+    #[test]
+    fn shipped_web_analyzer_keeps_the_localized_import_refusal() {
+        let analyze = schematic_analyzer();
+        let source = b"board version 1\nthis is not valid board code\n";
+        let report: serde_json::Value =
+            serde_json::from_str(&analyze("broken.board", source, None, None))
+                .expect("production web analyzer returns JSON");
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["import_failure"]["stage"], "Board-as-Code compiler");
+        assert_eq!(
+            report["import_failure"]["excerpt"],
+            "line 2: this is not valid board code"
+        );
+        assert!(report["import_failure"]["suggested_fix"]
+            .as_str()
+            .is_some_and(|fix| fix.contains("exact line")));
+    }
+
+    #[test]
+    fn shipped_web_analyzer_names_an_invalid_companion_without_showing_a_board_line() {
+        let analyze = schematic_analyzer();
+        let board =
+            include_bytes!("../../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
+        let report: serde_json::Value = serde_json::from_str(&analyze(
+            "declared.brd",
+            board,
+            None,
+            Some(("declared.sch", b"this is not an Eagle schematic")),
+        ))
+        .expect("production web analyzer returns JSON");
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["import_failure"]["stage"], "schematic reader");
+        assert!(report["import_failure"].get("excerpt").is_none());
+        assert!(report["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("not an Eagle .sch")));
     }
 
     #[test]

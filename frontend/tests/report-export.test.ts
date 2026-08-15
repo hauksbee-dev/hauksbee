@@ -45,6 +45,22 @@ const hostile: WebReport = {
     heads_up: [{ what: 'a note with <tags>' }],
   }],
   components: [{ reference: 'U1<x>', value: 'v', x: 0, y: 0, rot: 0 }],
+  import_diagnostics: {
+    format: 'Gerber <X2>',
+    recovered: 1,
+    partial: 1,
+    unplaced: 1,
+    missing_or_refused: 1,
+    objects: [{
+      id: 'U1<script>', status: 'partial', confidence: 'medium',
+      explanation: 'no <coordinate> supplied', nets: ['/<net>'],
+    }],
+    issues: [{
+      kind: 'split_net', title: 'Split <net>',
+      explanation: 'NET_1 may be <split>',
+      suggested_fix: 'supply <CAD>', net: 'NET_<1>',
+    }],
+  },
   bind: {
     critical_parts_bound: '1/2',
     active_path_unresolved: ['U1<x>'],
@@ -195,6 +211,10 @@ test('it still carries the report it is an export of', () => {
   expect(html).toContain('A verdict with')
   expect(html).toContain('Copper spacing')
   expect(html).toContain('Model binding')
+  expect(html).toContain('Import coverage')
+  expect(html).toContain('Gerber &lt;X2&gt;')
+  expect(html).toContain('Split &lt;net&gt;')
+  expect(html).toContain('not placeable; no coordinate was supplied')
   expect(html).toContain('[[assert]]')
   expect(html).toContain('0.1.0')
   expect(html).toContain('3 parts, 4 nets')

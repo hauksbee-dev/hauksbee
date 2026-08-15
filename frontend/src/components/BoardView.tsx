@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection, WebImportDiagnostics } from '../types/report'
 import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from '../lib/cosim-coverage'
 import { summarizeErrorBudget } from '../lib/error-budget'
 import type { BoardSession } from '../hooks/useBoardSession'
@@ -79,6 +79,131 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
   )
 }
 
+function ImportDiagnosticsPanel({
+  diagnostics, overlay, selectedNet, onToggleOverlay, onLocate, onInspectNet,
+}: {
+  diagnostics: WebImportDiagnostics
+  overlay: boolean
+  selectedNet: string | null
+  onToggleOverlay: () => void
+  onLocate: (x: number, y: number, label: string) => void
+  onInspectNet: (net: string) => void
+}) {
+  const issues = diagnostics.issues ?? []
+  const caveated = diagnostics.partial + diagnostics.missing_or_refused
+  return (
+    <details
+      data-testid="import-diagnostics"
+      open={caveated > 0 || issues.length > 0}
+      className="mt-3 rounded-lg px-4 py-3"
+      style={{
+        border: `1px solid ${caveated > 0 ? 'var(--warn-border)' : 'var(--hairline)'}`,
+        background: 'var(--surface)',
+      }}
+    >
+      <summary className="cursor-pointer text-sm font-semibold" style={{ color: 'var(--silk)' }}>
+        Import coverage
+        <span className="ml-2 text-[11px] font-normal tnum" style={{ color: 'var(--silk-dim)' }}>
+          {diagnostics.recovered} recovered · {diagnostics.partial} partial · {diagnostics.unplaced} unplaced
+          {diagnostics.missing_or_refused > 0 ? ` · ${diagnostics.missing_or_refused} missing/refused limit${diagnostics.missing_or_refused === 1 ? '' : 's'}` : ''}
+        </span>
+      </summary>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
+        <span>
+          Reader: <b style={{ color: 'var(--silk)', fontWeight: 600 }}>{diagnostics.format}</b>.
+          Confidence describes fields actually recovered; it is not a claim about the physical board.
+        </span>
+        <button
+          type="button"
+          data-testid="toggle-import-overlay"
+          className="hb-press rounded-md px-2.5 py-1 text-[11px] font-semibold"
+          style={{
+            border: '1px solid var(--hairline)',
+            background: overlay ? 'var(--copper-tint)' : 'var(--canvas)',
+            color: overlay ? 'var(--copper-hi)' : 'var(--silk-dim)',
+          }}
+          onClick={onToggleOverlay}
+        >
+          {overlay ? 'Hide board overlay' : 'Show recovered / partial on board'}
+        </button>
+      </div>
+
+      {issues.map((issue, index) => {
+        const locatedOnNet = issue.net
+          ? diagnostics.objects.filter(object =>
+              object.x !== undefined && object.y !== undefined && object.nets?.includes(issue.net!),
+            )
+          : []
+        const inspecting = !!issue.net && selectedNet === issue.net
+        return (
+          <div
+            key={`${index}:${issue.kind}:${issue.title}`}
+            data-testid="import-issue"
+            className="mt-2 rounded-md px-3 py-2.5 text-[12px] leading-relaxed"
+            style={{ border: '1px solid var(--warn-border)', background: 'var(--warn-bg)' }}
+          >
+            <div className="font-semibold" style={{ color: 'var(--warn-strong)' }}>{issue.title}</div>
+            <div className="mt-1" style={{ color: 'var(--silk)' }}>{issue.explanation}</div>
+            <div className="mt-1" style={{ color: 'var(--silk-dim)' }}><b>What fixes it:</b> {issue.suggested_fix}</div>
+            {issue.net && (
+              <>
+                <button
+                  type="button"
+                  className="hb-press mt-2 rounded px-2 py-1 text-[11px] font-semibold"
+                  style={{ border: '1px solid var(--hairline)', color: 'var(--copper-hi)', background: 'var(--surface)' }}
+                  onClick={() => onInspectNet(issue.net!)}
+                >
+                  Inspect {displayNet(issue.net)}
+                </button>
+                {inspecting && (
+                  <div data-testid="import-net-inspection" className="mt-2" style={{ color: 'var(--silk-dim)' }}>
+                    {locatedOnNet.length > 0
+                      ? `Highlighted ${locatedOnNet.length} located imported object${locatedOnNet.length === 1 ? '' : 's'} on this net.`
+                      : 'No placeable object was recovered for this net. The reader supplied no coordinate to highlight.'}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )
+      })}
+
+      <div className="mt-3 max-h-64 overflow-y-auto rounded-md" style={{ border: '1px solid var(--hairline)' }}>
+        {diagnostics.objects.map(object => {
+          const located = object.x !== undefined && object.y !== undefined
+          return (
+            <div
+              key={object.id}
+              data-testid="import-object"
+              className="grid gap-2 px-3 py-2 text-[12px] sm:grid-cols-[minmax(5rem,auto)_auto_minmax(0,1fr)_auto]"
+              style={{ borderBottom: '1px solid var(--hairline)', color: 'var(--silk-dim)' }}
+            >
+              <span style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>{object.id}</span>
+              <span style={{ color: object.status === 'recovered' ? 'var(--ok)' : 'var(--warn-strong)' }}>{object.status}</span>
+              <span title={object.explanation}>{object.confidence} confidence · {object.explanation}</span>
+              {located ? (
+                <button
+                  type="button"
+                  className="hb-press text-[11px] font-semibold"
+                  style={{ color: 'var(--copper-hi)', background: 'none', border: 'none' }}
+                  onClick={() => onLocate(object.x!, object.y!, `Imported ${object.id}: ${object.status}`)}
+                >
+                  Show
+                </button>
+              ) : <span title="The source supplied no coordinate, so plotting one would be fabricated.">not placeable</span>}
+            </div>
+          )
+        })}
+      </div>
+      {diagnostics.unplaced > 0 && (
+        <p className="mt-2 text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+          Unplaced objects stay in this list. They are not drawn at guessed coordinates.
+        </p>
+      )}
+    </details>
+  )
+}
+
 export function BoardView({
   session, onQueueCheck, onOpenChecks, onDriveLive, simMounted, engineVersion, spec, checks, sessionName,
 }: {
@@ -116,6 +241,7 @@ export function BoardView({
   // Expand-to-viewport for the map. Per-view and deliberately not persisted:
   // it is a "let me look at this properly" gesture, not a setting.
   const [mapFullscreen, setMapFullscreen] = useState(false)
+  const [importOverlay, setImportOverlay] = useState(false)
   const focusSeq = useRef(0)
   const mapRef = useRef<HTMLDivElement>(null)
   const locate = useCallback((x: number, y: number, label: string) => {
@@ -123,6 +249,19 @@ export function BoardView({
     setFocusPoint({ x, y, label, seq: focusSeq.current })
     mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [])
+  useEffect(() => setImportOverlay(false), [session.runEpoch])
+  const importMarkers = useMemo(() => {
+    if (!importOverlay) return []
+    return (r.import_diagnostics?.objects ?? []).flatMap(object =>
+      object.x !== undefined && object.y !== undefined
+        ? [{ x: object.x, y: object.y, status: object.status, nets: object.nets ?? [] }]
+        : [])
+  }, [importOverlay, r.import_diagnostics])
+  const inspectImportNet = useCallback((net: string) => {
+    setImportOverlay(true)
+    setSelectedNet(net)
+    mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [setSelectedNet])
 
   if (!r.ok) {
     return (
@@ -135,6 +274,23 @@ export function BoardView({
           >
             {r.error ? withoutEngineFormatList(r.error) : 'Could not read the file.'}
           </div>
+          {r.import_failure && (
+            <div
+              data-testid="import-failure"
+              className="mt-3 rounded-lg px-4 py-3 text-[13px] leading-relaxed"
+              style={{ border: '1px solid var(--warn-border)', background: 'var(--warn-bg)', color: 'var(--silk)' }}
+            >
+              <div className="text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--warn-strong)' }}>
+                Import stopped at {r.import_failure.stage}
+              </div>
+              {r.import_failure.excerpt && (
+                <pre className="mt-2 overflow-x-auto rounded px-3 py-2 text-[11px]" style={{ background: 'var(--canvas)', border: '1px solid var(--hairline)' }}>
+                  {r.import_failure.excerpt}
+                </pre>
+              )}
+              <div className="mt-2"><b>Suggested fix:</b> {r.import_failure.suggested_fix}</div>
+            </div>
+          )}
           {/* The dead end must not be dead: offer the retry inline instead of
               sending the user hunting for the header button. */}
           <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -406,6 +562,17 @@ export function BoardView({
           </div>
         ))}
 
+        {r.import_diagnostics && (
+          <ImportDiagnosticsPanel
+            diagnostics={r.import_diagnostics}
+            overlay={importOverlay}
+            selectedNet={selectedNet}
+            onToggleOverlay={() => setImportOverlay(value => !value)}
+            onLocate={locate}
+            onInspectNet={inspectImportNet}
+          />
+        )}
+
         {((r.inventory?.length ?? 0) > 0 || (r.assumptions?.length ?? 0) > 0 || (r.evidence?.length ?? 0) > 0) && (
           <details
             data-testid="evidence-panel"
@@ -501,6 +668,7 @@ export function BoardView({
                 wheelMode="capture-on-focus"
                 partCount={r.num_components}
                 focusPoint={focusPoint}
+                importMarkers={importMarkers}
                 onViewModeChange={setViewerMode}
                 fullscreen={mapFullscreen}
                 onToggleFullscreen={() => setMapFullscreen(v => !v)}
@@ -541,11 +709,16 @@ export function BoardView({
             </div>
           </section>
         ) : r.components?.length > 0 ? (
-          <section className="mt-6">
+          <section className="mt-6" ref={mapRef}>
             <h2 className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: 'var(--silk-faint)' }}>
               Board map (2D)
             </h2>
-            <BoardMap components={r.components} />
+            <BoardMap
+              components={r.components}
+              importDiagnostics={r.import_diagnostics ?? undefined}
+              showImportOverlay={importOverlay}
+              selectedNet={selectedNet}
+            />
           </section>
         ) : null}
 
@@ -921,7 +1094,14 @@ function CosimBlock({ cosim: c, timingRefusals, liveAvailable, onDriveLive, simM
 // Simple 2D footprint dot map, drawn from the report's component positions
 // (board mm), for formats the client-side renderer cannot draw. Sits on the
 // instrument surface and follows the theme via the --map-* tokens.
-function BoardMap({ components }: { components: WebComponent[] }) {
+function BoardMap({
+  components, importDiagnostics, showImportOverlay, selectedNet,
+}: {
+  components: WebComponent[]
+  importDiagnostics?: WebImportDiagnostics
+  showImportOverlay?: boolean
+  selectedNet?: string | null
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -946,11 +1126,21 @@ function BoardMap({ components }: { components: WebComponent[] }) {
       // the BoardViewer path.
       const drawLabels = components.length <= 300
       const dotR = components.length > 1000 ? 1.5 : 3
+      const importStatus = new Map((importDiagnostics?.objects ?? []).map(object => [object.id, object.status]))
+      const selectedObjects = new Set((importDiagnostics?.objects ?? [])
+        .filter(object => selectedNet && object.nets?.includes(selectedNet))
+        .map(object => object.id))
       for (const c of components) {
         const x = pad + (c.x - minX) * scale
         const y = pad + (c.y - minY) * scale
-        ctx.fillStyle = cssToken('--map-dot')
-        ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2); ctx.fill()
+        const status = showImportOverlay ? importStatus.get(c.reference) : undefined
+        ctx.fillStyle = status === 'recovered' ? '#22c55e' : status === 'partial' ? '#f59e0b' : cssToken('--map-dot')
+        ctx.beginPath(); ctx.arc(x, y, status ? dotR + 2 : dotR, 0, Math.PI * 2); ctx.fill()
+        if (selectedObjects.has(c.reference)) {
+          ctx.strokeStyle = cssToken('--copper-hi')
+          ctx.lineWidth = 2
+          ctx.beginPath(); ctx.arc(x, y, dotR + 6, 0, Math.PI * 2); ctx.stroke()
+        }
         if (drawLabels) {
           ctx.fillStyle = cssToken('--map-label'); ctx.font = '10px sans-serif'
           ctx.fillText(c.reference, x + 5, y + 3)
@@ -964,7 +1154,7 @@ function BoardMap({ components }: { components: WebComponent[] }) {
     draw()
     // Canvas pixels do not restyle themselves when the theme flips; redraw.
     return onThemeChange(draw)
-  }, [components])
+  }, [components, importDiagnostics, selectedNet, showImportOverlay])
 
   return (
     <canvas

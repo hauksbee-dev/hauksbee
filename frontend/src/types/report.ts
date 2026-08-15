@@ -113,6 +113,40 @@ export interface WebComponent {
   rot: number
 }
 
+export interface WebImportObject {
+  id: string
+  status: 'recovered' | 'partial'
+  confidence: 'high' | 'medium' | 'low'
+  x?: number
+  y?: number
+  explanation: string
+  nets?: string[]
+}
+
+export interface WebImportIssue {
+  kind: 'split_net' | 'missing' | string
+  title: string
+  explanation: string
+  suggested_fix: string
+  net?: string
+}
+
+export interface WebImportDiagnostics {
+  format: string
+  recovered: number
+  partial: number
+  unplaced: number
+  missing_or_refused: number
+  objects: WebImportObject[]
+  issues?: WebImportIssue[]
+}
+
+export interface WebImportFailure {
+  stage: string
+  excerpt?: string
+  suggested_fix: string
+}
+
 export interface JsonNote {
   kind: string
   message: string
@@ -210,6 +244,8 @@ export interface WebReport {
   total: number
   sections: WebSection[]
   components: WebComponent[]
+  import_diagnostics?: WebImportDiagnostics | null
+  import_failure?: WebImportFailure | null
   bind?: BindSummaryWeb | null
   /** Canonical assumption registry and per-assertion maps from the engine. */
   inventory?: ArtifactProvenance[]
