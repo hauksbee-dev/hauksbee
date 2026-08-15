@@ -257,6 +257,58 @@ function evidenceHtml(report: WebReport): string {
   </section>`
 }
 
+/** Import coverage belongs in the human export as well as the JSON. Missing
+ * objects deliberately have no map coordinate: the export says that plainly
+ * instead of manufacturing a location for them. */
+function importDiagnosticsHtml(report: WebReport): string {
+  const failure = report.import_failure
+  if (failure) {
+    return `<section>
+      <h2>Import stopped at ${esc(failure.stage)}</h2>
+      ${failure.excerpt ? `<pre>${esc(failure.excerpt)}</pre>` : ''}
+      <div class="card" style="border-left-color:var(--warn)">
+        <div class="gloss"><b>Suggested fix:</b> ${esc(failure.suggested_fix)}</div>
+      </div>
+    </section>`
+  }
+
+  const diagnostics = report.import_diagnostics
+  if (!diagnostics) return ''
+  const issues = diagnostics.issues ?? []
+  const issueCards = issues.map(issue => `<div class="card" style="border-left-color:var(--warn)">
+      <span class="tag" style="color:var(--warn-strong)">${esc(issue.title)}</span>
+      <div class="what">${esc(issue.explanation)}</div>
+      <div class="gloss"><b>What fixes it:</b> ${esc(issue.suggested_fix)}</div>
+      ${issue.net ? `<div class="gloss"><b>Named net:</b> <span class="mono">${esc(issue.net)}</span></div>` : ''}
+    </div>`).join('')
+  const objects = diagnostics.objects.map(object => `<tr>
+      <td class="mono">${esc(object.id)}</td>
+      <td>${esc(object.status)}</td>
+      <td>${esc(object.confidence)}</td>
+      <td>${esc(object.explanation)}</td>
+      <td>${object.x !== undefined && object.y !== undefined
+        ? `<span class="mono">${esc(object.x)}, ${esc(object.y)} mm</span>`
+        : 'not placeable; no coordinate was supplied'}</td>
+    </tr>`).join('')
+
+  return `<section>
+    <h2>Import coverage</h2>
+    <p class="verdict-line">
+      Reader: ${esc(diagnostics.format)}. ${diagnostics.recovered} recovered,
+      ${diagnostics.partial} partial, ${diagnostics.unplaced} unplaced,
+      ${diagnostics.missing_or_refused} missing/refused limits. Confidence describes fields
+      actually recovered; it is not a claim about the physical board.
+    </p>
+    ${issueCards}
+    ${objects
+      ? `<div class="scroll-x"><table>
+          <thead><tr><th>Object</th><th>Status</th><th>Confidence</th><th>Basis</th><th>Board location</th></tr></thead>
+          <tbody>${objects}</tbody>
+        </table></div>`
+      : ''}
+  </section>`
+}
+
 function cosimHtml(report: WebReport): string {
   const c = report.cosim
   if (!c) return ''
@@ -480,6 +532,8 @@ ${(r.notes ?? [])
   .map(n => `<div class="note-row"><b>Note:</b> ${esc(n.message)}</div>`).join('\n')}
 
 ${bindHtml(r)}
+
+${importDiagnosticsHtml(r)}
 
 ${evidenceHtml(r)}
 

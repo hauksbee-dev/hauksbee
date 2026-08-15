@@ -188,6 +188,11 @@ values (``line 6: pad kind: expected smd|thru_hole|np_thru_hole|connect, got
 `banana` ``). Omitting `shape` fails the same way: the token in the shape slot
 would be `at`, which is not a valid shape.
 
+The browser keeps that refusal actionable: it shows only the exact parser-named
+line (never an arbitrary line presented as causal), plus the `from-code` command
+for the complete compiler diagnostic. See
+[Import diagnostics](IMPORT_DIAGNOSTICS.md).
+
 ## Worked example: decompile and recompile
 
 Against the Watchy board that ships in this repository, so this runs on a bare

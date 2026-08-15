@@ -12,7 +12,9 @@ here.
 This module reconstructs an `ExtractedBoard` (the same nets + components +
 pads the rest of the engine consumes) from those fab files alone, so bind,
 DRC, lint, stress and simulation work on boards that otherwise could not be
-ingested.
+ingested. The browser's per-object recovery status, honest missing-object
+handling, and clickable reconstructed-net explanations are documented in
+[Import diagnostics](IMPORT_DIAGNOSTICS.md).
 
 Entry point: `ExtractedBoard::from_gerber(path)`, a job directory or a
 `.zip`. The richer `gerber::from_gerber_dir` returns reconstruction stats
