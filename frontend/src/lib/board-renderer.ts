@@ -471,11 +471,29 @@ export function renderStaticBoard(
  *  rule the renderer draws with. */
 export const LABEL_MIN_PX = 26
 
+export interface ImportMarker {
+  x: number
+  y: number
+  status: 'recovered' | 'partial'
+  nets: string[]
+}
+
+/** Apply the same net selection to import markers as to the copper beneath
+ * them. With no selected net the coverage overlay shows every located object;
+ * with one selected it shows only objects whose recovered pins name that net. */
+export function visibleImportMarkers(markers: ImportMarker[], highlightNets: Set<string>): ImportMarker[] {
+  if (highlightNets.size === 0) return markers
+  return markers.filter(point => point.nets.some(net => highlightNets.has(net)))
+}
+
 export interface OverlayData {
   /** Pulsing glow on these nets */
   highlightNets: Set<string>
   /** A "show on board" marker (board mm): pulsing ring + optional label. */
   marker?: { x: number; y: number; label?: string } | null
+  /** Import completeness markers. Only objects with real source coordinates
+   *  appear here; unplaced/missing objects remain in the diagnostics list. */
+  importMarkers?: ImportMarker[]
   /** Dim the non-highlighted board when a highlight is active */
   dimOthers?: boolean
   /** Signal flow particles: netName → list of positions (t∈[0,1]) along each segment */
@@ -838,6 +856,24 @@ export function renderDynamicOverlay(
     ctx.arc(sx, sy, 4, 0, Math.PI * 2)
     ctx.fillStyle = theme.probeValue
     ctx.fill()
+  }
+
+  // ── Import completeness: located recovered/partial objects only ──
+  if (overlay.importMarkers?.length) {
+    ctx.save()
+    for (const point of visibleImportMarkers(overlay.importMarkers, overlay.highlightNets)) {
+      const [sx, sy] = ws(cam, point.x, point.y)
+      if (sx < -10 || sy < -10 || sx > ctx.canvas.width + 10 || sy > ctx.canvas.height + 10) continue
+      const color = point.status === 'recovered' ? '#22c55e' : '#f59e0b'
+      ctx.beginPath()
+      ctx.arc(sx, sy, point.status === 'recovered' ? 5 : 7, 0, Math.PI * 2)
+      ctx.fillStyle = `${color}66`
+      ctx.strokeStyle = color
+      ctx.lineWidth = point.status === 'recovered' ? 1.5 : 2
+      ctx.fill()
+      ctx.stroke()
+    }
+    ctx.restore()
   }
 
   // ── "Show on board" marker: pulsing ring + crosshair at a finding's spot ──

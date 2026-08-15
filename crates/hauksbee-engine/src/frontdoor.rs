@@ -431,6 +431,67 @@ pub struct WebComponent {
     pub rot: f64,
 }
 
+/// One imported object and the exact completeness of what the reader recovered.
+/// Coordinates are optional because a netlist/schematic can recover the
+/// electrical object without carrying a board location; the browser lists those
+/// rows but cannot honestly paint them on the board overlay.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebImportObject {
+    pub id: String,
+    /// `"recovered"` when reference, pins and (for the overlay) location are
+    /// all present; `"partial"` when at least one named field is absent.
+    pub status: String,
+    /// `"high"`, `"medium"` or `"low"`, derived only from fields actually
+    /// present and whether connectivity was declared or reconstructed.
+    pub confidence: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    pub explanation: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nets: Vec<String>,
+}
+
+/// One import limitation that needs explanation rather than a false object
+/// marker. A `net` is carried only when the reader named one exact reconstructed
+/// net, which lets the browser make the explanation clickable.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebImportIssue {
+    pub kind: String,
+    pub title: String,
+    pub explanation: String,
+    pub suggested_fix: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net: Option<String>,
+}
+
+/// Typed import coverage for the browser. Counts are over actual recovered
+/// component objects; `missing_or_refused` counts reader limitations whose
+/// absent object cannot be enumerated or located without fabricating it.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebImportDiagnostics {
+    pub format: String,
+    pub recovered: usize,
+    pub partial: usize,
+    pub unplaced: usize,
+    pub missing_or_refused: usize,
+    pub objects: Vec<WebImportObject>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<WebImportIssue>,
+}
+
+/// Actionable context for a board the parser refused. `excerpt` is present only
+/// when the underlying parser identified an exact line; no arbitrary first line
+/// is presented as the cause when the parser did not localise it.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebImportFailure {
+    pub stage: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    pub suggested_fix: String,
+}
+
 /// The whole payload sent back to the browser after an upload.
 #[derive(Debug, Clone, Serialize)]
 pub struct WebReport {
@@ -459,6 +520,13 @@ pub struct WebReport {
     /// Components with a known position, for the 2D map (empty for netlist-only
     /// inputs that carry no layout).
     pub components: Vec<WebComponent>,
+    /// What the importer recovered per object, plus every named reader limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_diagnostics: Option<WebImportDiagnostics>,
+    /// Parser-stage diagnosis for an unreadable input. Mutually exclusive with
+    /// `import_diagnostics` on reports produced by this version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_failure: Option<WebImportFailure>,
     /// Bind-role honesty summary (active ICs bound / open on the live circuit).
     /// Present whenever the board bound; the browser renders a warning banner
     /// when `active_path_unresolved` is non-empty and must NOT say "Looks
@@ -517,7 +585,267 @@ pub struct WebSupply {
 
 /// The "could not read the file" report shape, shared by every early-return in
 /// [`analyze`] so the error surface stays consistent.
-fn unreadable(file_name: &str, error: String) -> WebReport {
+fn web_import_diagnostics(norm: &crate::board_input::NormalizedBoard) -> WebImportDiagnostics {
+    use crate::board_input::InputKind;
+
+    let format = match norm.kind {
+        InputKind::Text => "text board / netlist",
+        InputKind::Schematic => "KiCad schematic",
+        InputKind::Altium => "Altium PcbDoc",
+        InputKind::Gerber => "Gerber / Excellon reconstruction",
+        InputKind::Ipc356Archive => "fab archive with IPC-D-356 connectivity",
+        InputKind::Odb => "ODB++",
+        InputKind::Ipc2581 => "IPC-2581",
+        InputKind::BoardCode => "Board-as-Code",
+    }
+    .to_string();
+
+    let net_names: std::collections::BTreeMap<i64, String> = norm
+        .board
+        .nets
+        .iter()
+        .map(|net| (net.id, net.name.clone()))
+        .collect();
+    let reconstructed = norm.kind == InputKind::Gerber;
+    let mut recovered = 0usize;
+    let mut partial = 0usize;
+    let mut unplaced = 0usize;
+    let mut objects = Vec::with_capacity(norm.board.components.len());
+
+    for (component_index, component) in norm.board.components.iter().enumerate() {
+        let mut gaps = Vec::new();
+        if component.reference.trim().is_empty() {
+            gaps.push("reference was not recovered");
+        }
+        if component.pins.is_empty() {
+            gaps.push("no pins were recovered");
+        }
+        if component.position.is_none() {
+            gaps.push("the source supplied no board coordinate");
+            unplaced += 1;
+        }
+        if component.value.trim().is_empty() {
+            gaps.push("value / part identity was not recovered");
+        }
+
+        let status = if gaps.is_empty() {
+            recovered += 1;
+            "recovered"
+        } else {
+            partial += 1;
+            "partial"
+        };
+        let confidence = if component.reference.trim().is_empty() || component.pins.is_empty() {
+            "low"
+        } else if reconstructed || component.position.is_none() || component.value.trim().is_empty()
+        {
+            "medium"
+        } else {
+            "high"
+        };
+        let explanation = if gaps.is_empty() {
+            if reconstructed {
+                "Reference, value, pins and location were recovered; connectivity is reconstructed from manufacturing copper rather than declared by CAD."
+                    .to_string()
+            } else {
+                "Reference, value, pins and board location were recovered from the input."
+                    .to_string()
+            }
+        } else {
+            gaps.join("; ")
+        };
+        let mut nets: Vec<String> = component
+            .pins
+            .iter()
+            .filter_map(|pin| pin.net.and_then(|id| net_names.get(&id).cloned()))
+            .collect();
+        nets.sort();
+        nets.dedup();
+        let (x, y) = component
+            .position
+            .map(|(x, y, _)| (Some(x), Some(y)))
+            .unwrap_or((None, None));
+        objects.push(WebImportObject {
+            id: if component.reference.trim().is_empty() {
+                format!("unnamed component {}", component_index + 1)
+            } else {
+                component.reference.clone()
+            },
+            status: status.to_string(),
+            confidence: confidence.to_string(),
+            x,
+            y,
+            explanation,
+            nets,
+        });
+    }
+    objects.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut issues = Vec::new();
+    let mut missing_or_refused = 0usize;
+    for note in &norm.notes {
+        let lower = note.to_ascii_lowercase();
+        // "split" alone is not a net diagnosis: a plating refusal can tell
+        // the exporter to split PTH and NPTH drill files. Only phrases emitted
+        // for reconstructed-connectivity uncertainty belong in the split-net
+        // bucket.
+        let is_split = lower.contains("under-connected") || lower.contains("synthetic name");
+        let is_missing = lower.contains("were not")
+            || lower.contains("missing")
+            || lower.contains("refused")
+            || lower.contains("dropped")
+            || lower.contains("could not")
+            || lower.contains("stitch no layers")
+            || lower.contains("nothing in this job says whether");
+        if !is_split && !is_missing {
+            continue;
+        }
+        if is_missing {
+            missing_or_refused += 1;
+        }
+        let linked_net = norm
+            .board
+            .nets
+            .iter()
+            .filter(|net| !net.name.is_empty() && note.contains(&net.name))
+            .max_by_key(|net| net.name.len())
+            .map(|net| net.name.clone());
+        let (title, suggested_fix) = if is_split {
+            (
+                "Possible split-net boundary",
+                "Supply the original CAD layout or an authoritative IPC-D-356 / ODB++ netlist so the connection can be declared instead of inferred.",
+            )
+        } else if reconstructed {
+            (
+                "Manufacturing object was not fully recovered",
+                "Add the missing pick-and-place or drill metadata, or analyze the original CAD layout alongside this fab package.",
+            )
+        } else {
+            (
+                "Reader refused incomplete evidence",
+                "Correct or re-export the named source record, then analyze the new export; Hauksbee will not invent the missing object.",
+            )
+        };
+        issues.push(WebImportIssue {
+            kind: if is_split { "split_net" } else { "missing" }.to_string(),
+            title: title.to_string(),
+            explanation: note.clone(),
+            suggested_fix: suggested_fix.to_string(),
+            net: linked_net,
+        });
+    }
+
+    if reconstructed {
+        let synthetic: Vec<String> = norm
+            .board
+            .nets
+            .iter()
+            .filter(|net| net.name.starts_with("NET_"))
+            .map(|net| net.name.clone())
+            .collect();
+        if !synthetic.is_empty() && !issues.iter().any(|issue| issue.kind == "split_net") {
+            issues.push(WebImportIssue {
+                kind: "split_net".to_string(),
+                title: "Reconstructed net boundaries".to_string(),
+                explanation: format!(
+                    "{} net(s) keep synthetic names because the fab files did not declare their electrical identity. Copper connectivity was recovered, but a missing plane or drill declaration can leave one physical net split into several reconstructed nets.",
+                    synthetic.len()
+                ),
+                suggested_fix: "Supply the original CAD layout or an authoritative IPC-D-356 / ODB++ netlist to replace geometric inference.".to_string(),
+                net: synthetic.first().cloned(),
+            });
+        }
+    }
+
+    WebImportDiagnostics {
+        format,
+        recovered,
+        partial,
+        unplaced,
+        missing_or_refused,
+        objects,
+        issues,
+    }
+}
+
+fn error_line_number(message: &str) -> Option<usize> {
+    let lower = message.to_ascii_lowercase();
+    for (index, _) in lower.match_indices("line") {
+        if index > 0 && lower.as_bytes()[index - 1].is_ascii_alphanumeric() {
+            continue;
+        }
+        let tail = &message[index + "line".len()..];
+        let Some(tail) = tail.strip_prefix(':').or_else(|| tail.strip_prefix(' ')) else {
+            continue;
+        };
+        let digits: String = tail
+            .chars()
+            .skip_while(|ch| ch.is_ascii_whitespace())
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect();
+        if let Ok(line) = digits.parse::<usize>() {
+            if line > 0 {
+                return Some(line);
+            }
+        }
+    }
+    None
+}
+
+fn web_import_failure(
+    error: &crate::board_input::BoardInputError,
+    contents: &[u8],
+) -> WebImportFailure {
+    use crate::board_input::BoardInputError;
+
+    let message = error.to_string();
+    let excerpt = std::str::from_utf8(contents).ok().and_then(|text| {
+        let line = error_line_number(&message)?;
+        text.lines().nth(line.saturating_sub(1)).map(|body| {
+            format!(
+                "line {line}: {}",
+                body.chars().take(300).collect::<String>()
+            )
+        })
+    });
+    let (stage, suggested_fix) = match error {
+        BoardInputError::BoardCode(_) => (
+            "Board-as-Code compiler",
+            "Edit the exact line shown below, then rerun. If no line is shown, run `hauksbee from-code <file.board>` for the compiler's full diagnostic.",
+        ),
+        BoardInputError::Zip(_) | BoardInputError::Gerber(_) => (
+            "fab-package reader",
+            "Re-export the package with one unambiguous layer/drill manifest, or supply the original CAD board. Do not rename ambiguous films to force a guess.",
+        ),
+        BoardInputError::Schematic(_) => (
+            "schematic reader",
+            "Open and re-save the schematic hierarchy in KiCad, ensuring every referenced sheet is present beside the root file.",
+        ),
+        BoardInputError::Unsupported(_) => (
+            "format capability check",
+            "Use the conversion named in the refusal, then retry the converted file.",
+        ),
+        BoardInputError::Extract(_) => (
+            "board reader",
+            "Open and re-save the file in its source EDA tool, or export one of the supported interchange formats. The parser did not guess past invalid input.",
+        ),
+        BoardInputError::NotFound { .. } | BoardInputError::Io { .. } => (
+            "input read",
+            "Check the path and file permissions, then retry the exact file.",
+        ),
+    };
+    WebImportFailure {
+        stage: stage.to_string(),
+        excerpt,
+        suggested_fix: suggested_fix.to_string(),
+    }
+}
+
+fn unreadable_with_import_failure(
+    file_name: &str,
+    error: String,
+    import_failure: Option<WebImportFailure>,
+) -> WebReport {
     WebReport {
         ok: false,
         error: Some(error),
@@ -531,6 +859,8 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
         total: 0,
         sections: Vec::new(),
         components: Vec::new(),
+        import_diagnostics: None,
+        import_failure,
         bind: None,
         inventory: Vec::new(),
         assumptions: Vec::new(),
@@ -542,6 +872,31 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
         cosim: None,
         refusal: None,
     }
+}
+
+fn unreadable(file_name: &str, error: String) -> WebReport {
+    unreadable_with_import_failure(file_name, error, None)
+}
+
+/// Serialize one normalizer refusal with the same localized import diagnosis
+/// as [`analyze_json_with_ties`]. The shipped schematic-aware HTTP callback
+/// has to normalize once before resolving companion ties; without this helper
+/// its early return collapsed the response back to `{ok,error}` and silently
+/// discarded the parser excerpt and suggested fix.
+pub(crate) fn unreadable_input_json(
+    file_name: &str,
+    contents: &[u8],
+    error: crate::board_input::BoardInputError,
+) -> String {
+    let failure = web_import_failure(&error, contents);
+    serde_json::to_string(&unreadable_with_import_failure(
+        file_name,
+        error.web_message(),
+        Some(failure),
+    ))
+    .unwrap_or_else(|serialize_error| {
+        format!("{{\"ok\":false,\"error\":\"failed to serialize report: {serialize_error}\"}}")
+    })
 }
 
 /// Run the full front-door analysis on an uploaded board file.
@@ -559,7 +914,10 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
 pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     match crate::board_input::from_bytes(file_name, contents) {
         Ok(norm) => analyze_normalized(file_name, &norm).0,
-        Err(e) => unreadable(file_name, e.web_message()),
+        Err(e) => {
+            let failure = web_import_failure(&e, contents);
+            unreadable_with_import_failure(file_name, e.web_message(), Some(failure))
+        }
     }
 }
 
@@ -904,6 +1262,8 @@ fn analyze_normalized_with_ties(
         total,
         sections,
         components,
+        import_diagnostics: Some(web_import_diagnostics(norm)),
+        import_failure: None,
         bind: Some(bind_web),
         inventory: evidence.inventory().to_vec(),
         assumptions: evidence.assumptions().to_vec(),
@@ -995,10 +1355,11 @@ fn analyze_with_firmware_parts(
         Ok(n) => n,
         // No board to co-sim against; return the normalization error as-is.
         Err(e) => {
+            let failure = web_import_failure(&e, contents);
             return (
-                unreadable(file_name, e.web_message()),
+                unreadable_with_import_failure(file_name, e.web_message(), Some(failure)),
                 WebCosimCoverage::default(),
-            )
+            );
         }
     };
     let (mut report, drc) = analyze_normalized_with_ties(file_name, &norm, schematic_ties);
@@ -2094,7 +2455,7 @@ pub fn analyze_json_with_ties(
 ) -> String {
     let report = match crate::board_input::from_bytes(file_name, contents) {
         Ok(norm) => analyze_normalized_with_ties(file_name, &norm, schematic_ties).0,
-        Err(e) => unreadable(file_name, e.web_message()),
+        Err(e) => return unreadable_input_json(file_name, contents, e),
     };
     serde_json::to_string(&report).unwrap_or_else(|e| {
         format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}")
@@ -2175,6 +2536,205 @@ fn top_gpio_nets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_report_carries_per_object_import_coverage() {
+        let report = analyze("boot_gate.kicad_pcb", SHORTED);
+        let diagnostics = report
+            .import_diagnostics
+            .expect("a successful import carries typed diagnostics");
+        assert_eq!(diagnostics.recovered, 3);
+        assert_eq!(diagnostics.partial, 0);
+        assert_eq!(diagnostics.unplaced, 0);
+        assert_eq!(diagnostics.missing_or_refused, 0);
+        let u1 = diagnostics
+            .objects
+            .iter()
+            .find(|object| object.id == "U1")
+            .expect("U1 import row");
+        assert_eq!(u1.status, "recovered");
+        assert_eq!(u1.confidence, "high");
+        assert!(u1.x.is_some() && u1.y.is_some());
+        assert!(u1.nets.iter().any(|net| net == "+5V"));
+    }
+
+    #[test]
+    fn gerber_import_diagnostics_link_a_real_reconstructed_net_to_located_objects() {
+        use std::io::Write;
+
+        let files: [(&str, &[u8]); 4] = [
+            (
+                "board-F_Cu.gbr",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_kicad_pos/board-F_Cu.gbr"
+                ),
+            ),
+            (
+                "board-B_Cu.gbr",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_kicad_pos/board-B_Cu.gbr"
+                ),
+            ),
+            (
+                "board-PTH.drl",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_kicad_pos/board-PTH.drl"
+                ),
+            ),
+            (
+                "board-all.pos",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_kicad_pos/board-all.pos"
+                ),
+            ),
+        ];
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, contents) in files {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(contents).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        let report = analyze("fab.zip", &bytes);
+        assert!(report.ok, "fixture must import: {:?}", report.error);
+        let diagnostics = report.import_diagnostics.expect("typed diagnostics");
+        assert_eq!(diagnostics.format, "Gerber / Excellon reconstruction");
+        assert_eq!(diagnostics.recovered, 2);
+        assert_eq!(diagnostics.partial, 1);
+        let issue = diagnostics
+            .issues
+            .iter()
+            .find(|issue| issue.kind == "split_net")
+            .expect("synthetic reconstructed boundary is explained");
+        assert_eq!(issue.net.as_deref(), Some("NET_1"));
+        let located_on_net = diagnostics
+            .objects
+            .iter()
+            .filter(|object| {
+                object.x.is_some()
+                    && object.y.is_some()
+                    && object.nets.iter().any(|net| net == "NET_1")
+            })
+            .count();
+        assert_eq!(located_on_net, 2);
+    }
+
+    #[test]
+    fn a_plating_refusal_is_not_mislabeled_as_a_split_net() {
+        use std::io::Write;
+
+        let files: [(&str, &[u8]); 8] = [
+            (
+                "BoardOutline.gbr",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_bare_role_names/BoardOutline.gbr"
+                ),
+            ),
+            (
+                "Bottom.gbr",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_bare_role_names/Bottom.gbr"
+                ),
+            ),
+            (
+                "Through.drl",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_bare_role_names/Through.drl"
+                ),
+            ),
+            (
+                "Top.gbr",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_bare_role_names/Top.gbr"
+                ),
+            ),
+            (
+                "TopAssy.gbr",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_bare_role_names/TopAssy.gbr"
+                ),
+            ),
+            (
+                "TopDimension.gbr",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_bare_role_names/TopDimension.gbr"
+                ),
+            ),
+            (
+                "TopMask.gbr",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_bare_role_names/TopMask.gbr"
+                ),
+            ),
+            (
+                "TopSilk.gbr",
+                include_bytes!(
+                    "../../../testdata/ingest-robustness/gerber_bare_role_names/TopSilk.gbr"
+                ),
+            ),
+        ];
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, contents) in files {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(contents).unwrap();
+        }
+        let report = analyze("bare-role-names.zip", &zip.finish().unwrap().into_inner());
+        assert!(report.ok, "fixture must import: {:?}", report.error);
+        let diagnostics = report.import_diagnostics.expect("typed diagnostics");
+        let plating = diagnostics
+            .issues
+            .iter()
+            .find(|issue| issue.explanation.contains("stitch no layers"))
+            .expect("plating authority refusal stays visible");
+        assert_eq!(plating.kind, "missing");
+        assert!(!diagnostics
+            .issues
+            .iter()
+            .any(|issue| issue.kind == "split_net" && issue.net.is_none()));
+        assert!(diagnostics.missing_or_refused >= 1);
+    }
+
+    #[test]
+    fn board_code_failure_returns_only_the_parser_named_line_and_a_fix() {
+        let source = b"board version 1\nthis is not valid board code\n";
+        let report = analyze("broken.board", source);
+        assert!(!report.ok);
+        assert!(report.import_diagnostics.is_none());
+        let failure = report
+            .import_failure
+            .expect("a parser refusal carries import guidance");
+        assert_eq!(failure.stage, "Board-as-Code compiler");
+        assert_eq!(
+            failure.excerpt.as_deref(),
+            Some("line 2: this is not valid board code")
+        );
+        assert!(failure.suggested_fix.contains("exact line"));
+    }
+
+    #[test]
+    fn parser_line_localizer_does_not_treat_pipeline_or_lineage_as_a_line() {
+        assert_eq!(error_line_number("pipeline 2 failed"), None);
+        assert_eq!(error_line_number("lineage 7 is invalid"), None);
+        assert_eq!(error_line_number("parse failed at line: 19"), Some(19));
+    }
+
+    #[test]
+    fn companion_parser_excerpt_is_taken_from_the_companion_bytes() {
+        let json = unreadable_input_json(
+            "design.brd",
+            b"<eagle>\nmalformed schematic record\n",
+            crate::board_input::BoardInputError::Schematic(
+                "schematic parser failed at line 2".to_string(),
+            ),
+        );
+        let report: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(report["import_failure"]["stage"], "schematic reader");
+        assert_eq!(
+            report["import_failure"]["excerpt"],
+            "line 2: malformed schematic record"
+        );
+    }
 
     #[cfg(feature = "avr")]
     #[test]
@@ -2756,7 +3316,9 @@ fn main {
         // byte-for-byte equality proves the plain .kicad_pcb web report did not
         // change shape, counts, wording, or ordering under the refactor.
         // (Regenerated once when findings gained their optional x/y board
-        // location: the two DRC shorts now carry x=112.0, y=100.0.)
+        // location: the two DRC shorts now carry x=112.0, y=100.0.) New
+        // evidence and import-diagnostic fields are deliberately additive and
+        // therefore removed before comparing the original contract.
         let golden = include_str!("../../../testdata/golden/boot_gate_web_report.json");
         let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2764,6 +3326,8 @@ fn main {
         object.remove("assumptions");
         object.remove("evidence");
         object.remove("inventory");
+        object.remove("import_diagnostics");
+        object.remove("import_failure");
         let golden_value: serde_json::Value = serde_json::from_str(golden).unwrap();
         assert_eq!(
             value, golden_value,

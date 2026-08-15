@@ -55,6 +55,9 @@ interface BoardViewerProps {
    *  report's "show on board" affordance). A new `seq` re-triggers the move
    *  even for the same coordinates. */
   focusPoint?: { x: number; y: number; label?: string; seq: number } | null
+  /** Located objects from the import-coverage panel. Missing/unplaced objects
+   *  are intentionally absent because the reader supplied no coordinate. */
+  importMarkers?: Array<{ x: number; y: number; status: 'recovered' | 'partial'; nets: string[] }>
   /** Expanded-to-viewport state, owned by the embedding view (it also holds
    *  the floating selection card, so the two must expand together). When a
    *  toggle is supplied the toolbar grows a fullscreen control and Escape
@@ -213,6 +216,7 @@ function LayerRow({ label, swatch, on, onToggle }: {
 export function BoardViewer({
   boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick,
   onEmptyBoard, faultedRefs, netOptions, focusPoint, onViewModeChange,
+  importMarkers,
   fullscreen = false, onToggleFullscreen,
   wheelMode = 'always',
   partCount,
@@ -812,6 +816,7 @@ export function BoardViewer({
         showActivity: showActivityRef.current,
         renderOpts: renderOptsRef.current,
         marker: markerRef.current,
+        importMarkers,
       }
 
       ensureStatic(canvas, now)
@@ -823,7 +828,7 @@ export function BoardViewer({
 
     animFrame.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(animFrame.current)
-  }, [board, netIndex, viewMode, setCamera])
+  }, [board, netIndex, viewMode, setCamera, importMarkers])
 
   // ── Wheel zoom ──
   // Attached natively (non-passive): React registers wheel listeners as
