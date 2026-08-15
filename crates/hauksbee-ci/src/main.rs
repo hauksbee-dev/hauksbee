@@ -75,11 +75,12 @@ enum Command {
     /// structure, cross-references inside the spec (scenario ids, peripheral
     /// ids), and, with the board loaded, every referenced net and component.
     ///
-    /// What it does NOT check (these need a run, a model bind, or an artifact
-    /// that may legitimately not exist yet at edit time): firmware existence
-    /// or loadability, sensor-TOML contents, scenario part/profile resolution
-    /// against the model DB, tolerance patterns matching real components,
-    /// MCU/emulator resolution, and of course every behavioral assertion.
+    /// It also resolves BOM, placement, variant and firmware files; firmware
+    /// existence and obvious extension/content mismatches are checked. What it
+    /// does NOT check (these need a run or a circuit bind): firmware loadability
+    /// on the target core, sensor-TOML contents, scenario part/profile
+    /// resolution, tolerance patterns matching real components, MCU/emulator
+    /// availability, and of course every behavioral assertion.
     ///
     /// Independent errors are reported together in one invocation rather than
     /// one per run, in file order. The exception is an error that stops the file
@@ -220,6 +221,13 @@ struct CheckArgs {
     /// run". Use it in an editor loop where neither artifact is built yet.
     #[arg(long)]
     no_board: bool,
+
+    /// Extra model directory, layered above the builtin db, installed packs,
+    /// and user model dirs. Uses the same authority as `run --models-dir`, so
+    /// BOM/placement identity reconciliation cannot disagree between check and
+    /// run merely because a repository carries custom parts.
+    #[arg(long, value_name = "DIR")]
+    models_dir: Option<PathBuf>,
 
     /// Print diagnostics as JSON on stdout: one array per spec, one per line
     /// (a single spec prints a single array). Each element is
@@ -459,6 +467,15 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
             &board_path,
             &format!("board[{index}]"),
         ));
+        if let Some(path) = spec.bom_path() {
+            inputs.push(ManifestInput::new(format!("bom[{index}]"), path));
+        }
+        if let Some(path) = spec.placement_path() {
+            inputs.push(ManifestInput::new(format!("placement[{index}]"), path));
+        }
+        if let Some(path) = spec.variant_path() {
+            inputs.push(ManifestInput::new(format!("variant[{index}]"), path));
+        }
         if let Some(path) = spec.firmware_path() {
             inputs.push(ManifestInput::new(
                 format!("firmware_source[{index}]"),
@@ -650,6 +667,7 @@ fn cmd_github_action(args: GithubActionArgs) -> ExitCode {
 fn cmd_check(args: CheckArgs) -> ExitCode {
     let opts = hauksbee_ci::check::CheckOptions {
         no_board: args.no_board,
+        models_dir: args.models_dir,
     };
     let mut worst = 0u8;
     for spec in &args.specs {

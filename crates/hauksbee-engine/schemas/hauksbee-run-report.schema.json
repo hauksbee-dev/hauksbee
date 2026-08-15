@@ -221,6 +221,16 @@
           "type": "string"
         },
         {
+          "const": "placement",
+          "description": "A pick-and-place / component-position file.",
+          "type": "string"
+        },
+        {
+          "const": "variant",
+          "description": "An explicit assembly-variant decision (which references are fitted).",
+          "type": "string"
+        },
+        {
           "const": "spec",
           "description": "A CI spec / assertion file.",
           "type": "string"

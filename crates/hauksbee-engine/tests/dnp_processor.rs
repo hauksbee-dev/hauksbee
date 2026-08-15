@@ -132,6 +132,24 @@ fn no_fit_overrides_the_policy() {
 }
 
 #[test]
+fn no_fit_can_make_a_normally_populated_part_absent_for_an_assembly_variant() {
+    let mut b = board();
+    let r1 = b.component("R1").expect("fixture resistor");
+    assert!(!r1.dnp, "R1 starts as an ordinary fitted layout part");
+
+    let d = b
+        .apply_dnp_policy(DnpPolicy::FitExceptLinks, &[], &["R1".to_string()])
+        .expect("explicit variant decision applies");
+    let r1 = d
+        .left_open
+        .iter()
+        .find(|part| part.reference == "R1")
+        .expect("ordinary layout part is left open by name");
+    assert_eq!(r1.reason, DnpReason::NamedOpen);
+    assert!(b.component("R1").expect("R1 remains in inventory").dnp);
+}
+
+#[test]
 fn honour_leaves_everything_open() {
     let mut b = board();
     let d = b.apply_dnp_policy(DnpPolicy::Honour, &[], &[]).unwrap();

@@ -40,6 +40,7 @@ PATH), or grab the prebuilt release bundle and skip the build entirely.
 - [How a check runs](#how-a-check-runs)
 - [Quick start](#quick-start)
 - [Spec format](#spec-format): [top-level keys](#top-level),
+  [assembly inputs](#assembly-inputs-bom-placement-variant),
   [`[[supply]]`](#power-supplies-supply), [`[[net_drive]]`](#net-drives-net_drive),
   [`suppress_rail`](#rail-suppression-suppress_rail),
   [`[[override]]`](#component-overrides-override),
@@ -104,7 +105,7 @@ echo $?   # 0
 
 ### Custom parts: the model library and `--models-dir`
 
-`hauksbee-ci run` binds the board against the same layered model library as
+`hauksbee-ci run` and `hauksbee-ci check` bind the board against the same layered model library as
 `hauksbee run`: the builtin db, then installed packs, then the user model dirs
 (`~/.hauksbee/models`, `~/.config/hauksbee/models`), then `--models-dir DIR`
 (highest priority). A custom `[[models]]` entry, including a
@@ -114,6 +115,7 @@ as it does interactively:
 
 ```bash
 hauksbee-ci run ci/board.toml --models-dir hardware/models
+hauksbee-ci check ci/board.toml --models-dir hardware/models
 ```
 
 MCU SoC descriptors themselves resolve from `$HAUKSBEE_MCU_DIR` /
@@ -138,6 +140,10 @@ Every key the loader accepts, in one place. Unknown keys are rejected.
 | --------------- | -------- | ------------- | ------------------------------------------------------------- |
 | `name`          | string   | `"hauksbee-ci"`| Label shown in reports.                                       |
 | `board`         | path     | required      | Board file: `.kicad_sch` (schematic), `.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356, Altium `.PcbDoc`, a gerber folder/zip, or Board-as-Code `.board` (bare or zipped; compiled in-process, no routing step needed). The same formats `hauksbee run` accepts. |
+| `bom`           | path     | none          | BOM read and fail-closed reconciled before binding through the same production reader as `hauksbee run --bom`. See [assembly inputs](#assembly-inputs-bom-placement-variant). |
+| `bom_columns`   | [string] | `[]`          | Explicit `role=Header` mappings for an ambiguous BOM, equivalent to repeatable `--bom-column`; requires `bom`. |
+| `placement`     | path     | none          | Pick-and-place file reconciled against layout identity, package, position, side and rotation before binding. |
+| `variant`       | path     | none          | Assembly-variant TOML with `name`, `fit` and/or `no_fit`; exact bytes and population decisions are separate evidence. |
 | `firmware`      | path     | none          | Firmware to boot on the detected MCU: a compiled ELF/hex, a PlatformIO project directory, or a zip of either (same three input tiers as `run --firmware`, see [`../cosim/MCU.md`](../cosim/MCU.md)). |
 | `mcu`           | string   | none          | Informational note only, nothing reads it. The MCU comes from the BOARD's part value via `[[models]] kind = "mcu"` routing entries (builtin, user model dirs, `--models-dir`); this field cannot force a backend. Distinct from the `mcu` field inside a `uart` `[[assert]]`, which IS load-bearing (it selects which MCU's UART the assertion reads). |
 | `duration_ms`   | float    | `100`         | Simulated time to run.                                        |
@@ -164,6 +170,51 @@ Every key the loader accepts, in one place. Unknown keys are rejected.
 | `[[assert]]`    | blocks   | at least one  | The assertions, all of which must pass. See [Assertions](#assertions-assert). |
 
 Paths are resolved relative to the spec file's directory.
+
+### Assembly inputs: `bom`, `placement`, `variant`
+
+Use these when the layout alone does not identify the exact purchased part or
+when one superset layout has several fitted assemblies:
+
+```toml
+board = "../hardware/board.kicad_pcb"
+bom = "../hardware/bom.csv"
+bom_columns = ["reference=Customer Reference"]
+placement = "../hardware/positions.csv"
+variant = "../hardware/prototype.variant.toml"
+duration_ms = 1
+
+[[assert]]
+kind = "no_faults"
+```
+
+The BOM and placement readers content-detect their dialects and feed the same
+binder identity reconciliation used by `hauksbee run --bom --placement`.
+Ambiguous columns, duplicate or conflicting rows, poor board overlap, package
+or position contradictions, and malformed artifacts refuse before assertions.
+`hauksbee-ci check` executes this same preparation path, so editor validation
+and the gate agree. If repository-local parts participate in identity, pass the
+same `--models-dir` to both commands; the option exists on both surfaces.
+
+The separate variant file is deliberately small:
+
+```toml
+name = "prototype without sensor"
+fit = ["R7"]
+no_fit = ["U4"]
+```
+
+Its decisions merge with top-level `fit` and `no_fit`. A contradiction,
+unknown reference, or duplicate within either artifact refuses; identical
+same-side decisions across the two artifacts deduplicate. BOM population fields
+remain advice: they never become hidden executable policy. CI JSON inventories
+the board, spec, BOM, placement and variant with exact SHA-256s and
+contributions; assertion evidence cites those causal inputs, and
+`--emit-manifest` captures all five transitive inputs. See
+[`BOM.md`](../ingest/BOM.md) and [`DNP.md`](../ingest/DNP.md) for the authority
+and reconciliation rules. A population that leaves every component open is
+invalid rather than vacuously GREEN, and a simulated peripheral `ref` cannot
+name a component the selected variant leaves open.
 
 ### Timing coverage (`[timing]`)
 

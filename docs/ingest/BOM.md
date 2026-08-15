@@ -34,6 +34,24 @@ hauksbee run board.kicad_pcb --bom bom.csv \
   --bom-column 'reference=Customer Reference' --report
 ```
 
+The repeatable CI form uses the same readers and reconciliation path:
+
+```toml
+board = "hardware/board.kicad_pcb"
+bom = "hardware/bom.csv"
+bom_columns = ["reference=Customer Reference"]
+placement = "hardware/positions.csv"
+variant = "hardware/prototype.variant.toml"
+duration_ms = 1
+
+[[assert]]
+kind = "no_faults"
+```
+
+All paths resolve relative to the spec. `hauksbee-ci check` reads and
+reconciles these inputs too, so it cannot call an ambiguous or contradictory
+manufacturing artifact safe and leave `hauksbee-ci run` to fail later.
+
 Both artifacts are reconciled before binding. A refusal leaves the board
 unchanged. Every board-analysis JSON result includes the same typed `inputs[]`
 inventory for the board, BOM and placement file, including hashes,
@@ -400,6 +418,25 @@ it DNP is information the board file does not carry at all. In that case
 `dnp=false` means unspecified, not an explicit fitted claim, so the run gives
 `--no-fit` advice without inventing a conflict.
 
+For a checked-in assembly decision, keep that policy out of the BOM entirely
+and use a variant artifact:
+
+```toml
+# hardware/prototype.variant.toml
+name = "prototype without sensor"
+fit = ["R7"]
+no_fit = ["U4"]
+```
+
+The spec names it with `variant = "hardware/prototype.variant.toml"`. `fit`
+can populate a layout-DNP reference; `no_fit` can omit an ordinary reference
+from a superset layout. The artifact's exact SHA-256, name, fitted references
+and open references enter the CI evidence inventory. Unknown references,
+duplicates within either artifact, and a reference named on both sides refuse.
+A spec may still carry its own `fit` / `no_fit` lists; identical decisions
+deduplicate when they merge with the variant, while a combined contradiction
+refuses.
+
 ## Provenance
 
 Every read records what the artifact contributed, what was ignored and why, and
@@ -423,9 +460,6 @@ becoming a second vocabulary for the same idea.
 
 ## Honest limitations
 
-- **The CLI surface is live; the `hauksbee-ci` spec surface is not.** `run`
-  accepts `--bom`, repeatable `--bom-column`, and `--placement`. The same typed
-  fields are not yet accepted in a `hauksbee-ci` project specification.
 - **A reference range is not expanded.** A BOM that writes `R1-R4` in one cell
   yields one designator called `R1-R4`, which then reports as not on the board.
   No file in the survey used the form; a BOM that does will say so loudly rather
@@ -437,10 +471,10 @@ becoming a second vocabulary for the same idea.
   disagreement is reported and the layout's number is used. If the BOM is the
   current one and the layout is stale, the report says so and the fix is to
   update the layout, not to pass a flag.
-- **A variant BOM is not modelled.** An assembly variant that populates a
-  different set of parts under one layout reads as a BOM disagreeing with the
-  layout about which parts are fitted, and produces populate advice rather than a
-  variant.
+- **A BOM population column is not a variant policy.** It continues to produce
+  fit/no-fit advice rather than silently deciding the circuit. Check in a
+  separate variant TOML when that population choice is authoritative for the
+  gate.
 - **Multiline CSV cells require a re-export.** They are refused explicitly
   rather than misparsed. Single-line quoted cells, including embedded
   delimiters and grouped reference lists, remain supported.

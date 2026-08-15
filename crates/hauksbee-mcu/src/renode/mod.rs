@@ -1479,19 +1479,48 @@ fn materialize_platform(platform: &str) -> Result<(String, Option<PathBuf>)> {
     if !platform.contains('\n') {
         return Ok((platform.to_string(), None));
     }
-    // Hash the content into the name so two configs in one process (or a
-    // leaked file from a crashed run) never collide or go stale.
+    // Hash the content for diagnosis, but do not use it as the file identity:
+    // several Renode backends can load the same descriptor concurrently. If
+    // they shared one path, dropping the first backend would unlink the file
+    // while a peer was still asking Renode to load it.
     use std::hash::{Hash, Hasher};
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_PLATFORM_FILE: AtomicU64 = AtomicU64::new(0);
+
     let mut h = std::collections::hash_map::DefaultHasher::new();
     platform.hash(&mut h);
-    let path = std::env::temp_dir().join(format!(
-        "hauksbee-renode-platform-{}-{:016x}.repl",
-        std::process::id(),
-        h.finish()
-    ));
-    std::fs::write(&path, platform)
-        .with_context(|| format!("writing inline platform to {}", path.display()))?;
-    Ok((format!("@{}", path.display()), Some(path)))
+    let hash = h.finish();
+
+    for _ in 0..1024 {
+        let sequence = NEXT_PLATFORM_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "hauksbee-renode-platform-{}-{hash:016x}-{sequence:016x}.repl",
+            std::process::id()
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                if let Err(error) = file.write_all(platform.as_bytes()) {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error)
+                        .with_context(|| format!("writing inline platform to {}", path.display()));
+                }
+                return Ok((format!("@{}", path.display()), Some(path)));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("creating inline platform at {}", path.display()));
+            }
+        }
+    }
+
+    bail!("could not allocate a unique temporary file for the inline Renode platform")
 }
 
 /// Does this platform's I2C controller model need the single-byte-read
@@ -2688,6 +2717,25 @@ mod tests {
             "the file carries the source byte-for-byte"
         );
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn identical_inline_platforms_have_independent_lifetimes() {
+        let source =
+            "using \"platforms/cpus/stm32f103.repl\"\n\nspi1: SPI.STM32SPI @ sysbus 0x40013000\n";
+        let (_, first) = materialize_platform(source).unwrap();
+        let (_, second) = materialize_platform(source).unwrap();
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_ne!(first, second, "concurrent backends must not share cleanup");
+        std::fs::remove_file(&first).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&second).unwrap(),
+            source,
+            "dropping one backend must not remove its peer's platform"
+        );
+        std::fs::remove_file(&second).unwrap();
     }
 
     #[test]

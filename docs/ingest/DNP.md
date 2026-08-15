@@ -75,7 +75,7 @@ firmware = "firmware/build/app.elf"
 
 dnp = "fit-except-links"   # or "fit-all", or "honour"; this is the default
 fit = ["R7"]               # fit these regardless of the policy
-no_fit = ["A101"]          # leave these open regardless of the policy
+no_fit = ["A101"]          # leave these open regardless of layout DNP state
 
 # A spec needs at least one assertion; without an [[assert]] block
 # `hauksbee-ci run` refuses:
@@ -88,6 +88,43 @@ kind = "no_faults"
 Naming an unknown reference is an error. Naming the same part in both `fit`
 and `no_fit` is also an error. A typo should fail loudly, not quietly change
 nothing.
+
+### Checked-in assembly variants
+
+When one superset layout has several fitted assemblies, put the population
+decision in its own small TOML artifact instead of treating the BOM's populate
+column as executable policy:
+
+```toml
+# hardware/prototype.variant.toml
+name = "prototype without sensor"
+fit = ["R7"]
+no_fit = ["U4"]
+```
+
+Then reference it from the CI spec:
+
+```toml
+board = "hardware/board.kicad_pcb"
+variant = "hardware/prototype.variant.toml"
+duration_ms = 1
+
+[[assert]]
+kind = "no_faults"
+```
+
+The variant's `fit` and `no_fit` lists merge with any lists written directly
+in the spec. `fit` can place a layout-DNP part. `no_fit` can leave out an
+ordinary part when the layout describes a superset assembly. Unknown refs,
+duplicates within one artifact, and contradictions refuse. Identical decisions
+in the spec and variant deduplicate; opposite decisions refuse. The exact
+variant bytes and the named decision are separate entries in the CI evidence
+inventory and immutable run manifest; a purchasing spreadsheet never overrides
+them implicitly. CI refuses a selection which leaves every board component
+open: `no_faults` on an empty circuit would be a vacuous pass, not evidence
+about the design. It also refuses a simulated peripheral whose `ref` names a
+component this variant leaves open, even when the peripheral declares its net
+explicitly; routing information cannot make an absent physical device present.
 
 ## Firmware on a board with no processor
 

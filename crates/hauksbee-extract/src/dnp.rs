@@ -338,7 +338,13 @@ impl ExtractedBoard {
             ..Default::default()
         };
         for comp in &mut self.components {
-            if !comp.dnp {
+            // An explicit `no_fit` is also the assembly-variant seam: the
+            // layout may describe the superset of placements and carry no DNP
+            // flag for a part omitted from this build. In that case the named
+            // decision still has to make the component electrically absent.
+            // Policy-only decisions continue to apply only to layout DNPs.
+            let explicitly_open = no_fit.contains(&comp.reference);
+            if !comp.dnp && !explicitly_open {
                 continue;
             }
             let reason = if fit.contains(&comp.reference) {
@@ -373,6 +379,7 @@ impl ExtractedBoard {
                     decision.fitted.push(part);
                 }
                 _ => {
+                    comp.dnp = true;
                     comp.properties
                         .push((DNP_REASON_KEY.to_string(), reason.policy_tag().to_string()));
                     decision.left_open.push(part);
