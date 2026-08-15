@@ -42,6 +42,22 @@
       "description": "Path to the board file, relative to the spec file's directory. A\n`.kicad_sch` (schematic-stage CI) is loaded by path so its sheet\nhierarchy resolves; `.kicad_pcb` / `.net` / `.brd` / `.d356` are sniffed\nfrom content.",
       "type": "string"
     },
+    "bom": {
+      "description": "Optional BOM, resolved relative to the spec. It is dialect-detected and\nreconciled through the same fail-closed identity path as `hauksbee run\n--bom` before any CI assertion binds.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "bom_columns": {
+      "description": "Explicit BOM column confirmations, each `role=Header`, equivalent to a\nrepeated `hauksbee run --bom-column` flag.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
     "decoupling": {
       "description": "Opt-in capacitor parasitics (ESR/ESL) for this run. Off by default, so a\nboard's decoupling stays ideal unless realism is explicitly requested.",
       "anyOf": [
@@ -137,7 +153,7 @@
       }
     },
     "no_fit": {
-      "description": "References of Do-Not-Populate parts to leave open, whatever `dnp` says.",
+      "description": "References to leave open, whatever the layout DNP state or `dnp` policy\nsays. This is also how an assembly variant omits an ordinary part from\na superset layout.",
       "type": "array",
       "default": [],
       "items": {
@@ -157,6 +173,14 @@
       "items": {
         "$ref": "#/definitions/PeripheralSpec"
       }
+    },
+    "placement": {
+      "description": "Optional pick-and-place file, resolved relative to the spec and checked\nagainst layout position, side, rotation, package and identity.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
     },
     "profile": {
       "description": "Inline (spec-local) load-profile definitions, referenced by a scenario's\n`profile` field in addition to the built-in profile database.",
@@ -219,6 +243,14 @@
       "items": {
         "$ref": "#/definitions/ToleranceRule"
       }
+    },
+    "variant": {
+      "description": "Optional assembly-variant TOML (`name`, `fit`, `no_fit`). Its exact\nbytes and decisions are inventoried separately from the BOM.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
     }
   },
   "additionalProperties": false,

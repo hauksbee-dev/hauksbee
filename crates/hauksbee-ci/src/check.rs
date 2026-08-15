@@ -14,10 +14,11 @@
 //! validation errors; absent when not derivable), and a short suggested `fix`
 //! where one is derivable (typically a did-you-mean).
 //!
-//! The `firmware` path is resolved and checked to exist, on the same code path
-//! `run` uses, so `check` cannot pass a spec `run` will refuse at startup. That
-//! is the one artifact check beyond the board, and `--no-board` turns both off
-//! together for an editor loop where neither is built yet.
+//! BOM, placement and assembly-variant artifacts are parsed and reconciled on
+//! the same code path `run` uses; the `firmware` path is resolved and checked
+//! to exist too. `check` therefore cannot pass a spec `run` will refuse at
+//! startup. `--no-board` turns all on-disk artifact checks off together for an
+//! editor loop where they may not be built or checked out yet.
 //!
 //! What `check` does NOT verify (these need a run, a model bind, or an
 //! artifact that legitimately may not exist yet at edit time): whether the
@@ -89,6 +90,11 @@ pub struct CheckOptions {
     /// image): parse + structural validation only. For editor loops where the
     /// board is large or not checked out, or the firmware is not built yet.
     pub no_board: bool,
+    /// Extra model directory, with the same highest-priority layer used by
+    /// `run --models-dir`. Manufacturing identity reconciliation consumes the
+    /// model library, so `check` must use the identical authority or it can
+    /// accept a BOM/placement combination that `run` later refuses.
+    pub models_dir: Option<std::path::PathBuf>,
 }
 
 /// Validate the spec at `path` without running anything. Empty vec = valid.
@@ -99,9 +105,10 @@ pub struct CheckOptions {
 ///    / `missing-field`, with exact line/col from the parser's span),
 /// 3. board-independent structural validation, ALL independent errors
 ///    collected ([`Spec::validate_all`]),
-/// 4. unless `no_board`: resolve + load the board file (`board-load`) and
-///    validate every referenced net (`unknown-net`) and component reference
-///    (`unknown-ref`) against it,
+/// 4. unless `no_board`: resolve + load the board and reconcile its BOM,
+///    placement and assembly variant (`board-load` / `invalid`), then validate
+///    every referenced net (`unknown-net`) and component reference
+///    (`unknown-ref`) against that exact assembled input,
 /// 5. unless `no_board`: resolve the `firmware` path and check it exists and is
 ///    readable (`firmware-missing`), on the same code path `run` uses.
 pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
@@ -151,17 +158,26 @@ pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
                 });
             }
             Ok(board) => {
-                let known: Vec<String> = board.nets.iter().map(|n| n.name.clone()).collect();
-                if let Err(e) = spec.check_nets(&known) {
-                    push_spec_error(&mut diags, &text, &e);
-                }
-                let known_refs: Vec<String> = board
-                    .components
-                    .iter()
-                    .map(|c| c.reference.clone())
-                    .collect();
-                for e in crate::runner::component_ref_errors(&spec, &known_refs) {
-                    push_spec_error(&mut diags, &text, &e);
+                let extra: Vec<&Path> = opts.models_dir.as_deref().into_iter().collect();
+                let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&extra);
+                match crate::runner::prepare_assembly_inputs(&spec, board, &lib) {
+                    Err(error) => push_spec_error(&mut diags, &text, &error),
+                    Ok(prepared) => {
+                        let known: Vec<String> =
+                            prepared.board.nets.iter().map(|n| n.name.clone()).collect();
+                        if let Err(e) = prepared.spec.check_nets(&known) {
+                            push_spec_error(&mut diags, &text, &e);
+                        }
+                        let known_refs: Vec<String> = prepared
+                            .board
+                            .components
+                            .iter()
+                            .map(|c| c.reference.clone())
+                            .collect();
+                        for e in crate::runner::component_ref_errors(&prepared.spec, &known_refs) {
+                            push_spec_error(&mut diags, &text, &e);
+                        }
+                    }
                 }
             }
         }

@@ -65,7 +65,7 @@ is present exactly for exit 3.
 | `timing_refusals` | array of string | yes, may be empty | explicit unrepresentable timing claims or replay limits; any entry makes the run INVALID |
 | `dead_rails` | array of string | yes, may be empty | nets that name a supply and that nothing powered |
 | `waiver_notes` | array of string | yes, may be empty | lapsed waivers, active waivers that matched nothing, a malformed waiver file |
-| `inventory` | array of object | yes, may be empty | exact input files consumed (board, spec, firmware, models), with content hashes |
+| `inventory` | array of object | yes, may be empty | exact input files consumed (board, spec, firmware, BOM, placement, assembly variant, waivers, models), with content hashes |
 | `assumptions` | array of object | yes, may be empty | the canonical typed assumption registry; `substitutions`/`coverage_warnings` are compatibility projections of it |
 | `evidence` | array of object | yes, may be empty | one causal evidence map per evaluated assertion (plus board-scoped maps); `assumptions` ids inside resolve in the registry above |
 | `results` | array of object | yes | one entry per assertion, in spec order |

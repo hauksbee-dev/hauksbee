@@ -111,6 +111,12 @@ fn init_generates_a_spec_the_loader_accepts() {
     // The rendered text still carries a (commented) boot-coverage block so the
     // user can opt in after wiring firmware.
     let text = hauksbee_ci::init::render_spec(&board).expect("render scaffolds a spec");
+    for field in ["# bom =", "# bom_columns =", "# placement =", "# variant ="] {
+        assert!(
+            text.contains(field),
+            "the starter must make assembly inputs discoverable without enabling them: {field}\n{text}"
+        );
+    }
     assert!(
         text.contains("# kind = \"boot_coverage\""),
         "a commented boot-coverage block is present to opt into, got:\n{text}"

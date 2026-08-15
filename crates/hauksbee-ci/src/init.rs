@@ -327,6 +327,22 @@ fn render_spec_at_with_run_hint(
         s,
         "board = \"{board_file}\"          # the design file this spec checks"
     );
+    let _ = writeln!(
+        s,
+        "# bom = \"hardware/bom.csv\"        # exact purchased-part identity (optional)"
+    );
+    let _ = writeln!(
+        s,
+        "# bom_columns = [\"reference=Customer Reference\"] # confirm an ambiguous header"
+    );
+    let _ = writeln!(
+        s,
+        "# placement = \"hardware/positions.csv\" # assembly position/side cross-check (optional)"
+    );
+    let _ = writeln!(
+        s,
+        "# variant = \"hardware/prototype.variant.toml\" # explicit fit/no-fit assembly (optional)"
+    );
 
     // MCU + firmware placeholder. The informational value is what the BOARD
     // says (the part value), not the coarse backend family it collapses to:

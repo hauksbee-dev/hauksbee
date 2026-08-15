@@ -867,8 +867,18 @@ mod tests {
         assert_eq!(command, [0x07]);
         drop(peer);
 
-        let events = ep.poll_peer();
-        assert!(events.contains(&PeerEvent::Detached));
+        let mut saw_detach = false;
+        for _ in 0..200 {
+            if ep.poll_peer().contains(&PeerEvent::Detached) {
+                saw_detach = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            saw_detach,
+            "the peer close must be observed within the bounded poll window"
+        );
     }
 
     #[cfg(unix)]

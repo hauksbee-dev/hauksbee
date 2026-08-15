@@ -777,6 +777,20 @@ impl BoardEvidence {
         Ok(self)
     }
 
+    /// Attach an already-normalized auxiliary artifact (BOM, placement or
+    /// another input that shaped the assembled board). The caller constructs
+    /// the typed provenance from the reader's own mapping and reconciliation
+    /// report; this method makes it part of the same registry and therefore of
+    /// every later CI assertion map.
+    pub fn with_supporting_artifact(
+        mut self,
+        artifact: ArtifactProvenance,
+    ) -> Result<Self, EvidenceError> {
+        let id = self.registry.add_artifact(artifact)?;
+        self.supporting_artifacts.push(id);
+        Ok(self)
+    }
+
     /// Merge facts produced after binding (scheduler, solver, live waiver).
     /// Existing artifact indices remain stable and every map is rebuilt later.
     pub fn with_assumptions(

@@ -19,11 +19,27 @@ fn ci_run_emits_spec_and_transitive_input_hashes_without_polluting_json() {
         .join("../../testdata/boards/button_pullup.kicad_pcb");
     let spec = dir.path().join("check.toml");
     let manifest = dir.path().join("check.manifest.json");
+    let bom = dir.path().join("bom.csv");
+    let placement = dir.path().join("positions.csv");
+    let variant = dir.path().join("prototype.variant.toml");
+    std::fs::write(&bom, "Designator,Value\nR1,10k\n").unwrap();
+    std::fs::write(
+        &placement,
+        "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n\
+         R1,10k,R_Axial_DIN0207_L6.3mm_D2.5mm,100,100,0,top\n",
+    )
+    .unwrap();
+    // Keep a real variant input without deleting the fixture board's only
+    // component: an all-open assembly is now correctly invalid because
+    // `no_faults` would pass vacuously on an empty circuit.
+    std::fs::write(&variant, "name = 'prototype'\nfit = ['R1']\n").unwrap();
     std::fs::write(
         &spec,
         format!(
-            "name = 'manifest smoke'\nboard = {:?}\nduration_ms = 0.01\n\n[[assert]]\nkind = 'no_faults'\n",
-            board.display().to_string()
+            "name = 'manifest smoke'\nboard = {:?}\nbom = 'bom.csv'\nplacement = \
+             'positions.csv'\nvariant = 'prototype.variant.toml'\nduration_ms = 0.01\n\n\
+             [[assert]]\nkind = 'no_faults'\n",
+            board.display().to_string(),
         ),
     )
     .unwrap();
@@ -46,6 +62,9 @@ fn ci_run_emits_spec_and_transitive_input_hashes_without_polluting_json() {
     assert_eq!(doc.tool.name, "hauksbee-ci");
     assert!(doc.inputs.iter().any(|input| input.role == "spec[0]"));
     assert!(doc.inputs.iter().any(|input| input.role == "board[0]"));
+    assert!(doc.inputs.iter().any(|input| input.role == "bom[0]"));
+    assert!(doc.inputs.iter().any(|input| input.role == "placement[0]"));
+    assert!(doc.inputs.iter().any(|input| input.role == "variant[0]"));
     assert!(!doc
         .invocation
         .argv
