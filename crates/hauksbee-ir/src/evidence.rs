@@ -1723,6 +1723,10 @@ pub enum ArtifactRole {
     Firmware,
     /// A bill of materials.
     Bom,
+    /// A pick-and-place / component-position file.
+    Placement,
+    /// An explicit assembly-variant decision (which references are fitted).
+    Variant,
     /// A CI spec / assertion file.
     Spec,
     /// A waiver file.

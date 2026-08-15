@@ -111,6 +111,116 @@ impl From<DnpMode> for hauksbee_extract::dnp::DnpPolicy {
     }
 }
 
+/// A checked-in assembly variant. The board remains the electrical design
+/// authority; this artifact states only which named placements are present in
+/// one build of that design. It is separate from a BOM because a purchasing
+/// spreadsheet's populate column remains advice, never hidden fit policy.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyVariant {
+    /// Human-readable variant name carried into the evidence inventory.
+    pub name: String,
+    /// Layout-DNP parts fitted in this assembly.
+    #[serde(default)]
+    pub fit: Vec<String>,
+    /// Parts omitted from this assembly, even when the superset layout does
+    /// not mark them DNP.
+    #[serde(default)]
+    pub no_fit: Vec<String>,
+}
+
+impl AssemblyVariant {
+    pub(crate) fn load(path: &Path) -> Result<(Self, Vec<u8>), SpecError> {
+        let raw = std::fs::read(path).map_err(|error| {
+            SpecError::Io(format!(
+                "reading assembly variant '{}': {error}",
+                path.display()
+            ))
+        })?;
+        let text = std::str::from_utf8(&raw).map_err(|error| {
+            SpecError::Invalid(format!(
+                "assembly variant '{}' is not UTF-8 TOML: {error}",
+                path.display()
+            ))
+        })?;
+        let variant: Self = toml::from_str(text).map_err(|error| SpecError::Toml {
+            file: path.display().to_string(),
+            message: crate::error::cap_context_width(&error.to_string()),
+        })?;
+        variant.validate(path)?;
+        Ok((variant, raw))
+    }
+
+    fn validate(&self, path: &Path) -> Result<(), SpecError> {
+        if self.name.trim().is_empty() {
+            return Err(SpecError::Invalid(format!(
+                "assembly variant '{}' needs a non-empty `name`",
+                path.display()
+            )));
+        }
+        if self.fit.is_empty() && self.no_fit.is_empty() {
+            return Err(SpecError::Invalid(format!(
+                "assembly variant '{}' names no `fit` or `no_fit` references; an empty variant changes no assembly",
+                path.display()
+            )));
+        }
+        validate_fit_lists(
+            &self.fit,
+            &self.no_fit,
+            &format!("assembly variant '{}'", path.display()),
+        )
+    }
+
+    pub(crate) fn apply_to(&self, spec: &mut Spec, path: &Path) -> Result<(), SpecError> {
+        spec.fit.extend(self.fit.iter().cloned());
+        spec.no_fit.extend(self.no_fit.iter().cloned());
+        dedup_refs(&mut spec.fit);
+        dedup_refs(&mut spec.no_fit);
+        validate_fit_lists(
+            &spec.fit,
+            &spec.no_fit,
+            &format!("spec plus assembly variant '{}'", path.display()),
+        )
+    }
+}
+
+fn dedup_refs(refs: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    refs.retain(|reference| seen.insert(reference.clone()));
+}
+
+fn validate_fit_lists(fit: &[String], no_fit: &[String], context: &str) -> Result<(), SpecError> {
+    let mut seen = std::collections::HashSet::new();
+    for reference in fit.iter().chain(no_fit) {
+        if reference.trim().is_empty() {
+            return Err(SpecError::Invalid(format!(
+                "{context} contains an empty fit/no_fit reference"
+            )));
+        }
+    }
+    for reference in fit {
+        if !seen.insert(("fit", reference)) {
+            return Err(SpecError::Invalid(format!(
+                "{context} names '{reference}' more than once in `fit`"
+            )));
+        }
+    }
+    seen.clear();
+    for reference in no_fit {
+        if !seen.insert(("no_fit", reference)) {
+            return Err(SpecError::Invalid(format!(
+                "{context} names '{reference}' more than once in `no_fit`"
+            )));
+        }
+    }
+    if let Some(reference) = fit.iter().find(|reference| no_fit.contains(reference)) {
+        return Err(SpecError::Invalid(format!(
+            "{context} names '{reference}' as both fitted and left open; pick one"
+        )));
+    }
+    Ok(())
+}
+
 /// Timing coverage a strict check requires from the MCU/co-sim bridge.
 /// Declaring this opts the run into adaptive poll chunking and fail-closed
 /// capability negotiation; absent means the report still publishes measured
@@ -168,6 +278,23 @@ pub struct Spec {
     /// hierarchy resolves; `.kicad_pcb` / `.net` / `.brd` / `.d356` are sniffed
     /// from content.
     pub board: PathBuf,
+    /// Optional BOM, resolved relative to the spec. It is dialect-detected and
+    /// reconciled through the same fail-closed identity path as `hauksbee run
+    /// --bom` before any CI assertion binds.
+    #[serde(default)]
+    pub bom: Option<PathBuf>,
+    /// Explicit BOM column confirmations, each `role=Header`, equivalent to a
+    /// repeated `hauksbee run --bom-column` flag.
+    #[serde(default)]
+    pub bom_columns: Vec<String>,
+    /// Optional pick-and-place file, resolved relative to the spec and checked
+    /// against layout position, side, rotation, package and identity.
+    #[serde(default)]
+    pub placement: Option<PathBuf>,
+    /// Optional assembly-variant TOML (`name`, `fit`, `no_fit`). Its exact
+    /// bytes and decisions are inventoried separately from the BOM.
+    #[serde(default)]
+    pub variant: Option<PathBuf>,
     /// Optional companion Eagle schematic. CI identity-validates and inventories
     /// it as exact input provenance; assertions still use the board alone as the
     /// physical authority and do not consume its declarations.
@@ -180,7 +307,9 @@ pub struct Spec {
     /// `dnp` says. An unknown reference is a loud spec error.
     #[serde(default)]
     pub fit: Vec<String>,
-    /// References of Do-Not-Populate parts to leave open, whatever `dnp` says.
+    /// References to leave open, whatever the layout DNP state or `dnp` policy
+    /// says. This is also how an assembly variant omits an ordinary part from
+    /// a superset layout.
     #[serde(default)]
     pub no_fit: Vec<String>,
     /// What to do with the DNP parts neither `fit` nor `no_fit` names:
@@ -1316,6 +1445,18 @@ impl Spec {
         self.resolve(&self.board)
     }
 
+    pub fn bom_path(&self) -> Option<PathBuf> {
+        self.bom.as_ref().map(|path| self.resolve(path))
+    }
+
+    pub fn placement_path(&self) -> Option<PathBuf> {
+        self.placement.as_ref().map(|path| self.resolve(path))
+    }
+
+    pub fn variant_path(&self) -> Option<PathBuf> {
+        self.variant.as_ref().map(|path| self.resolve(path))
+    }
+
     /// The optional Eagle companion path, resolved against the spec directory.
     pub fn schematic_path(&self) -> Option<PathBuf> {
         self.schematic.as_ref().map(|path| self.resolve(path))
@@ -1411,6 +1552,21 @@ impl Spec {
                 "spec has no [[assert]] blocks: a check with no assertions always passes vacuously"
                     .into(),
             ));
+        }
+        if let Err(error) = validate_fit_lists(&self.fit, &self.no_fit, "spec") {
+            errs.push(error);
+        }
+        if self.bom.is_none() && !self.bom_columns.is_empty() {
+            errs.push(SpecError::Invalid(
+                "`bom_columns` needs `bom = ...`; there is no BOM to map".into(),
+            ));
+        }
+        for mapping in &self.bom_columns {
+            if let Err(error) = hauksbee_extract::bom::ColumnOverrides::parse_pair(mapping) {
+                errs.push(SpecError::Invalid(format!(
+                    "invalid `bom_columns` entry {mapping:?}: {error}"
+                )));
+            }
         }
         // TOML accepts `inf`/`nan` floats, so a non-finite time field must be
         // rejected explicitly: `duration_ms = inf` passes `<= 0.0` yet makes the

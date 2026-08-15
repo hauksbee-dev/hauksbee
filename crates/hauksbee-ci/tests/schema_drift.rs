@@ -117,7 +117,17 @@ fn generated_schema_is_strict_and_documented() {
     // Doc comments must arrive as descriptions: that is the hover text the
     // editor shows, and the reason the schema is generated from the types.
     let props = &schema["properties"];
-    for field in ["board", "fit", "no_fit", "dnp", "duration_ms"] {
+    for field in [
+        "board",
+        "bom",
+        "bom_columns",
+        "placement",
+        "variant",
+        "fit",
+        "no_fit",
+        "dnp",
+        "duration_ms",
+    ] {
         let d = props[field]["description"].as_str().unwrap_or("");
         assert!(
             !d.is_empty(),

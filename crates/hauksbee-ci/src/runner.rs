@@ -10,12 +10,244 @@ use std::path::{Path, PathBuf};
 use hauksbee_engine::power_supply::{Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 use hauksbee_engine::{bind_board, BoundBoard, HauksbeeEngine};
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_ir::evidence::{
+    ArtifactKind, ArtifactProvenance, ArtifactRole, Contribution, IgnoredInput,
+};
 use hauksbee_ir::{Device, NodeId, SourceKind};
 use hauksbee_models::ModelLibrary;
 use hauksbee_server::engine::Engine;
 
 use crate::error::SpecError;
 use crate::spec::{Spec, SupplySpec};
+
+#[derive(Debug, Clone)]
+pub(crate) struct VariantEvidence {
+    path: PathBuf,
+    raw: Vec<u8>,
+    name: String,
+    fit: Vec<String>,
+    no_fit: Vec<String>,
+}
+
+/// Board state after every checked-in assembly input has been parsed and
+/// reconciled. The effective spec is a clone because an assembly variant adds
+/// explicit fit/no_fit decisions without mutating the user-visible source
+/// object or giving a BOM's population column implicit authority.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedAssembly {
+    pub board: ExtractedBoard,
+    pub spec: Spec,
+    pub supporting_artifacts: Vec<ArtifactProvenance>,
+    pub variant: Option<VariantEvidence>,
+}
+
+/// Immutable source material used to build one member's evidence map. Keeping
+/// it together prevents the ensemble loop and `run_one` from drifting on which
+/// artifacts qualify every member of the same checked run.
+struct RunInputEvidence<'a> {
+    board_path: &'a Path,
+    input_kind: hauksbee_engine::board_input::InputKind,
+    input_raw: &'a [u8],
+    reader_notes: &'a [String],
+    schematic_ties: Option<&'a hauksbee_engine::schematic_ties::SchematicTies>,
+    supporting_artifacts: &'a [ArtifactProvenance],
+    variant: Option<&'a VariantEvidence>,
+}
+
+fn identity_contributions(report: &hauksbee_engine::binder::IdentityReport) -> Vec<Contribution> {
+    report
+        .lines()
+        .into_iter()
+        .map(|detail| Contribution {
+            what: "identity_reconciliation".into(),
+            detail: detail.trim().to_string(),
+        })
+        .collect()
+}
+
+fn bom_provenance(
+    bom: &hauksbee_extract::bom::Bom,
+    report: &hauksbee_engine::binder::IdentityReport,
+) -> Result<ArtifactProvenance, SpecError> {
+    let mut contributed: Vec<Contribution> = bom
+        .provenance
+        .contributed
+        .iter()
+        .map(|item| Contribution {
+            what: item.what.clone(),
+            detail: item.detail.clone(),
+        })
+        .collect();
+    contributed.extend(identity_contributions(report));
+    ArtifactProvenance::new(
+        bom.provenance.path.clone(),
+        ArtifactKind::Bom,
+        ArtifactRole::Bom,
+        bom.provenance.sha256.clone(),
+        Vec::new(),
+    )
+    .map(|artifact| {
+        artifact
+            .with_format(bom.provenance.kind.clone())
+            .with_contributions(contributed)
+            .with_ignored(
+                bom.provenance
+                    .ignored
+                    .iter()
+                    .map(|item| IgnoredInput {
+                        what: item.what.clone(),
+                        why: item.why.clone(),
+                    })
+                    .collect(),
+            )
+    })
+    .map_err(|error| SpecError::Invalid(format!("building BOM evidence: {error}")))
+}
+
+fn placement_provenance(
+    placement: &hauksbee_extract::placement::PlacementFile,
+    report: &hauksbee_engine::binder::IdentityReport,
+) -> Result<ArtifactProvenance, SpecError> {
+    let mut contributed: Vec<Contribution> = placement
+        .provenance
+        .contributed
+        .iter()
+        .map(|item| Contribution {
+            what: item.what.clone(),
+            detail: item.detail.clone(),
+        })
+        .collect();
+    contributed.extend(identity_contributions(report));
+    ArtifactProvenance::new(
+        placement.provenance.path.clone(),
+        ArtifactKind::Placement,
+        ArtifactRole::Placement,
+        placement.provenance.sha256.clone(),
+        Vec::new(),
+    )
+    .map(|artifact| {
+        artifact
+            .with_format(placement.provenance.kind.clone())
+            .with_contributions(contributed)
+            .with_ignored(
+                placement
+                    .provenance
+                    .ignored
+                    .iter()
+                    .map(|item| IgnoredInput {
+                        what: item.what.clone(),
+                        why: item.why.clone(),
+                    })
+                    .collect(),
+            )
+    })
+    .map_err(|error| SpecError::Invalid(format!("building placement evidence: {error}")))
+}
+
+/// Apply BOM, placement and assembly-variant inputs through the production
+/// readers and binder. Used by both `run` and `check`, so an editor validation
+/// cannot call an artifact safe that the gate later refuses.
+pub(crate) fn prepare_assembly_inputs(
+    spec: &Spec,
+    mut board: ExtractedBoard,
+    lib: &ModelLibrary,
+) -> Result<PreparedAssembly, SpecError> {
+    let mut effective_spec = spec.clone();
+    let mut supporting_artifacts = Vec::new();
+
+    if let Some(path) = spec.bom_path() {
+        let mut overrides = hauksbee_extract::bom::ColumnOverrides::new();
+        for mapping in &spec.bom_columns {
+            let (role, header) = hauksbee_extract::bom::ColumnOverrides::parse_pair(mapping)
+                .map_err(|error| {
+                    SpecError::Invalid(format!("invalid `bom_columns` entry {mapping:?}: {error}"))
+                })?;
+            overrides.set(role, header);
+        }
+        let bom = hauksbee_extract::bom::Bom::read_with(&path, &overrides)
+            .map_err(|error| SpecError::Invalid(format!("reading BOM: {error}")))?;
+        let report = hauksbee_engine::binder::apply_bom_identity(&mut board, &bom, lib)
+            .map_err(|error| SpecError::Invalid(format!("reconciling BOM: {error}")))?;
+        supporting_artifacts.push(bom_provenance(&bom, &report)?);
+    }
+
+    if let Some(path) = spec.placement_path() {
+        let placement = hauksbee_extract::placement::PlacementFile::read(&path)
+            .map_err(|error| SpecError::Invalid(format!("reading placement: {error}")))?;
+        let report = hauksbee_engine::binder::apply_placement_identity(&mut board, &placement, lib)
+            .map_err(|error| SpecError::Invalid(format!("reconciling placement: {error}")))?;
+        supporting_artifacts.push(placement_provenance(&placement, &report)?);
+    }
+
+    let variant = if let Some(path) = spec.variant_path() {
+        let (variant, raw) = crate::spec::AssemblyVariant::load(&path)?;
+        variant.apply_to(&mut effective_spec, &path)?;
+        Some(VariantEvidence {
+            path,
+            raw,
+            name: variant.name,
+            fit: variant.fit,
+            no_fit: variant.no_fit,
+        })
+    } else {
+        None
+    };
+
+    // Population is part of the assembled board, not a per-seed simulation
+    // option. Apply it here, at the preparation seam shared by `check` and
+    // `run`, so both commands validate and bind the same physical assembly.
+    // Keeping this in `run_one` let `check` bless contradictions which only
+    // became visible after DNP/variant processing.
+    board
+        .apply_dnp_policy(
+            effective_spec.dnp.into(),
+            &effective_spec.fit,
+            &effective_spec.no_fit,
+        )
+        .map_err(|error| SpecError::Invalid(format!("dnp: {error}")))?;
+
+    if !board.components.is_empty() && board.components.iter().all(|component| component.dnp) {
+        return Err(SpecError::Invalid(
+            "the selected assembly leaves every board component open; assertions such as \
+             `no_faults` would then pass on an empty circuit without testing the design. Fit at \
+             least one component, or select the intended assembly variant."
+                .into(),
+        ));
+    }
+
+    // For SPI slaves, `ref` names the component the simulated peripheral
+    // physically IS. A real layout reference is insufficient: if the selected
+    // variant leaves that part open, instantiating its virtual slave would test
+    // hardware which is not assembled. This check deliberately runs even when
+    // `cs_net` is explicit; an explicit route cannot make an absent device real.
+    for peripheral in &effective_spec.peripherals {
+        if !crate::spec::is_spi_slave_kind(&peripheral.kind) {
+            continue;
+        }
+        let Some(reference) = peripheral.reference.as_deref() else {
+            continue;
+        };
+        if board
+            .components
+            .iter()
+            .any(|component| component.reference == reference && component.dnp)
+        {
+            return Err(SpecError::Invalid(format!(
+                "SPI peripheral '{}' uses `ref = \"{}\"`, but that component is left open in \
+                 the selected assembly. Remove the peripheral or fit the component; CI will not \
+                 simulate a slave which is not physically assembled.",
+                peripheral.id, reference
+            )));
+        }
+    }
+
+    Ok(PreparedAssembly {
+        board,
+        spec: effective_spec,
+        supporting_artifacts,
+        variant,
+    })
+}
 
 /// Per-net statistics collected over a run, sampled only at/after each
 /// assertion's time threshold (tracked per threshold so `after_ms` is honored).
@@ -440,18 +672,23 @@ pub fn run_spec_with_lib(
     let input_kind = normalized.kind;
     let input_raw = normalized.raw;
     let reader_notes = normalized.notes;
-    let base = normalized.board;
     let board_is_eagle = input_raw
         .windows(b"<eagle".len())
         .any(|window| window.eq_ignore_ascii_case(b"<eagle"));
     let schematic_path = spec.schematic_path();
+    // Design identity is checked before BOM/PnP enrichment fills missing
+    // values. Otherwise a correct board/companion pair can be rejected merely
+    // because a later manufacturing artifact supplied more identity.
     let schematic_ties = hauksbee_engine::schematic_ties::resolve(
         &board_path,
-        &base,
+        &normalized.board,
         schematic_path.as_deref(),
         board_is_eagle,
     )
     .map_err(|error| SpecError::Invalid(format!("resolving companion schematic: {error}")))?;
+    let prepared = prepare_assembly_inputs(spec, normalized.board, lib)?;
+    let base = prepared.board;
+    let spec = &prepared.spec;
     crate::progress::say(&format!(
         "  read {} components across {} nets",
         base.components.len(),
@@ -536,6 +773,15 @@ pub fn run_spec_with_lib(
 
     let mut outcomes = Vec::with_capacity(plans.len());
     let member_count = plans.len();
+    let run_inputs = RunInputEvidence {
+        board_path: &board_path,
+        input_kind,
+        input_raw: &input_raw,
+        reader_notes: &reader_notes,
+        schematic_ties: schematic_ties.as_ref(),
+        supporting_artifacts: &prepared.supporting_artifacts,
+        variant: prepared.variant.as_ref(),
+    };
     for plan in &plans {
         let mut outcome = run_one(
             spec,
@@ -544,11 +790,7 @@ pub fn run_spec_with_lib(
             plan,
             lib,
             member_count,
-            &board_path,
-            input_kind,
-            &input_raw,
-            &reader_notes,
-            schematic_ties.as_ref(),
+            &run_inputs,
         )?;
         outcome.ac = match &shared_ac {
             Some(ac) => Some(ac.clone()),
@@ -855,6 +1097,12 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
 pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<SpecError> {
     let set: std::collections::HashSet<&str> = known_refs.iter().map(String::as_str).collect();
     let mut named: Vec<(&str, &str)> = Vec::new();
+    for reference in &spec.fit {
+        named.push((reference.as_str(), "fit decision"));
+    }
+    for reference in &spec.no_fit {
+        named.push((reference.as_str(), "no_fit decision"));
+    }
     for ov in &spec.overrides {
         named.push((ov.reference.as_str(), "override"));
     }
@@ -1111,11 +1359,9 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard,
             })?;
         comp.value = ov.value.clone();
     }
-    // The DNP policy is board state too, and it decides whether a part is
-    // stamped at all, so it lands at this same pre-bind seam.
-    board
-        .apply_dnp_policy(spec.dnp.into(), &spec.fit, &spec.no_fit)
-        .map_err(|e| SpecError::Invalid(format!("dnp: {e}")))?;
+    // DNP / variant population was already applied by
+    // `prepare_assembly_inputs`, before `check` and `run` diverge. Reapplying it
+    // per seed would make this path a second authority for assembly state.
     Ok(board)
 }
 
@@ -1149,11 +1395,7 @@ fn run_one(
     plan: &crate::tolerance::SeedPlan,
     lib: &ModelLibrary,
     member_count: usize,
-    board_path: &Path,
-    input_kind: hauksbee_engine::board_input::InputKind,
-    input_raw: &[u8],
-    reader_notes: &[String],
-    schematic_ties: Option<&hauksbee_engine::schematic_ties::SchematicTies>,
+    run_inputs: &RunInputEvidence<'_>,
 ) -> Result<RunOutcome, SpecError> {
     let seed = plan.seed;
     let mut board = apply_overrides(spec, base)?;
@@ -1758,16 +2000,22 @@ fn run_one(
     let mut evidence = hauksbee_engine::BoardEvidence::from_bound(
         &board,
         engine.report(),
-        reader_notes,
+        run_inputs.reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )
-    .and_then(|evidence| evidence.with_input_artifact(board_path, input_raw, input_kind))
+    .and_then(|evidence| {
+        evidence.with_input_artifact(
+            run_inputs.board_path,
+            run_inputs.input_raw,
+            run_inputs.input_kind,
+        )
+    })
     .and_then(|evidence| {
         evidence.with_scoped_substitutions(engine.scheduler().scoped_substitutions())
     })
     .and_then(|evidence| evidence.with_assumptions(production_assumptions))
     .map_err(|e| SpecError::Invalid(format!("building run evidence: {e}")))?;
-    if let Some(ties) = schematic_ties {
+    if let Some(ties) = run_inputs.schematic_ties {
         evidence = evidence
             .with_schematic_artifact(
                 &ties.path,
@@ -1790,6 +2038,41 @@ fn run_one(
         evidence = evidence
             .with_firmware_artifact(path, &bytes)
             .map_err(|e| SpecError::Invalid(format!("building firmware evidence: {e}")))?;
+    }
+    for artifact in run_inputs.supporting_artifacts {
+        evidence = evidence
+            .with_supporting_artifact(artifact.clone())
+            .map_err(|error| {
+                SpecError::Invalid(format!("building assembly-input evidence: {error}"))
+            })?;
+    }
+    if let Some(variant) = run_inputs.variant {
+        let fit = if variant.fit.is_empty() {
+            "none".to_string()
+        } else {
+            variant.fit.join(", ")
+        };
+        let no_fit = if variant.no_fit.is_empty() {
+            "none".to_string()
+        } else {
+            variant.no_fit.join(", ")
+        };
+        evidence = evidence
+            .with_toml_artifact(
+                &variant.path,
+                &variant.raw,
+                ArtifactRole::Variant,
+                Contribution {
+                    what: "assembly_variant".into(),
+                    detail: format!(
+                        "variant {:?}: fitted [{}]; left open [{}]",
+                        variant.name, fit, no_fit
+                    ),
+                },
+            )
+            .map_err(|error| {
+                SpecError::Invalid(format!("building assembly-variant evidence: {error}"))
+            })?;
     }
 
     Ok(RunOutcome {
