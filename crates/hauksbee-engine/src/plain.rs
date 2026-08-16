@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 
 use hauksbee_extract::{
     DrcReport, ItemKind, LintCheck, NetLintReport, Severity, SiCheck, SiFinding, SiReport,
-    SiSeverity, ViolationKind, DNP_PULLUP_MESSAGE_MARKER,
+    SiSeverity, ViolationKind, DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
 
 use crate::stress::{FaultEvent, FaultKind};
@@ -760,6 +760,14 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                     "Either fit the resistor in this build (remove the DNP mark, or name it as fitted), or, if leaving it off is deliberate, document what else defines the line's level.".to_string(),
                 )
             }
+            // The SPI-wired-socket variant: the lint's own message avoids the
+            // SD-mode open-drain claim (false for SPI), so the plain surface
+            // must not reinstate it.
+            LintCheck::MissingSdPullup if f.message.contains(SPI_PULLUP_MESSAGE_MARKER) => (
+                format!("The SD card line \"{net}\" has no pull-up resistor (socket appears wired for SPI mode)."),
+                "This socket looks wired for SPI mode (DAT1/DAT2 are not driven by the host). In SPI mode the CMD pin is the host's DI line and DAT0 is the card's DO, which floats whenever the card is deselected; the SD specification still recommends pull-ups on these lines so they rest at a defined level.".to_string(),
+                format!("Add a pull-up resistor (typically 10k to 100k ohm) from \"{net}\" to the card's supply rail, or record the omission as a deliberate choice for this SPI design."),
+            ),
             LintCheck::MissingI2cPullup => (
                 format!("The I2C data line \"{net}\" has no pull-up resistor."),
                 "I2C is an \"open-drain\" bus: parts can only pull the line low, so it needs a resistor to a power rail to pull it back high. Without one the line floats, and the bus will not communicate reliably (or at all).".to_string(),

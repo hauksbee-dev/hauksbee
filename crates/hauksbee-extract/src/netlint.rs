@@ -111,6 +111,13 @@ pub enum LintCheck {
 /// rather than two strings that can silently drift apart.
 pub const DNP_PULLUP_MESSAGE_MARKER: &str = "do-not-populate";
 
+/// The phrase that marks an SD pull-up finding as the SPI-wired-socket
+/// variant, whose rationale differs from SD mode (CMD is the host's
+/// push-pull DI there, not an open-drain identification line). The plain
+/// renderer keys its SPI explanation off this substring; shared for the same
+/// no-drift reason as [`DNP_PULLUP_MESSAGE_MARKER`].
+pub const SPI_PULLUP_MESSAGE_MARKER: &str = "wired for SPI mode";
+
 impl LintCheck {
     /// Every variant, for exhaustiveness-style tests in downstream crates
     /// (e.g. "every check has a plain-language template"). Grows with the
@@ -372,12 +379,18 @@ fn is_resistor_array(c: &Component) -> bool {
     {
         return true;
     }
-    // A plain R-designated part on an R_Array footprint is the same physical
+    // RA/RZ are common array designators outside KiCad's RN convention.
+    if (r.starts_with("RA") || r.starts_with("RZ")) && connected_pads(c) >= 3 {
+        return true;
+    }
+    // A plain R-designated part on an array footprint is the same physical
     // thing; without this, its `4x0402` grid read as a pin array and the part
-    // classified connector-like, silencing whole nets.
+    // classified connector-like, silencing whole nets. Vendor array footprints
+    // (Bourns CAY16/CAT16, Panasonic EXB) carry no "r_array" token.
+    let fp = c.footprint.to_ascii_lowercase();
     r.starts_with('R')
         && connected_pads(c) >= 3
-        && c.footprint.to_ascii_lowercase().contains("r_array")
+        && (fp.contains("r_array") || fp.contains("cay16") || fp.contains("cat16") || fp.contains("exb"))
 }
 
 /// Is this an I2C level translator that provides its own bus pull-ups, so an
@@ -877,12 +890,18 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 // Does another pad land on a rail (named, or a structural local
                 // rail with a bypass cap to ground)? A resistor array whose element
                 // pulls the bus to a rail terminates it just like a discrete R.
+                // Ground is refused even when a split-ground stitching cap makes
+                // it structurally rail-like: a pull-DOWN is not a pull-up.
                 for op in &c.pins {
                     if op.net == Some(net.id) {
                         continue;
                     }
                     if let Some(oid) = op.net {
-                        if net_is_raillike(board, oid) {
+                        let far_is_ground = board
+                            .net(oid)
+                            .map(|n| is_ground(&n.name))
+                            .unwrap_or(false);
+                        if !far_is_ground && net_is_raillike(board, oid) {
                             if crate::dnp::fitted_from_dnp_policy(c) {
                                 dnp_pullup_ref.get_or_insert_with(|| c.reference.clone());
                             } else {
@@ -1091,11 +1110,19 @@ fn is_card_socket_structurally(board: &ExtractedBoard, c: &Component) -> bool {
     if is_pin_array_package(&c.footprint)
         || [
             "header", "pinhead", "fpc", "ffc", "b2b", "board-to-board", "sodimm", "dimm", "edge",
-            "df40", "fh12", "mezz", "m.2", "m2_", "minipcie", "sim",
+            "df40", "df12", "fh12", "fh34", "jst", "slimstack", "mezz", "m.2", "m2_", "minipcie",
+            "sim",
         ]
         .iter()
         .any(|p| fp.contains(p))
     {
+        return false;
+    }
+    // Shape gate that needs no name knowledge at all: a microSD/SD/eMMC
+    // socket has 8-13 connected pads. A 24-pin flex, a 30-pin mezzanine, or a
+    // SODIMM carrying the bus off-board is far wider, whatever its footprint
+    // is called; those must default to "the bus exits", not to "socket".
+    if connected_pads(c) > 16 {
         return false;
     }
     let mut roles = std::collections::HashSet::new();
@@ -1166,9 +1193,12 @@ fn is_protection_part(c: &Component) -> bool {
     let v = c.value.to_ascii_uppercase();
     v.contains("ESD")
         || v.contains("TVS")
-        || ["TPD", "PESD", "USBLC", "SRV05", "IP42", "SP05", "PRTR"]
-            .iter()
-            .any(|p| v.starts_with(p))
+        || [
+            "TPD", "PESD", "USBLC", "SRV05", "IP42", "SP05", "PRTR", "SMF", "NUP", "RCLAMP",
+            "CM12", "CM14",
+        ]
+        .iter()
+        .any(|p| v.starts_with(p))
 }
 
 /// Does this component qualify as on-board host silicon for a card bus?
@@ -1207,13 +1237,18 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         // either. Like the I2C check, a resistor ARRAY is credited if ANY
         // element reaches a rail, without pairing the element to this net's
         // pad, a stated over-credit inherited for consistency rather than an
-        // oversight. Returns (fitted, dnp_policy_ref): a pull-up that is only
-        // present because the default fit policy assumed a DNP part will be
-        // placed is reported separately, because the assembled board does not
-        // carry it.
-        let scan_for_pullup = |net_id: i64| -> (bool, Option<String>) {
+        // oversight. Returns (fitted, dnp_policy_ref, unjudgeable): a pull-up
+        // that is only present because the default fit policy assumed a DNP
+        // part will be placed is reported separately, because the assembled
+        // board does not carry it; a resistor whose VALUE cannot be parsed
+        // (an MPN or a blank field, routine in Altium/EAGLE extraction) but
+        // which sits where a pull-up would makes the net unjudgeable: it must
+        // neither be credited as the pull-up nor ignored so the check claims
+        // "has no pull-up" about a resistor it cannot read.
+        let scan_for_pullup = |net_id: i64| -> (bool, Option<String>, bool) {
             let mut fitted = false;
             let mut dnp_ref = None;
+            let mut unjudgeable = false;
             for (c, _p) in members(board, net_id) {
                 if !AssemblyState::of(c).is_present() {
                     continue;
@@ -1221,7 +1256,8 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 if !(is_resistor(c) || is_resistor_array(c)) {
                     continue;
                 }
-                if !parse_ohms(&c.value).is_none_or(|ohms| ohms >= 1_000.0) {
+                let parsed = parse_ohms(&c.value);
+                if parsed.is_some_and(|ohms| ohms < 1_000.0) {
                     continue;
                 }
                 for op in &c.pins {
@@ -1234,7 +1270,9 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                         .map(|n| is_ground(&n.name))
                         .unwrap_or(false);
                     if !far_is_ground && net_is_raillike(board, oid) {
-                        if crate::dnp::fitted_from_dnp_policy(c) {
+                        if parsed.is_none() {
+                            unjudgeable = true;
+                        } else if crate::dnp::fitted_from_dnp_policy(c) {
                             dnp_ref.get_or_insert_with(|| c.reference.clone());
                         } else {
                             fitted = true;
@@ -1242,10 +1280,10 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                     }
                 }
             }
-            (fitted, dnp_ref)
+            (fitted, dnp_ref, unjudgeable)
         };
 
-        let (mut has_pullup, mut dnp_pullup_ref) = scan_for_pullup(net.id);
+        let (mut has_pullup, mut dnp_pullup_ref, mut unjudgeable) = scan_for_pullup(net.id);
         let mut has_socket = false;
         let mut socket_parts: Vec<&Component> = Vec::new();
         let mut has_emmc = false;
@@ -1303,8 +1341,12 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             // (The refusal deliberately does not use the structural
             // bypass-cap rail test: a host pin with an EMI cap to ground is a
             // signal node that must still be searched.)
+            // An unparseable resistor value also qualifies for the hop: it
+            // MIGHT be a damper (MPN and blank value fields are routine), and
+            // refusing the hop while also refusing the credit would fail
+            // toward silence twice on the same unknown.
             let two_pin_series = c.pins.len() == 2
-                && ((is_resistor(c) && parse_ohms(&c.value).is_some_and(|o| o < 1_000.0))
+                && ((is_resistor(c) && parse_ohms(&c.value).is_none_or(|o| o < 1_000.0))
                     || r.starts_with("FB")
                     || (r.starts_with('L') && !r.starts_with("LED")));
             if two_pin_series {
@@ -1318,8 +1360,9 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                             if far_named_ground_or_rail {
                                 continue;
                             }
-                            let (far_fitted, far_dnp) = scan_for_pullup(oid);
+                            let (far_fitted, far_dnp, far_unjudgeable) = scan_for_pullup(oid);
                             has_pullup |= far_fitted;
+                            unjudgeable |= far_unjudgeable;
                             if dnp_pullup_ref.is_none() {
                                 dnp_pullup_ref = far_dnp;
                             }
@@ -1354,6 +1397,11 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             }
         }
         if has_pullup {
+            continue;
+        }
+        // A resistor with an unreadable value sits exactly where a pull-up
+        // would: the net cannot be judged, in either direction.
+        if unjudgeable {
             continue;
         }
         // A pass-gate mux or integrated-pull-up translator on the net puts
@@ -1393,18 +1441,27 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             }
         }
 
-        // SPI-mode heuristic: a socket wired for SPI leaves DAT1/DAT2
-        // unused, and in SPI mode the CMD pin is the host's push-pull DI,
-        // so the SD-mode open-drain rationale would be false for that board.
-        // The spec still recommends the pull-ups, so this softens severity
-        // and wording rather than going silent.
+        // SPI-mode heuristic: a socket wired for SPI leaves DAT1/DAT2 out of
+        // the host's hands, and in SPI mode the CMD pin is the host's
+        // push-pull DI, so the SD-mode open-drain rationale would be false
+        // for that board. The test is whether HOST SILICON reaches DAT1/DAT2,
+        // not whether those nets exist: an SPI design that dutifully parks
+        // DAT1/DAT2 on pull-ups (what the spec asks for) must not be promoted
+        // to SD-mode severity for doing the right thing. The spec still
+        // recommends the pull-ups, so this softens severity and wording
+        // rather than going silent.
         let spi_suspect = has_socket
             && socket_parts.iter().all(|s| {
                 !s.pins.iter().any(|p| {
-                    p.net
-                        .and_then(|id| board.net(id))
+                    let Some(nid) = p.net else { return false };
+                    let is_dat12 = board
+                        .net(nid)
                         .and_then(|n| sd_role(&n.name))
-                        .is_some_and(|r| r == "DAT1" || r == "DAT2")
+                        .is_some_and(|r| r == "DAT1" || r == "DAT2");
+                    is_dat12
+                        && members(board, nid).iter().any(|(mc, _)| {
+                            AssemblyState::of(mc).is_present() && is_host_silicon(mc)
+                        })
                 })
             });
 
@@ -2204,9 +2261,10 @@ mod sd_pullup_tests {
                     Net { id: 4, name: "sd_data_1".into() },
                 ],
                 components: vec![
-                    part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                    // A DAT1 pin so the socket reads as SD-mode wiring (the
-                    // SPI heuristic would otherwise soften the severity).
+                    // The host reaches DAT1 too, so the socket reads as
+                    // SD-mode wiring (the SPI heuristic would otherwise
+                    // soften the severity).
+                    part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1)), pin("2", Some(4))]),
                     part(
                         "J3",
                         "SOCKET",
@@ -2218,21 +2276,27 @@ mod sd_pullup_tests {
             }
         };
 
+        let cmd_findings = |board: &ExtractedBoard| -> Vec<(Severity, String)> {
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .filter(|x| x.nets == ["sd_cmd"])
+                .map(|x| (x.severity, x.message.clone()))
+                .collect()
+        };
         let mut honoured = make();
         honoured
             .apply_dnp_policy(DnpPolicy::Honour, &[], &[])
             .unwrap();
-        let report = honoured.net_lint();
-        let f: Vec<_> = report.of_check(LintCheck::MissingSdPullup).collect();
+        let f = cmd_findings(&honoured);
         assert_eq!(f.len(), 1, "honoured DNP: the line has no pull-up at all");
-        assert_eq!(f[0].severity, Severity::Medium);
+        assert_eq!(f[0].0, Severity::Medium);
 
         let mut fitted = make();
         fitted
             .apply_dnp_policy(DnpPolicy::FitExceptLinks, &[], &[])
             .unwrap();
-        let report = fitted.net_lint();
-        let f: Vec<_> = report.of_check(LintCheck::MissingSdPullup).collect();
+        let f = cmd_findings(&fitted);
         assert_eq!(
             f.len(),
             1,
@@ -2240,11 +2304,11 @@ mod sd_pullup_tests {
         );
         // Same severity the absent-part case earns: a simulation-policy flag
         // must not decide whether CI gates on a fab-real defect.
-        assert_eq!(f[0].severity, Severity::Medium);
+        assert_eq!(f[0].0, Severity::Medium);
         assert!(
-            f[0].message.contains("R11") && f[0].message.contains("do-not-populate"),
+            f[0].1.contains("R11") && f[0].1.contains("do-not-populate"),
             "the finding names the unfitted part: {}",
-            f[0].message
+            f[0].1
         );
 
         // A part the user explicitly fits is a build decision, not a policy
@@ -2253,7 +2317,7 @@ mod sd_pullup_tests {
         named
             .apply_dnp_policy(DnpPolicy::FitExceptLinks, &["R11".to_string()], &[])
             .unwrap();
-        assert_eq!(named.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+        assert_eq!(cmd_findings(&named).len(), 0);
     }
 
     /// The I2C presence check makes the same promise about DNP pull-ups and
@@ -2671,7 +2735,10 @@ mod sd_pullup_tests {
         let f: Vec<_> = report.of_check(LintCheck::MissingSdPullup).collect();
         assert_eq!(f.len(), 2);
         assert!(f.iter().all(|x| x.severity == Severity::Low), "{f:?}");
-        assert!(f.iter().all(|x| x.message.contains("SPI mode")), "{f:?}");
+        assert!(
+            f.iter().all(|x| x.message.contains(super::SPI_PULLUP_MESSAGE_MARKER)),
+            "the plain renderer keys on the marker, so the message must carry it: {f:?}"
+        );
     }
 
     /// A DAT3 pull-DOWN (the card-detect convention) to ground must never be
