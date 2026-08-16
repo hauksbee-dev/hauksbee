@@ -1260,6 +1260,19 @@ impl BoardEvidence {
         Ok(map)
     }
 
+    /// Recompute one map's status treating its open-part assumptions as
+    /// non-critical, using this evidence's own registry and run date. The
+    /// caller owes circuit-level proof (see `dcpath`): the subject net's DC
+    /// level is defined by modeled elements alone, so the opens can only
+    /// matter by actively driving the net, which the surviving Qualified
+    /// caveat states.
+    pub fn map_assuming_open_parts_high_impedance(
+        &self,
+        map: EvidenceMap,
+    ) -> Result<EvidenceMap, EvidenceError> {
+        map.assuming_open_parts_high_impedance(&self.registry, self.today)
+    }
+
     /// Error budget for transient/thermal/co-sim numeric claims, populated from
     /// the solver options actually used plus the run's measured windows.
     pub fn transient_error_budget(

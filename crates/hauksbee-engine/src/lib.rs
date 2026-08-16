@@ -27,6 +27,7 @@ pub mod board_input;
 pub mod boardcode;
 pub mod checks;
 pub mod commands;
+pub mod dcpath;
 mod component_evidence;
 pub mod decoupling;
 pub mod deps;
