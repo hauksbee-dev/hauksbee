@@ -751,6 +751,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "I2C is an \"open-drain\" bus: parts can only pull the line low, so it needs a resistor to a power rail to pull it back high. Without one the line floats, and the bus will not communicate reliably (or at all).".to_string(),
                 format!("Add a pull-up resistor (typically 2.2k to 10k ohm) from \"{net}\" to its power rail. One resistor per signal line (SDA and SCL)."),
             ),
+            LintCheck::MissingSdPullup => (
+                format!("The SD card line \"{net}\" has no pull-up resistor."),
+                "SD and microSD cards rely on host-side pull-ups: the CMD line is driven open-drain while the card is being identified, and the DAT lines float whenever the card is not driving them. Without a pull-up the line's level is undefined at exactly the moments the protocol depends on it, so card detection or initialization can hang in ways firmware cannot see. An MCU's internal pull-ups, if enabled, only help after firmware turns them on.".to_string(),
+                format!("Add a pull-up resistor (typically 10k to 100k ohm) from \"{net}\" to the card's supply rail. The SD specification asks for one on CMD and on each DAT line."),
+            ),
             LintCheck::FloatingControlPin => (
                 format!("A control pin on {parts} is left floating (net \"{net}\" has nothing else on it)."),
                 "Enable / reset / chip-select style pins decide whether a chip is on, held in reset, or selected. Left floating, the voltage is undefined, so the chip may randomly turn on/off or sit in reset. Behaviour will be flaky and may differ board to board.".to_string(),
@@ -1405,18 +1410,10 @@ mod tests {
     fn every_lint_check_maps_to_a_template() {
         // One finding per LintCheck variant; each must produce non-empty
         // what/why/fix so no kind is left without a plain translation.
-        let checks = [
-            (LintCheck::MissingI2cPullup, Severity::High),
-            (LintCheck::FloatingControlPin, Severity::High),
-            (LintCheck::LedCurrentSanity, Severity::Medium),
-            (LintCheck::OutputContention, Severity::High),
-            (LintCheck::StrapPin, Severity::High),
-            (LintCheck::McuResourceConflict, Severity::High),
-            (LintCheck::DesignatorFootprintMismatch, Severity::Medium),
-            (LintCheck::ValuePackageSanity, Severity::Medium),
-            (LintCheck::PlaceholderValue, Severity::Medium),
-            (LintCheck::UncheckedMcu, Severity::Low),
-        ];
+        // LintCheck::ALL, not a hand-list: a hand-list here silently went
+        // stale (DeviceDecode/BackPower/I2cBusLoading were never added), so
+        // the guard was not guarding.
+        let checks = LintCheck::ALL.map(|c| (c, Severity::Medium));
         for (check, sev) in checks {
             let report = NetLintReport {
                 findings: vec![LintFinding {

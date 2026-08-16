@@ -37,6 +37,14 @@ pub struct LintFinding {
 pub enum LintCheck {
     /// An I2C bus net (SDA/SCL) with no resistor to a power rail.
     MissingI2cPullup,
+    /// An SD / microSD card bus net (CMD / DAT0..DAT3) with no resistor to a
+    /// power rail. The SD physical-layer spec requires host-side pull-ups: CMD
+    /// is driven open-drain during card identification and DAT0 carries the
+    /// card's busy signalling, so a floating line hangs initialization in a
+    /// way firmware cannot see. CMD/DAT0 report Medium; DAT1..DAT3 (required
+    /// by the spec but conventionally omitted in 1-bit-only designs) report
+    /// Low.
+    MissingSdPullup,
     /// An active-control pin (enable / reset / chip-select / output-enable) on a
     /// net with no other connection - genuinely floating, no defined level.
     FloatingControlPin,
@@ -98,9 +106,31 @@ pub enum LintCheck {
 }
 
 impl LintCheck {
+    /// Every variant, for exhaustiveness-style tests in downstream crates
+    /// (e.g. "every check has a plain-language template"). Grows with the
+    /// enum; a variant added here but not to a consumer's handling shows up
+    /// as a test failure instead of a silent gap.
+    pub const ALL: [LintCheck; 14] = [
+        LintCheck::MissingI2cPullup,
+        LintCheck::MissingSdPullup,
+        LintCheck::FloatingControlPin,
+        LintCheck::LedCurrentSanity,
+        LintCheck::OutputContention,
+        LintCheck::StrapPin,
+        LintCheck::McuResourceConflict,
+        LintCheck::DesignatorFootprintMismatch,
+        LintCheck::ValuePackageSanity,
+        LintCheck::PlaceholderValue,
+        LintCheck::UncheckedMcu,
+        LintCheck::DeviceDecode,
+        LintCheck::BackPower,
+        LintCheck::I2cBusLoading,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             LintCheck::MissingI2cPullup => "missing_i2c_pullup",
+            LintCheck::MissingSdPullup => "missing_sd_pullup",
             LintCheck::FloatingControlPin => "floating_control_pin",
             LintCheck::LedCurrentSanity => "led_current_sanity",
             LintCheck::OutputContention => "output_contention",
@@ -160,6 +190,7 @@ impl ExtractedBoard {
     pub fn net_lint(&self) -> NetLintReport {
         let mut report = NetLintReport::default();
         check_i2c_pullups(self, &mut report);
+        check_sd_pullups(self, &mut report);
         check_floating_control_pins(self, &mut report);
         check_led_current(self, &mut report);
         check_output_contention(self, &mut report);
@@ -885,6 +916,242 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
 }
 
 // ---------------------------------------------------------------------------
+// Check 1b: missing SD-card bus pull-ups.
+// ---------------------------------------------------------------------------
+
+/// A net is an SD/eMMC card bus line if its name carries a card-bus context
+/// token (SD, USD, MICROSD, TF, SDIO, SDMMC, SDCARD, MMC, EMMC) *and* names
+/// one of the lines the SD physical-layer spec requires a host pull-up on:
+/// CMD, or DAT0..DAT7 in any of the common spellings (`sd_dat0`, `sd_data_0`,
+/// `sd_d2`, `emmc_d7`, ...). CLK is push-pull driven and never requires one,
+/// so it is not matched. The context requirement means a bare "CMD" net (a
+/// motor driver command line, a modem AT channel) can never fire this check.
+///
+/// The context token is searched in the FULL net name including its
+/// hierarchical sheet path, because KiCad puts the context there for local
+/// labels (`/uSD Connector/CMD`); the role token is taken from the leaf only,
+/// so a sheet merely *named* after the card cannot turn an unrelated leaf
+/// signal into a bus line.
+///
+/// Name context alone is deliberately not enough to fire the check: SDRAM
+/// buses are conventionally named `SD_D0..SD_D15` too, so `check_sd_pullups`
+/// additionally requires an actual card socket on the net.
+fn sd_role(name: &str) -> Option<&'static str> {
+    const DAT: [&str; 8] = [
+        "DAT0", "DAT1", "DAT2", "DAT3", "DAT4", "DAT5", "DAT6", "DAT7",
+    ];
+    // Context: tokens of the whole name, sheet path included. A bus-index
+    // suffix ("SDMMC1", "SDIO2") still names the same controller.
+    let full = name.trim().to_ascii_uppercase();
+    let ctx = full
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .any(|t| {
+            let t = t.trim_end_matches(|c: char| c.is_ascii_digit());
+            matches!(
+                t,
+                "SD" | "USD" | "MICROSD" | "TF" | "SDIO" | "SDMMC" | "SDCARD" | "MMC" | "EMMC"
+            )
+        });
+    if !ctx {
+        return None;
+    }
+    // Role: tokens of the leaf only.
+    let n = norm(name);
+    let toks: Vec<&str> = n
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if toks.iter().any(|t| *t == "CMD") {
+        return Some("CMD");
+    }
+    let dat_index = |t: &str| -> Option<usize> {
+        for stem in ["DATA", "DAT", "D"] {
+            if let Some(rest) = t.strip_prefix(stem) {
+                if rest.len() == 1 && rest.chars().all(|c| c.is_ascii_digit()) {
+                    let i = rest.parse::<usize>().ok()?;
+                    if i <= 7 {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        None
+    };
+    for (i, t) in toks.iter().enumerate() {
+        // Combined token: "DAT0" / "DATA2" / "D3".
+        if let Some(idx) = dat_index(t) {
+            return Some(DAT[idx]);
+        }
+        // Split spelling: a "DAT"/"DATA" token followed by a bare digit token
+        // ("sd_data_0" tokenizes to SD, DATA, 0).
+        if matches!(*t, "DAT" | "DATA") {
+            if let Some(next) = toks.get(i + 1) {
+                if next.len() == 1 {
+                    if let Ok(idx) = next.parse::<usize>() {
+                        if idx <= 7 {
+                            return Some(DAT[idx]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Does this component look like the card socket itself? Checked against the
+/// footprint, library id, and value, which is where real designs carry it:
+/// KiCad's official card sockets live in `Connector_Card`, and vendor
+/// footprints are named things like `microSD_HC_Molex_47219-2001` or
+/// `TF-01A`. This is the positive evidence `check_sd_pullups` requires before
+/// firing: an SDRAM bus named `SD_D0..` has no such part on it.
+fn is_card_socket(c: &Component) -> bool {
+    let hay = format!("{} {} {}", c.footprint, c.lib_id, c.value).to_ascii_lowercase();
+    [
+        "microsd",
+        "micro_sd",
+        "micro-sd",
+        "micro sd",
+        "sdcard",
+        "sd_card",
+        "sd-card",
+        "sd card",
+        "tf_card",
+        "tf-card",
+        "tfcard",
+        "memorycard",
+        "memory_card",
+        "connector_card",
+        "sd_socket",
+        "usd_",
+        "emmc_socket",
+    ]
+    .iter()
+    .any(|p| hay.contains(p))
+}
+
+fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
+    for net in &board.nets {
+        if net.id == 0 || is_unconnected_net(&net.name) {
+            continue;
+        }
+        let Some(role) = sd_role(&net.name) else {
+            continue;
+        };
+        let mem = members(board, net.id);
+        // A single-member SD net is a stub / NC pad, not a bus.
+        if mem.len() < 2 {
+            continue;
+        }
+
+        let mut has_pullup = false;
+        let mut has_socket = false;
+        let mut exits_to_other_connector = false;
+        let mut active_refs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (c, _p) in &mem {
+            // Only assembled, identity-trusted parts count, for the same
+            // reason as the I2C check: a DNP option resistor must not clear a
+            // genuinely missing pull-up.
+            if !AssemblyState::of(c).is_present() {
+                continue;
+            }
+            if is_connector_like(c) {
+                // A card socket is the positive evidence a card bus exists; a
+                // second, non-socket connector means the bus leaves the board.
+                if is_card_socket(c) {
+                    has_socket = true;
+                } else {
+                    exits_to_other_connector = true;
+                }
+                continue;
+            }
+            let r = c.reference.to_ascii_uppercase();
+            if r.starts_with('U') || (c.pins.len() > 2 && !is_resistor(c) && !is_resistor_array(c))
+            {
+                active_refs.insert(c.reference.as_str());
+            }
+            if is_resistor(c) || is_resistor_array(c) {
+                // A pull-up is a resistor element to a rail. Two deliberate
+                // narrowings versus the I2C check: (1) a value parsing below
+                // 1 kΩ is a series damper (22-100 Ω is routine on SDIO), not
+                // a pull-up, and crediting it would silence a real finding
+                // when its far side carries an EMI cap that makes the net
+                // look rail-like; (2) like the I2C check, a resistor ARRAY is
+                // credited if ANY element reaches a rail, without pairing the
+                // element to this net's pad, a stated over-credit inherited
+                // for consistency rather than an oversight.
+                let credible_value = parse_ohms(&c.value).is_none_or(|ohms| ohms >= 1_000.0);
+                if credible_value {
+                    for op in &c.pins {
+                        if op.net == Some(net.id) {
+                            continue;
+                        }
+                        if let Some(oid) = op.net {
+                            if net_is_raillike(board, oid) {
+                                has_pullup = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if has_pullup {
+            continue;
+        }
+        // No card socket on the net: the name alone is not evidence. SDRAM
+        // buses are named SD_D0.. too, and an MCU that routes SD lines to a
+        // plain header may rely on the attached module's pull-ups.
+        if !has_socket {
+            continue;
+        }
+        // Socket plus another connector: an adapter/breakout that passes the
+        // bus through to a host board, where the pull-ups legitimately live.
+        // Ambiguous, skip.
+        if exits_to_other_connector {
+            continue;
+        }
+        // Socket but no on-board host silicon at all: same breakout story.
+        if active_refs.is_empty() {
+            continue;
+        }
+
+        // CMD and DAT0 are exercised by every card in every bus mode; a
+        // missing pull-up there stalls identification or busy detection.
+        // DAT1..DAT3 are spec-required but conventionally omitted in
+        // 1-bit-only designs, so they report Low rather than Medium.
+        let (sev, why) = match role {
+            "CMD" => (
+                Severity::Medium,
+                "CMD is driven open-drain during card identification; without a pull-up \
+                 initialization can hang before firmware sees a card at all",
+            ),
+            "DAT0" => (
+                Severity::Medium,
+                "DAT0 carries the card's response and busy signalling; it floats whenever \
+                 the card is not driving it",
+            ),
+            _ => (
+                Severity::Low,
+                "required by the SD/eMMC spec, though conventionally omitted when the bus \
+                 runs narrower than its full width; MCU internal pull-ups, if enabled, only \
+                 cover the window after firmware configures them",
+            ),
+        };
+        report.findings.push(LintFinding {
+            check: LintCheck::MissingSdPullup,
+            severity: sev,
+            message: format!(
+                "SD card {role} net '{}' has no pull-up to a rail: {why}",
+                net.name
+            ),
+            refs: mem.iter().map(|(c, _)| c.reference.clone()).collect(),
+            nets: vec![net.name.clone()],
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Check 2: floating active-control pins.
 // ---------------------------------------------------------------------------
 
@@ -1371,6 +1638,244 @@ mod i2c_pullup_dedup_tests {
             0,
             "a single device (its pad merely double-listed) must not fire a missing-pullup finding"
         );
+    }
+}
+
+#[cfg(test)]
+mod sd_pullup_tests {
+    use super::sd_role;
+    use crate::{Component, ExtractedBoard, LintCheck, Net, Pin, Severity};
+
+    fn pin(number: &str, net: Option<i64>) -> Pin {
+        Pin {
+            number: number.into(),
+            net,
+            function: String::new(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+
+    fn part(reference: &str, value: &str, footprint: &str, pins: Vec<Pin>) -> Component {
+        Component {
+            reference: reference.into(),
+            value: value.into(),
+            lib_id: String::new(),
+            footprint: footprint.into(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins,
+        }
+    }
+
+    #[test]
+    fn role_names() {
+        // The RockSat-X RSXVT2026 spellings that motivated the check.
+        assert_eq!(sd_role("sd_cmd"), Some("CMD"));
+        assert_eq!(sd_role("sd_data_0"), Some("DAT0"));
+        assert_eq!(sd_role("sd_data_3"), Some("DAT3"));
+        // Common alternates.
+        assert_eq!(sd_role("/SDIO_CMD"), Some("CMD"));
+        assert_eq!(sd_role("uSD_DAT2"), Some("DAT2"));
+        assert_eq!(sd_role("TF_D1"), Some("DAT1"));
+        assert_eq!(sd_role("SDMMC1_D0"), Some("DAT0"));
+        // eMMC: same physics, wider bus.
+        assert_eq!(sd_role("EMMC_CMD"), Some("CMD"));
+        assert_eq!(sd_role("MMC_D7"), Some("DAT7"));
+        // Hierarchical: the context lives in the sheet path, the role in the
+        // leaf (KiCad local labels).
+        assert_eq!(sd_role("/uSD Connector/CMD"), Some("CMD"));
+        assert_eq!(sd_role("/uSD Connector/data_0"), Some("DAT0"));
+        // ...but a sheet named after the card must not promote an unrelated
+        // leaf signal into a bus line.
+        assert_eq!(sd_role("/uSD Connector/detect"), None);
+        // Push-pull, never needs a pull-up.
+        assert_eq!(sd_role("sd_clock"), None);
+        assert_eq!(sd_role("SD_CLK"), None);
+        // Card detect is not a bus line.
+        assert_eq!(sd_role("SD_CD"), None);
+        // No SD context: a bare CMD net (motor driver, modem) must not match.
+        assert_eq!(sd_role("CMD"), None);
+        assert_eq!(sd_role("MOTOR_CMD"), None);
+        assert_eq!(sd_role("DATA0"), None);
+        // SDRAM address lines never carry a DAT role.
+        assert_eq!(sd_role("SD_A0"), None);
+    }
+
+    /// Host MCU + card socket, no pull-up: CMD fires Medium, DAT1 fires Low.
+    #[test]
+    fn host_and_socket_without_pullup_fires() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "sd_cmd".into() },
+                Net { id: 2, name: "sd_data_1".into() },
+            ],
+            components: vec![
+                part("U1", "STM32H533VET6", "LQFP-100", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part("J3", "0472192001", "microSD_socket", vec![pin("3", Some(1)), pin("5", Some(2))]),
+            ],
+        };
+        let report = board.net_lint();
+        let f: Vec<_> = report.of_check(LintCheck::MissingSdPullup).collect();
+        assert_eq!(f.len(), 2, "CMD and DAT1 both lack pull-ups: {f:?}");
+        let cmd = f.iter().find(|x| x.nets == ["sd_cmd"]).expect("cmd finding");
+        assert_eq!(cmd.severity, Severity::Medium);
+        let dat1 = f.iter().find(|x| x.nets == ["sd_data_1"]).expect("dat1 finding");
+        assert_eq!(dat1.severity, Severity::Low);
+    }
+
+    /// The same bus with a 10k to a rail is clean, and the pulled net alone
+    /// goes quiet (per-net check).
+    #[test]
+    fn pullup_to_rail_clears_the_net() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "sd_cmd".into() },
+                Net { id: 3, name: "+3V3".into() },
+            ],
+            components: vec![
+                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
+                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+                part("R11", "10k", "R_0402", vec![pin("1", Some(1)), pin("2", Some(3))]),
+            ],
+        };
+        let report = board.net_lint();
+        assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 0);
+    }
+
+    /// Socket wired straight to a header (no on-board host): an adapter
+    /// board, where the pull-ups live on the host. Must stay silent.
+    #[test]
+    fn breakout_without_host_is_silent() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![Net { id: 1, name: "sd_cmd".into() }],
+            components: vec![
+                part("J1", "HEADER", "PinHeader_1x08", vec![pin("1", Some(1))]),
+                part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+            ],
+        };
+        let report = board.net_lint();
+        assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 0);
+    }
+
+    /// An SDRAM bus is conventionally named SD_D0..SD_D15 but has no card
+    /// socket, only the MCU and the SDRAM chip. The check must stay silent:
+    /// the net NAME is not evidence a card exists.
+    #[test]
+    fn sdram_bus_named_sd_d0_is_silent() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "SD_D0".into() },
+                Net { id: 2, name: "SD_D3".into() },
+            ],
+            components: vec![
+                part("U1", "STM32F429ZIT6", "LQFP-144", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part(
+                    "U2",
+                    "MT48LC16M16A2",
+                    "TSOP-II-54",
+                    vec![pin("3", Some(1)), pin("4", Some(2))],
+                ),
+            ],
+        };
+        let report = board.net_lint();
+        assert_eq!(
+            report.of_check(LintCheck::MissingSdPullup).count(),
+            0,
+            "an SDRAM bus named SD_D0.. must not fire the SD card check"
+        );
+    }
+
+    /// A breakout that carries an ESD array (a multi-pin active part) beside
+    /// the socket and the header must still be silent: the bus passes through
+    /// to a host board that owns the pull-ups.
+    #[test]
+    fn breakout_with_esd_array_is_silent() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![Net { id: 1, name: "sd_cmd".into() }],
+            components: vec![
+                part("J1", "HEADER", "PinHeader_1x08", vec![pin("1", Some(1))]),
+                part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+                part(
+                    "D1",
+                    "TPD4E05U06",
+                    "SOT-23-6",
+                    vec![pin("1", Some(1)), pin("2", None), pin("3", None), pin("6", None)],
+                ),
+            ],
+        };
+        let report = board.net_lint();
+        assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 0);
+    }
+
+    /// A 33R series damper into a filtered node (EMI cap to ground makes it
+    /// rail-like) is not a pull-up and must not clear the finding.
+    #[test]
+    fn series_damper_into_filtered_node_does_not_clear() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "sd_cmd".into() },
+                Net { id: 2, name: "sd_cmd_f".into() },
+                Net { id: 9, name: "GND".into() },
+            ],
+            components: vec![
+                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
+                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+                part("R5", "33", "R_0402", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part("C7", "22p", "C_0402", vec![pin("1", Some(2)), pin("2", Some(9))]),
+            ],
+        };
+        let report = board.net_lint();
+        assert_eq!(
+            report.of_check(LintCheck::MissingSdPullup).count(),
+            1,
+            "a sub-1k series damper must not be credited as a pull-up"
+        );
+    }
+
+    /// Hierarchical KiCad names put the card context in the sheet path and
+    /// only the role in the leaf; the check must still see the bus.
+    #[test]
+    fn hierarchical_sheet_name_still_fires() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![Net { id: 1, name: "/uSD Connector/CMD".into() }],
+            components: vec![
+                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
+                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+            ],
+        };
+        let report = board.net_lint();
+        assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 1);
+    }
+
+    /// A DNP pull-up must not clear the finding.
+    #[test]
+    fn dnp_pullup_does_not_clear() {
+        let mut r = part("R11", "10k", "R_0402", vec![pin("1", Some(1)), pin("2", Some(3))]);
+        r.dnp = true;
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "sd_cmd".into() },
+                Net { id: 3, name: "+3V3".into() },
+            ],
+            components: vec![
+                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
+                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+                r,
+            ],
+        };
+        let report = board.net_lint();
+        assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 1);
     }
 }
 
