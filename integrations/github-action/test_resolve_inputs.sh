@@ -81,6 +81,24 @@ board_as_code="$work/board_as_code"
 mkdir -p "$board_as_code/hardware"
 touch "$board_as_code/hardware/blinky.board"
 
+fab_archive="$work/fab_archive"
+mkdir -p "$fab_archive/fab"
+touch "$fab_archive/fab/release.tar.gz"
+
+ipc2581="$work/ipc2581"
+mkdir -p "$ipc2581/manufacturing"
+printf '%s\n' '<?xml version="1.0"?><IPC-2581 revision="C"><Ecad/></IPC-2581>' \
+  >"$ipc2581/manufacturing/board.XML"
+
+generic_xml="$work/generic_xml"
+mkdir -p "$generic_xml"
+printf '%s\n' '<project><name>not a board</name></project>' >"$generic_xml/pom.xml"
+
+board_and_generic_xml="$work/board_and_generic_xml"
+mkdir -p "$board_and_generic_xml/hardware"
+touch "$board_and_generic_xml/hardware/board.kicad_pcb"
+printf '%s\n' '<coverage line-rate="1.0"/>' >"$board_and_generic_xml/coverage.xml"
+
 two_specs="$work/two_specs"
 mkdir -p "$two_specs/ci"
 printf 'board = "../board.kicad_pcb"\n' >"$two_specs/ci/a.toml"
@@ -119,6 +137,23 @@ run_resolve "$board_as_code" auto "" "" ""
 expect_rc "one Board-as-Code file auto-detects" 0
 expect "  ...as mode check" "check" "$(got_mode)"
 expect "  ...naming that board" "hardware/blinky.board" "$(got_board)"
+
+run_resolve "$fab_archive" auto "" "" ""
+expect_rc "one ODB++ or fab archive auto-detects" 0
+expect "  ...archive runs as mode check" "check" "$(got_mode)"
+expect "  ...naming the archive" "fab/release.tar.gz" "$(got_board)"
+
+run_resolve "$ipc2581" auto "" "" ""
+expect_rc "one IPC-2581 XML file auto-detects case-insensitively" 0
+expect "  ...XML runs as mode check" "check" "$(got_mode)"
+expect "  ...naming the XML" "manufacturing/board.XML" "$(got_board)"
+
+run_resolve "$generic_xml" auto "" "" ""
+expect_rc "an unrelated XML document is not guessed to be a board" 1
+
+run_resolve "$board_and_generic_xml" auto "" "" ""
+expect_rc "unrelated XML does not make a real board ambiguous" 0
+expect "  ...the actual board is selected" "hardware/board.kicad_pcb" "$(got_board)"
 
 run_resolve "$specs_and_board" auto "" "" ""
 expect_rc "several specs never silently fall through to a board" 1

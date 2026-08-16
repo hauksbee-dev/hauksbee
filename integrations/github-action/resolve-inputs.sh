@@ -31,6 +31,15 @@ OUT="${GITHUB_OUTPUT:?GITHUB_OUTPUT must name a writable file}"
 
 die() { printf 'hauksbee action: %s\n' "$*" >&2; exit 1; }
 
+# XML is a content-sniffed input in Hauksbee: the suffix alone is not enough,
+# because ordinary repositories commonly contain pom.xml, coverage.xml, and
+# other unrelated documents. Mirror the extractor's bounded root sniff for
+# auto-detection; an explicitly named board remains the caller's decision.
+is_ipc2581_xml() {
+  LC_ALL=C head -c 8192 -- "$1" 2>/dev/null \
+    | grep -aEq '<([[:alnum:]_.-]+:)?IPC-2581([[:space:]>])'
+}
+
 case "$MODE" in
   auto|spec|check) ;;
   *) die "mode must be auto, spec, or check (got '$MODE')" ;;
@@ -68,10 +77,19 @@ if [ "$MODE" = "auto" ]; then
         fi
       done | sort -u
     )"
-    boards="$(find . \( -name .git -o -name '.hauksbee*' \) -prune \
-      -o \( -name '*.kicad_pcb' -o -name '*.kicad_sch' -o -name '*.net' \
-             -o -name '*.brd' -o -name '*.PcbDoc' -o -name '*.d356' \
-             -o -name '*.board' \) -print 2>/dev/null | sed 's|^\./||' | sort)"
+    boards="$({
+      find . \( -name .git -o -name '.hauksbee*' \) -prune \
+        -o \( -iname '*.kicad_pcb' -o -iname '*.kicad_sch' -o -iname '*.net' \
+               -o -iname '*.brd' -o -iname '*.PcbDoc' -o -iname '*.d356' \
+               -o -iname '*.board' -o -iname '*.zip' -o -iname '*.tgz' \
+               -o -iname '*.tar.gz' -o -iname '*.tar' \) -print 2>/dev/null
+      while IFS= read -r -d '' candidate; do
+        if is_ipc2581_xml "$candidate"; then
+          printf '%s\n' "$candidate"
+        fi
+      done < <(find . \( -name .git -o -name '.hauksbee*' \) -prune \
+        -o -iname '*.xml' -print0 2>/dev/null)
+    } | sed 's|^\./||' | sort -u)"
     n_specs="$(printf '%s' "$ci_specs" | grep -c . || true)"
     n_boards="$(printf '%s' "$boards" | grep -c . || true)"
     if [ "$n_specs" -eq 1 ]; then

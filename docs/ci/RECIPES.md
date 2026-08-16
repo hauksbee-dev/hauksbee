@@ -11,13 +11,13 @@ live in `ci/` in a hardware repo; `run` also accepts several specs at once and
 writes one merged JUnit file, exiting with the worst code of the set), then
 publishes the JUnit XML so the assertions show up as test results.
 
-The GHCR image is private. Every recipe below obtains an authorized package-read
-credential from its CI system's protected secret store; no token belongs in the
-pipeline file or repository. A fine-grained PAT or GitHub App installation
-token may be used, provided the repository has granted it access to the package.
+The GHCR image is public, so every recipe pulls it anonymously; no registry
+credential is needed. (A private mirror or GitHub Enterprise registry works
+too: add your CI system's usual registry credential, kept in its protected
+secret store, never in the pipeline file.)
 Replace `REPLACE_WITH_SLIM_DIGEST` with the slim digest from the matching
-private `container-digests-<tag>` prerelease's
-`hauksbee-<version>-docker-digests.txt` asset. A moving tag is
+release's `container-digests-<tag>` record
+(`hauksbee-<version>-docker-digests.txt`). A moving tag is
 not release evidence and is intentionally absent from these recipes.
 
 ## The exit-code contract
@@ -43,11 +43,9 @@ and the working directory is your checkout. `artifacts:reports:junit` feeds
 the per-assertion results into the merge-request Tests tab, and
 `artifacts:when: always` keeps the report on a red build, which is exactly
 when you want it. `allow_failure:exit_codes` maps exit 3 to GitLab's orange
-"passed with warnings" state while 1 and 2 stay red.
-Because GitLab pulls the job image before `script`, configure a protected,
-masked `DOCKER_AUTH_CONFIG` CI variable containing Docker auth JSON for
-`ghcr.io` and an authorized package-read token. Generate and store that JSON in
-GitLab's variable UI, never in this YAML.
+"passed with warnings" state while 1 and 2 stay red. The public image needs
+no registry configuration; for a private mirror, set a protected, masked
+`DOCKER_AUTH_CONFIG` CI variable in GitLab's variable UI, never in this YAML.
 
 ```yaml
 hauksbee:
@@ -76,8 +74,6 @@ pipeline {
     agent {
         docker {
             image 'ghcr.io/hauksbee-dev/hauksbee@sha256:REPLACE_WITH_SLIM_DIGEST'
-            registryUrl 'https://ghcr.io'
-            registryCredentialsId 'hauksbee-ghcr-read'
         }
     }
     stages {
@@ -107,8 +103,10 @@ pipeline {
 }
 ```
 
-`hauksbee-ghcr-read` is a Jenkins username/password credential whose password
-is the authorized token. Jenkins passes it to Docker without committing it.
+For a private mirror, add `registryUrl 'https://ghcr.io'` and a
+`registryCredentialsId` naming a Jenkins username/password credential whose
+password is the registry token; Jenkins passes it to Docker without
+committing it.
 
 ## Azure DevOps
 
@@ -124,7 +122,6 @@ resources:
   containers:
     - container: hauksbee
       image: ghcr.io/hauksbee-dev/hauksbee@sha256:REPLACE_WITH_SLIM_DIGEST
-      endpoint: hauksbee-ghcr
 
 jobs:
   - job: hauksbee
@@ -150,15 +147,14 @@ jobs:
           testRunTitle: hauksbee-ci
 ```
 
-`hauksbee-ghcr` is an Azure DevOps Docker Registry service connection for
-`ghcr.io`, backed by an authorized package-read credential.
+For a private mirror, add `endpoint:` naming an Azure DevOps Docker Registry
+service connection for the registry.
 
 ## Buildkite
 
-The step logs in and runs Docker explicitly so the private pull cannot happen
-before authentication. `--user` runs the container as the agent user so
-`report.xml` is writable in the mounted checkout (the same ownership point
-[DOCKER.md](DOCKER.md) makes). `soft_fail` on exit status 3
+The step runs Docker explicitly. `--user` runs the container as the agent
+user so `report.xml` is writable in the mounted checkout (the same ownership
+point [DOCKER.md](DOCKER.md) makes). `soft_fail` on exit status 3
 turns the non-verdict into a soft-failed (annotated, non-blocking) step while
 1 and 2 stay hard failures, and `artifact_paths` uploads the report; add the
 `junit-annotate` plugin in a follow-up step if you want the failures rendered
@@ -168,11 +164,6 @@ as a build annotation.
 steps:
   - label: "hauksbee-ci"
     command: |
-      set +x
-      export DOCKER_CONFIG="$(mktemp -d)"
-      trap 'docker logout ghcr.io >/dev/null 2>&1 || true; find "$DOCKER_CONFIG" -depth -mindepth 1 -delete; rmdir "$DOCKER_CONFIG"' EXIT
-      printf '%s' "$HAUKSBEE_GHCR_TOKEN" \
-        | docker login ghcr.io --username "$HAUKSBEE_GHCR_USER" --password-stdin
       docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" \
         ghcr.io/hauksbee-dev/hauksbee@sha256:REPLACE_WITH_SLIM_DIGEST \
         hauksbee-ci run ci/power-up.toml --junit report.xml
@@ -182,8 +173,10 @@ steps:
       - report.xml
 ```
 
-Inject `HAUKSBEE_GHCR_USER` and `HAUKSBEE_GHCR_TOKEN` with Buildkite's secret
-manager. The token must be redacted from logs and authorized for package read.
+For a private mirror, log in first inside the step: confine the credential to
+a temporary `DOCKER_CONFIG`, pipe the token to
+`docker login --password-stdin` (never into argv), and log out in a trap.
+Inject the credential with Buildkite's secret manager, redacted from logs.
 
 ## Where to go next
 

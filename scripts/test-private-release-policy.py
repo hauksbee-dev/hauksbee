@@ -422,9 +422,17 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         asset, tarball, checksum = self.private_installer_fixture(
             include_mcp=include_mcp, bad_binary_version=bad_binary_version
         )
+        # GitHub's immutable-release digests describe the published bytes; a
+        # corrupted download is served with the GENUINE digests, the way real
+        # tampering or truncation would present.
+        genuine_tarball = tarball
         if corrupt_asset:
             tarball += b"corrupt-after-checksum"
-        expected_auth = "Bearer installer-token"
+        # Public policy: without a token the installer must send NO
+        # Authorization header at all; with one it must send it on every
+        # request. The mock enforces whichever contract applies.
+        expected_auth = None if token is None else f"Bearer {token}"
+        release_sha = "0123456789abcdef0123456789abcdef01234567"
         requests: list[tuple[str, str, str]] = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -436,7 +444,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                         handler.headers.get("Accept", ""),
                     )
                 )
-                if handler.headers.get("Authorization") != expected_auth:
+                auth = handler.headers.get("Authorization", "")
+                if (expected_auth is None and auth) or (
+                    expected_auth is not None and auth != expected_auth
+                ):
                     handler.send_response(401)
                     handler.end_headers()
                     return
@@ -448,10 +459,14 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                         "assets": [
                             {
                                 "name": asset,
+                                "digest": "sha256:"
+                                + hashlib.sha256(genuine_tarball).hexdigest(),
                                 "url": f"http://127.0.0.1:{port}/repos/hauksbee-dev/hauksbee/releases/assets/101",
                             },
                             {
                                 "name": f"{asset}.sha256",
+                                "digest": "sha256:"
+                                + hashlib.sha256(checksum).hexdigest(),
                                 "url": f"http://127.0.0.1:{port}/repos/hauksbee-dev/hauksbee/releases/assets/102",
                             },
                         ],
@@ -459,6 +474,9 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 ).encode()
                 body = {
                     "/repos/hauksbee-dev/hauksbee/releases/tags/v0.1.0": release,
+                    "/repos/hauksbee-dev/hauksbee/commits/v0.1.0": json.dumps(
+                        {"sha": release_sha}
+                    ).encode(),
                     "/repos/hauksbee-dev/hauksbee/releases/assets/101": tarball,
                     "/repos/hauksbee-dev/hauksbee/releases/assets/102": checksum,
                 }.get(handler.path)
@@ -495,18 +513,6 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     env["HAUKSBEE_GITHUB_TOKEN"] = token
                 fake_bin = Path(raw_tmp) / "fake-bin"
                 fake_bin.mkdir()
-                fake_gh = fake_bin / "gh"
-                fake_gh.write_text(
-                    "#!/usr/bin/env bash\n"
-                    "set -euo pipefail\n"
-                    "if [ \"${1:-}\" = api ]; then\n"
-                    "  printf '%s\\n' 0123456789abcdef0123456789abcdef01234567\n"
-                    "  exit 0\n"
-                    "fi\n"
-                    "if [ \"${1:-}\" = release ] && [ \"${2:-}\" = verify-asset ]; then exit 0; fi\n"
-                    "exit 2\n"
-                )
-                fake_gh.chmod(0o755)
                 if fail_atomic_link:
                     fake_ln = fake_bin / "ln"
                     fake_ln.write_text("#!/usr/bin/env bash\nexit 70\n")
@@ -591,13 +597,21 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             thread.join()
         return result, requests, installed
 
-    def test_private_installer_refuses_to_download_without_credential(self) -> None:
+    def test_public_installer_downloads_without_credential(self) -> None:
         result, requests, _installed = self.run_private_installer(token=None)
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("HAUKSBEE_GITHUB_TOKEN", result.stdout + result.stderr)
-        self.assertEqual(requests, [], "missing credentials must fail before HTTP")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            [(path, auth) for path, auth, _accept in requests],
+            [
+                ("/repos/hauksbee-dev/hauksbee/releases/tags/v0.1.0", ""),
+                ("/repos/hauksbee-dev/hauksbee/releases/assets/101", ""),
+                ("/repos/hauksbee-dev/hauksbee/releases/assets/102", ""),
+                ("/repos/hauksbee-dev/hauksbee/commits/v0.1.0", ""),
+            ],
+            "tokenless install must send no Authorization header anywhere",
+        )
 
-    def test_private_installer_authenticates_every_asset_download(self) -> None:
+    def test_optional_token_authenticates_every_request(self) -> None:
         result, requests, _installed = self.run_private_installer(token="installer-token")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
@@ -618,6 +632,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     "Bearer installer-token",
                     "application/octet-stream",
                 ),
+                (
+                    "/repos/hauksbee-dev/hauksbee/commits/v0.1.0",
+                    "Bearer installer-token",
+                    "application/vnd.github+json",
+                ),
             ],
         )
 
@@ -632,7 +651,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             token="installer-token", corrupt_asset=True
         )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("did not match", (result.stdout + result.stderr).lower())
+        self.assertIn("do not match", (result.stdout + result.stderr).lower())
         self.assertEqual(len(requests), 3)
 
     def test_private_installer_refuses_a_mutable_release(self) -> None:
@@ -804,7 +823,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         image = action[action.index("- name: Run the hardware check (image)") :]
         self.assertIn("RELEASE_SHA: ${{ steps.reltag.outputs.expected-sha }}", image)
 
-    def test_prebuilt_private_bytes_are_uncached_and_publisher_attested(self) -> None:
+    def test_prebuilt_release_bytes_are_uncached_and_publisher_attested(self) -> None:
         action = (ROOT / "integrations/github-action/action.yml").read_text()
         self.assertIn('repos/$REPO/commits/$tag', action)
         self.assertIn(
@@ -820,7 +839,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             action.index("- name: Build hauksbee (fallback build)")
         ]
         self.assertNotIn(".hauksbee/target", fallback_cache)
-        self.assertIn("$RUNNER_TEMP/hauksbee-private-archives", action)
+        self.assertIn("$RUNNER_TEMP/hauksbee-release-archives", action)
         self.assertIn('gh release verify-asset "$TAG" "$tarball"', action)
         self.assertIn('--jq .immutable', action)
         release = (ROOT / ".github/workflows/release.yml").read_text()
@@ -892,60 +911,67 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertEqual(resolve("ghs_example").stdout.strip(), "x-access-token")
         self.assertEqual(resolve("ghs_example", "explicit-user").stdout.strip(), "explicit-user")
 
-    def test_private_action_requires_and_forwards_authorized_credential(self) -> None:
+    def test_public_action_needs_no_credential_and_pins_one_commit(self) -> None:
         action = (ROOT / "integrations/github-action/action.yml").read_text()
+        # The token input survives as an optional override, defaulting to the
+        # calling workflow's own token for public downloads.
         self.assertIn("hauksbee-token:", action)
-        self.assertIn("GH_TOKEN: ${{ inputs.hauksbee-token }}", action)
-        self.assertIn("token: ${{ inputs.hauksbee-token }}", action)
+        self.assertNotIn("required: true", action)
+        self.assertIn("GH_TOKEN: ${{ inputs.hauksbee-token || github.token }}", action)
+        self.assertIn("token: ${{ inputs.hauksbee-token || github.token }}", action)
 
         readme = (ROOT / "integrations/github-action/README.md").read_text()
-        self.assertIn("fine-grained personal access token", readme)
-        self.assertIn("GitHub App installation token", readme)
-        self.assertIn("Contents: read", readme)
-        self.assertIn("uses: ./.hauksbee-action/integrations/github-action", readme)
-        self.assertIn("hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}", readme)
+        self.assertIn("No secret and\nno token are needed", readme)
+        self.assertIn(
+            "uses: hauksbee-dev/hauksbee/integrations/github-action@", readme
+        )
+        self.assertNotIn("secrets.HAUKSBEE_READ_TOKEN", readme)
+        self.assertNotIn(".hauksbee-action", readme)
 
         generated = (ROOT / "crates/hauksbee-ci/src/integrate.rs").read_text()
-        self.assertIn('${{ secrets.HAUKSBEE_READ_TOKEN }}', generated)
-        self.assertIn("path: .hauksbee-action", generated)
-        self.assertIn("token: {}", generated)
-        self.assertIn("uses: ./.hauksbee-action/integrations/github-action", generated)
-        self.assertIn("hauksbee-token: {}", generated)
+        self.assertNotIn("secrets.HAUKSBEE_READ_TOKEN", generated)
+        self.assertNotIn("path: .hauksbee-action", generated)
+        self.assertIn(
+            "uses: hauksbee-dev/hauksbee/integrations/github-action@{}", generated
+        )
 
         frontend_workflow = (ROOT / "frontend/src/lib/ci-workflow.ts").read_text()
-        self.assertIn("repository: ${ACTION_REPOSITORY}", frontend_workflow)
-        self.assertIn("token: ${PRIVATE_TOKEN_SECRET}", frontend_workflow)
-        self.assertIn("uses: ./.hauksbee-action/integrations/github-action", frontend_workflow)
-        self.assertIn("hauksbee-token: ${PRIVATE_TOKEN_SECRET}", frontend_workflow)
+        self.assertIn(
+            "uses: ${ACTION_REPOSITORY}/integrations/github-action@${RELEASE_COMMIT}",
+            frontend_workflow,
+        )
+        self.assertNotIn("PRIVATE_TOKEN_SECRET", frontend_workflow)
         version = (ROOT / "frontend/src/lib/version.ts").read_text()
-        self.assertIn("${{ secrets.HAUKSBEE_READ_TOKEN }}", version)
+        self.assertNotIn("secrets.HAUKSBEE_READ_TOKEN", version)
 
-        private_checkout_sources = {
+        checkout_sources = {
             "integrations/github-action/action.yml": 1,
-            "integrations/github-action/README.md": 2,
-            "integrations/github-action/example-workflow.yml": 4,
-            "docs/ci/DOCKER.md": 1,
-            # Both generated checkouts erase credentials; the unit assertion
-            # names the setting twice while checking the exact count.
-            "crates/hauksbee-ci/src/integrate.rs": 4,
-            "frontend/src/lib/ci-workflow.ts": 2,
+            "integrations/github-action/README.md": 1,
+            "integrations/github-action/example-workflow.yml": 2,
+            "crates/hauksbee-ci/src/integrate.rs": 2,
+            "frontend/src/lib/ci-workflow.ts": 1,
         }
-        for relative, expected in private_checkout_sources.items():
+        for relative, expected in checkout_sources.items():
             text = (ROOT / relative).read_text()
             with self.subTest(path=relative):
                 self.assertEqual(
                     text.count("persist-credentials: false"),
                     expected,
-                    "every private-token checkout must erase its credential after checkout",
+                    "every checkout must erase its credential after checkout",
                 )
 
+        # When a dedicated token IS provided for a private mirror, the
+        # registry login is confined, cleaned up, and never argv-visible.
         registry_auth = (ROOT / "integrations/github-action/action.yml").read_text()
         self.assertIn('mktemp -d "$RUNNER_TEMP/hauksbee-docker-auth.XXXXXX"', registry_auth)
         self.assertIn("docker logout ghcr.io", registry_auth)
-        self.assertIn("Cleanup private registry credential", registry_auth)
+        self.assertIn("Cleanup registry credential", registry_auth)
         self.assertIn("if: ${{ always()", registry_auth)
+        self.assertIn(
+            "inputs.use-image == 'true' && inputs.hauksbee-token != ''", registry_auth
+        )
         login = registry_auth[
-            registry_auth.index("Authenticate to the private image registry") :
+            registry_auth.index("Authenticate to the image registry") :
             registry_auth.index("\n    - name: Run the hardware check (image)")
         ]
         self.assertLess(login.index("set +x"), login.index('printf \'%s\' "$GH_TOKEN"'))
@@ -971,7 +997,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "every release build checkout must erase even its read credential before dependencies run",
         )
 
-    def test_shipped_installer_examples_authenticate_the_private_script_fetch(self) -> None:
+    def test_shipped_installer_examples_use_the_public_one_liner(self) -> None:
+        one_liner = (
+            "curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/"
+            "main/scripts/get-hauksbee.sh | bash"
+        )
         for relative in (
             Path("README.md"),
             Path("docs/START_HERE.md"),
@@ -980,31 +1010,13 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         ):
             text = (ROOT / relative).read_text()
             with self.subTest(path=relative):
-                self.assertIn("export HAUKSBEE_GITHUB_TOKEN", text)
-                self.assertIn("REPLACE_WITH_RELEASE_COMMIT_SHA", text)
-                self.assertIn("set -o pipefail", text)
-                self.assertIn("set +x", text)
-                self.assertIn("api.github.com/repos/hauksbee-dev/hauksbee/contents/", text)
-                self.assertNotIn("raw.githubusercontent.com/hauksbee-dev/hauksbee/main", text)
-                example = text[text.index("export HAUKSBEE_GITHUB_TOKEN") :]
-                if relative.suffix == ".tsx":
-                    self.assertIn("'(\\n  set -o pipefail", text)
-                    self.assertIn(
-                        '| bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION"\\n)',
-                        example,
-                    )
-                else:
-                    self.assertIn("(\n", text[: text.index("export HAUKSBEE_GITHUB_TOKEN") + 1])
-                    self.assertIn("\n)", example)
-
-        readme = (ROOT / "README.md").read_text()
-        self.assertIn("[Convert]::FromBase64String", readme)
-        self.assertNotIn("/main/scripts/get-hauksbee.ps1", readme)
-
-        docker_example = readme[readme.index("export HAUKSBEE_GHCR_USER") : readme.index("The credential needs")]
-        self.assertIn('DOCKER_CONFIG="$(mktemp -d)"', docker_example)
-        self.assertIn("trap cleanup EXIT", docker_example)
-        self.assertIn("docker logout ghcr.io", docker_example)
+                self.assertIn(one_liner, text)
+                # The private-era authenticated contents-API bootstrap must not
+                # resurface anywhere an installer example ships.
+                self.assertNotIn("export HAUKSBEE_GITHUB_TOKEN", text)
+                self.assertNotIn(
+                    "api.github.com/repos/hauksbee-dev/hauksbee/contents/", text
+                )
 
     def test_mirror_rejects_retained_scripts_with_missing_operational_dependencies(self) -> None:
         manifest = self.surface_manifest()
@@ -1388,14 +1400,16 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn(phrase.lower(), (result.stdout + result.stderr).lower())
 
-    def test_private_pcm_is_manual_authenticated_install_from_file_only(self) -> None:
+    def test_pcm_is_manual_install_from_file_until_officially_listed(self) -> None:
         readme = (ROOT / "integrations/kicad-plugin/README.md").read_text()
         self.assertNotIn("official listing", readme.lower())
         self.assertNotIn("pcm handles updates", readme.lower())
-        self.assertIn("GH_TOKEN", readme)
+        # Public state: the download needs no credential, and no token env
+        # var is prescribed in the instructions.
+        self.assertNotIn("GH_TOKEN", readme)
+        self.assertIn("no credential needed", readme)
         self.assertIn("gh release download", readme)
         self.assertIn("Install from File", readme)
-        self.assertIn("manually repeat", readme)
 
         builder = (ROOT / "integrations/kicad-plugin/build-pcm.sh").read_text()
         self.assertNotIn("registry listing", builder)
@@ -1411,28 +1425,12 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("hauksbee-ci-pcm-v*.zip", workflow[upload:publish])
         self.assertIn("hauksbee-ci-pcm-v*.zip.sha256", workflow[upload:publish])
 
-    def test_all_named_private_consumers_authenticate_before_fetching(self) -> None:
-        token_curl_surfaces = (
-            Path("README.md"),
-            Path("docs/START_HERE.md"),
-            Path("crates/hauksbee-mcp/README.md"),
-            Path("frontend/src/demo/DemoApp.tsx"),
-            Path("scripts/get-hauksbee.sh"),
-        )
-        for relative in token_curl_surfaces:
-            surface = (ROOT / relative).read_text()
-            with self.subTest(curl_surface=relative):
-                self.assertNotIn("curl --config -", surface)
-                self.assertIn("curl -q --config -", surface)
-
-        mcp = (ROOT / "crates/hauksbee-mcp/README.md").read_text()
-        self.assertIn("HAUKSBEE_GITHUB_TOKEN", mcp)
-        self.assertIn("curl -q --config -", mcp)
-
-        demo = (ROOT / "frontend/src/demo/DemoApp.tsx").read_text()
-        self.assertIn("HAUKSBEE_GITHUB_TOKEN", demo)
-        self.assertIn("curl -q --config -", demo)
-        self.assertNotIn("curl -fsSL https://raw.githubusercontent.com", demo)
+    def test_consumers_keep_optional_credentials_out_of_argv(self) -> None:
+        # The optional-token path in the installer must still feed the header
+        # through curl's config stdin, never argv.
+        installer = (ROOT / "scripts/get-hauksbee.sh").read_text()
+        self.assertNotIn("curl --config -", installer)
+        self.assertIn("curl -q --config -", installer)
 
         action = (ROOT / "integrations/github-action/action.yml").read_text()
         self.assertIn('asset manifest did not contain one sha256', action)
@@ -1446,9 +1444,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn('default: "ghcr.io/hauksbee-dev/hauksbee:slim"', action)
         image_step = action[
             action.index("- name: Run the hardware check (image)") :
-            action.index("- name: Cleanup private registry credential")
+            action.index("- name: Cleanup registry credential")
         ]
-        self.assertIn("GH_TOKEN: ${{ inputs.hauksbee-token }}", image_step)
+        self.assertIn(
+            "GH_TOKEN: ${{ inputs.hauksbee-token || github.token }}", image_step
+        )
         self.assertIn('image_flavor=slim', image_step)
         self.assertIn('image_flavor=full', image_step)
 
@@ -1458,26 +1458,20 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("Hauksbee and libsimavr", slim)
         self.assertIn("Hauksbee and libsimavr", full)
 
-        for relative in (Path("README.md"), Path("docs/ci/DOCKER.md")):
-            text = (ROOT / relative).read_text()
-            with self.subTest(path=relative):
-                login = text.index("docker login ghcr.io")
-                self.assertLess(
-                    login,
-                    text.index("\n  docker run", login),
-                )
-                snippet = text[text.rfind("```", 0, login) : text.find("```", login)]
-                self.assertIn("set +x", snippet)
+        # Public state: the default Docker path pulls anonymously; the
+        # private-mirror fallback keeps its credential-hygiene guidance.
+        docker_doc = (ROOT / "docs/ci/DOCKER.md").read_text()
+        self.assertIn("The images are public", docker_doc)
+        self.assertIn("docker login ghcr.io", docker_doc)
 
         recipes = (ROOT / "docs/ci/RECIPES.md").read_text()
+        self.assertIn("pulls it anonymously", recipes)
         for credential_contract in (
             "DOCKER_AUTH_CONFIG",
             "registryCredentialsId",
-            "endpoint: hauksbee-ghcr",
-            "docker login ghcr.io",
+            "docker login --password-stdin",
         ):
             self.assertIn(credential_contract, recipes)
-        self.assertIn("set +x", recipes[recipes.index("## Buildkite") :])
 
     def test_container_carries_exact_corresponding_source_without_repository_access(self) -> None:
         slim = (ROOT / "docker/Dockerfile.slim").read_text()

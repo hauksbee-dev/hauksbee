@@ -55,35 +55,17 @@ CI runner). The bundled example boards live inside the image, under the
 binaries' embedded data. The boards and specs you check usually come from
 your own repo, mounted in.
 
-The images are private. Authenticate before the first pull with a fine-grained
-PAT or GitHub App installation token authorized for this GHCR package. Load it
-from your platform's secret manager; this example assumes it is already in
-`HAUKSBEE_GITHUB_TOKEN`, with the corresponding login name in
-`HAUKSBEE_GHCR_USER`:
+The images are public: no registry login is needed. Pull and run directly:
 
 ```bash
-(
-  set +x
-  export DOCKER_CONFIG="$(mktemp -d)"
-  cleanup() {
-    docker logout ghcr.io >/dev/null 2>&1 || true
-    find "$DOCKER_CONFIG" -depth -mindepth 1 -delete 2>/dev/null || true
-    rmdir "$DOCKER_CONFIG" 2>/dev/null || true
-  }
-  trap cleanup EXIT
-  trap 'exit 130' INT TERM
-  printf '%s' "$HAUKSBEE_GITHUB_TOKEN" \
-    | docker login ghcr.io --username "$HAUKSBEE_GHCR_USER" --password-stdin
-  docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
-    hauksbee run path/to/board.kicad_pcb --report
-)
+docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
+  hauksbee run path/to/board.kicad_pcb --report
 ```
 
-For a user token, the login name is that GitHub user; for a GitHub App
-installation token, use `x-access-token`.
-The example confines Docker's credential file to a temporary configuration,
-logs out and removes it on every exit path, and drops the configuration variable
-with the subshell. The token is read from stdin, not placed in process argv.
+(Private mirrors and GitHub Enterprise registries still work the usual way:
+`docker login ghcr.io` with a package-read token before the first pull,
+preferably confined to a temporary `DOCKER_CONFIG` that is logged out and
+removed afterwards.)
 
 Report a board (the bind report table):
 
@@ -136,16 +118,8 @@ published image instead of downloading a release binary or compiling from
 source. Set `use-image: true`, and optionally pick the image:
 
 ```yaml
-- uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+- uses: hauksbee-dev/hauksbee/integrations/github-action@REPLACE_WITH_RELEASE_COMMIT_SHA
   with:
-    repository: hauksbee-dev/hauksbee
-    ref: REPLACE_WITH_RELEASE_COMMIT_SHA
-    path: .hauksbee-action
-    token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
-    persist-credentials: false
-- uses: ./.hauksbee-action/integrations/github-action
-  with:
-    hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
     hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
     hauksbee-version: v0.1.0
     spec: ci/watchy.toml
@@ -174,12 +148,12 @@ manifests to GHCR.
 
 The first publication is fail-closed too. GHCR has no package visibility to
 inspect until a package exists, so the workflow first pushes a zero-layer,
-non-runnable `privacy-bootstrap-<commit>` marker built `FROM scratch`. It
-contains no Hauksbee binaries or source. The workflow then queries GitHub's
-package API and refuses to build or push the slim/full images unless the new
-package reports `private`. Existing packages skip the marker but must pass the
-same check. A final visibility check runs unconditionally after the push; it
-cannot turn an earlier build/push failure into success.
+non-runnable `privacy-bootstrap-<commit>` marker built `FROM scratch`, which
+contains no Hauksbee binaries or source. The package is therefore born
+private, verified as such before any real image is built, and made public
+only as a deliberate owner decision at launch, never as a push side effect. A
+final visibility check runs unconditionally after the push; it cannot turn an
+earlier build/push failure into success.
 
 The build is **multi-stage from source**, not a repackaged release tarball:
 
@@ -191,7 +165,7 @@ The build is **multi-stage from source**, not a repackaged release tarball:
    db, and exact Hauksbee + simavr corresponding-source archives under
    `/usr/share/doc/hauksbee/source/`; the shared libraries it still needs,
    `libelf1` and `zlib1g`, come from apt. Source access therefore travels with
-   the private image and does not depend on separate repository permission.
+   the image itself and does not depend on separate repository permission.
 
 This choice of multi-stage from source over consuming `scripts/bundle.sh`'s
 tarball has two reasons. First, each architecture builds natively under

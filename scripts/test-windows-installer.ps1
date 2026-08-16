@@ -1,4 +1,4 @@
-<# Native end-to-end contract for get-hauksbee.ps1 against a local private API. #>
+<# Native end-to-end contract for get-hauksbee.ps1 against a local mock API. #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]

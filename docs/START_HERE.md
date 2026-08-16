@@ -1,103 +1,50 @@
 # Start here
 
-Hauksbee is CI for hardware. Hand it a real PCB design file (KiCad, Eagle,
-Altium `.PcbDoc`, IPC-D-356, or gerber-only fab output). Hauksbee works out
-the circuit the copper actually implements, runs that circuit headless with
-real device physics, and co-simulates the firmware on an emulated MCU. It
-then checks the board the way a test suite checks a function: rails,
-faults, shorts, USB-C compliance, signal integrity, thermal, loop
-stability. A bug that used to cost a fab spin and a fortnight at the bench
-now fails a test instead.
+Hauksbee executes the evidence that describes a real electronic product. Give
+it a layout, schematic, fab archive, BOM, placement file, fitted variant, or
+compiled firmware. It reconstructs the circuit the copper implements, binds
+device models, runs static and numerical checks, and can boot the firmware
+against the solved board. CI is an optional consumer of those results, not the
+definition of the tool.
+
+The unusual part is the cross-checking. IPC-D-356 inside a fab archive can be
+the authority for connectivity; a contradictory BOM can stop analysis before
+model binding; a firmware-controlled net can remain undecidable statically and
+become testable only when the firmware runs. If an active part has no adequate
+model, Hauksbee names it, keeps the valid partial result, and refuses the
+stronger conclusion instead of guessing.
 
 ## Install and first run
 
-> **Private release candidate:** the download commands below become runnable
-> only after the launch checklist publishes the named private tag and commit.
-> Invited testers also need a `Contents: read` token. Until then, use the
-> source-build route below; do not substitute `main` for either placeholder.
+The quickest path needs no terminal at all: on macOS, download `Hauksbee.app`
+from the [latest release](https://github.com/hauksbee-dev/hauksbee/releases/latest),
+unzip, and double-click. It starts the engine on your machine and opens the
+web interface in your browser, with sample boards ready to run. The app is
+signed and notarised; nothing you drop on it leaves your machine.
 
-**On a Mac, no terminal needed:** download `Hauksbee.app` (the
-`hauksbee-<version>-darwin-<arch>-app.zip` asset) from the
-[releases page](https://github.com/hauksbee-dev/hauksbee/releases). Unzip it and
-double-click it. Your browser opens on the drop-zone. Drop a board and read
-the report. Released apps are signed and notarised, so Gatekeeper accepts a
-plain double-click; the full signing story is under the installer below
-(mechanics: [`app/macos/SIGNING.md`](../app/macos/SIGNING.md)). The double-click
-app is macOS-only. Windows x86_64 ships a native permissive zip with the same
-browser front door but without AVR/libsimavr; Linux users take the installer
-line below. Exact platform differences are in
-[`release-and-licensing.md`](about/release-and-licensing.md).
-
-**From a terminal**, use either the one-line installer:
+For the CLI, one line downloads and installs the released binaries
+(`hauksbee`, `hauksbee-ci`, `hauksbee-mcp`), verifying checksums:
 
 ```bash
-(
-  set -o pipefail
-  set +x
-  export HAUKSBEE_GITHUB_TOKEN="$(security find-generic-password -w -s hauksbee-read)"
-  export HAUKSBEE_INSTALLER_COMMIT=REPLACE_WITH_RELEASE_COMMIT_SHA
-  export HAUKSBEE_INSTALLER_VERSION=REPLACE_WITH_RELEASE_TAG
-  printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" \
-    | curl -q --config - -fsSL "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.sh?ref=$HAUKSBEE_INSTALLER_COMMIT" \
-    | python3 -c 'import base64,json,sys; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["content"]).decode())' \
-    | bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION"
-)
+curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
 ```
 
-Use a fine-grained PAT or GitHub App installation token with Contents: read on
-the private release repository; substitute your platform's secret manager for
-the macOS keychain command when needed. The header travels through stdin, not
-curl's argv or output. The subshell drops the exported credential after both
-private release-assets API downloads finish. The installer also needs Python 3
-to parse GitHub's authenticated release metadata.
+Windows uses the PowerShell twin
+(`irm .../scripts/get-hauksbee.ps1 | iex`), and CI can pull
+`ghcr.io/hauksbee-dev/hauksbee:slim` or `:full` instead; see
+[DOCKER](ci/DOCKER.md).
 
-or build from a checkout. The first command installs the pinned AVR dependency;
-the second builds the web front door and all three binaries, then installs them.
-Both fail before installation when a prerequisite is missing.
+From a checkout, the first command checks or installs simulator
+prerequisites; the second builds the web front door and the three binaries,
+then installs them:
 
 ```bash
-scripts/install-sims.sh --avr                           # once: pinned simavr + its build prerequisites
-scripts/install.sh                                      # web UI + hauksbee + hauksbee-ci + hauksbee-mcp onto PATH
-hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report --plain
-hauksbee serve                                          # web front door (long-running; Ctrl-C to stop)
+scripts/install-sims.sh --check
+scripts/install.sh
+hauksbee doctor --json
+hauksbee run --example blinky --check --plain
+hauksbee serve
 ```
-
-**macOS signing, stated plainly.** Every macOS release binary is signed with
-a Developer ID identity. `Hauksbee.app` is signed and notarised with the
-ticket stapled, and the release workflow refuses to publish an app zip that is
-not, so the app opens on a double-click with no Gatekeeper warning. The
-tarball binaries are signed too, and notarised from launch onward; a bare
-command-line binary cannot carry a stapled ticket, so Gatekeeper confirms the
-notarisation online on first run, and a tarball fetched through a browser
-opens cleanly. Only a pre-release or locally built unsigned bundle still needs
-the one-time fallback `xattr -d com.apple.quarantine ~/.local/bin/hauksbee
-~/.local/bin/hauksbee-ci ~/.local/bin/hauksbee-mcp`, while a copy installed by
-the curl line above never carries the quarantine flag at all.
-
-Parts hauksbee does not recognise bind OPEN (simulated as disconnected) and
-are reported, never silently guessed. On the Watchy board, 61 of 67
-non-ignored parts resolve, with the MCU bound, so a few warnings about
-unresolved actives are expected, and the report's bottom line explains
-exactly what they mean for the results.
-
-No board of your own yet? Three routes, none needing a file. In the terminal,
-these two work from a bare installed binary with no checkout on disk: the board
-is compiled into the binary and unpacked to a temp directory, so there is no path
-to get wrong.
-
-```bash
-hauksbee run --example blinky --check --plain   # every static check, one plain-language verdict per check
-hauksbee-ci run --example blinky                # the same board as a CI spec: GREEN or RED
-```
-
-The default AVR-capable binary runs four firmware/rail/timing assertions on
-Blinky. The Windows/permissive binary cannot honestly run AVR firmware, so the
-same zero-file command runs one static `no_faults` assertion on a bundled
-passive divider and labels the embedded spec accordingly.
-
-Both answer "is this board OK?" in a few lines. The second is the shape a
-pipeline gates on, so it is the better first run if CI is why you are here. Ask
-either binary for an example it does not carry and it names the one it does.
 
 In the browser, the `hauksbee serve` page has one-click samples: a real
 smartwatch, a board-plus-firmware pair that runs a live co-sim, and a minimal
@@ -121,15 +68,17 @@ that runs it. CI wrappers are optional, and you add them later.
 
 ## Your next four reads
 
-1. [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md): get it running. Install, the first useful
-   result in a minute, and every runnable example and script.
-2. [`docs/ci/CI.md`](ci/CI.md): the point of the tool. Boot the board headless on every
-   commit and assert on it, with a GitHub Action, JUnit output, and exit codes.
-3. [`docs/cosim/MCU.md`](cosim/MCU.md): MCU co-simulation. Which chips are supported (AVR,
-   STM32, ESP32/-C3, nRF52840, RISC-V) and how firmware couples to the analog solve.
-4. [`docs/about/ARCHITECTURE.md`](about/ARCHITECTURE.md): the mental model. How a board file
-   becomes an extracted circuit, a bound model set, a partitioned solve, and a
-   co-simulation.
+1. [`docs/about/CAPABILITIES.md`](about/CAPABILITIES.md): the authoritative
+   scope and per-backend evidence matrix.
+2. [`docs/about/ARCHITECTURE.md`](about/ARCHITECTURE.md): how a board or fab
+   input becomes an extracted circuit, bound model set, solve, and co-simulation.
+3. [`docs/models/MODELS.md`](models/MODELS.md): inspect unresolved parts,
+   scaffold or extract a model, validate it, and prove that it binds.
+4. [`docs/models/BOARD_MODELING_WORKFLOW.md`](models/BOARD_MODELING_WORKFLOW.md):
+   click-to-model browser workflow, approval-gated pack preparation, full
+   behavior layers, reference-board proof, and multi-board regeneration.
+5. [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md): runnable examples and, when useful,
+   the CI/spec surface over the same engine.
 
 From there, the rest of `docs/` covers each capability in depth:
 
@@ -160,7 +109,21 @@ From there, the rest of `docs/` covers each capability in depth:
 A part hauksbee does not recognise binds OPEN, meaning it is simulated as
 disconnected rather than silently guessed. The report says "N% resolved"
 (the share of parts bound to a device model) and names the part. Closing
-that gap needs one small TOML file and no recompile:
+that gap needs model data and no recompile. Start with the board itself:
+
+```bash
+hauksbee models resolve board.kicad_pcb --json
+hauksbee models new U3 --board board.kicad_pcb --out models/u3.toml
+hauksbee models lint models/u3.toml
+hauksbee run board.kicad_pcb --models-dir models --report --plain
+```
+
+The scaffold deliberately refuses to guess an IC kind or datasheet value.
+Supply those from identified source material, or use the consent-gated
+`models extract --pdf ... --part ...` workflow to create a draft that must
+still pass review, lint, binding, and positive/negative tests.
+
+The worked formats are:
 
 - an **analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator):
   [`extending/add-an-analog-part.md`](extending/add-an-analog-part.md)

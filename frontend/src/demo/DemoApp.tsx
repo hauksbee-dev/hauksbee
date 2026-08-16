@@ -16,13 +16,7 @@ import type { Startup } from '../types/report'
 
 const BANNER = 'A recorded run of the real engine, byte for byte. Install to run your own boards.'
 const INSTALL_CMD =
-  '(\n  set -o pipefail\n  set +x\n  export HAUKSBEE_GITHUB_TOKEN="$(gh auth token)"\n' +
-  '  export HAUKSBEE_INSTALLER_COMMIT=REPLACE_WITH_RELEASE_COMMIT_SHA\n' +
-  '  export HAUKSBEE_INSTALLER_VERSION=REPLACE_WITH_RELEASE_TAG\n' +
-  'printf \'header = "Authorization: Bearer %s"\\n\' "$HAUKSBEE_GITHUB_TOKEN" ' +
-  '| curl -q --config - -fsSL "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.sh?ref=$HAUKSBEE_INSTALLER_COMMIT" ' +
-  '| python3 -c \'import base64,json,sys; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["content"]).decode())\' ' +
-  '| bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION"\n)'
+  'curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash'
 
 /** The one line that must never leave the screen, on every demo surface. */
 function HonestyBanner() {
