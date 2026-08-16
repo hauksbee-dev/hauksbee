@@ -61,26 +61,21 @@ Two ways in, pick one. Both end the same way: in the PCB editor run
 install) and a "hauksbee-ci: run hardware check" entry appears, plus a toolbar
 button.
 
-### Plugin and Content Manager, from an authenticated release asset
+### Plugin and Content Manager, from a release asset
 
-The repository and its release assets remain private. Download the PCM archive
-with an authorized fine-grained token or GitHub App installation token that
-has `Contents: read` access to `hauksbee-dev/hauksbee`:
+Download the PCM archive from the GitHub release (no credential needed):
 
 ```bash
-(
-  export GH_TOKEN="$(gh auth token)"
-  gh release download "v<version>" --repo hauksbee-dev/hauksbee \
-    --pattern "hauksbee-ci-pcm-v<version>.zip" --dir "$HOME/Downloads"
-)
+gh release download "v<version>" --repo hauksbee-dev/hauksbee \
+  --pattern "hauksbee-ci-pcm-v<version>.zip" --dir "$HOME/Downloads"
 ```
 
+or grab `hauksbee-ci-pcm-v<version>.zip` from the release page in a browser.
+
 In KiCad: **Plugin and Content Manager -> Install from File...**, pick the zip,
-and apply it. PCM can uninstall the package, but it cannot authenticate to the
-private GitHub release for discovery or updates. You must manually repeat the
-authenticated download and **Install from File...** for each version. We do not
-publish an official-list endpoint because that would require an
-unauthenticated public package URL.
+and apply it. PCM can uninstall the package; updating means downloading the
+new release's zip and repeating **Install from File...** until the package is
+listed in an official PCM repository.
 
 Maintainers can instead build the same archive locally with
 `bash integrations/kicad-plugin/build-pcm.sh`. The package layout

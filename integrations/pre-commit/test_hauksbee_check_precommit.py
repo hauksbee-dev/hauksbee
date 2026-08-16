@@ -15,6 +15,7 @@ and passes them as arguments.
 import contextlib
 import io
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -162,6 +163,98 @@ def test_hauksbee_bin_env_var_is_respected():
         )
         assert r.returncode == 0, r.stderr
         assert os.path.exists(log), "the HAUKSBEE_BIN binary must be the one run"
+
+
+def _ci_file_patterns():
+    """Read the CI hook's pre-commit ``files`` pattern from both examples."""
+    paths = (
+        os.path.join(_HERE, ".pre-commit-config.yaml"),
+        os.path.join(_HERE, "..", "..", ".pre-commit-hooks.yaml"),
+    )
+    patterns = []
+    for path in paths:
+        text = open(path, encoding="utf-8").read()
+        matches = re.findall(r"(?m)^\s+files:\s*'([^']*ci/[^']*)'\s*$", text)
+        assert len(matches) == 1, f"expected one CI files pattern in {path}"
+        patterns.append(matches[0])
+    return patterns
+
+
+def test_precommit_path_filters_cover_all_board_formats_and_ci_specs():
+    # These are the single-file inputs accepted by `hauksbee run`. Archives
+    # are content-sniffed, so matching their suffix is the only way for a
+    # staged fab.zip (or ODB++ tarball) to trigger this path-only hook. XML is
+    # intentionally broad: IPC-2581 is also content-sniffed, and pre-commit
+    # cannot distinguish it from unrelated XML without reading the file.
+    supported_extensions = (
+        "kicad_pcb",
+        "kicad_sch",
+        "net",
+        "brd",
+        "d356",
+        "pcbdoc",
+        "board",
+    )
+    positive = [f"board.{ext}" for ext in supported_extensions]
+    positive += [f"nested/board.{ext}" for ext in supported_extensions]
+    archive_extensions = ("xml", "zip", "tgz", "tar.gz", "tar")
+    positive += [f"fab.{ext}" for ext in archive_extensions]
+    positive += [f"nested/fab.{ext}" for ext in archive_extensions]
+    positive += [
+        "board.PcbDoc",
+        "nested/board.PcbDoc",
+        "nested/fab.TAR.GZ",
+        "ci/power.toml",
+        "nested/ci/power.toml",
+        "nested/ci/deep/spec.TOML",
+    ]
+    # In particular, `(?:^|/)ci/` must not turn a filename containing `ci/`
+    # into a spec, and extension matching must stop at the real suffix.
+    hostile = [
+        "power.toml",
+        "not-ci/power.toml",
+        "nested/not-ci/power.toml",
+        "ci-not/power.toml",
+        "nested/ci/power.yaml",
+        "nested/ci/power.toml.bak",
+        "board.kicad_pcb.bak",
+        "nested/board.PcbDoc.txt",
+        "nested/board.gbr",
+        "nested/fab.gz",
+        "nested/fab.tar.bz2",
+        "nested/fab.tar.gz.bak",
+        "nested/fab.tgz.bak",
+        "nested/fab.zip.bak",
+    ]
+
+    patterns = _ci_file_patterns()
+    assert patterns[0] == patterns[1], "the shipped examples must stay in sync"
+    for pattern in patterns:
+        compiled = re.compile(pattern)
+        for path in positive:
+            assert compiled.search(path), f"{path!r} did not match {pattern!r}"
+        for path in hostile:
+            assert not compiled.search(path), f"hostile path matched: {path!r}"
+
+
+def test_board_hook_path_filter_covers_archives_and_exchange_documents():
+    text = open(
+        os.path.join(_HERE, "..", "..", ".pre-commit-hooks.yaml"),
+        encoding="utf-8",
+    ).read()
+    matches = re.findall(r"(?m)^\s+files:\s*'([^']*)'\s*$", text)
+    assert len(matches) == 2, "expected board and CI files patterns"
+    board_pattern = re.compile(matches[0])
+    for path in (
+        "fab.zip",
+        "nested/fab.tgz",
+        "nested/fab.tar.gz",
+        "nested/fab.tar",
+        "nested/ipc2581.xml",
+    ):
+        assert board_pattern.search(path), f"{path!r} did not match board hook"
+    for path in ("ci/power.toml", "nested/ci/power.toml", "notes.xml.bak"):
+        assert not board_pattern.search(path), f"non-board path matched: {path!r}"
 
 
 def test_no_em_dashes_in_anything_a_user_reads():

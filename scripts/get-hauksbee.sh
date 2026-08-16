@@ -7,17 +7,10 @@
 # Safe to re-run: an existing install is only overwritten once the checksum
 # of the new download is verified.
 #
-# Usage:
-#   ( set -o pipefail
-#     set +x
-#     export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
-#     export HAUKSBEE_INSTALLER_COMMIT=REPLACE_WITH_RELEASE_COMMIT_SHA
-#     export HAUKSBEE_INSTALLER_VERSION=REPLACE_WITH_RELEASE_TAG
-#     printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
-#       curl -q --config - -fsSL "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.sh?ref=$HAUKSBEE_INSTALLER_COMMIT" |
-#       python3 -c 'import base64,json,sys; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["content"]).decode())' | bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION" )
+# Usage (the README one-liner):
+#   curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
 #   With flags through the pipe:
-#     printf ... | curl -q --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
+#     curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash -s -- --permissive
 #   Or run locally:
 #     bash scripts/get-hauksbee.sh [--version v0.1.0] [--prefix ~/.local] [--permissive]
 #
@@ -37,12 +30,14 @@
 #   Either way, LICENSE-BINARY.txt inside the tarball spells out the terms.
 #
 # Environment:
-#   HAUKSBEE_GITHUB_TOKEN  Required for the private release repository. Use a
-#                          fine-grained PAT or GitHub App installation token
-#                          with Contents: read on hauksbee-dev/hauksbee.
+#   HAUKSBEE_GITHUB_TOKEN  Optional. The releases are public, so no credential
+#                          is needed; set one to raise the GitHub API rate
+#                          limit (busy CI) or to target a private mirror or
+#                          GitHub Enterprise host via HAUKSBEE_API_BASE.
 #   GITHUB_TOKEN           Accepted as a CI-compatible fallback.
-# Credentials must never become xtrace output. This intentionally overrides an
-# inherited `SHELLOPTS=xtrace` or an explicit `bash -x` before reading them.
+# A credential, when present, must never become xtrace output. This
+# intentionally overrides an inherited `SHELLOPTS=xtrace` or an explicit
+# `bash -x` before reading them.
 set +x
 set -euo pipefail
 
@@ -50,9 +45,10 @@ REPO="hauksbee-dev/hauksbee"
 # The API base is overridable so the installer can target a GitHub Enterprise
 # host or the local contract server used by the regression test.
 API_BASE="${HAUKSBEE_API_BASE:-https://api.github.com/repos/${REPO}}"
-PRIVATE_TOKEN="${HAUKSBEE_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
-# The credential authorizes API reads only. Keep the captured value shell-local
-# and prevent every downloaded binary/child process from inheriting it.
+API_TOKEN="${HAUKSBEE_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+# The optional credential authorizes API reads only. Keep the captured value
+# shell-local and prevent every downloaded binary/child process from
+# inheriting it.
 unset HAUKSBEE_GITHUB_TOKEN GITHUB_TOKEN GH_TOKEN
 
 VERSION=""
@@ -75,16 +71,9 @@ re-run: an existing install is only overwritten once the checksum of the new
 download is verified.
 
 Usage:
-  ( set -o pipefail
-    set +x
-    export HAUKSBEE_GITHUB_TOKEN="$(secret-manager read hauksbee-read)"
-    export HAUKSBEE_INSTALLER_COMMIT=REPLACE_WITH_RELEASE_COMMIT_SHA
-    export HAUKSBEE_INSTALLER_VERSION=REPLACE_WITH_RELEASE_TAG
-    printf 'header = "Authorization: Bearer %s"\n' "$HAUKSBEE_GITHUB_TOKEN" |
-      curl -q --config - -fsSL "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.sh?ref=$HAUKSBEE_INSTALLER_COMMIT" |
-      python3 -c 'import base64,json,sys; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["content"]).decode())' | bash -s -- --version "$HAUKSBEE_INSTALLER_VERSION" )
+  curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
   With flags through the pipe:
-    printf ... | curl -q --config - -fsSL .../get-hauksbee.sh | bash -s -- --permissive
+    curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash -s -- --permissive
   Or run locally:
     bash scripts/get-hauksbee.sh [--version v0.1.0] [--prefix ~/.local] [--permissive]
 
@@ -104,8 +93,9 @@ Which build you get:
   Either way, LICENSE-BINARY.txt inside the tarball spells out the terms.
 
 Environment:
-  HAUKSBEE_GITHUB_TOKEN  Required. Fine-grained PAT or GitHub App installation
-                         token with Contents: read on the private repository.
+  HAUKSBEE_GITHUB_TOKEN  Optional. Set a token to raise the GitHub API rate
+                         limit, or for a private mirror / GitHub Enterprise
+                         host (with HAUKSBEE_API_BASE).
   GITHUB_TOKEN           Accepted as a CI-compatible fallback.
 
 Dependencies:
@@ -149,26 +139,22 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -z "$PRIVATE_TOKEN" ]; then
-  echo "HAUKSBEE_GITHUB_TOKEN is required to download from the private ${REPO} release repository." >&2
-  echo "Use a fine-grained PAT or GitHub App installation token with Contents: read; do not put it in a URL." >&2
-  exit 1
-fi
-
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required to parse authenticated GitHub release metadata safely." >&2
-  exit 1
-fi
-if ! command -v gh >/dev/null 2>&1; then
-  echo "GitHub CLI (gh) is required to verify signed release provenance." >&2
+  echo "python3 is required to parse GitHub release metadata safely." >&2
   exit 1
 fi
 
-# Feed the authorization header through curl's config stdin. Keeping the token
-# out of curl's argv prevents it appearing in process listings or shell traces.
-curl_private() {
-  printf 'header = "Authorization: Bearer %s"\n' "$PRIVATE_TOKEN" \
-    | curl -q --config - "$@"
+# When a token was provided, feed the authorization header through curl's
+# config stdin. Keeping the token out of curl's argv prevents it appearing in
+# process listings or shell traces. Without a token, plain unauthenticated
+# requests are the default: the release repository is public.
+curl_gh() {
+  if [ -n "$API_TOKEN" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$API_TOKEN" \
+      | curl -q --config - "$@"
+  else
+    curl -q "$@"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -232,7 +218,7 @@ echo "Detected platform: ${OS}/${ARCH} -> asset suffix: ${ASSET_SUFFIX}"
 # subsequently fetched only through the API URLs in this authenticated response.
 # ---------------------------------------------------------------------------
 fetch_release() {
-  curl_private -fsSL \
+  curl_gh -fsSL \
     -H 'Accept: application/vnd.github+json' \
     -H 'X-GitHub-Api-Version: 2026-03-10' \
     "$1"
@@ -258,6 +244,33 @@ print(matches[0])
 ' "$name"
 }
 
+# GitHub's immutable-release API records a server-side digest for every
+# uploaded asset. Extracting it here lets the installer verify the downloaded
+# bytes against GitHub's own record, independently of the .sha256 sidecar a
+# publisher uploads (a coherently replaced tarball + sidecar must not
+# authenticate itself).
+release_asset_digest() {
+  local name="$1"
+  python3 -c '
+import json, re, sys
+name = sys.argv[1]
+matches = [asset.get("digest") for asset in json.load(sys.stdin).get("assets", []) if asset.get("name") == name]
+if len(matches) != 1 or not isinstance(matches[0], str):
+    sys.exit(1)
+if not re.fullmatch(r"sha256:[0-9a-f]{64}", matches[0]):
+    sys.exit(1)
+print(matches[0][7:])
+' "$name"
+}
+
+file_sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
+
 if [ -z "${VERSION}" ]; then
   echo "Fetching latest release tag..."
   if ! RELEASE_JSON="$(fetch_release "${API_BASE}/releases/latest")" \
@@ -270,7 +283,7 @@ if [ -z "${VERSION}" ]; then
   fi
 else
   if ! RELEASE_JSON="$(fetch_release "${API_BASE}/releases/tags/${VERSION}")"; then
-    echo "Could not read release ${VERSION} from the authenticated GitHub API." >&2
+    echo "Could not read release ${VERSION} from the GitHub API." >&2
     exit 1
   fi
   if ! RESOLVED_TAG="$(printf '%s' "$RELEASE_JSON" | release_tag)" \
@@ -280,7 +293,7 @@ else
   fi
 fi
 if ! printf '%s' "$RELEASE_JSON" | release_is_immutable; then
-  echo "Release ${VERSION} is not immutable; refusing replaceable private assets." >&2
+  echo "Release ${VERSION} is not immutable; refusing replaceable release assets." >&2
   exit 1
 fi
 
@@ -298,6 +311,11 @@ CHECKSUM_NAME="${TARBALL_NAME}.sha256"
 if ! TARBALL_URL="$(printf '%s' "$RELEASE_JSON" | release_asset_url "$TARBALL_NAME")" \
   || ! CHECKSUM_URL="$(printf '%s' "$RELEASE_JSON" | release_asset_url "$CHECKSUM_NAME")"; then
   echo "Release ${VERSION} does not contain exactly one ${TARBALL_NAME} and checksum asset." >&2
+  exit 1
+fi
+if ! TARBALL_DIGEST="$(printf '%s' "$RELEASE_JSON" | release_asset_digest "$TARBALL_NAME")" \
+  || ! CHECKSUM_DIGEST="$(printf '%s' "$RELEASE_JSON" | release_asset_digest "$CHECKSUM_NAME")"; then
+  echo "Release ${VERSION} assets carry no valid GitHub asset digests." >&2
   exit 1
 fi
 for api_url in "$TARBALL_URL" "$CHECKSUM_URL"; do
@@ -340,7 +358,7 @@ CHECKSUM_PATH="${TMPDIR_WORK}/${CHECKSUM_NAME}"
 # what to check, instead of dying with a bare non-zero under `set -e`.
 download_asset() {
   local url="$1" dest="$2" what="$3"
-  if ! curl_private -fsSL --retry 3 --retry-delay 2 \
+  if ! curl_gh -fsSL --retry 3 --retry-delay 2 \
     -H 'Accept: application/octet-stream' -o "${dest}" "${url}"; then
     echo "Failed to download ${what}:" >&2
     echo "  ${url}" >&2
@@ -355,6 +373,16 @@ download_asset "${TARBALL_URL}" "${TARBALL_PATH}" "the release tarball"
 
 echo "Downloading checksum..."
 download_asset "${CHECKSUM_URL}" "${CHECKSUM_PATH}" "the sha256 checksum"
+
+# Verify GitHub's server-recorded asset digests before trusting the checksum
+# sidecar. The immutable release binds these digests to the protected tag, so
+# a swapped tarball with a matching swapped sidecar still fails here.
+echo "Verifying release asset digests..."
+if [ "$(file_sha256 "${TARBALL_PATH}")" != "$TARBALL_DIGEST" ] \
+  || [ "$(file_sha256 "${CHECKSUM_PATH}")" != "$CHECKSUM_DIGEST" ]; then
+  echo "Downloaded bytes do not match the GitHub asset digest for immutable release ${VERSION}." >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Verify sha256 checksum
@@ -380,9 +408,11 @@ echo "Verifying checksum..."
   fi
 )
 
-# The checksum catches corruption, while the repository's immutable-release
-# attestation binds the archive bytes to the protected tag and release.
-RELEASE_SHA="$(GH_TOKEN="$PRIVATE_TOKEN" gh api "repos/${REPO}/commits/${VERSION}" --jq .sha)"
+# The checksum catches corruption; the GitHub asset digests above bind the
+# archive bytes to the immutable release. Resolving the tag to its one source
+# commit lets the staged binaries prove they identify this exact release.
+RELEASE_SHA="$(fetch_release "${API_BASE}/commits/${VERSION}" \
+  | python3 -c 'import json,sys; value=json.load(sys.stdin).get("sha"); value or sys.exit(1); print(value)')"
 [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
   echo "Could not resolve ${VERSION} to one immutable source commit." >&2
   exit 1
@@ -392,10 +422,6 @@ if [ -n "${HAUKSBEE_INSTALLER_COMMIT:-}" ] \
   echo "Installer commit $HAUKSBEE_INSTALLER_COMMIT does not match release $VERSION ($RELEASE_SHA)." >&2
   exit 1
 fi
-GH_TOKEN="$PRIVATE_TOKEN" gh release verify-asset "$VERSION" "$TARBALL_PATH" \
-  --repo "$REPO" >/dev/null
-GH_TOKEN="$PRIVATE_TOKEN" gh release verify-asset "$VERSION" "$CHECKSUM_PATH" \
-  --repo "$REPO" >/dev/null
 
 validate_release_archive() {
   local archive="$1" member line kind
@@ -619,7 +645,7 @@ fi
 # before committing the recovery journal. The preflight above preserves the old
 # installation for malformed assets; this catches destination-filesystem or
 # rename damage. Current release builds link libelf statically; retaining the
-# final-path probes also catches older/private assets and other loader failures.
+# final-path probes also catches older assets and other loader failures.
 # ---------------------------------------------------------------------------
 for b in ${BINARIES}; do
   actual_version="$("${INSTALL_DIR}/$b" --version 2>&1 || true)"

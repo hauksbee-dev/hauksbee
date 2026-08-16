@@ -54,17 +54,32 @@ describe('frontend release gates', () => {
     expect(generated).toContain('permissions:\n  contents: read\n  checks: write')
     expect(generated).toContain('cancel-in-progress: true')
     expect(generated).toContain('timeout-minutes: 45')
-    expect(generated.match(/persist-credentials: false/g)).toHaveLength(2)
+    expect(generated.match(/persist-credentials: false/g)).toHaveLength(1)
     expect(generated).toContain("publish-report: ${{ github.event_name != 'pull_request'")
-    expect(generated).toContain('ref: 0123456789abcdef0123456789abcdef01234567')
+    expect(generated).toContain(
+      'uses: hauksbee-dev/hauksbee/integrations/github-action@0123456789abcdef0123456789abcdef01234567',
+    )
+    expect(generated).not.toContain('secrets.')
     expect(generated).toContain('hauksbee-ref: 0123456789abcdef0123456789abcdef01234567')
     expect(generated).toContain('hauksbee-version: v0.1.0')
     expect(generated).not.toContain('ref: v0.1.0')
+    for (const inputPath of ['**/*.xml', '**/*.zip', '**/*.tgz', '**/*.tar.gz', '**/*.tar']) {
+      expect(generated).toContain(`"${inputPath}"`)
+    }
     expect(specStemFor('my # board.kicad_pcb')).toBe('my-board')
     const injected = specStemFor('board\nspecs: stolen.kicad_pcb')
     expect(injected).toBe('board-specs-stolen')
     expect(workflowYaml(injected)).toContain('spec: ci/board-specs-stolen.toml')
     expect(workflowYaml(injected)).not.toContain('\nspecs:')
+  })
+
+  test('the browser picker exposes every single-file and archive input used by CI', async () => {
+    const { BOARD_ACCEPT_ATTR, acceptedFormatsSentence } = await import('../src/lib/board-formats')
+    const accepted = acceptedFormatsSentence()
+    for (const extension of ['.xml', '.zip', '.tgz', '.tar.gz', '.tar']) {
+      expect(BOARD_ACCEPT_ATTR.split(',')).toContain(extension)
+      expect(accepted).toContain(extension)
+    }
   })
 
   test('every default-feature Rust job installs the immutable simavr prerequisite', () => {

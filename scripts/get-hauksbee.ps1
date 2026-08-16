@@ -21,11 +21,13 @@
     the limitation before downloading. LICENSE-BINARY.txt records it too.
 
 .PARAMETER Version
-  Install a specific release tag (e.g. v0.1.0).
+  Install a specific release tag (e.g. v0.1.0). Default: the latest release.
 
 .PARAMETER ExpectedCommit
-  Exact 40-character source commit printed by the immutable release. The
-  installer resolves Version through GitHub and refuses any mismatch.
+  Optional exact 40-character source commit printed by the immutable release.
+  When given, the installer resolves Version through GitHub and refuses any
+  mismatch; either way the resolved release commit must match the version
+  every installed binary reports.
 
 .PARAMETER Prefix
   Install binaries to <Prefix>\bin. Default: $env:LOCALAPPDATA\hauksbee.
@@ -35,26 +37,23 @@
   shape, so omitting the switch selects the same artifact with a notice.
 
 .EXAMPLE
-  try {
-    $env:HAUKSBEE_GITHUB_TOKEN = Get-Secret hauksbee-read -AsPlainText
-    $headers = @{ Authorization = "Bearer $env:HAUKSBEE_GITHUB_TOKEN" }
-    $releaseCommit = "REPLACE_WITH_RELEASE_COMMIT_SHA"
-    $releaseTag = "REPLACE_WITH_RELEASE_TAG"
-    $payload = irm -Headers $headers "https://api.github.com/repos/hauksbee-dev/hauksbee/contents/scripts/get-hauksbee.ps1?ref=$releaseCommit"
-    $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($payload.content -replace '\s', '')))
-    $block = [ScriptBlock]::Create($script)
-    & $block -Version $releaseTag -ExpectedCommit $releaseCommit
-  } finally {
-    Remove-Item Env:HAUKSBEE_GITHUB_TOKEN -ErrorAction SilentlyContinue
-  }
+  irm https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
+
+.EXAMPLE
+  # Fully pinned: fetch the installer at the release commit and refuse drift.
+  $releaseCommit = "REPLACE_WITH_RELEASE_COMMIT_SHA"
+  $releaseTag = "REPLACE_WITH_RELEASE_TAG"
+  $script = irm "https://raw.githubusercontent.com/hauksbee-dev/hauksbee/$releaseCommit/scripts/get-hauksbee.ps1"
+  & ([ScriptBlock]::Create($script)) -Version $releaseTag -ExpectedCommit $releaseCommit
 
 .EXAMPLE
   .\get-hauksbee.ps1 -Version v0.1.0 -ExpectedCommit 0123456789abcdef0123456789abcdef01234567 -Permissive
 
 .NOTES
-  Set $env:HAUKSBEE_GITHUB_TOKEN to a fine-grained personal access token or a
-  GitHub App installation token with Contents: read on the private repository.
-  $env:GITHUB_TOKEN is accepted as a CI-compatible fallback.
+  No credential is needed: the releases are public. Optionally set
+  $env:HAUKSBEE_GITHUB_TOKEN (or the CI-compatible $env:GITHUB_TOKEN fallback)
+  to raise the GitHub API rate limit or to target a private mirror or GitHub
+  Enterprise host via $env:HAUKSBEE_API_BASE.
 #>
 [CmdletBinding()]
 param(
@@ -67,22 +66,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-if ($Version -notmatch '^v[0-9A-Za-z._-]+$') {
+if ($Version -and $Version -notmatch '^v[0-9A-Za-z._-]+$') {
     throw "-Version must name one explicit v* release tag."
 }
-if ($ExpectedCommit -notmatch '^[0-9a-f]{40}$') {
+if ($ExpectedCommit -and $ExpectedCommit -notmatch '^[0-9a-f]{40}$') {
     throw "-ExpectedCommit must be the exact lowercase 40-character release source commit."
 }
 
 $Repo = "hauksbee-dev/hauksbee"
 # The API base is overridable for GitHub Enterprise or the local contract test.
 $ApiBase = if ($env:HAUKSBEE_API_BASE) { $env:HAUKSBEE_API_BASE } else { "https://api.github.com/repos/$Repo" }
-$privateToken = if ($env:HAUKSBEE_GITHUB_TOKEN) { $env:HAUKSBEE_GITHUB_TOKEN } else { $env:GITHUB_TOKEN }
-if (-not $privateToken) {
-    Write-Error ("HAUKSBEE_GITHUB_TOKEN is required to download from the private $Repo release repository. " +
-        "Use a fine-grained PAT or GitHub App installation token with Contents: read; do not put it in a URL.")
-    exit 1
-}
+# Optional: the releases are public, so no credential is needed. A token, when
+# present, raises the API rate limit or authorizes a private mirror / GHE host.
+$apiToken = if ($env:HAUKSBEE_GITHUB_TOKEN) { $env:HAUKSBEE_GITHUB_TOKEN } else { $env:GITHUB_TOKEN }
 
 function Assert-SafeZip([string]$Archive) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -130,32 +126,47 @@ if (-not $Permissive) {
 # Resolve the release tag (latest or pinned)
 # ---------------------------------------------------------------------------
 $headers = @{
-    "Authorization" = "Bearer $privateToken"
     "Accept" = "application/vnd.github+json"
     "X-GitHub-Api-Version" = "2026-03-10"
 }
+if ($apiToken) { $headers["Authorization"] = "Bearer $apiToken" }
 
-$releaseUri = "$ApiBase/releases/tags/$Version"
+$releaseUri = if ($Version) { "$ApiBase/releases/tags/$Version" } else { "$ApiBase/releases/latest" }
 try {
     $release = Invoke-RestMethod -Uri $releaseUri -Headers $headers
 } catch {
-    Write-Error ("Could not resolve the release through the authenticated GitHub API: $_`n" +
+    Write-Error ("Could not resolve the release through the GitHub API: $_`n" +
         "Pass -Version vX.Y.Z explicitly, or check https://github.com/$Repo/releases")
     exit 1
 }
-if (-not $Version -or $release.tag_name -ne $Version) {
+if ($Version -and $release.tag_name -ne $Version) {
     Write-Error "The GitHub API response did not identify the requested release tag."
     exit 1
 }
+if (-not $Version) {
+    $Version = [string]$release.tag_name
+    if ($Version -notmatch '^v[0-9A-Za-z._-]+$') {
+        Write-Error "The latest release reports an unusable tag name '$Version'."
+        exit 1
+    }
+    Write-Host "Latest release: $Version"
+}
 if (-not $release.immutable) {
-    Write-Error "Release $Version is not immutable; refusing replaceable private assets."
+    Write-Error "Release $Version is not immutable; refusing replaceable release assets."
     exit 1
 }
 $tagCommit = Invoke-RestMethod -Uri "$ApiBase/commits/$Version" -Headers $headers
-if (-not $tagCommit.sha -or $tagCommit.sha -cne $ExpectedCommit) {
+if (-not $tagCommit.sha -or $tagCommit.sha -notmatch '^[0-9a-f]{40}$') {
+    Write-Error "Could not resolve $Version to one immutable source commit."
+    exit 1
+}
+if ($ExpectedCommit -and $tagCommit.sha -cne $ExpectedCommit) {
     Write-Error "Release $Version resolves to $($tagCommit.sha), not expected commit $ExpectedCommit."
     exit 1
 }
+# From here on the API-resolved commit is the identity every staged and
+# installed binary must attest, whether or not the caller pinned it.
+$ResolvedCommit = [string]$tagCommit.sha
 
 # Strip a leading 'v' to match the asset naming convention used in bundle.sh.
 $VersionBare = $Version -replace '^v', ''
@@ -189,10 +200,10 @@ $ChecksumAsset = Resolve-Asset $ChecksumName
 $ZipUrl = $ZipAsset.Url
 $ChecksumUrl = $ChecksumAsset.Url
 $assetHeaders = @{
-    "Authorization" = "Bearer $privateToken"
     "Accept" = "application/octet-stream"
     "X-GitHub-Api-Version" = "2026-03-10"
 }
+if ($apiToken) { $assetHeaders["Authorization"] = "Bearer $apiToken" }
 
 function Invoke-TokenFreeVersionProbe([string]$Path) {
     $savedHauksbee = [Environment]::GetEnvironmentVariable("HAUKSBEE_GITHUB_TOKEN", "Process")
@@ -215,7 +226,7 @@ function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVer
     $probe = Invoke-TokenFreeVersionProbe $Path
     $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
     $escapedVersion = [regex]::Escape($ExpectedVersion)
-    $escapedCommit = [regex]::Escape($ExpectedCommit)
+    $escapedCommit = [regex]::Escape($ResolvedCommit)
     if ($probe.ExitCode -ne 0 -or $probe.Output -notmatch "(?m)^$escapedName $escapedVersion \(git $escapedCommit\)$") {
         throw "staged $Name does not identify release version $ExpectedVersion`: $($probe.Output)"
     }

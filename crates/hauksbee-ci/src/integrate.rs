@@ -35,10 +35,6 @@ const LOCAL_HOOK: &str = "pre-commit.local";
 /// same one [`count_discoverable_specs`] mirrors at install time.
 const DEFAULT_SPEC_DIRS: &str = "ci:.";
 
-/// Secret expression written into generated GitHub workflows. It is an input
-/// reference, never the credential value itself.
-const PRIVATE_TOKEN_EXPR: &str = "${{ secrets.HAUKSBEE_READ_TOKEN }}";
-
 /// The exact string `hauksbee-ci --version` prints (name + crate version +
 /// git hash). Written into the hook as the `# installed by` line AND compared
 /// by the hook at run time against the live binary, so both sides of that
@@ -158,8 +154,9 @@ fn plain_hook_script() -> String {
          fi\n\
          staged=$(git diff --cached --name-only --diff-filter=ACMR)\n\
          [ -z \"$staged\" ] && exit 0\n\
-         case \"$staged\" in\n\
-         \x20 *.kicad_pcb*|*.kicad_sch*|*.net*|*.brd*|*.d356*|*.PcbDoc*|*.board*|*.toml*|*.hex*|*.elf*)\n\
+         staged_lower=$(printf '%s' \"$staged\" | tr '[:upper:]' '[:lower:]')\n\
+         case \"$staged_lower\" in\n\
+         \x20 *.kicad_pcb*|*.kicad_sch*|*.net*|*.brd*|*.d356*|*.pcbdoc*|*.board*|*.xml*|*.zip*|*.tgz*|*.tar.gz*|*.tar*|*.toml*|*.hex*|*.elf*)\n\
          \x20   # A hauksbee-ci spec is a TOML file with a top-level `board = ...`,\n\
          \x20   # looked for in the HAUKSBEE_CI_SPECS directories (colon-separated,\n\
          \x20   # default `ci:.`), the same contract `hauksbee-ci init` prints.\n\
@@ -206,7 +203,7 @@ fn plain_hook_script() -> String {
 /// normal exit-2 diagnostic.
 pub fn github_workflow_yaml() -> String {
     try_github_workflow_yaml().unwrap_or_else(|error| {
-        format!("# hauksbee-ci could not generate a runnable private workflow.\n# {error}\n")
+        format!("# hauksbee-ci could not generate a runnable workflow.\n# {error}\n")
     })
 }
 
@@ -227,7 +224,7 @@ fn github_workflow_yaml_for(
     source_commit: Option<&str>,
     release_tag: Option<&str>,
 ) -> anyhow::Result<String> {
-    // A credential-bearing private checkout must name a real Hauksbee object.
+    // The pinned Action reference must name a real Hauksbee object.
     // Source archives intentionally carry no identity; refuse generation
     // instead of emitting zeros or borrowing an enclosing consumer repo HEAD.
     let release_commit = source_commit
@@ -243,7 +240,7 @@ fn github_workflow_yaml_for(
                     .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)) =>
         {
             format!(
-                "         \x20         hauksbee-version: {tag}\n\
+                "         \x20hauksbee-version: {tag}\n\
                  \x20         prefer-prebuilt: true\n"
             )
         }
@@ -258,18 +255,18 @@ fn github_workflow_yaml_for(
          # spec/board/matrix options (integrations/github-action in the hauksbee repo).\n\
          name: hauksbee\n\
          \n\
-         # checks: write publishes the JUnit results to the Checks tab. Private\n\
-         # Action credentials are withheld from fork PRs, which therefore\n\
-         # fail closed at checkout; publish-report only gates same-repository reports.\n\
+         # checks: write publishes the JUnit results to the Checks tab. Fork PRs\n\
+         # run without checks: write, so publish-report below gates the report\n\
+         # step to same-repository events; the hardware check itself still runs.\n\
          permissions:\n\
          \x20 contents: read\n\
          \x20 checks: write\n\
          \n\
          on:\n\
          \x20 push:\n\
-         \x20   paths: [\"ci/**\", \"*.toml\", \".github/workflows/**\", \"hardware/**\", \"firmware/**\", \"models/**\", \"**/*.kicad_pcb\", \"**/*.kicad_sch\", \"**/*.net\", \"**/*.brd\", \"**/*.PcbDoc\", \"**/*.d356\", \"**/*.board\"]\n\
+         \x20   paths: [\"ci/**\", \"*.toml\", \".github/workflows/**\", \"hardware/**\", \"firmware/**\", \"models/**\", \"**/*.kicad_pcb\", \"**/*.kicad_sch\", \"**/*.net\", \"**/*.brd\", \"**/*.PcbDoc\", \"**/*.d356\", \"**/*.board\", \"**/*.xml\", \"**/*.zip\", \"**/*.tgz\", \"**/*.tar.gz\", \"**/*.tar\"]\n\
          \x20 pull_request:\n\
-         \x20   paths: [\"ci/**\", \"*.toml\", \".github/workflows/**\", \"hardware/**\", \"firmware/**\", \"models/**\", \"**/*.kicad_pcb\", \"**/*.kicad_sch\", \"**/*.net\", \"**/*.brd\", \"**/*.PcbDoc\", \"**/*.d356\", \"**/*.board\"]\n\
+         \x20   paths: [\"ci/**\", \"*.toml\", \".github/workflows/**\", \"hardware/**\", \"firmware/**\", \"models/**\", \"**/*.kicad_pcb\", \"**/*.kicad_sch\", \"**/*.net\", \"**/*.brd\", \"**/*.PcbDoc\", \"**/*.d356\", \"**/*.board\", \"**/*.xml\", \"**/*.zip\", \"**/*.tgz\", \"**/*.tar.gz\", \"**/*.tar\"]\n\
          \n\
          concurrency:\n\
          \x20 group: hauksbee-${{{{ github.workflow }}}}-${{{{ github.ref }}}}\n\
@@ -283,24 +280,15 @@ fn github_workflow_yaml_for(
          \x20     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n\
          \x20       with:\n\
          \x20         persist-credentials: false\n\
-         \x20     - name: Fetch the private hauksbee Action\n\
-         \x20       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n\
+         \x20       # Pinned to the exact release commit: a tag can move after\n\
+         \x20       # review, while an object ID cannot redirect the Action code.\n\
+         \x20     - uses: hauksbee-dev/hauksbee/integrations/github-action@{}\n\
          \x20       with:\n\
-         \x20         repository: hauksbee-dev/hauksbee\n\
-         \x20         ref: {}\n\
-         \x20         path: .hauksbee-action\n\
-         \x20         token: {}\n\
-         \x20         persist-credentials: false\n\
-         \x20     - uses: ./.hauksbee-action/integrations/github-action\n\
-         \x20       with:\n\
-         \x20         hauksbee-token: {}\n\
          \x20         hauksbee-ref: {}\n\
          {}\
          \x20         junit: hauksbee-ci-results.xml\n\
          \x20         publish-report: ${{{{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}}}\n",
         release_commit,
-        PRIVATE_TOKEN_EXPR,
-        PRIVATE_TOKEN_EXPR,
         release_commit,
         acquisition
     ))
@@ -1051,45 +1039,30 @@ mod tests {
     }
 
     #[test]
-    fn generated_workflow_authenticates_private_action_and_repository() {
+    fn generated_workflow_pins_the_public_action_to_one_commit() {
         let _legacy_signature: fn() -> String = github_workflow_yaml;
         let yaml = github_workflow_yaml();
-        assert!(yaml.contains("repository: hauksbee-dev/hauksbee"), "{yaml}");
-        assert!(yaml.contains("path: .hauksbee-action"), "{yaml}");
-        assert!(
-            yaml.contains("token: ${{ secrets.HAUKSBEE_READ_TOKEN }}"),
-            "{yaml}"
-        );
         assert!(yaml.contains("persist-credentials: false"), "{yaml}");
-        assert_eq!(
-            yaml.matches("persist-credentials: false").count(),
-            2,
-            "{yaml}"
-        );
         assert!(yaml.contains("cancel-in-progress: true"), "{yaml}");
         assert!(yaml.contains("timeout-minutes: 45"), "{yaml}");
-        assert!(
-            yaml.contains("uses: ./.hauksbee-action/integrations/github-action"),
-            "{yaml}"
-        );
-        assert!(
-            yaml.contains("hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}"),
-            "{yaml}"
-        );
-        assert!(!yaml.contains("uses: hauksbee-dev/hauksbee/integrations/github-action@"));
-        assert!(
-            yaml.contains("credentials are withheld from fork PRs"),
-            "{yaml}"
-        );
-        assert!(yaml.contains("fail closed at checkout"), "{yaml}");
+        // The public Action is used directly and pinned to an exact commit;
+        // no credential, secondary checkout, or secret reference is emitted.
+        let uses_line = yaml
+            .lines()
+            .find(|line| {
+                line.trim_start()
+                    .starts_with("- uses: hauksbee-dev/hauksbee/integrations/github-action@")
+            })
+            .expect("generated pinned public action reference");
+        let pinned_ref = uses_line.rsplit('@').next().unwrap();
+        assert_eq!(pinned_ref.len(), 40, "{yaml}");
+        assert!(pinned_ref.bytes().all(|b| b.is_ascii_hexdigit()), "{yaml}");
+        assert!(!yaml.contains("secrets."), "{yaml}");
+        assert!(!yaml.contains("hauksbee-token:"), "{yaml}");
+        assert!(!yaml.contains(".hauksbee-action"), "{yaml}");
         assert!(yaml.contains("hauksbee-ref:"), "{yaml}");
         assert!(yaml.contains("prefer-prebuilt: false"), "{yaml}");
         assert!(!yaml.contains("hauksbee-version:"), "{yaml}");
-        let ref_line = yaml
-            .lines()
-            .find(|line| line.trim_start().starts_with("ref: "))
-            .expect("generated private checkout ref");
-        assert_eq!(ref_line.trim_start()[5..].len(), 40, "{yaml}");
         assert!(
             !yaml.contains("token is read-only; pass publish-report: false"),
             "{yaml}"
@@ -1119,6 +1092,34 @@ mod tests {
         );
         assert!(yaml.contains("prefer-prebuilt: true"), "{yaml}");
         assert!(!yaml.contains("prefer-prebuilt: false"), "{yaml}");
+    }
+
+    #[test]
+    fn generated_workflow_is_valid_yaml_for_release_and_source_builds() {
+        let source = Some("0123456789abcdef0123456789abcdef01234567");
+        let release_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+        for (mode, tag) in [("source", None), ("release", Some(release_tag.as_str()))] {
+            let yaml = github_workflow_yaml_for(source, tag).unwrap();
+            let parsed = yaml_rust2::YamlLoader::load_from_str(&yaml).unwrap_or_else(|error| {
+                panic!("{mode} workflow is not valid YAML: {error}\n{yaml}")
+            });
+            assert!(
+                matches!(parsed.as_slice(), [yaml_rust2::Yaml::Hash(_)]),
+                "{mode} workflow should be exactly one YAML mapping: {yaml}"
+            );
+            for path in [
+                "**/*.xml",
+                "**/*.zip",
+                "**/*.tgz",
+                "**/*.tar.gz",
+                "**/*.tar",
+            ] {
+                assert!(
+                    yaml.contains(path),
+                    "{mode} workflow omitted {path}:\n{yaml}"
+                );
+            }
+        }
     }
 
     #[test]

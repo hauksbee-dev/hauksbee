@@ -8,9 +8,8 @@
 name: hardware-ci
 
 # contents: read checks out the repo; checks: write lets the action publish
-# the JUnit results to the Checks tab. Fork pull requests do not receive the
-# private Hauksbee read token and therefore fail closed before running; see the
-# README for the trusted same-repository reporting pattern.
+# the JUnit results to the Checks tab. Fork pull requests run the check but
+# lack checks: write; see the README for the two-workflow reporting pattern.
 permissions:
   contents: read
   checks: write
@@ -31,6 +30,11 @@ on:
       - "**/*.PcbDoc"
       - "**/*.d356"
       - "**/*.board"
+      - "**/*.xml"
+      - "**/*.zip"
+      - "**/*.tgz"
+      - "**/*.tar.gz"
+      - "**/*.tar"
   pull_request:
     paths:
       - "ci/**"
@@ -46,6 +50,11 @@ on:
       - "**/*.PcbDoc"
       - "**/*.d356"
       - "**/*.board"
+      - "**/*.xml"
+      - "**/*.zip"
+      - "**/*.tgz"
+      - "**/*.tar.gz"
+      - "**/*.tar"
 
 concurrency:
   group: hauksbee-${{ github.workflow }}-${{ github.ref }}
@@ -61,33 +70,20 @@ jobs:
         with:
           persist-credentials: false
 
-      # 2. Fetch the private Action code. HAUKSBEE_READ_TOKEN is a fine-grained
-      # PAT or GitHub App installation token with Contents: read on the private
-      # hauksbee repository; the consumer repo's github.token cannot do this.
-      - name: Fetch the private hauksbee Action
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          repository: hauksbee-dev/hauksbee
-          # Replace this with the 40-character commit printed by the v0.1.0
-          # release. A tag is not an immutable credential boundary.
-          ref: REPLACE_WITH_RELEASE_COMMIT_SHA
-          path: .hauksbee-action
-          token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
-          persist-credentials: false
-
-      # 3. (Optional) build your firmware here, so the ELF the spec points at
+      # 2. (Optional) build your firmware here, so the ELF the spec points at
       #    exists. For an AVR project that is usually a `make` in firmware/.
       # - name: Build firmware
       #   run: make -C firmware
 
-      # 4. Run the hardware check. The action fetches hauksbee-ci, runs your
+      # 3. Run the hardware check. The action fetches hauksbee-ci, runs your
       #    spec, writes JUnit XML, and emits inline annotations. Pin the
-      #    action to the exact release commit above. The separate version input
-      #    names the release assets, and the Action verifies both identities.
+      #    action to the release's full 40-character commit, not a tag: a tag
+      #    can move after review, while an object ID cannot redirect the
+      #    Action code. The separate version input names the release assets,
+      #    and the Action verifies both identities.
       - name: hauksbee-ci power-up check
-        uses: ./.hauksbee-action/integrations/github-action
+        uses: hauksbee-dev/hauksbee/integrations/github-action@REPLACE_WITH_RELEASE_COMMIT_SHA
         with:
-          hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
           hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
           hauksbee-version: v0.1.0
           spec: ci/power-up.toml
@@ -110,16 +106,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: hauksbee-dev/hauksbee/integrations/github-action@REPLACE_WITH_RELEASE_COMMIT_SHA
         with:
-          repository: hauksbee-dev/hauksbee
-          ref: REPLACE_WITH_RELEASE_COMMIT_SHA
-          path: .hauksbee-action
-          token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
-          persist-credentials: false
-      - uses: ./.hauksbee-action/integrations/github-action
-        with:
-          hauksbee-token: ${{ secrets.HAUKSBEE_READ_TOKEN }}
           hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
           hauksbee-version: v0.1.0
           spec: ${{ matrix.spec }}

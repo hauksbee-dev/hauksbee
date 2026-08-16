@@ -39,8 +39,9 @@ inputs:
     required: false
     default: "hauksbee-dev/hauksbee"
   hauksbee-token:
-    description: "Credential authorized for the private hauksbee repository: a fine-grained PAT or GitHub App installation token with Contents: read. The calling repository's github.token is not sufficient across repositories."
-    required: true
+    description: "Optional credential for the hauksbee repository. The releases, source, and images are public, so the calling workflow's automatic github.token (the default) is enough; set this only for a private mirror, GitHub Enterprise, or to use a dedicated token."
+    required: false
+    default: ""
   registry-user:
     description: "GHCR login name for use-image. Empty derives x-access-token for a GitHub App installation token and otherwise uses github.actor. Set explicitly for a PAT owned by another user."
     required: false
@@ -82,29 +83,6 @@ runs:
     # the "Run the hardware check (image)" step). The image already carries the
     # binaries, the model db, and (in the full image) the co-sim backends.
 
-    # 0. Establish the private-distribution boundary before an API lookup,
-    # release download or fallback checkout can be mistaken for a missing asset.
-    - name: Verify private hauksbee access
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.hauksbee-token }}
-        REPO: ${{ inputs.hauksbee-repo }}
-        RELEASE_TAG: ${{ steps.reltag.outputs.tag }}
-      run: |
-        set -euo pipefail
-        if [ -z "$GH_TOKEN" ]; then
-          echo "::error::hauksbee-token is required for the private $REPO repository"
-          exit 1
-        fi
-        visibility="$(gh api "repos/$REPO" --jq .visibility)" || {
-          echo "::error::hauksbee-token cannot read the private $REPO repository"
-          exit 1
-        }
-        if [ "$visibility" != private ]; then
-          echo "::error::$REPO reports visibility '$visibility'; refusing the private-distribution path"
-          exit 1
-        fi
-
     # 1. Work out what this run actually runs: which mode (spec or check),
     #    which specs (globs expanded), or which board. The logic lives in
     #    resolve-inputs.sh so it can be tested.
@@ -130,7 +108,7 @@ runs:
       if: ${{ inputs.use-image == 'true' || inputs.prefer-prebuilt == 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.hauksbee-token }}
+        GH_TOKEN: ${{ inputs.hauksbee-token || github.token }}
         REPO: ${{ inputs.hauksbee-repo }}
         REF: ${{ inputs.hauksbee-ref }}
         VERSION: ${{ inputs.hauksbee-version }}
@@ -175,7 +153,7 @@ runs:
       if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.hauksbee-token }}
+        GH_TOKEN: ${{ inputs.hauksbee-token || github.token }}
         REPO: ${{ inputs.hauksbee-repo }}
         REF: ${{ inputs.hauksbee-ref }}
         CHOICE: ${{ steps.reltag.outputs.choice }}
@@ -205,11 +183,11 @@ runs:
         platform="${os}-${arch}"
         release_sha="$RELEASE_SHA"
         if [ -z "$TAG" ]; then
-          echo "no private release is available; will build from source"
+          echo "no release is available; will build from source"
           exit 0
         fi
         [ "$(gh api "repos/$REPO/releases/tags/$TAG" --jq .immutable)" = true ] || {
-          echo "release $TAG is not immutable; refusing replaceable private assets" >&2
+          echo "release $TAG is not immutable; refusing replaceable release assets" >&2
           exit 1
         }
         [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]] || {
@@ -236,9 +214,10 @@ runs:
           echo "asset manifest did not contain one sha256" >&2
           exit 1
         }
-        # Private release archives must not enter the consumer repository's
-        # Actions cache: fork workflows can restore base-branch caches.
-        archive_cache="$(mktemp -d "$RUNNER_TEMP/hauksbee-private-archives-$platform.XXXXXX")"
+        # Release archives must not enter the consumer repository's Actions
+        # cache: fork workflows can restore base-branch caches, and a poisoned
+        # cache entry would bypass every verification above.
+        archive_cache="$(mktemp -d "$RUNNER_TEMP/hauksbee-release-archives-$platform.XXXXXX")"
         echo "archive-dir=$archive_cache" >> "$GITHUB_OUTPUT"
         tarball="$(find "$archive_cache" -maxdepth 1 -type f -name "$asset_glob" -print -quit)"
         if [ -n "$tarball" ]; then
@@ -293,7 +272,7 @@ runs:
         repository: ${{ inputs.hauksbee-repo }}
         ref: ${{ steps.reltag.outputs.source-ref || inputs.hauksbee-ref }}
         path: .hauksbee
-        token: ${{ inputs.hauksbee-token }}
+        token: ${{ inputs.hauksbee-token || github.token }}
         persist-credentials: false
 
     - name: Install Rust toolchain (fallback build)
@@ -400,9 +379,13 @@ runs:
     #    is writable by the runner (the image's default user is uid 1000).
     #    GITHUB_ACTIONS is passed through so the binary still emits inline
     #    annotations.
-    - name: Authenticate to the private image registry
+    #
+    #    The published images are public, so a registry login only happens when
+    #    a dedicated token was provided (private mirror / GHE); an anonymous
+    #    pull is the default.
+    - name: Authenticate to the image registry
       id: registry-auth
-      if: ${{ inputs.use-image == 'true' }}
+      if: ${{ inputs.use-image == 'true' && inputs.hauksbee-token != '' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.hauksbee-token }}
@@ -430,7 +413,7 @@ runs:
         REPO: ${{ inputs.hauksbee-repo }}
         RELEASE_SHA: ${{ steps.reltag.outputs.expected-sha }}
         RELEASE_TAG: ${{ steps.reltag.outputs.tag }}
-        GH_TOKEN: ${{ inputs.hauksbee-token }}
+        GH_TOKEN: ${{ inputs.hauksbee-token || github.token }}
         DOCKER_CONFIG: ${{ steps.registry-auth.outputs.docker-config }}
       run: |
         set -euo pipefail
@@ -514,10 +497,10 @@ runs:
         echo "junit=$JUNIT" >> "$GITHUB_OUTPUT"
         exit $code
 
-    # Keep the private registry token out of the runner's persistent Docker
-    # config. Cleanup is best-effort and always runs, so it cannot replace the
+    # Keep any registry token out of the runner's persistent Docker config.
+    # Cleanup is best-effort and always runs, so it cannot replace the
     # hardware check's primary exit status with a logout failure.
-    - name: Cleanup private registry credential
+    - name: Cleanup registry credential
       if: ${{ always() && inputs.use-image == 'true' && steps.registry-auth.outputs.docker-config != '' }}
       shell: bash
       env:
@@ -539,7 +522,7 @@ runs:
         check_name: "hauksbee-ci (hardware)"
         fail_on_failure: false
 
-    - name: Cleanup private prebuilt files
+    - name: Cleanup prebuilt files
       if: ${{ always() && inputs.use-image != 'true' }}
       shell: bash
       env:

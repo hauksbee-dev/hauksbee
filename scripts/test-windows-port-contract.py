@@ -70,7 +70,7 @@ class WindowsPortContract(unittest.TestCase):
         self.assertRegex(installer, r"if\s*\(\s*-not\s+\$Permissive\s*\)")
         self.assertIn("Windows releases are permissive-only", installer)
         self.assertIn("release.immutable", installer)
-        self.assertIn("refusing replaceable private assets", installer)
+        self.assertIn("refusing replaceable release assets", installer)
 
     def test_windows_children_are_owned_by_kill_on_close_jobs(self) -> None:
         children = read("crates/hauksbee-mcu/src/children.rs")
@@ -272,7 +272,9 @@ class WindowsPortContract(unittest.TestCase):
         self.assertIn("Out-String).Trim()", bundle)
         self.assertIn("Out-String).Trim()", installer)
         bootstrap = read("README.md")
-        self.assertIn("-Version $releaseTag -ExpectedCommit $releaseCommit", bootstrap)
+        self.assertIn("scripts/get-hauksbee.ps1 | iex", bootstrap)
+        # The fully pinned bootstrap stays documented in the installer itself.
+        self.assertIn("-Version $releaseTag -ExpectedCommit $releaseCommit", installer)
 
     def test_windows_tree_swaps_use_unique_recoverable_backups(self) -> None:
         for path in ("scripts/get-hauksbee.ps1", "scripts/install-sims-windows.ps1"):

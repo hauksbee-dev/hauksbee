@@ -14,9 +14,10 @@ repos:
         name: hauksbee-ci hardware check
         entry: integrations/pre-commit/hauksbee_ci_precommit.py
         language: python
-        # Trigger when a board or a spec changes; the hook itself then runs
-        # only the specs whose board was actually staged.
-        files: '\.(kicad_sch|kicad_pcb|net|brd|d356)$|/ci/.*\.toml$'
+        # Trigger when a board, exchange/archive, or a spec changes; the hook
+        # itself then runs only the specs whose board was actually staged. The
+        # XML match is broad because IPC-2581 is content-sniffed.
+        files: '(?i)\.(kicad_sch|kicad_pcb|net|brd|d356|pcbdoc|board|xml|zip|tgz|tar\.gz|tar)$|(?:^|/)ci/.*\.toml$'
         pass_filenames: false
         # Point at your built binary if it is not on PATH:
         # env:
