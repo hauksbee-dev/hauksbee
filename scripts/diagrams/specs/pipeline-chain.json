@@ -1,15 +1,13 @@
 {
-  "background": "#ffffff",
-  "theme": "slate",
-  "layout": { "algorithm": "layered", "direction": "RIGHT" },
+  "layout": { "direction": "RIGHT" },
   "nodes": [
-    { "id": "board", "label": "board file\nch 1", "role": "primary" },
-    { "id": "netlist", "label": "netlist\nch 1", "role": "neutral" },
-    { "id": "bound", "label": "bound circuit\nch 1, 9", "role": "neutral" },
-    { "id": "mna", "label": "MNA system\nch 2", "role": "neutral" },
-    { "id": "dc", "label": "DC point\nch 3", "role": "neutral" },
-    { "id": "waves", "label": "waveforms\nch 4–7", "role": "neutral" },
-    { "id": "verdicts", "label": "verdicts\nch 8", "role": "success", "emphasis": "strong" }
+    { "id": "board", "label": "board file\nch 1", "role": "input" },
+    { "id": "netlist", "label": "netlist\nch 1", "role": "stage" },
+    { "id": "bound", "label": "bound circuit\nch 1, 9", "role": "stage" },
+    { "id": "mna", "label": "MNA system\nch 2", "role": "stage" },
+    { "id": "dc", "label": "DC point\nch 3", "role": "stage" },
+    { "id": "waves", "label": "waveforms\nch 4–7", "role": "stage" },
+    { "id": "verdicts", "label": "verdicts\nch 8", "role": "output" }
   ],
   "edges": [
     { "from": "board", "to": "netlist" },
