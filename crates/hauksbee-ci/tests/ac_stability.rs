@@ -135,6 +135,7 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
     RunOutcome {
         bind: None,
         evidence: None,
+        dc_definitions: Default::default(),
         seed: 0,
         windows: Default::default(),
         uart: Default::default(),
@@ -261,6 +262,7 @@ fn ac_gain_assertion_evaluates_rc_corner() {
     let outcome = RunOutcome {
         bind: None,
         evidence: None,
+        dc_definitions: Default::default(),
         seed: 0,
         windows: Default::default(),
         uart: Default::default(),

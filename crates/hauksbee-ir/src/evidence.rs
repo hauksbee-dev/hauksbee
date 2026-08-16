@@ -3556,6 +3556,49 @@ impl EvidenceMap {
         self.status
     }
 
+    /// Recompute the status treating this map's `OpenPart` assumptions as
+    /// non-critical (at most `Qualified`), because the CALLER has
+    /// circuit-level proof that the conclusion does not rest on them: the
+    /// subject net's DC level is defined by modeled elements alone, so an
+    /// unmodelled part can only change the answer by actively driving the
+    /// net, and that residual is exactly what the surviving Qualified
+    /// caveat states. Every assumption stays listed; only the criticality
+    /// of the open-part entries changes. All other kinds keep their normal
+    /// effect, so a lapsed waiver or an unexercised peripheral still
+    /// undermines. The caller owes the rendered surface an explanation of
+    /// why the opens were downgraded; this method only makes the status
+    /// consistent with that explanation.
+    pub fn assuming_open_parts_high_impedance(
+        mut self,
+        registry: &EvidenceRegistry,
+        today: RunDate,
+    ) -> Result<Self, EvidenceError> {
+        let mut on_path = Vec::with_capacity(self.assumptions.len());
+        for id in &self.assumptions {
+            let Some(assumption) = registry.assumptions().iter().find(|a| a.id() == id) else {
+                return Err(EvidenceError::InvalidAssumption {
+                    message: format!(
+                        "map cites assumption {id} absent from its registry; cannot recompute status"
+                    ),
+                });
+            };
+            on_path.push(assumption.clone());
+        }
+        let non_open: Vec<Assumption> = on_path
+            .iter()
+            .filter(|a| a.kind != AssumptionKind::OpenPart)
+            .cloned()
+            .collect();
+        let base = Self::derive_status(&non_open, today);
+        let has_open = on_path.len() != non_open.len();
+        self.status = if has_open {
+            base.max(EvidenceStatus::Qualified)
+        } else {
+            base
+        };
+        Ok(self)
+    }
+
     /// How good the numbers behind this assertion are, when the producing path
     /// measured them.
     pub fn error_budget(&self) -> Option<&ErrorBudget> {

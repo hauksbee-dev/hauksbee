@@ -1509,3 +1509,45 @@ fn registry_owned_rekey_is_atomic_and_updates_every_reference() {
         .with_parameters(&rekeyed, map.parameters().to_vec())
         .expect("every re-keyed reference resolves in the replacement registry");
 }
+
+/// The circuit-proof downgrade: open parts drop to Qualified (never Clean:
+/// the residual "an unmodelled part could drive the net" caveat must
+/// survive), while every other undermining kind keeps its full effect.
+#[test]
+fn open_parts_downgrade_needs_no_other_undermining_kind() {
+    let open = Assumption::open_part(
+        "IC4",
+        "STM32C092KCT6",
+        "no model matched it, and its pins sit on connected nets",
+    );
+    let registry = EvidenceRegistry::new(vec![open.clone()]).unwrap();
+    let map = EvidenceMap::new("SWCLK stays low", std::slice::from_ref(&open), today());
+    assert_eq!(map.status(), EvidenceStatus::Undermined);
+    let map = map
+        .assuming_open_parts_high_impedance(&registry, today())
+        .unwrap();
+    assert_eq!(
+        map.status(),
+        EvidenceStatus::Qualified,
+        "the open part is stated, not silenced"
+    );
+    assert_eq!(map.assumptions().len(), 1, "the assumption stays listed");
+
+    // A lapsed waiver on the same path still undermines: the downgrade is
+    // scoped to open parts only.
+    let lapsed = Assumption::waived(
+        "si",
+        "ringing",
+        "board rev B",
+        "known ringing on the scope",
+        "2001-01-01",
+        today(),
+    )
+    .unwrap();
+    let registry = EvidenceRegistry::new(vec![open.clone(), lapsed.clone()]).unwrap();
+    let map = EvidenceMap::new("SWCLK stays low", &[open, lapsed], today());
+    let map = map
+        .assuming_open_parts_high_impedance(&registry, today())
+        .unwrap();
+    assert_eq!(map.status(), EvidenceStatus::Undermined);
+}

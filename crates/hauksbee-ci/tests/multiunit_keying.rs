@@ -35,6 +35,7 @@ fn outcome_with(peak_temp_c: HashMap<String, f64>, faults: Vec<RunFault>) -> Run
     RunOutcome {
         bind: None,
         evidence: None,
+        dc_definitions: Default::default(),
         seed: 0,
         windows: HashMap::new(),
         uart: HashMap::new(),
