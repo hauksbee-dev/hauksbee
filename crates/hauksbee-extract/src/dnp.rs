@@ -63,6 +63,20 @@ impl DnpPolicy {
 /// side channel. The value is [`DnpReason::policy_tag`].
 pub const DNP_REASON_KEY: &str = "hauksbee.dnp_reason";
 
+/// Property key marking a component that was DNP in the source layout and is
+/// present only because the default fit policy assumed it will be placed
+/// eventually. Presence-class lints (a pull-up "exists") read this so a
+/// simulation convenience cannot silently satisfy an as-assembled claim: the
+/// board that ships does NOT carry the part. A part the user explicitly named
+/// as fitted carries no mark; that is a human decision about this build.
+pub const DNP_FITTED_KEY: &str = "hauksbee.dnp_fitted_by_policy";
+
+/// True when this component was DNP in the source and is present only by the
+/// default fit policy (see [`DNP_FITTED_KEY`]).
+pub fn fitted_from_dnp_policy(c: &crate::Component) -> bool {
+    c.properties.iter().any(|(key, _)| key == DNP_FITTED_KEY)
+}
+
 /// Why one DNP part ended up fitted or open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DnpReason {
@@ -372,9 +386,18 @@ impl ExtractedBoard {
             // Record the decision ON the component: a stale tag from an earlier
             // policy application is always stripped, and a left-open part keeps
             // its reason where `assembly::AssemblyState::of` can read it back.
-            comp.properties.retain(|(key, _)| key != DNP_REASON_KEY);
+            comp.properties
+                .retain(|(key, _)| key != DNP_REASON_KEY && key != DNP_FITTED_KEY);
             match reason {
                 DnpReason::Policy | DnpReason::NamedFit => {
+                    // A policy fit of a source-DNP part is a simulation
+                    // assumption, not an assembly fact; mark it so
+                    // presence-class lints can tell the two apart. A NamedFit
+                    // is the user's own build decision and stays unmarked.
+                    if comp.dnp && reason == DnpReason::Policy {
+                        comp.properties
+                            .push((DNP_FITTED_KEY.to_string(), "policy".to_string()));
+                    }
                     comp.dnp = false;
                     decision.fitted.push(part);
                 }

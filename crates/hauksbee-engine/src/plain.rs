@@ -746,6 +746,20 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
         let parts = join_refs(&f.refs);
         let net = f.nets.first().map(|s| s.as_str()).unwrap_or("the net");
         let (what, why, fix) = match f.check {
+            // The DNP variant of either pull-up check: the resistor exists in
+            // the layout but is do-not-populate, so the assembled board still
+            // floats. The finding message is the precise statement (it names
+            // the part); the generic "has no pull-up resistor" template would
+            // contradict the schematic the reader is looking at.
+            LintCheck::MissingI2cPullup | LintCheck::MissingSdPullup
+                if f.message.contains("do-not-populate") =>
+            {
+                (
+                    f.message.clone(),
+                    "The design contains the pull-up, but the part is marked do-not-populate, so the boards that come back from assembly do not have it fitted. Simulation fits DNP parts by default (they are usually placed eventually), which is why other results can look healthy while the real line floats.".to_string(),
+                    "Either fit the resistor in this build (remove the DNP mark, or name it as fitted), or, if leaving it off is deliberate, document what else defines the line's level.".to_string(),
+                )
+            }
             LintCheck::MissingI2cPullup => (
                 format!("The I2C data line \"{net}\" has no pull-up resistor."),
                 "I2C is an \"open-drain\" bus: parts can only pull the line low, so it needs a resistor to a power rail to pull it back high. Without one the line floats, and the bus will not communicate reliably (or at all).".to_string(),
