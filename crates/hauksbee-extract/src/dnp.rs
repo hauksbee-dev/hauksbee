@@ -347,6 +347,24 @@ impl ExtractedBoard {
             )));
         }
 
+        // Re-application would decide from already-mutated state: the first
+        // pass rewrites `comp.dnp`, so a second pass cannot see the source
+        // truth and would silently no-op (a user asking to honour DNP after a
+        // fit pass would get a fitted board and an empty decision report).
+        // Refuse loudly instead; callers hold the original board if they
+        // genuinely need to re-decide.
+        if self.components.iter().any(|c| {
+            c.properties
+                .iter()
+                .any(|(key, _)| key == DNP_REASON_KEY || key == DNP_FITTED_KEY)
+        }) {
+            return Err(crate::ExtractError::Corrupt(
+                "a DNP policy was already applied to this board; applying another would \
+                 decide from mutated state, not the source layout. Re-extract the board \
+                 and apply the intended policy once."
+                    .to_string(),
+            ));
+        }
         let mut decision = DnpDecision {
             policy_line: policy.describe().to_string(),
             ..Default::default()

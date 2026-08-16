@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 
 use hauksbee_extract::{
     DrcReport, ItemKind, LintCheck, NetLintReport, Severity, SiCheck, SiFinding, SiReport,
-    SiSeverity, ViolationKind,
+    SiSeverity, ViolationKind, DNP_PULLUP_MESSAGE_MARKER,
 };
 
 use crate::stress::{FaultEvent, FaultKind};
@@ -752,7 +752,7 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             // the part); the generic "has no pull-up resistor" template would
             // contradict the schematic the reader is looking at.
             LintCheck::MissingI2cPullup | LintCheck::MissingSdPullup
-                if f.message.contains("do-not-populate") =>
+                if f.message.contains(DNP_PULLUP_MESSAGE_MARKER) =>
             {
                 (
                     f.message.clone(),

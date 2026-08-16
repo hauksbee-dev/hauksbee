@@ -105,6 +105,12 @@ pub enum LintCheck {
     I2cBusLoading,
 }
 
+/// The phrase that marks a pull-up-presence finding as the "the resistor
+/// exists but is do-not-populate" variant. The plain-language renderer keys
+/// its DNP explanation off this exact substring, so it is a shared constant
+/// rather than two strings that can silently drift apart.
+pub const DNP_PULLUP_MESSAGE_MARKER: &str = "do-not-populate";
+
 impl LintCheck {
     /// Every variant, for exhaustiveness-style tests in downstream crates
     /// (e.g. "every check has a plain-language template"). Grows with the
@@ -399,11 +405,6 @@ fn is_led(c: &Component) -> bool {
 /// package name, because boards label headers with non-obvious refs (Adafruit's
 /// Arduino headers are `IOH`/`IOL`/`AD`/`POWER`, Eagle package `1X10`).
 fn is_connector_like(c: &Component) -> bool {
-    // A resistor NETWORK (RN/RP/RM) is a passive part, never a connector, even
-    // though its footprint name carries a grid dimension ("R_Array_..._4x0603")
-    // that `is_pin_array_package` reads as a pin array. Without this a resistor-
-    // array I2C pull-up was classified a header (exits_to_connector) and its
-    // pull-up credit skipped.
     // A resistor NETWORK (RN/RP/RM) is a passive part, never a connector, even
     // though its footprint name carries a grid dimension ("R_Array_..._4x0603")
     // that `is_pin_array_package` reads as a pin array. Without this a resistor-
@@ -888,16 +889,23 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             continue;
         }
         if let Some(dnp_ref) = dnp_pullup_ref {
+            // Same deduped, present-parts-only refs convention as the SD arm.
+            let mut refs: Vec<String> = Vec::new();
+            for (c, _p) in &mem {
+                if AssemblyState::of(c).is_present() && !refs.contains(&c.reference) {
+                    refs.push(c.reference.clone());
+                }
+            }
             report.findings.push(LintFinding {
                 check: LintCheck::MissingI2cPullup,
                 severity: Severity::Low,
                 message: format!(
                     "I2C {role} net '{}' relies on {dnp_ref} for its pull-up, but {dnp_ref} \
-                     is marked do-not-populate: as assembled, the line floats (simulation \
-                     fits DNP parts by default, so other results may look fine)",
+                     is marked {DNP_PULLUP_MESSAGE_MARKER}: as assembled, the line floats \
+                     (simulation fits DNP parts by default, so other results may look fine)",
                     net.name
                 ),
-                refs: mem.iter().map(|(c, _)| c.reference.clone()).collect(),
+                refs,
                 nets: vec![net.name.clone()],
             });
             continue;
@@ -1052,13 +1060,29 @@ fn is_card_socket_by_name(c: &Component) -> bool {
 }
 
 /// Does this connector behave like the card socket structurally, whatever its
-/// footprint is called? A card socket is the one connector whose pins land on
-/// several distinct card-bus roles at once (CMD plus DAT lines plus CLK); no
-/// header breaking a single line out to a test rig does that, and an SDRAM
-/// chip is not a connector at all. This backstop exists because socket naming
-/// in the wild is unbounded (bare vendor part numbers, house libraries), and
-/// a name-whitelist alone silently exempts every board it misses.
+/// footprint is called? This backstop exists because socket naming in the
+/// wild is unbounded (bare vendor part numbers, house libraries), and a
+/// name-whitelist alone silently exempts every board it misses. The bar is
+/// deliberately higher than "touches several card-bus nets", because a pin
+/// header, FPC, mezzanine, or SODIMM that breaks the whole bus out to
+/// another board ALSO touches several; classifying one of those as the
+/// socket would both fire on socket-less boards and disable the
+/// bus-leaves-the-board escape. Structural recognition therefore requires
+/// all three of: CMD among the roles (an SDRAM bus has DAT-like lines but
+/// never CMD), at least three distinct roles, and a package that is not a
+/// header / pin array / board-to-board carrier.
 fn is_card_socket_structurally(board: &ExtractedBoard, c: &Component) -> bool {
+    let fp = format!("{} {}", c.footprint, c.lib_id).to_ascii_lowercase();
+    if is_pin_array_package(&c.footprint)
+        || [
+            "header", "pinhead", "fpc", "ffc", "b2b", "board-to-board", "sodimm", "dimm", "edge",
+            "df40", "fh12", "mezz", "m.2", "m2_", "minipcie", "sim",
+        ]
+        .iter()
+        .any(|p| fp.contains(p))
+    {
+        return false;
+    }
     let mut roles = std::collections::HashSet::new();
     for p in &c.pins {
         let Some(net) = p.net.and_then(|id| board.net(id)) else {
@@ -1078,7 +1102,7 @@ fn is_card_socket_structurally(board: &ExtractedBoard, c: &Component) -> bool {
             }
         }
     }
-    roles.len() >= 3
+    roles.contains("CMD") && roles.len() >= 3
 }
 
 /// A test point or mounting hole is a single-point attachment, not a bus
@@ -1209,7 +1233,11 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 // pull-up requirement on its bus.
                 has_emmc = true;
             }
-            if is_sd_bus_switch(c) {
+            if is_sd_bus_switch(c) || has_integrated_i2c_pullups(c) {
+                // A pass-gate mux, or a TXS/TXB-class translator whose every
+                // I/O carries its own ~10 k pull-up (they get dropped onto
+                // SD/SDIO lines too): either way, a discrete resistor is not
+                // the whole story on this net.
                 behind_bus_switch = true;
             }
             let r = c.reference.to_ascii_uppercase();
@@ -1219,22 +1247,55 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             }
             // One-hop traversal through a series element: SD buses routinely
             // interpose a small damper (or a ferrite) between the host and
-            // the socket, and the pull-up then legitimately sits on the far
-            // side. A two-terminal resistor below 1 kΩ, or an FB/L-referenced
-            // two-pin part, is followed one hop; the far net is scanned with
-            // the same rules.
+            // the socket. The far half-net legitimately carries the pull-up,
+            // and it is also where the HOST sits when this is the socket-side
+            // half, so both kinds of evidence cross the hop; socket evidence
+            // deliberately does not (only the socket-side net reports, which
+            // is what keeps a split bus from double-reporting one defect). A
+            // two-terminal resistor below 1 kΩ, or an FB/L-referenced two-pin
+            // part (not an LED), qualifies as the series element; a hop into
+            // ground or a rail is refused, because everything touches ground
+            // and an unrelated bleeder there would count as this line's
+            // pull-up.
             let two_pin_series = c.pins.len() == 2
                 && ((is_resistor(c) && parse_ohms(&c.value).is_some_and(|o| o < 1_000.0))
                     || r.starts_with("FB")
-                    || r.starts_with('L'));
-            if two_pin_series && !has_pullup {
+                    || (r.starts_with('L') && !r.starts_with("LED")));
+            if two_pin_series {
                 for op in &c.pins {
                     match op.net {
                         Some(oid) if oid != net.id => {
+                            let far_ground_or_rail = board
+                                .net(oid)
+                                .map(|n| is_ground(&n.name))
+                                .unwrap_or(false)
+                                || net_is_raillike(board, oid);
+                            if far_ground_or_rail {
+                                continue;
+                            }
                             let (far_fitted, far_dnp) = scan_for_pullup(oid);
                             has_pullup |= far_fitted;
                             if dnp_pullup_ref.is_none() {
                                 dnp_pullup_ref = far_dnp;
+                            }
+                            for (fc, _fp) in members(board, oid) {
+                                if !AssemblyState::of(fc).is_present()
+                                    || is_connector_like(fc)
+                                    || is_test_point_or_hole(fc)
+                                {
+                                    continue;
+                                }
+                                if is_sd_bus_switch(fc) || has_integrated_i2c_pullups(fc) {
+                                    behind_bus_switch = true;
+                                }
+                                let fr = fc.reference.to_ascii_uppercase();
+                                if fr.starts_with('U')
+                                    || (fc.pins.len() > 2
+                                        && !is_resistor(fc)
+                                        && !is_resistor_array(fc))
+                                {
+                                    active_refs.insert(fc.reference.as_str());
+                                }
                             }
                         }
                         _ => {}
@@ -1291,8 +1352,9 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 severity: Severity::Low,
                 message: format!(
                     "SD card {role} net '{}' relies on {dnp_ref} for its pull-up, but \
-                     {dnp_ref} is marked do-not-populate: as assembled, the line floats \
-                     (simulation fits DNP parts by default, so other results may look fine)",
+                     {dnp_ref} is marked {DNP_PULLUP_MESSAGE_MARKER}: as assembled, the \
+                     line floats (simulation fits DNP parts by default, so other results \
+                     may look fine)",
                     net.name
                 ),
                 refs,
@@ -2264,6 +2326,145 @@ mod sd_pullup_tests {
                 .collect()
         };
         assert_eq!(f, vec![Severity::Medium]);
+    }
+
+    /// A breakout whose header carries the WHOLE bus (the realistic shape)
+    /// must stay silent: the header spans many roles but a pin array is not
+    /// a card socket, so it still counts as the bus leaving the board.
+    #[test]
+    fn breakout_with_full_bus_header_is_silent() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "sd_cmd".into() },
+                Net { id: 2, name: "sd_data_0".into() },
+                Net { id: 3, name: "sd_clk".into() },
+            ],
+            components: vec![
+                part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1)), pin("5", Some(2)), pin("4", Some(3))]),
+                part(
+                    "J1",
+                    "HEADER",
+                    "Connector_PinHeader:PinHeader_2x05_P2.54mm",
+                    vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))],
+                ),
+                part("D1", "TPD4E05U06", "SOT-23-6", vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", None), pin("4", None)]),
+            ],
+        };
+        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+    }
+
+    /// A mezzanine/FPC carrying the bus to a daughtercard is the bus leaving
+    /// the board, never the socket, whatever roles it spans.
+    #[test]
+    fn fpc_to_daughtercard_is_silent() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "sd_cmd".into() },
+                Net { id: 2, name: "sd_data_0".into() },
+                Net { id: 3, name: "sd_clk".into() },
+            ],
+            components: vec![
+                part("U1", "STM32H7", "LQFP-100", vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))]),
+                part(
+                    "J5",
+                    "FH12",
+                    "Connector_FFC-FPC:Hirose_FH12-10S-0.5SH",
+                    vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))],
+                ),
+            ],
+        };
+        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+    }
+
+    /// SDRAM broken out to a SODIMM: many SD_D* roles on one connector, but
+    /// no CMD anywhere, so the structural socket test must refuse it.
+    #[test]
+    fn sodimm_sdram_bus_is_silent() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "SD_D0".into() },
+                Net { id: 2, name: "SD_D1".into() },
+                Net { id: 3, name: "SD_D2".into() },
+                Net { id: 4, name: "SD_CLK".into() },
+            ],
+            components: vec![
+                part("U1", "FPGA", "BGA-256", vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3)), pin("4", Some(4))]),
+                part(
+                    "J1",
+                    "SODIMM-144",
+                    "Connector_SODIMM:SODIMM-144",
+                    vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3)), pin("4", Some(4))],
+                ),
+            ],
+        };
+        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+    }
+
+    /// The series-element hop must never walk into ground: everything touches
+    /// ground, and an unrelated bleeder there is not this line's pull-up.
+    #[test]
+    fn hop_into_ground_does_not_credit_a_bleeder() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "sd_cmd".into() },
+                Net { id: 8, name: "GND".into() },
+                Net { id: 3, name: "+3V3".into() },
+            ],
+            components: vec![
+                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
+                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+                part("R2", "100", "R_0402", vec![pin("1", Some(1)), pin("2", Some(8))]),
+                part("R9", "100k", "R_0402", vec![pin("1", Some(3)), pin("2", Some(8))]),
+            ],
+        };
+        assert_eq!(
+            board.net_lint().of_check(LintCheck::MissingSdPullup).count(),
+            1,
+            "the +3V3-to-GND bleeder is not a pull-up on sd_cmd"
+        );
+    }
+
+    /// A series-damped bus with NO pull-up anywhere must still fire: host
+    /// evidence crosses the damper to the socket-side net, which reports
+    /// (once; the host-side half has no socket and stays quiet).
+    #[test]
+    fn series_damped_bus_without_pullup_fires_once() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![
+                Net { id: 1, name: "sd_cmd".into() },
+                Net { id: 2, name: "sd_cmd_mcu".into() },
+            ],
+            components: vec![
+                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+                part("R5", "33", "R_0402", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(2))]),
+            ],
+        };
+        let report = board.net_lint();
+        let f: Vec<_> = report.of_check(LintCheck::MissingSdPullup).collect();
+        assert_eq!(f.len(), 1, "exactly one finding for the split bus: {f:?}");
+        assert_eq!(f[0].nets, vec!["sd_cmd".to_string()]);
+    }
+
+    /// A TXS-class translator with integrated pull-ups on the bus means a
+    /// discrete resistor is not the whole story: abstain.
+    #[test]
+    fn integrated_pullup_translator_abstains() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![Net { id: 1, name: "sd_cmd".into() }],
+            components: vec![
+                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
+                part("U9", "TXS0108E", "TSSOP-20", vec![pin("2", Some(1)), pin("3", None), pin("4", None)]),
+                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+            ],
+        };
+        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
     }
 
     /// A DAT3 pull-DOWN (the card-detect convention) to ground must never be
