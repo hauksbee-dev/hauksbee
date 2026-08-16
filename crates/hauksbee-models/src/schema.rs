@@ -98,6 +98,181 @@ pub struct ModelEntry {
     /// protection threshold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_program: Option<CurrentProgram>,
+
+    /// Optional firmware-visible peripheral protocol implemented by this part.
+    /// The board binder turns this data into an I2C/SPI slave automatically;
+    /// users should not have to repeat a datasheet's address/geometry in every
+    /// CI spec after the fitted component has resolved exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peripheral: Option<PeripheralSpec>,
+
+    /// Electrical load coupled to the firmware-visible peripheral state.
+    ///
+    /// A protocol model that answers bytes but never draws power is not a full
+    /// board model: EEPROM writes, flash reads and erase/program operations can
+    /// be the load that exposes a marginal rail.  This separate block lets the
+    /// engine stamp one rail-current leg and select its source-bound idle/read/
+    /// write current from the transactions the peripheral actually executed.
+    /// It is valid only alongside [`Self::peripheral`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peripheral_power: Option<PeripheralPower>,
+
+    /// Machine-readable scope of the behavior this model actually implements.
+    ///
+    /// A model resolving is not the same claim as the whole component being
+    /// represented. For example, a regulator may stamp only its nominal DC
+    /// output while omitting startup, current limiting, switching ripple and
+    /// thermal shutdown. Keeping those two lists in the card lets authoring,
+    /// reports and analysis requirements distinguish a useful partial model
+    /// from either an identity-only card or a model complete for a requested
+    /// behavior profile. Legacy cards with neither list remain executable, but
+    /// their scope is explicitly `unspecified` on the coverage surface.
+    #[serde(default, skip_serializing_if = "ModelCoverage::is_empty")]
+    pub coverage: ModelCoverage,
+}
+
+/// Declared executable scope of a model card.
+///
+/// `implements` and `missing` are capability identifiers rather than prose so
+/// callers can ask whether a requested analysis is covered. Descriptions and
+/// citations still belong beside the source-bound parameters in the card.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ModelCoverage {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implements: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+}
+
+/// Data-driven firmware-visible peripheral behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PeripheralSpec {
+    /// 24Cxx-compatible I2C EEPROM array.
+    I2cEeprom {
+        address: u8,
+        size_bytes: usize,
+        page_size: usize,
+        word_address_bytes: u8,
+    },
+    /// JEDEC SPI NOR flash with three-byte addressing.
+    SpiNorFlash {
+        size_bytes: usize,
+        page_size: usize,
+        sector_size: usize,
+        jedec_id: Vec<u8>,
+        #[serde(default)]
+        spi_mode: u8,
+        #[serde(default = "default_cs_role")]
+        cs_role: String,
+        #[serde(default = "default_clk_role")]
+        clk_role: String,
+        #[serde(default = "default_mosi_role")]
+        mosi_role: String,
+        #[serde(default = "default_miso_role")]
+        miso_role: String,
+    },
+    /// A datasheet-derived register map executed by the generic I2C/SPI
+    /// interpreter. Keeping the validated TOML bytes in the model card makes
+    /// the peripheral portable with a model pack: once the exact component
+    /// resolves, the board binder can attach its firmware-visible behavior
+    /// without a second scenario-only sensor declaration.
+    RegisterMap {
+        spec_toml: String,
+        /// Optional named SPI controller (for multi-controller MCUs). I2C
+        /// currently uses the backend's modeled I2C controller selection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        controller: Option<String>,
+        #[serde(default = "default_scl_role")]
+        scl_role: String,
+        #[serde(default = "default_sda_role")]
+        sda_role: String,
+        #[serde(default = "default_cs_role")]
+        cs_role: String,
+        #[serde(default = "default_clk_role")]
+        clk_role: String,
+        #[serde(default = "default_mosi_role")]
+        mosi_role: String,
+        #[serde(default = "default_miso_role")]
+        miso_role: String,
+        /// Board straps that must resolve directly to a known supply or ground
+        /// before this bus personality is attached. This is how one portable
+        /// card safely expresses e.g. CSB=high selects I2C.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        required_high_roles: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        required_low_roles: Vec<String>,
+        /// Optional I2C address-select strap. All three fields are an
+        /// all-or-none contract; the binder refuses a floating or otherwise
+        /// unresolved strap instead of choosing a plausible address.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address_select_role: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address_when_low: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address_when_high: Option<u8>,
+    },
+}
+
+/// Datasheet current envelope for a firmware-visible peripheral.
+///
+/// The current levels are conservative operating values selected by observed
+/// protocol activity, not a claim to reproduce sub-byte current waveforms.
+/// `power_on_threshold_v` also gates protocol responses: below that solved
+/// supply voltage the peripheral is unpowered and returns no valid traffic.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct PeripheralPower {
+    #[serde(default = "default_supply_role")]
+    pub supply_role: String,
+    #[serde(default = "default_return_role")]
+    pub return_role: String,
+    pub power_on_threshold_v: f64,
+    pub idle_a: f64,
+    pub read_a: f64,
+    pub write_a: f64,
+    /// Current after a protocol-defined low-power command (for example SPI
+    /// NOR deep-power-down). Omitted when the peripheral has no such state or
+    /// the source does not bound it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low_power_a: Option<f64>,
+}
+
+fn default_supply_role() -> String {
+    "vcc".to_string()
+}
+
+fn default_return_role() -> String {
+    "gnd".to_string()
+}
+
+fn default_cs_role() -> String {
+    "cs".to_string()
+}
+
+fn default_scl_role() -> String {
+    "scl".to_string()
+}
+
+fn default_sda_role() -> String {
+    "sda".to_string()
+}
+
+fn default_clk_role() -> String {
+    "sck".to_string()
+}
+
+fn default_mosi_role() -> String {
+    "mosi".to_string()
+}
+
+fn default_miso_role() -> String {
+    "miso".to_string()
+}
+
+impl ModelCoverage {
+    pub fn is_empty(&self) -> bool {
+        self.implements.is_empty() && self.missing.is_empty()
+    }
 }
 
 /// Where a model entry's numbers come from, on the source accuracy ladder:
@@ -108,8 +283,22 @@ pub struct ModelSourceSpec {
     pub tier: ModelSourceTier,
     #[serde(default = "unvalidated")]
     pub validation: ModelValidation,
+    /// Exact human-auditable sources for the card's identity and numbers.
+    /// URLs remain useful without a retained blob hash; when exact source bytes
+    /// are available, `sha256` turns the citation into a reproducible input.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<ModelSourceReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uncertainty: Vec<ModelUncertainty>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ModelSourceReference {
+    pub url: String,
+    pub title: String,
+    pub locator: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 fn unvalidated() -> ModelValidation {
@@ -223,6 +412,20 @@ pub enum CurrentProgramEquation {
         k_volts: f64,
     },
 
+    /// Datasheet best-fit power law:
+    ///
+    /// `I(A) = coefficient_a / (R / resistance_scale_ohms) ^ exponent`.
+    ///
+    /// Adjustable current-limit switches commonly publish this form because
+    /// their ILIM transfer is close to, but measurably not, a simple inverse.
+    /// Encoding the exponent avoids replacing a sourced curve with a hand-fit
+    /// `k/R` constant that is only accurate at one resistor value.
+    PowerLawResistance {
+        coefficient_a: f64,
+        resistance_scale_ohms: f64,
+        exponent: f64,
+    },
+
     /// A continuous two-branch law: use `low_k_volts / R` while that result is
     /// at or below `transition_current_a`; above it, use
     /// `high_numerator_a / (R / resistance_scale_ohms + high_offset)`.
@@ -286,6 +489,11 @@ impl CurrentProgram {
 
         let current_a = match &self.equation {
             CurrentProgramEquation::InverseResistance { k_volts } => *k_volts / resistance_ohms,
+            CurrentProgramEquation::PowerLawResistance {
+                coefficient_a,
+                resistance_scale_ohms,
+                exponent,
+            } => *coefficient_a / (resistance_ohms / *resistance_scale_ohms).powf(*exponent),
             CurrentProgramEquation::PiecewiseInverseResistance {
                 low_k_volts,
                 transition_current_a,
@@ -652,6 +860,16 @@ pub struct MatchRules {
     /// Regex matched against a manufacturer part-number property (if present).
     #[serde(default)]
     pub mpn_re: Option<String>,
+
+    /// Regexes matched against named source properties carried by the board.
+    ///
+    /// Property names are compared case-insensitively after normalising spaces
+    /// and hyphens to underscores. Every populated property rule is required.
+    /// This lets an exact supplier/order-code property disambiguate a generic
+    /// Value such as `Polyfuse 1.8A` without copying a board reference into the
+    /// model or pretending the Value itself is an MPN.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
 }
 
 impl MatchRules {
@@ -661,6 +879,7 @@ impl MatchRules {
             && self.value_re.is_none()
             && self.footprint_re.is_none()
             && self.mpn_re.is_none()
+            && self.properties.is_empty()
     }
 }
 
@@ -704,6 +923,11 @@ impl Params {
     /// Insert an integer param.
     pub fn set_int(&mut self, key: impl Into<String>, v: i64) {
         self.0.insert(key.into(), ParamValue::Int(v));
+    }
+
+    /// Insert a boolean param.
+    pub fn set_bool(&mut self, key: impl Into<String>, v: bool) {
+        self.0.insert(key.into(), ParamValue::Bool(v));
     }
 
     /// True when no params are present.
@@ -789,5 +1013,25 @@ k_volts = 1000.0
             toml::from_str(&format!("{base}\nabove_domain = \"saturate\"\n")).unwrap();
         assert_eq!(saturating.above_domain, AboveDomainBehavior::Saturate);
         assert_eq!(saturating.operating_current_a(100.0), Some(0.4));
+    }
+
+    #[test]
+    fn current_program_supports_datasheet_power_law_curves() {
+        let program: CurrentProgram = toml::from_str(
+            r#"
+pin = "ilim"
+semantics = "protection_limit"
+equation = "power_law_resistance"
+coefficient_a = 19.94
+resistance_scale_ohms = 1000.0
+exponent = 0.925
+"#,
+        )
+        .unwrap();
+
+        let at_20k = program.equation_current_a(20_000.0).unwrap();
+        assert!((at_20k - 1.251).abs() < 0.005, "{at_20k}");
+        let at_49k9 = program.equation_current_a(49_900.0).unwrap();
+        assert!((at_49k9 - 0.530).abs() < 0.010, "{at_49k9}");
     }
 }

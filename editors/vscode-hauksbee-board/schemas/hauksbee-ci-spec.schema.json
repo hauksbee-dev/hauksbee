@@ -1232,12 +1232,20 @@
           ],
           "default": null
         },
+        "cs_net": {
+          "description": "Optional explicit board net that frames an SPI device's chip select.\nWhen absent, SPI retains the documented heuristic framing. Invalid net\nnames are rejected with the rest of the spec's board references.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "id": {
           "description": "Stable identifier (used in error messages and future state assertions).",
           "type": "string"
         },
         "inputs": {
-          "description": "Input overrides: map from input name to value. Applied after parsing,\nbefore the run starts. Unknown names are silently ignored (they may be\nvalid for a different sensor or simply pre-set defaults).",
+          "description": "Input overrides: map from input name to value. Applied after parsing,\nbefore the run starts. Unknown names are refused: a typo that quietly\nleaves the datasheet default in place would make the scenario lie.",
           "type": "object",
           "additionalProperties": {
             "type": "number",

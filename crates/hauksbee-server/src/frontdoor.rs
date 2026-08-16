@@ -24,7 +24,7 @@ use axum::extract::{DefaultBodyLimit, Multipart, Path as UrlPath, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Json, Router};
 
 /// Reject a request that a *website* in the user's browser made cross-origin to
 /// our loopback server. The analysis/check endpoints can run an uploaded
@@ -178,6 +178,11 @@ pub type DatasheetExtractor =
 pub type DatasheetSaver = Arc<dyn Fn(&str, &str, &str) -> Result<String, String> + Send + Sync>;
 /// Validate a model and describe what it is, without writing anything.
 pub type DatasheetChecker = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
+/// Draft a board-local extension from an already resolved model. The request
+/// and response are JSON/text so the server crate remains engine-independent.
+/// Read-only: the returned TOML is reviewed and validated before the separate
+/// save route is allowed to write it.
+pub type ModelDrafter = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
 /// The datasheet-extraction backend, as one value. The three calls are a single
 /// consent contract (can it run, run it, keep the result) and a deployment that
@@ -190,6 +195,7 @@ pub struct DatasheetHooks {
     pub check: DatasheetChecker,
     /// Report what the SPICE front end makes of a pasted deck.
     pub spice_check: DatasheetChecker,
+    pub draft: ModelDrafter,
 }
 
 /// The engine-backed hooks the browser's tool panels need beyond board
@@ -610,8 +616,60 @@ pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
         .route("/api/models/extract", post(datasheet_extract_handler))
         .route("/api/models/save", post(datasheet_save_handler))
         .route("/api/models/check", post(datasheet_check_handler))
+        .route("/api/models/draft", post(model_draft_handler))
+        .route("/api/sensor-specs", get(sensor_catalog_handler))
         .layer(DefaultBodyLimit::max(MAX_DATASHEET_BYTES))
         .with_state(state)
+}
+
+/// Checked-in, product-bundled register behavior for the no-LLM browser path.
+/// The response carries the exact same TOML bytes accepted by models lint,
+/// live attachment and CI scenarios; choosing an item never writes a model.
+fn sensor_catalog_json() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "read_only": true,
+        "llm_required": false,
+        "entries": [
+            {"id":"lm75","name":"LM75 temperature subset","bus":"i2c","scope":"temperature register at 0x48; no timing/OS/thermal dynamics","spec_toml":include_str!("../../../testdata/sensor-specs/lm75.toml")},
+            {"id":"bma423_chip_id","name":"BMA423 chip identity","bus":"i2c","scope":"CHIP_ID at 0x18 for SDO low; no acceleration/FIFO/interrupts","spec_toml":include_str!("../../../testdata/sensor-specs/bma423_chip_id.toml")},
+            {"id":"bme280","name":"BME280 environmental sensor","bus":"i2c","scope":"declarative environmental register subset","spec_toml":include_str!("../../../testdata/sensor-specs/bme280.toml")},
+            {"id":"mpu6050","name":"MPU6050 motion sensor","bus":"i2c","scope":"declarative motion register subset","spec_toml":include_str!("../../../testdata/sensor-specs/mpu6050.toml")},
+            {"id":"ads1115","name":"ADS1115 ADC","bus":"i2c","scope":"mux/PGA/config/conversion subset; conversion timing omitted","spec_toml":include_str!("../../../testdata/sensor-specs/ads1115.toml")},
+            {"id":"ina219","name":"INA219 current monitor","bus":"i2c","scope":"declarative shunt/bus register subset","spec_toml":include_str!("../../../testdata/sensor-specs/ina219.toml")},
+            {"id":"mcp4728","name":"MCP4728 quad DAC","bus":"i2c","scope":"declarative DAC register/output subset","spec_toml":include_str!("../../../testdata/sensor-specs/mcp4728.toml")},
+            {"id":"icm42605","name":"ICM-42605 motion sensor","bus":"spi","scope":"declarative SPI register subset","spec_toml":include_str!("../../../testdata/sensor-specs/icm42605.toml")}
+        ]
+    })
+}
+
+async fn sensor_catalog_handler() -> Json<serde_json::Value> {
+    Json(sensor_catalog_json())
+}
+
+/// POST `/api/models/draft`: prepare the selected component for local editing.
+/// An executable partial model is copied into a board-narrowed extension;
+/// an unresolved component gets the same conservative evidence-first scaffold
+/// as `models prepare`. It is a local deterministic preview: no files are
+/// written and no network or LLM is used.
+async fn model_draft_handler(
+    State(state): State<Arc<DatasheetState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let request = String::from_utf8_lossy(&body).into_owned();
+    let draft = state.hooks.draft.clone();
+    match tokio::task::spawn_blocking(move || (draft)(&request)).await {
+        Ok(Ok(toml)) => json_body(
+            StatusCode::OK,
+            serde_json::json!({ "ok": true, "toml": toml, "read_only": true }),
+        ),
+        Ok(Err(message)) => json_error(&message),
+        Err(_) => json_error("the model draft task panicked; see the server log"),
+    }
 }
 
 /// GET `/api/models/extract/ready`: relay the engine's readiness JSON. The
@@ -716,7 +774,9 @@ fn extraction_identity(
 
 #[cfg(test)]
 mod datasheet_input_tests {
-    use super::{extraction_identity, name_upload_limit_413, MAX_UPLOAD_BYTES};
+    use super::{
+        extraction_identity, name_upload_limit_413, sensor_catalog_json, MAX_UPLOAD_BYTES,
+    };
     use axum::{body::Body, http::StatusCode, response::Response};
 
     #[test]
@@ -730,6 +790,40 @@ mod datasheet_input_tests {
     #[test]
     fn missing_part_is_still_refused() {
         assert!(extraction_identity(None, Some("vreg".into())).is_err());
+    }
+
+    #[test]
+    fn bundled_sensor_catalog_is_local_exact_and_contains_valid_toml() {
+        let catalog = sensor_catalog_json();
+        assert_eq!(catalog["read_only"], true);
+        assert_eq!(catalog["llm_required"], false);
+        let entries = catalog["entries"].as_array().unwrap();
+        let ids = entries
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "lm75",
+                "bma423_chip_id",
+                "bme280",
+                "mpu6050",
+                "ads1115",
+                "ina219",
+                "mcp4728",
+                "icm42605"
+            ]
+        );
+        for entry in entries {
+            let spec = entry["spec_toml"].as_str().unwrap();
+            assert!(spec.contains("[sensor]"), "{} lacks [sensor]", entry["id"]);
+            assert!(
+                spec.contains("[sensor.protocol]"),
+                "{} lacks protocol",
+                entry["id"]
+            );
+        }
     }
 
     #[tokio::test]

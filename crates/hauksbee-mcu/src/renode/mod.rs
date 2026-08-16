@@ -69,6 +69,16 @@ pub struct PortMap {
     pub letter: char,
     /// Renode peripheral name, e.g. `"gpioPortC"`.
     pub peripheral: String,
+    /// Renode peripheral that receives externally driven GPIO input levels.
+    ///
+    /// Usually this is the same peripheral as [`Self::peripheral`]. Some SoCs
+    /// split the register bank from the physical pin receiver: RP2040's SIO
+    /// owns GPIO_OUT/GPIO_OE, while its GPIOPort model owns `OnGPIO`. Keeping
+    /// this path explicit prevents a register-only peripheral from being used
+    /// as an input receiver (which Renode rejects) and keeps unsupported input
+    /// drives fail-closed at the Monitor boundary.
+    #[serde(default)]
+    pub input_peripheral: Option<String>,
     /// Byte offset of the output-data register within the peripheral.
     /// STM32F1 GPIO ODR is at 0x0C; many Cortex-M GPIO blocks differ.
     pub odr_offset: u32,
@@ -1918,7 +1928,8 @@ impl Mcu for RenodeBackend {
             // this backend: silently discarding the result let a rejected/failed
             // OnGPIO masquerade as "input never changed", diverging the co-sim
             // from the analog solve with zero diagnostic.
-            let cmd = format!("sysbus.{} OnGPIO {} {}", port.peripheral, pin.bit, high);
+            let input_peripheral = port.input_peripheral.as_deref().unwrap_or(&port.peripheral);
+            let cmd = format!("sysbus.{} OnGPIO {} {}", input_peripheral, pin.bit, high);
             match self.monitor.command(&cmd) {
                 Ok(resp) if !monitor_failed(&resp) => {}
                 Ok(resp) => panic!("Renode digital-input drive failed ({cmd}): {resp}"),
@@ -2507,6 +2518,7 @@ mod tests {
         assert_eq!(c.ports.len(), 1);
         assert_eq!(c.ports[0].letter, '0');
         assert_eq!(c.ports[0].peripheral, "sio");
+        assert_eq!(c.ports[0].input_peripheral.as_deref(), Some("gpio"));
         assert_eq!(c.ports[0].odr_offset, 0x10);
         assert_eq!(c.ports[0].width, 30);
         assert_eq!(

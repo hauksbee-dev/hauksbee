@@ -26,18 +26,19 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use hauksbee_ir::evidence::{Assumption, AssumptionSource};
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 #[cfg(feature = "avr")]
 use hauksbee_mcu::AvrMcu;
 use hauksbee_mcu::{Mcu, PinId};
+use hauksbee_models::{Bus, PeripheralSpec};
 use hauksbee_solve::{Layout, SolverOptions, Transient, TransientDiagnostics};
 
 use crate::behavioral::BehavioralDevice;
 use crate::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
 use crate::digital::{DigitalComponent, PinEdge};
 use crate::peripherals::{
-    CsProvenance, I2cBus, PeripheralSet, RegisterMapSensor, ResolvedCs, SpiBus, SpiFramingMode,
-    TickCtx, TimelineEvent,
+    CsProvenance, Eeprom24c, I2cBus, PeripheralSet, RegisterMapSensor, ResolvedCs, SpiBus,
+    SpiFramingMode, SpiNorFlash, TickCtx, TimelineEvent,
 };
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::stress::{FaultEvent, StressMonitor};
@@ -299,6 +300,33 @@ struct ParallelMemoryDrive {
     runtime: Arc<Mutex<crate::responders::ParallelMemoryRuntime>>,
 }
 
+/// One model-declared firmware peripheral's electrical supply projection.
+///
+/// The bus model remains the authority for protocol work; this leg only drains
+/// its typed read/write activity once per analogue chunk and selects the
+/// datasheet current envelope. Supply voltage from the previous converged
+/// operating point gates both the bus and the load, so an unpowered EEPROM
+/// cannot ACK while drawing an invented active current.
+enum ModelPeripheralBus {
+    I2c(Arc<Mutex<I2cBus>>),
+    Spi(Arc<Mutex<SpiBus>>),
+}
+
+struct ModelPeripheralPowerLeg {
+    reference: String,
+    isource: DeviceId,
+    supply_node: NodeId,
+    return_node: NodeId,
+    power_on_threshold_v: f64,
+    idle_a: f64,
+    read_a: f64,
+    write_a: f64,
+    low_power_a: Option<f64>,
+    bus: ModelPeripheralBus,
+    powered: bool,
+    last_current_a: f64,
+}
+
 /// The scheduler driving one bound board.
 pub struct Scheduler {
     pub circuit: Circuit,
@@ -375,6 +403,10 @@ pub struct Scheduler {
     i2c_buses: Vec<Arc<Mutex<I2cBus>>>,
     /// SPI bus slaves, shared with each MCU's `on_spi` callback.
     spi_buses: Vec<Arc<Mutex<SpiBus>>>,
+    /// Model-owned bus peripherals whose protocol activity is projected into
+    /// the analogue supply network using source-bound idle/read/write current
+    /// envelopes and rail-voltage power gating.
+    model_peripheral_power: Vec<ModelPeripheralPowerLeg>,
     /// Per-controller SPI bus map (controller name -> bus). Populated by
     /// [`attach_spi_bus_on`]; not populated by the legacy [`attach_spi_bus`]
     /// path. Used for look-up by controller name after the run.
@@ -1045,6 +1077,7 @@ impl Scheduler {
             behavioral,
             device_meta,
             dacs,
+            peripherals,
             report,
             ..
         } = bound;
@@ -1192,6 +1225,7 @@ impl Scheduler {
             peripherals: PeripheralSet::new(),
             i2c_buses: Vec::new(),
             spi_buses: Vec::new(),
+            model_peripheral_power: Vec::new(),
             spi_controller_map: HashMap::new(),
             substitutions,
             scoped_substitutions,
@@ -1251,6 +1285,18 @@ impl Scheduler {
         if !dacs.is_empty() {
             sched.attach_mcp4728_dacs(dacs);
         }
+
+        // A fitted exact model card can carry its firmware-visible peripheral
+        // contract. Instantiate those slaves directly from the bound board so
+        // every CLI/co-sim surface gets the same EEPROM/flash behavior without
+        // requiring the user to repeat datasheet geometry in a CI-only spec.
+        sched.attach_model_peripherals(peripherals);
+
+        // Peripheral/DAC attachment can stamp real analogue devices after the
+        // initial constructor snapshot. A destructive-fault reset must restore
+        // those devices too; otherwise their retained DeviceIds point into a
+        // shorter circuit and the first post-reset update silently disappears.
+        sched.original_circuit = sched.circuit.clone();
 
         // Index the non-pin-driver devices touching each net, for the plain
         // digital-input sync's "is this net really driven?" check.
@@ -1381,6 +1427,274 @@ impl Scheduler {
         bus.lock()
             .unwrap_or_else(|e| e.into_inner())
             .drive_all(&mut ctx);
+    }
+
+    /// Instantiate I2C/SPI slaves declared by exact resolved model cards.
+    fn attach_model_peripherals(&mut self, peripherals: Vec<crate::binder::PeripheralBinding>) {
+        for peripheral in peripherals {
+            let reference = peripheral.reference;
+            let power = peripheral.power;
+            match peripheral.spec {
+                PeripheralSpec::I2cEeprom {
+                    address,
+                    size_bytes,
+                    page_size,
+                    word_address_bytes,
+                } => {
+                    let slave = Eeprom24c::new(address, size_bytes)
+                        .with_word_address_bytes(word_address_bytes)
+                        .with_page_size(page_size);
+                    let bus = Arc::new(Mutex::new(
+                        I2cBus::new(&reference).with_slave(Box::new(slave)),
+                    ));
+                    if power.is_some() {
+                        bus.lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .set_powered(false);
+                    }
+                    self.attach_i2c_bus(bus.clone());
+                    if let Some(power) = power {
+                        self.attach_model_peripheral_power(
+                            &reference,
+                            power,
+                            ModelPeripheralBus::I2c(bus),
+                        );
+                    }
+                }
+                PeripheralSpec::SpiNorFlash {
+                    size_bytes,
+                    page_size,
+                    sector_size,
+                    jedec_id,
+                    spi_mode,
+                    ..
+                } => {
+                    // Model validation guarantees exactly three JEDEC bytes.
+                    let id: [u8; 3] = jedec_id
+                        .try_into()
+                        .expect("validated SPI NOR JEDEC ID has exactly three bytes");
+                    let bus = Arc::new(Mutex::new(SpiBus::new(
+                        &reference,
+                        Box::new(SpiNorFlash::new(
+                            size_bytes,
+                            page_size,
+                            sector_size,
+                            id,
+                            spi_mode,
+                        )),
+                    )));
+                    if power.is_some() {
+                        bus.lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .set_powered(false);
+                    }
+                    let cs = peripheral.cs_net.and_then(|net| {
+                        self.pin_driving_node(net).map(|pin| ResolvedCs {
+                            pin,
+                            net: Some(net),
+                            provenance: CsProvenance::ModelRoles,
+                        })
+                    });
+                    self.attach_spi_bus(bus, cs);
+                    if let Some(power) = power {
+                        self.attach_model_peripheral_power(
+                            &reference,
+                            power,
+                            ModelPeripheralBus::Spi(
+                                self.spi_buses
+                                    .last()
+                                    .expect("just-attached SPI bus is retained")
+                                    .clone(),
+                            ),
+                        );
+                    }
+                }
+                PeripheralSpec::RegisterMap {
+                    spec_toml,
+                    controller,
+                    ..
+                } => {
+                    let mut sensor = RegisterMapSensor::from_toml(&spec_toml)
+                        .expect("model validation guarantees an executable register-map spec");
+                    if let Some(address) = peripheral.i2c_address_override {
+                        sensor.set_i2c_address(address);
+                    }
+                    match sensor.bus() {
+                        Bus::I2c => {
+                            let bus = Arc::new(Mutex::new(
+                                I2cBus::new(&reference).with_slave(Box::new(sensor)),
+                            ));
+                            if power.is_some() {
+                                bus.lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .set_powered(false);
+                            }
+                            self.attach_i2c_bus(bus.clone());
+                            if let Some(power) = power {
+                                self.attach_model_peripheral_power(
+                                    &reference,
+                                    power,
+                                    ModelPeripheralBus::I2c(bus),
+                                );
+                            }
+                        }
+                        Bus::Spi => {
+                            let bus =
+                                Arc::new(Mutex::new(SpiBus::new(&reference, Box::new(sensor))));
+                            if power.is_some() {
+                                bus.lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .set_powered(false);
+                            }
+                            let cs = peripheral.cs_net.and_then(|net| {
+                                self.pin_driving_node(net).map(|pin| ResolvedCs {
+                                    pin,
+                                    net: Some(net),
+                                    provenance: CsProvenance::ModelRoles,
+                                })
+                            });
+                            if let Some(controller) = controller.as_deref() {
+                                self.attach_spi_bus_on(controller, bus.clone(), cs);
+                            } else {
+                                self.attach_spi_bus(bus.clone(), cs);
+                            }
+                            if let Some(power) = power {
+                                self.attach_model_peripheral_power(
+                                    &reference,
+                                    power,
+                                    ModelPeripheralBus::Spi(bus),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !self.model_peripheral_power.is_empty() {
+            self.relayout();
+        }
+    }
+
+    fn attach_model_peripheral_power(
+        &mut self,
+        reference: &str,
+        power: crate::binder::BoundPeripheralPower,
+        bus: ModelPeripheralBus,
+    ) {
+        let isource = self.circuit.add(Device::Isource {
+            name: format!("Iperipheral_{reference}"),
+            p: power.supply_node,
+            n: power.return_node,
+            // Begin electrically off. The first converged board operating
+            // point establishes whether the rail actually clears the source-
+            // bound power-on threshold; until then no transaction is accepted.
+            kind: SourceKind::Dc(0.0),
+        });
+        self.model_peripheral_power.push(ModelPeripheralPowerLeg {
+            reference: reference.to_string(),
+            isource,
+            supply_node: power.supply_node,
+            return_node: power.return_node,
+            power_on_threshold_v: power.spec.power_on_threshold_v,
+            idle_a: power.spec.idle_a,
+            read_a: power.spec.read_a,
+            write_a: power.spec.write_a,
+            low_power_a: power.spec.low_power_a,
+            bus,
+            powered: false,
+            last_current_a: 0.0,
+        });
+    }
+
+    /// Apply rail-voltage power gating before firmware runs this chunk.
+    /// `node_volts` is the previous converged operating point; the all-zero
+    /// construction/reset snapshot deliberately leaves each bus off for the
+    /// first chunk, so firmware cannot talk to a part before the board has
+    /// established a powered rail.
+    fn gate_model_peripherals_from_rails(&mut self) {
+        for leg in &mut self.model_peripheral_power {
+            let supply_v = self
+                .node_volts
+                .get(leg.supply_node.0 as usize)
+                .copied()
+                .unwrap_or(0.0)
+                - self
+                    .node_volts
+                    .get(leg.return_node.0 as usize)
+                    .copied()
+                    .unwrap_or(0.0);
+            let powered = supply_v.is_finite() && supply_v >= leg.power_on_threshold_v;
+            leg.powered = powered;
+            match &leg.bus {
+                ModelPeripheralBus::I2c(bus) => bus
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .set_powered(powered),
+                ModelPeripheralBus::Spi(bus) => bus
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .set_powered(powered),
+            }
+            let low_power = match &leg.bus {
+                ModelPeripheralBus::I2c(_) => false,
+                ModelPeripheralBus::Spi(bus) => bus
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .low_power_mode(),
+            };
+            let current_a = if powered {
+                if low_power {
+                    leg.low_power_a.unwrap_or(leg.idle_a)
+                } else {
+                    leg.idle_a
+                }
+            } else {
+                0.0
+            };
+            leg.last_current_a = current_a;
+            set_isource_dc(&mut self.circuit, leg.isource, current_a);
+        }
+    }
+
+    /// Drain model-owned bus work after firmware ran and project the highest
+    /// source-bound current class observed in this chunk onto the supply rail.
+    /// This is intentionally a conservative per-chunk envelope rather than an
+    /// invented sub-byte waveform or duty-cycle average.
+    fn apply_model_peripheral_activity(&mut self) {
+        for leg in &mut self.model_peripheral_power {
+            let (activity, low_power) = match &leg.bus {
+                ModelPeripheralBus::I2c(bus) => (
+                    bus.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take_activity(),
+                    false,
+                ),
+                ModelPeripheralBus::Spi(bus) => {
+                    let mut bus = bus.lock().unwrap_or_else(|e| e.into_inner());
+                    (bus.take_activity(), bus.low_power_mode())
+                }
+            };
+            let mut current_a = if leg.powered {
+                if low_power {
+                    leg.low_power_a.unwrap_or(leg.idle_a)
+                } else {
+                    leg.idle_a
+                }
+            } else {
+                0.0
+            };
+            if leg.powered && activity.read_units > 0 {
+                current_a = current_a.max(leg.read_a);
+            }
+            if leg.powered && activity.write_units > 0 {
+                current_a = current_a.max(leg.write_a);
+            }
+            if leg.powered && activity.other_units > 0 {
+                current_a = current_a.max(leg.read_a.max(leg.write_a));
+            }
+            leg.last_current_a = current_a;
+            set_isource_dc(&mut self.circuit, leg.isource, current_a);
+        }
     }
 
     /// The synchronous input-responder registry for MCU `mi` (05 §1.5),
@@ -2659,6 +2973,22 @@ impl Scheduler {
             let b = bus.lock().unwrap_or_else(|e| e.into_inner());
             m.insert(b.id().to_string(), b.state());
         }
+        for leg in &self.model_peripheral_power {
+            let supply_v = self
+                .node_volts
+                .get(leg.supply_node.0 as usize)
+                .copied()
+                .unwrap_or(0.0)
+                - self
+                    .node_volts
+                    .get(leg.return_node.0 as usize)
+                    .copied()
+                    .unwrap_or(0.0);
+            let fields = m.entry(leg.reference.clone()).or_default();
+            fields.insert("supply_v".into(), supply_v);
+            fields.insert("supply_current_a".into(), leg.last_current_a);
+            fields.insert("power_on_threshold_v".into(), leg.power_on_threshold_v);
+        }
         m
     }
 
@@ -2881,6 +3211,8 @@ impl Scheduler {
     }
 
     fn run_chunk(&mut self, chunk: f64, uart: &mut HashMap<String, Vec<u8>>) {
+        self.gate_model_peripherals_from_rails();
+
         // Integer microseconds for `run_micros`, carrying the sub-microsecond
         // remainder across chunks so the firmware clock does not drift from sim
         // time. A bare `(chunk * 1e6).round()` per chunk accumulates a rounding
@@ -3222,6 +3554,11 @@ impl Scheduler {
                     .flush_stops(&mut ctx);
             }
         }
+
+        // Model-owned bus activity is now complete for this chunk. Convert it
+        // to the datasheet current envelope before the analogue solve so the
+        // same transaction that firmware observed loads the physical rail.
+        self.apply_model_peripheral_activity();
 
         // 2b. Update configurable power supplies from the rail current measured
         // in the *previous* chunk, setting this chunk's commanded voltage (the
@@ -4497,6 +4834,23 @@ impl Scheduler {
         self.last_dc_seed = None;
         self.node_volts.iter_mut().for_each(|v| *v = 0.0);
         self.branch_x.iter_mut().for_each(|v| *v = 0.0);
+        for leg in &mut self.model_peripheral_power {
+            leg.powered = false;
+            leg.last_current_a = 0.0;
+            match &leg.bus {
+                ModelPeripheralBus::I2c(bus) => {
+                    let mut bus = bus.lock().unwrap_or_else(|e| e.into_inner());
+                    bus.set_powered(false);
+                    let _ = bus.take_activity();
+                }
+                ModelPeripheralBus::Spi(bus) => {
+                    let mut bus = bus.lock().unwrap_or_else(|e| e.into_inner());
+                    bus.set_powered(false);
+                    let _ = bus.take_activity();
+                }
+            }
+            set_isource_dc(&mut self.circuit, leg.isource, 0.0);
+        }
     }
 
     fn update_stats(&mut self) {
@@ -5603,6 +5957,17 @@ pub struct StepResult {
 /// (all deasserted between transactions) the bus is idle and MISO floats high
 /// (`0xFF`). At most one bus lock is held at a time, preserving the
 /// McuShared→SpiBus lock order.
+fn set_isource_dc(circuit: &mut Circuit, id: DeviceId, amps: f64) {
+    match circuit.devices.get_mut(id.0 as usize) {
+        Some(Device::Isource { kind, .. }) => *kind = SourceKind::Dc(amps),
+        Some(other) => panic!(
+            "model peripheral supply leg {:?} changed type: {other:?}",
+            id
+        ),
+        None => panic!("model peripheral supply leg {:?} disappeared", id),
+    }
+}
+
 fn dispatch_spi(
     buses: &[std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>],
     ev: hauksbee_mcu::SpiEvent,
@@ -6260,6 +6625,228 @@ fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const POWERED_EEPROM_BOARD: &str = r#"(kicad_pcb (version 20240108) (generator pcbnew)
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user "b.silkscreen") (37 "F.SilkS" user "f.silkscreen") (44 "Edge.Cuts" user))
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "SCL")
+  (net 4 "SDA")
+  (footprint "Package_TO_SOT_SMD:SOT-23-5" (layer "F.Cu")
+    (at 100 100)
+    (property "Reference" "U1" (at 0 -2 0) (layer "F.SilkS"))
+    (property "Value" "AT24CS01-STUM" (at 0 2 0) (layer "F.Fab"))
+    (pad "1" smd roundrect (at -0.95 -1) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 3 "SCL"))
+    (pad "2" smd roundrect (at -0.95 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 1 "GND"))
+    (pad "3" smd roundrect (at -0.95 1) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 4 "SDA"))
+    (pad "4" smd roundrect (at 0.95 1) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 2 "+3V3"))
+    (pad "5" smd roundrect (at 0.95 -1) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 1 "GND"))))"#;
+
+    const POWERED_FLASH_BOARD: &str = r#"(kicad_pcb (version 20240108) (generator pcbnew)
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user "b.silkscreen") (37 "F.SilkS" user "f.silkscreen") (44 "Edge.Cuts" user))
+  (net 0 "") (net 1 "GND") (net 2 "+3V3") (net 3 "CS") (net 4 "MISO") (net 5 "MOSI") (net 6 "SCK")
+  (footprint "Pedalboard Library:SOIC-8_5.23x5.23mm_P1.27mm" (layer "F.Cu")
+    (at 100 100)
+    (property "Reference" "U1" (at 0 -2 0) (layer "F.SilkS"))
+    (property "Value" "W25Q128JVS" (at 0 2 0) (layer "F.Fab"))
+    (pad "1" smd rect (at -2 -1.9) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 3 "CS"))
+    (pad "2" smd rect (at -2 -0.63) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 4 "MISO"))
+    (pad "3" smd rect (at -2 0.63) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 2 "+3V3"))
+    (pad "4" smd rect (at -2 1.9) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "GND"))
+    (pad "5" smd rect (at 2 1.9) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 5 "MOSI"))
+    (pad "6" smd rect (at 2 0.63) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 6 "SCK"))
+    (pad "7" smd rect (at 2 -0.63) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 2 "+3V3"))
+    (pad "8" smd rect (at 2 -1.9) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 2 "+3V3"))))"#;
+
+    const REGISTER_MAP_BOARD: &str = r#"(kicad_pcb (version 20240108) (generator pcbnew)
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user "b.silkscreen") (37 "F.SilkS" user "f.silkscreen") (44 "Edge.Cuts" user))
+  (net 0 "") (net 1 "GND") (net 2 "+3V3") (net 3 "SCL") (net 4 "SDA")
+  (footprint "Package_LGA:LGA-4" (layer "F.Cu")
+    (at 100 100)
+    (property "Reference" "U1" (at 0 -2 0) (layer "F.SilkS"))
+    (property "Value" "ACME-WHOAMI-13" (at 0 2 0) (layer "F.Fab"))
+    (pad "1" smd rect (at -1 -1) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 3 "SCL"))
+    (pad "2" smd rect (at -1 1) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "GND"))
+    (pad "3" smd rect (at 1 1) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 4 "SDA"))
+    (pad "4" smd rect (at 1 -1) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 2 "+3V3"))))"#;
+
+    const REGISTER_MAP_MODEL: &str = r#"[[models]]
+id = "acme_whoami_13"
+kind = "digital"
+description = "synthetic exact register-map attachment proof"
+
+[models.match]
+value_re = "^ACME-WHOAMI-13$"
+
+[models.pins]
+"1" = "scl"
+"2" = "gnd"
+"3" = "sda"
+"4" = "vcc"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "ACME WHOAMI"
+bus = "i2c"
+i2c_address = 0x18
+[[sensor.register]]
+addr = 0x00
+const = [0x13]
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.coverage]
+implements = ["i2c_chip_id"]
+missing = ["measurement_registers"]
+"#;
+
+    #[test]
+    fn model_card_register_map_attaches_without_scenario_duplication() {
+        let dir = tempfile::tempdir().expect("temporary model dir");
+        std::fs::write(dir.path().join("sensor.toml"), REGISTER_MAP_MODEL)
+            .expect("write exact test model");
+        let library = hauksbee_models::ModelLibrary::empty()
+            .with_user_dir(dir.path())
+            .expect("load validated register-map model");
+        let board = hauksbee_extract::ExtractedBoard::from_auto(REGISTER_MAP_BOARD)
+            .expect("register-map board parses");
+        let bound = crate::binder::bind_board(&board, &library);
+        assert_eq!(bound.peripherals.len(), 1, "exact model attaches itself");
+        assert!(matches!(
+            bound.report.rows[0].outcome,
+            crate::report::BindOutcome::Behavioral { .. }
+        ));
+
+        let sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut bus = sched.i2c_buses()[0]
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        bus.dispatch(hauksbee_mcu::I2cEvent::Start {
+            addr: 0x18,
+            read: false,
+        });
+        bus.dispatch(hauksbee_mcu::I2cEvent::Write {
+            addr: 0x18,
+            data: 0x00,
+        });
+        bus.dispatch(hauksbee_mcu::I2cEvent::Stop { addr: 0x18 });
+        bus.dispatch(hauksbee_mcu::I2cEvent::Start {
+            addr: 0x18,
+            read: true,
+        });
+        assert_eq!(
+            bus.dispatch(hauksbee_mcu::I2cEvent::Read { addr: 0x18 }),
+            Some(0x13),
+            "firmware-visible byte comes from the model card's exact spec"
+        );
+    }
+
+    #[test]
+    fn model_peripheral_power_is_rail_gated_and_transaction_coupled() {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(POWERED_EEPROM_BOARD)
+            .expect("EEPROM fixture parses");
+        let bound = crate::binder::bind_board(&board, &hauksbee_models::ModelLibrary::builtin());
+        assert_eq!(
+            bound.peripherals.len(),
+            1,
+            "exact model attaches one bus slave"
+        );
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        // Construction starts fail-closed. The first chunk establishes the
+        // 3.3 V operating point; the second observes it and applies standby.
+        sched.step(2.0 * DEFAULT_CHUNK_S);
+        let idle = sched.peripheral_states()["U1"].clone();
+        assert_eq!(idle["powered"], 1.0);
+        assert!((idle["supply_v"] - 3.3).abs() < 1e-6, "{idle:?}");
+        assert!((idle["supply_current_a"] - 6e-6).abs() < 1e-12, "{idle:?}");
+
+        {
+            let mut bus = sched.i2c_buses()[0]
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            bus.dispatch(hauksbee_mcu::I2cEvent::Start {
+                addr: 0x50,
+                read: true,
+            });
+            assert_eq!(
+                bus.dispatch(hauksbee_mcu::I2cEvent::Read { addr: 0x50 }),
+                Some(0xff)
+            );
+        }
+        sched.step(DEFAULT_CHUNK_S);
+        let read = sched.peripheral_states()["U1"].clone();
+        assert!((read["supply_current_a"] - 1e-3).abs() < 1e-12, "{read:?}");
+
+        // A brown rail disables both electrical draw and protocol response.
+        let vcc = sched.net_nodes["+3V3"].0 as usize;
+        sched.node_volts[vcc] = 1.0;
+        sched.gate_model_peripherals_from_rails();
+        let off = sched.peripheral_states()["U1"].clone();
+        assert_eq!(off["powered"], 0.0);
+        assert_eq!(off["supply_current_a"], 0.0);
+        let mut bus = sched.i2c_buses()[0]
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            bus.dispatch(hauksbee_mcu::I2cEvent::Start {
+                addr: 0x50,
+                read: true
+            }),
+            None
+        );
+        assert_eq!(
+            bus.dispatch(hauksbee_mcu::I2cEvent::Read { addr: 0x50 }),
+            None
+        );
+    }
+
+    #[test]
+    fn spi_deep_power_down_selects_the_datasheet_current_state() {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(POWERED_FLASH_BOARD)
+            .expect("flash fixture parses");
+        let bound = crate::binder::bind_board(&board, &hauksbee_models::ModelLibrary::builtin());
+        assert_eq!(bound.peripherals.len(), 1, "exact flash model attaches");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        sched.step(2.0 * DEFAULT_CHUNK_S);
+        assert!((sched.peripheral_states()["U1"]["supply_current_a"] - 60e-6).abs() < 1e-12);
+
+        {
+            let mut bus = sched.spi_buses()[0]
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            bus.cs_assert();
+            bus.transfer(0xb9);
+            bus.cs_deassert();
+        }
+        sched.step(DEFAULT_CHUNK_S);
+        let state = &sched.peripheral_states()["U1"];
+        assert!(
+            (state["supply_current_a"] - 20e-6).abs() < 1e-12,
+            "{state:?}"
+        );
+
+        {
+            let mut bus = sched.spi_buses()[0]
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            bus.cs_assert();
+            bus.transfer(0xab);
+            bus.cs_deassert();
+        }
+        sched.step(DEFAULT_CHUNK_S);
+        assert!((sched.peripheral_states()["U1"]["supply_current_a"] - 60e-6).abs() < 1e-12);
+    }
 
     #[test]
     fn unrelated_mutable_595_output_enable_does_not_disqualify_memory() {
@@ -7170,6 +7757,7 @@ mod tests {
             behavioral: Vec::new(),
             device_meta: Vec::new(),
             dacs: Vec::new(),
+            peripherals: Vec::new(),
             report: crate::report::BindReport::default(),
         };
         let mut scheduler =
@@ -9408,6 +9996,7 @@ data_out = ["io0"]
             behavioral: Vec::new(),
             device_meta: Vec::new(),
             dacs: Vec::new(),
+            peripherals: Vec::new(),
             report: crate::report::BindReport::default(),
         };
         let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
@@ -9555,6 +10144,7 @@ data_out = ["io0"]
                 behavioral: Vec::new(),
                 device_meta: vec![meta],
                 dacs: Vec::new(),
+                peripherals: Vec::new(),
                 report: crate::report::BindReport::default(),
             };
             let mut sched =

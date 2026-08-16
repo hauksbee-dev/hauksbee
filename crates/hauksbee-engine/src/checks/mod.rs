@@ -49,6 +49,7 @@ pub mod contention;
 pub mod converter;
 pub mod device_decode;
 pub mod mcu_coverage;
+pub mod model_controls;
 pub mod ripple;
 pub mod straps;
 pub mod usb_c;
@@ -83,6 +84,18 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(bus_loading::bus_loading_lint(board).findings);
+    for finding in model_controls::model_control_lint(board, lib).findings {
+        // Schematic/netlist extraction can already carry the pin function and
+        // raise the same structural finding. The model-aware path exists for
+        // PCB-only inputs whose pads have numbers/nets but no symbol function.
+        if !report.findings.iter().any(|existing| {
+            existing.check == finding.check
+                && existing.refs == finding.refs
+                && existing.nets == finding.nets
+        }) {
+            report.findings.push(finding);
+        }
+    }
     report
 }
 

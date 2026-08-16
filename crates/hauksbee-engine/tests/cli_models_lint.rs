@@ -108,7 +108,7 @@ fn lint_refuses_a_model_with_no_real_match_rule() {
 }
 
 #[test]
-fn scaffold_refuses_to_guess_an_ic_behavior_from_its_reference_letter() {
+fn scaffold_does_not_infer_model_kind_from_reference_letter() {
     let dir = tempfile::tempdir().unwrap();
     let scaffold = dir.path().join("u3.toml");
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -150,6 +150,417 @@ fn scaffold_refuses_to_guess_an_ic_behavior_from_its_reference_letter() {
     let text = std::fs::read_to_string(explicit).unwrap();
     assert!(text.contains("kind = \"vreg\""), "{text}");
     assert!(!text.contains("kind = \"digital\""), "{text}");
+    let explicit_path = dir.path().join("u3-vreg.toml");
+    let (code, out) = lint(&explicit_path);
+    assert_ne!(
+        code, 0,
+        "choosing a kind without supplying its parameters must stay fail-closed:\n{out}"
+    );
+    assert!(out.contains("missing required param 'vout'"), "{out}");
+}
+
+#[test]
+fn scaffold_emits_unknown_provenance_and_a_pack_without_writing_elsewhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack = dir.path().join("acme-pack");
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+    let made = Command::new(bin())
+        .args(["models", "new", "U3", "--board"])
+        .arg(&board)
+        .args(["--pack-dir"])
+        .arg(&pack)
+        .output()
+        .expect("pack scaffold command runs");
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+
+    let manifest = pack.join("pack.toml");
+    let model_dir = pack.join("models");
+    let model = model_dir.join("u3_7805.toml");
+    assert!(manifest.is_file(), "pack manifest was not created");
+    assert!(model.is_file(), "model was not created inside pack/models");
+    assert!(
+        !dir.path().join("u3_7805.toml").exists(),
+        "--pack-dir must never leave a model in the caller's cwd"
+    );
+
+    let model_text = std::fs::read_to_string(&model).unwrap();
+    let parsed: toml::Value = toml::from_str(&model_text).expect("scaffold is valid TOML");
+    assert_eq!(
+        parsed["models"][0]["source"]["uncertainty"][0]["status"].as_str(),
+        Some("unknown"),
+        "scaffold must retain explicit unknown uncertainty"
+    );
+    assert_eq!(
+        parsed["models"][0]["source"]["tier"].as_str(),
+        Some("user-model"),
+        "a completed user scaffold must be able to win user-model resolution"
+    );
+    assert!(
+        model_text.contains("TODO: cite a datasheet"),
+        "{model_text}"
+    );
+
+    let (code, out) = lint(&model);
+    assert_ne!(
+        code, 0,
+        "untouched scaffold must remain fail-closed:\n{out}"
+    );
+    assert!(out.contains("unknown kind 'choose_kind'"), "{out}");
+
+    let second = Command::new(bin())
+        .args(["models", "new", "U3", "--board"])
+        .arg(&board)
+        .args(["--pack-dir"])
+        .arg(&pack)
+        .output()
+        .expect("second scaffold command runs");
+    assert!(!second.status.success(), "overwrite must be refused");
+    let second_out = String::from_utf8_lossy(&second.stderr);
+    assert!(second_out.contains("refusing to overwrite"), "{second_out}");
+}
+
+#[test]
+fn prepare_yes_writes_only_the_printed_pack_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack = dir.path().join("prepared-pack");
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+    let out = Command::new(bin())
+        .args(["models", "prepare"])
+        .arg(&board)
+        .args(["--pack-dir"])
+        .arg(&pack)
+        .arg("--yes")
+        .output()
+        .expect("prepare command runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("no network, LLM, installer, or pack registration"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("pack.toml"), "{stdout}");
+    assert!(pack.join("pack.toml").is_file());
+    assert!(pack.join("inventory.json").is_file());
+    let workplan: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(pack.join("workplan.json")).expect("workplan written"),
+    )
+    .expect("workplan is valid JSON");
+    assert_eq!(workplan["schema_version"], 1);
+    assert_eq!(
+        workplan["items"].as_array().unwrap().len(),
+        std::fs::read_dir(pack.join("models")).unwrap().count(),
+        "every prepared card has one deterministic work item"
+    );
+    assert!(
+        workplan["validation_commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command.as_str().unwrap().contains("models coverage")),
+        "the handoff says how to prove coverage after editing"
+    );
+    let validation_commands = workplan["validation_commands"].as_array().unwrap();
+    assert_eq!(
+        validation_commands
+            .iter()
+            .filter(|command| command.as_str().unwrap().contains("models lint"))
+            .count(),
+        workplan["items"].as_array().unwrap().len(),
+        "models lint accepts one file, so the handoff must emit one exact command per prepared card"
+    );
+    assert!(
+        validation_commands
+            .iter()
+            .all(|command| !command.as_str().unwrap().contains("*.toml")),
+        "a wildcard would expand into an invalid multi-file models lint invocation"
+    );
+    let mut models = std::fs::read_dir(pack.join("models"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    models.sort();
+    assert!(
+        models.len() >= 4,
+        "the fixture has at least four unresolved active refs, and partial executable cards are now prepared too"
+    );
+    for model in models {
+        let text = std::fs::read_to_string(model).unwrap();
+        let parsed = toml::from_str::<toml::Value>(&text).expect("bulk scaffold is valid TOML");
+        let row = &parsed["models"][0];
+        if row["kind"].as_str() == Some("choose_kind") {
+            assert_eq!(
+                row["source"]["uncertainty"][0]["status"].as_str(),
+                Some("unknown")
+            );
+        } else {
+            assert_eq!(row["source"]["tier"].as_str(), Some("user-model"));
+            assert_eq!(row["source"]["validation"].as_str(), Some("unvalidated"));
+            assert!(text.contains("Copied from winning model"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn prepare_without_yes_refuses_a_non_tty_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack = dir.path().join("prepared-pack");
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+    let out = Command::new(bin())
+        .args(["models", "prepare"])
+        .arg(&board)
+        .args(["--pack-dir"])
+        .arg(&pack)
+        .output()
+        .expect("prepare command runs");
+    assert!(!out.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(combined.contains("stdin is not a terminal"), "{combined}");
+    assert!(!pack.exists(), "refusal must not create the pack directory");
+}
+
+#[test]
+fn prepare_refuses_overwrite_without_touching_existing_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack = dir.path().join("prepared-pack");
+    std::fs::create_dir_all(pack.join("models")).unwrap();
+    let manifest = pack.join("pack.toml");
+    std::fs::write(&manifest, "sentinel").unwrap();
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+    let out = Command::new(bin())
+        .args(["models", "prepare"])
+        .arg(&board)
+        .args(["--pack-dir"])
+        .arg(&pack)
+        .arg("--yes")
+        .output()
+        .expect("prepare command runs");
+    assert!(!out.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(combined.contains("refusing to overwrite"), "{combined}");
+    assert_eq!(std::fs::read_to_string(manifest).unwrap(), "sentinel");
+    assert_eq!(std::fs::read_dir(pack.join("models")).unwrap().count(), 0);
+}
+
+#[test]
+fn coverage_and_prepare_treat_identity_only_as_a_behavior_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let models_dir = dir.path().join("models-dir");
+    let pack = dir.path().join("prepared-pack");
+    std::fs::create_dir_all(&models_dir).unwrap();
+    std::fs::write(
+        models_dir.join("fixture.toml"),
+        r#"
+[[models]]
+id = "24cxx_identity_fixture"
+kind = "digital"
+description = "identity only"
+[models.match]
+value_re = "^24Cxx$"
+[models.params]
+identity_only = true
+warning = "identity and board pins only"
+unlocked_by = "a source-bound EEPROM protocol model"
+[models.pins]
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[[models]]
+id = "lt1373_partial_fixture"
+kind = "vreg"
+description = "nominal DC output only"
+[models.match]
+value_re = "^LT1373$"
+[models.params]
+vout = 5.0
+dropout_v = 1.0
+iq_a = 0.0001
+[models.pins]
+"1" = "vc"
+"2" = "fb"
+"3" = "fb_n"
+"4" = "ss"
+"5" = "gnd"
+"6" = "sw"
+"7" = "vin"
+"8" = "vin2"
+[models.coverage]
+implements = ["nominal_dc_output"]
+missing = ["switching_ripple", "current_limit", "soft_start"]
+"#,
+    )
+    .unwrap();
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+
+    let out = Command::new(bin())
+        .args(["models", "coverage"])
+        .arg(&board)
+        .args(["--models-dir"])
+        .arg(&models_dir)
+        .arg("--json")
+        .output()
+        .expect("coverage command runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["schema_version"], 4);
+    assert!(report["board"]["sha256"].as_str().unwrap().len() == 64);
+    assert_eq!(
+        report["summary"]["identified"].as_u64().unwrap(),
+        report["summary"]["active_connected"].as_u64().unwrap()
+            - report["summary"]["unresolved"].as_u64().unwrap()
+    );
+    assert_eq!(
+        report["summary"]["executable_available"].as_u64().unwrap(),
+        report["summary"]["executable_scope_unspecified"]
+            .as_u64()
+            .unwrap()
+            + report["summary"]["executable_partial"].as_u64().unwrap()
+            + report["summary"]["executable_declared"].as_u64().unwrap()
+    );
+    let rows = report["components"].as_array().unwrap();
+    let row = |reference: &str| {
+        rows.iter()
+            .find(|row| row["reference"] == reference)
+            .unwrap_or_else(|| panic!("missing coverage row {reference}"))
+    };
+    assert_eq!(row("U1")["stage"], "identity_only");
+    assert_eq!(row("U1")["model_id"], "24cxx_identity_fixture");
+    assert_eq!(row("U4")["stage"], "executable_partial");
+    assert_eq!(row("U4")["implements"][0], "nominal_dc_output");
+    assert_eq!(row("U4")["missing"][0], "switching_ripple");
+    assert_eq!(row("U5")["stage"], "unresolved");
+    assert!(
+        row("U1")["pins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pin| pin["number"] == "5" && pin["net"].is_string()),
+        "coverage must retain the board-observed pad/net inventory: {}",
+        row("U1")
+    );
+
+    let met = Command::new(bin())
+        .args(["models", "coverage"])
+        .arg(&board)
+        .args(["--models-dir"])
+        .arg(&models_dir)
+        .args(["--require", "U4:nominal_dc_output", "--json"])
+        .output()
+        .expect("capability-gated coverage runs");
+    assert!(
+        met.status.success(),
+        "declared implemented capability should pass: {}",
+        String::from_utf8_lossy(&met.stderr)
+    );
+    let met_report: serde_json::Value = serde_json::from_slice(&met.stdout).unwrap();
+    assert_eq!(met_report["summary"]["requirements_met"], 1);
+    assert_eq!(met_report["requirements"][0]["met"], true);
+
+    let missing = Command::new(bin())
+        .args(["models", "coverage"])
+        .arg(&board)
+        .args(["--models-dir"])
+        .arg(&models_dir)
+        .args(["--require", "U4:switching_ripple", "--json"])
+        .output()
+        .expect("missing-capability coverage runs");
+    assert!(
+        !missing.status.success(),
+        "an explicitly missing capability must fail closed"
+    );
+    let missing_report: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(missing_report["summary"]["requirements_unmet"], 1);
+    assert_eq!(missing_report["requirements"][0]["met"], false);
+    assert!(missing_report["requirements"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("explicitly declares"));
+
+    let out = Command::new(bin())
+        .args(["models", "prepare"])
+        .arg(&board)
+        .args(["--models-dir"])
+        .arg(&models_dir)
+        .args(["--pack-dir"])
+        .arg(&pack)
+        .arg("--yes")
+        .output()
+        .expect("prepare command runs");
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let inventory: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(pack.join("inventory.json")).expect("inventory written"),
+    )
+    .unwrap();
+    let prepared = inventory["authoring_targets"].as_array().unwrap();
+    assert!(
+        prepared
+            .iter()
+            .any(|row| row["reference"] == "U1" && row["stage"] == "identity_only"),
+        "identity-only models must be offered for behavioral upgrade"
+    );
+    assert!(
+        !prepared.iter().any(|row| row["reference"] == "U4"),
+        "authoring_targets remains the unresolved/identity denominator"
+    );
+    let partial_upgrade = pack.join("models/u4_lt1373.toml");
+    let partial_text = std::fs::read_to_string(&partial_upgrade)
+        .unwrap_or_else(|error| panic!("partial model upgrade was not prepared: {error}"));
+    let partial_doc: toml::Value = toml::from_str(&partial_text).expect("upgrade is valid TOML");
+    assert_eq!(
+        partial_doc["models"][0]["coverage"]["implements"][0].as_str(),
+        Some("nominal_dc_output")
+    );
+    assert_eq!(
+        partial_doc["models"][0]["coverage"]["missing"][0].as_str(),
+        Some("switching_ripple")
+    );
+    assert_eq!(
+        partial_doc["models"][0]["source"]["tier"].as_str(),
+        Some("user-model")
+    );
+    assert_eq!(
+        partial_doc["models"][0]["source"]["validation"].as_str(),
+        Some("unvalidated")
+    );
+    assert!(
+        partial_text.contains("Copied from winning model 'lt1373_partial_fixture'"),
+        "{partial_text}"
+    );
 }
 
 /// A file with neither [sensor] nor [[models]] is a usage error (exit 1),

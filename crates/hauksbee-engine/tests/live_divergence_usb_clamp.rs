@@ -52,6 +52,7 @@ fn board_with(
         behavioral,
         device_meta: Vec::new(),
         dacs: Vec::new(),
+        peripherals: Vec::new(),
         report: BindReport::default(),
     }
 }

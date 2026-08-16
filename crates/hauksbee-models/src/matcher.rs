@@ -19,6 +19,7 @@ pub struct CompiledEntry {
     value_re: Option<Regex>,
     footprint_re: Option<Regex>,
     mpn_re: Option<Regex>,
+    property_res: Vec<(String, Regex)>,
 }
 
 impl CompiledEntry {
@@ -49,11 +50,21 @@ impl CompiledEntry {
             .as_deref()
             .map(|p| Regex::new(&format!("(?i){}", p)))
             .transpose()?;
+        let property_res = entry
+            .r#match
+            .properties
+            .iter()
+            .map(|(key, pattern)| {
+                Regex::new(&format!("(?i){}", pattern))
+                    .map(|regex| (normalise_property_key(key), regex))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(CompiledEntry {
             entry,
             value_re,
             footprint_re,
             mpn_re,
+            property_res,
         })
     }
 
@@ -103,6 +114,21 @@ impl CompiledEntry {
             }
         }
 
+        // Named source properties. All authored rules are required; a missing
+        // property is not evidence and therefore cannot match.
+        for (expected_key, regex) in &self.property_res {
+            let Some((_, value)) = q
+                .properties
+                .iter()
+                .find(|(key, _)| normalise_property_key(key) == *expected_key)
+            else {
+                return false;
+            };
+            if !regex.is_match(value) {
+                return false;
+            }
+        }
+
         true
     }
 
@@ -142,6 +168,10 @@ impl CompiledEntry {
                 score += 5;
             }
         }
+        // A named property that carries an exact order code is at least as
+        // discriminating as an MPN field. Count each required property so an
+        // exact source-qualified entry wins over the same generic family rule.
+        score += 50 * rules.properties.len() as u32;
         score
     }
 
@@ -163,7 +193,12 @@ impl CompiledEntry {
         .into_iter()
         .flatten()
         .map(pattern_constrainedness)
-        .sum()
+        .sum::<u32>()
+            + rules
+                .properties
+                .values()
+                .map(|pattern| pattern_constrainedness(pattern))
+                .sum::<u32>()
     }
 }
 
@@ -349,6 +384,10 @@ fn normalise_value_str(s: &str) -> String {
     s.replace(',', ".") // European decimal comma → point
 }
 
+fn normalise_property_key(s: &str) -> String {
+    s.trim().to_ascii_lowercase().replace([' ', '-'], "_")
+}
+
 // ── ComponentQuery ────────────────────────────────────────────────────────────
 
 /// All available metadata for a component, used as input to [`crate::ModelLibrary::resolve`].
@@ -364,6 +403,9 @@ pub struct ComponentQuery {
     pub footprint: Option<String>,
     /// Manufacturer part number (from a schematic property), if present.
     pub mpn: Option<String>,
+    /// Source properties retained by the board extractor (datasheet URL,
+    /// supplier/order-code metadata, BOM fields, and similar evidence).
+    pub properties: Vec<(String, String)>,
     /// Reference designator (e.g. `"R1"`), used only in diagnostics.
     pub reference: Option<String>,
 }
@@ -380,6 +422,7 @@ impl ComponentQuery {
             value: value.into(),
             footprint: footprint.into(),
             mpn: None,
+            properties: Vec::new(),
             reference: None,
         }
     }
@@ -394,6 +437,7 @@ impl MatchRules {
             + self.value_re.is_some() as usize
             + self.footprint_re.is_some() as usize
             + self.mpn_re.is_some() as usize
+            + self.properties.len()
     }
 }
 
@@ -425,6 +469,9 @@ mod tests {
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         let compiled = CompiledEntry::compile(entry).expect("compiles");
@@ -436,6 +483,58 @@ mod tests {
             compiled.matches(&q),
             "footprint regex must match case-insensitively"
         );
+    }
+
+    #[test]
+    fn named_source_property_can_disambiguate_a_generic_board_value() {
+        let mut properties = std::collections::BTreeMap::new();
+        properties.insert("KiLib Generator".to_string(), "1812L150-24MR".to_string());
+        let entry = ModelEntry {
+            id: "exact-source-property".to_string(),
+            kind: ComponentKind::Passive,
+            description: String::new(),
+            r#match: MatchRules {
+                value_re: Some("^Polyfuse 1\\.8A$".to_string()),
+                properties,
+                ..Default::default()
+            },
+            params: Default::default(),
+            pins: Default::default(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+            current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
+            passive_class: Some(crate::schema::PassiveClass::Fuse),
+        };
+        let compiled = CompiledEntry::compile(entry).expect("compiles");
+        let exact = ComponentQuery {
+            value: Some("Polyfuse 1.8A".to_string()),
+            properties: vec![(
+                "KiLib_Generator".to_string(),
+                "https://supplier.invalid/1812L150-24MR/123".to_string(),
+            )],
+            ..Default::default()
+        };
+        assert!(compiled.matches(&exact));
+
+        let wrong_part = ComponentQuery {
+            properties: vec![(
+                "KiLib_Generator".to_string(),
+                "https://supplier.invalid/1812L110-24MR/456".to_string(),
+            )],
+            ..exact.clone()
+        };
+        assert!(!compiled.matches(&wrong_part));
+
+        let no_property = ComponentQuery {
+            properties: Vec::new(),
+            ..exact
+        };
+        assert!(!compiled.matches(&no_property));
     }
 
     #[test]

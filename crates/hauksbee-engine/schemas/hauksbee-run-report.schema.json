@@ -425,7 +425,7 @@
           "type": "array"
         },
         "critical_parts_bound": {
-          "description": "`\"M/N\"`, active ICs (MCU + U/IC-prefixed parts) that bound, over the\ntotal active ICs on the board. The metric, not a bare percentage.",
+          "description": "`\"M/N\"`, active ICs (MCU + U/IC-prefixed parts) with executable device\nbehaviour bound, over the total active ICs discovered on the board.\nThis is deliberately **not extraction coverage**: every member of the\ndenominator was already extracted with its reference/value/pads/nets.\nIdentity-only or static-contract-only model cards remain outside `M`\nuntil they can actually participate in the electrical simulation.\nRetain the existing field name for schema compatibility; renderers must\nlabel it as behavioural model coverage rather than generic \"binding\".",
           "type": "string"
         },
         "critical_parts_bound_n": {

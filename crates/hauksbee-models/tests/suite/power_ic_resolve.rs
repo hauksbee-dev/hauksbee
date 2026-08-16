@@ -69,6 +69,60 @@ fn power_ics_resolve_and_carry_behavioral() {
     assert_eq!(m.params.get_str("tie_ohms_from_ref"), Some("R52"));
 }
 
+/// The pinned MNT Pocket Reform charger contains these exact parts.  The
+/// entries intentionally resolve identity and source-bound pin maps only: a
+/// missing exact value stays RED, while the fitted value is GREEN for binding
+/// coverage without claiming that the gauge or charger has been simulated.
+#[test]
+fn mnt_pocket_exact_gauge_and_charger_identity_resolution() {
+    let lib = ModelLibrary::builtin();
+
+    let red = ["MAX17320G20+missing", "MP2650-missing"];
+    for value in red {
+        let resolution = lib.resolve(&ComponentQuery {
+            value: Some(value.into()),
+            ..Default::default()
+        });
+        assert!(
+            resolution.model.is_none(),
+            "a non-fitted MNT value must remain unresolved (RED): {value:?}"
+        );
+    }
+
+    let green = [
+        ("MAX17320G20+", "max17320", 25usize),
+        ("MP2650", "mp2650", 30usize),
+    ];
+    for (value, id, expected_pins) in green {
+        let resolution = lib.resolve(&ComponentQuery {
+            value: Some(value.into()),
+            mpn: Some(value.into()),
+            ..Default::default()
+        });
+        let model = resolution
+            .model
+            .unwrap_or_else(|| panic!("exact MNT value must resolve (GREEN): {value:?}"));
+        assert_eq!(model.id, id, "{value} resolved to the wrong model");
+        assert_eq!(model.pins.len(), expected_pins, "{value} pin map drifted");
+        let warning = model
+            .params
+            .get_str("warning")
+            .expect("identity-only model must carry an explicit behavior caveat");
+        assert!(
+            model.params.get_bool("identity_only") == Some(true),
+            "binding identity must not turn {value} into executable behavior"
+        );
+        assert!(
+            warning.contains("not modeled"),
+            "the caveat must separate binding from behavior: {warning}"
+        );
+        assert!(
+            model.params.get_str("unlocked_by").is_some(),
+            "the identity-only row must name what unlocks behavior"
+        );
+    }
+}
+
 #[test]
 fn tp4054_uses_the_current_datasheets_piecewise_programming_law() {
     let lib = ModelLibrary::builtin();

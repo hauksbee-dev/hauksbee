@@ -69,7 +69,7 @@
 
 use std::collections::HashMap;
 
-use super::{Peripheral, TickCtx};
+use super::{BusActivity, Peripheral, TickCtx};
 
 /// A device on the SPI bus that exchanges one byte per transfer.
 pub trait SpiSlave: Send {
@@ -141,6 +141,17 @@ pub trait SpiSlave: Send {
 
     fn state(&self) -> HashMap<String, f64> {
         HashMap::new()
+    }
+
+    /// Drain protocol work performed since the previous analogue chunk.
+    fn take_activity(&mut self) -> BusActivity {
+        BusActivity::default()
+    }
+
+    /// Whether the slave is in a protocol-defined low-power state whose rail
+    /// current can be selected by `[models.peripheral_power].low_power_a`.
+    fn low_power_mode(&self) -> bool {
+        false
     }
 
     fn as_any(&self) -> &dyn std::any::Any;
@@ -303,6 +314,7 @@ pub struct SpiBus {
     /// is only correct for a lone slave and why `framing_mode` reports it.
     /// See [`Scheduler::attach_spi_bus`].
     selected: bool,
+    powered: bool,
 }
 
 impl SpiBus {
@@ -319,6 +331,7 @@ impl SpiBus {
             // treat it as selected so a lone slave always receives traffic.
             // `set_cs_pin(Some)` flips it to start deselected until its CS asserts.
             selected: true,
+            powered: true,
         }
     }
 
@@ -381,7 +394,31 @@ impl SpiBus {
 
     /// Exchange one byte (body of the `on_spi` closure).
     pub fn transfer(&mut self, mosi: u8) -> u8 {
-        self.slave.transfer(mosi)
+        if self.powered {
+            self.slave.transfer(mosi)
+        } else {
+            0xff
+        }
+    }
+
+    pub fn set_powered(&mut self, powered: bool) {
+        if self.powered && !powered {
+            self.selected = self.cs_pin.is_none();
+            self.slave.deselect();
+        }
+        self.powered = powered;
+    }
+
+    pub fn powered(&self) -> bool {
+        self.powered
+    }
+
+    pub fn take_activity(&mut self) -> BusActivity {
+        self.slave.take_activity()
+    }
+
+    pub fn low_power_mode(&self) -> bool {
+        self.slave.low_power_mode()
     }
 
     /// The slave's next MISO byte, when determined (see
@@ -455,7 +492,9 @@ impl Peripheral for SpiBus {
     }
 
     fn state(&self) -> HashMap<String, f64> {
-        self.slave.state()
+        let mut state = self.slave.state();
+        state.insert("powered".into(), if self.powered { 1.0 } else { 0.0 });
+        state
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -616,6 +655,277 @@ impl SpiSlave for Spi25Eeprom {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// JEDEC SPI NOR flash
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Conservative byte-level JEDEC SPI NOR behavior for boot and update flows.
+///
+/// The primitive implements WREN/WRDI, status reads, JEDEC identity,
+/// normal/fast reads, page program, 4 KiB sector erase, chip erase, and deep
+/// power-down/release. Programming preserves NOR physics (`1 -> 0` only), page
+/// writes wrap within the selected page, and mutating commands require WEL.
+/// Busy timing, protection, SFDP, and dual/quad/QPI transfers are outside it.
+pub struct SpiNorFlash {
+    mem: Vec<u8>,
+    state: NorCmd,
+    addr: usize,
+    addr_bytes: u8,
+    page_base: usize,
+    page_offset: usize,
+    page_size: usize,
+    sector_size: usize,
+    wel: bool,
+    powered_down: bool,
+    jedec_id: [u8; 3],
+    jedec_index: usize,
+    spi_mode: u8,
+    activity: BusActivity,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NorCmd {
+    Idle,
+    Read,
+    FastReadAddress,
+    FastReadDummy,
+    Program,
+    Erase4k,
+    Status1,
+    Status2,
+    Jedec,
+}
+
+impl SpiNorFlash {
+    pub fn new(
+        size: usize,
+        page_size: usize,
+        sector_size: usize,
+        jedec_id: [u8; 3],
+        spi_mode: u8,
+    ) -> Self {
+        assert!(size > 0, "SPI NOR size must be positive");
+        assert!(
+            page_size.is_power_of_two() && page_size <= size,
+            "SPI NOR page size must be a power of two no larger than the array"
+        );
+        assert!(
+            sector_size.is_power_of_two() && sector_size <= size,
+            "SPI NOR sector size must be a power of two no larger than the array"
+        );
+        assert!(spi_mode <= 3, "SPI mode must be 0..3");
+        Self {
+            mem: vec![0xff; size],
+            state: NorCmd::Idle,
+            addr: 0,
+            addr_bytes: 0,
+            page_base: 0,
+            page_offset: 0,
+            page_size,
+            sector_size,
+            wel: false,
+            powered_down: false,
+            jedec_id,
+            jedec_index: 0,
+            spi_mode,
+            activity: BusActivity::default(),
+        }
+    }
+
+    pub fn contents(&self) -> &[u8] {
+        &self.mem
+    }
+
+    fn begin_address(&mut self, state: NorCmd) {
+        self.state = state;
+        self.addr = 0;
+        self.addr_bytes = 0;
+    }
+
+    fn address_byte(&mut self, byte: u8) -> bool {
+        self.addr = ((self.addr << 8) | byte as usize) % self.mem.len();
+        self.addr_bytes += 1;
+        self.addr_bytes == 3
+    }
+
+    fn erase_sector(&mut self) {
+        if !self.wel {
+            return;
+        }
+        let base = self.addr - (self.addr % self.sector_size);
+        let end = (base + self.sector_size).min(self.mem.len());
+        self.mem[base..end].fill(0xff);
+        self.wel = false;
+    }
+}
+
+impl SpiSlave for SpiNorFlash {
+    fn transfer(&mut self, mosi: u8) -> u8 {
+        if self.powered_down {
+            if self.state == NorCmd::Idle && mosi == 0xab {
+                self.powered_down = false;
+            }
+            return 0xff;
+        }
+
+        match self.state {
+            NorCmd::Idle => {
+                match mosi {
+                    0x06 => self.wel = true,
+                    0x04 => self.wel = false,
+                    0x05 => self.state = NorCmd::Status1,
+                    0x35 => self.state = NorCmd::Status2,
+                    0x9f => {
+                        self.state = NorCmd::Jedec;
+                        self.jedec_index = 0;
+                    }
+                    0x03 => self.begin_address(NorCmd::Read),
+                    0x0b => self.begin_address(NorCmd::FastReadAddress),
+                    0x02 => self.begin_address(NorCmd::Program),
+                    0x20 => self.begin_address(NorCmd::Erase4k),
+                    0x60 | 0xc7 if self.wel => {
+                        self.mem.fill(0xff);
+                        self.wel = false;
+                        self.activity.write_units = self.activity.write_units.saturating_add(1);
+                    }
+                    0xb9 => self.powered_down = true,
+                    0xab => {}
+                    _ => {}
+                }
+                0xff
+            }
+            NorCmd::Status1 => {
+                self.activity.read_units = self.activity.read_units.saturating_add(1);
+                if self.wel {
+                    0x02
+                } else {
+                    0x00
+                }
+            }
+            NorCmd::Status2 => {
+                self.activity.read_units = self.activity.read_units.saturating_add(1);
+                0x00
+            }
+            NorCmd::Jedec => {
+                let out = self.jedec_id.get(self.jedec_index).copied().unwrap_or(0xff);
+                self.jedec_index += 1;
+                self.activity.read_units = self.activity.read_units.saturating_add(1);
+                out
+            }
+            NorCmd::Read => {
+                if self.addr_bytes < 3 {
+                    self.address_byte(mosi);
+                    0xff
+                } else {
+                    let out = self.mem[self.addr];
+                    self.addr = (self.addr + 1) % self.mem.len();
+                    self.activity.read_units = self.activity.read_units.saturating_add(1);
+                    out
+                }
+            }
+            NorCmd::FastReadAddress => {
+                if self.address_byte(mosi) {
+                    self.state = NorCmd::FastReadDummy;
+                }
+                0xff
+            }
+            NorCmd::FastReadDummy => {
+                self.state = NorCmd::Read;
+                self.addr_bytes = 3;
+                0xff
+            }
+            NorCmd::Program => {
+                if self.addr_bytes < 3 {
+                    if self.address_byte(mosi) {
+                        self.page_base = self.addr - (self.addr % self.page_size);
+                        self.page_offset = self.addr % self.page_size;
+                    }
+                } else if self.wel {
+                    let i = self.page_base + self.page_offset;
+                    if i < self.mem.len() {
+                        self.mem[i] &= mosi;
+                    }
+                    self.page_offset = (self.page_offset + 1) % self.page_size;
+                    self.activity.write_units = self.activity.write_units.saturating_add(1);
+                }
+                0xff
+            }
+            NorCmd::Erase4k => {
+                if self.address_byte(mosi) {
+                    let was_enabled = self.wel;
+                    self.erase_sector();
+                    if was_enabled {
+                        self.activity.write_units = self.activity.write_units.saturating_add(1);
+                    }
+                    self.state = NorCmd::Idle;
+                }
+                0xff
+            }
+        }
+    }
+
+    fn select(&mut self) {
+        self.state = NorCmd::Idle;
+        self.addr = 0;
+        self.addr_bytes = 0;
+        self.jedec_index = 0;
+    }
+
+    fn deselect(&mut self) {
+        if self.state == NorCmd::Program && self.addr_bytes == 3 {
+            self.wel = false;
+        }
+        self.state = NorCmd::Idle;
+        self.addr_bytes = 0;
+        self.jedec_index = 0;
+    }
+
+    fn mid_transaction(&self) -> bool {
+        self.state != NorCmd::Idle
+    }
+
+    fn miso_preview(&mut self) -> Option<u8> {
+        match self.state {
+            NorCmd::Status1 => Some(if self.wel { 0x02 } else { 0x00 }),
+            NorCmd::Status2 => Some(0x00),
+            NorCmd::Jedec => Some(self.jedec_id.get(self.jedec_index).copied().unwrap_or(0xff)),
+            NorCmd::Read if self.addr_bytes == 3 => Some(self.mem[self.addr]),
+            _ => Some(0xff),
+        }
+    }
+
+    fn spi_mode(&self) -> u8 {
+        self.spi_mode
+    }
+
+    fn state(&self) -> HashMap<String, f64> {
+        HashMap::from([
+            ("size".into(), self.mem.len() as f64),
+            ("wel".into(), if self.wel { 1.0 } else { 0.0 }),
+            (
+                "powered_down".into(),
+                if self.powered_down { 1.0 } else { 0.0 },
+            ),
+        ])
+    }
+
+    fn take_activity(&mut self) -> BusActivity {
+        std::mem::take(&mut self.activity)
+    }
+
+    fn low_power_mode(&self) -> bool {
+        self.powered_down
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // MCP3008 8-channel 10-bit SPI ADC
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -729,6 +1039,142 @@ mod tests {
         let k = bus.transfer(0x00);
         assert_eq!([o, k], [b'O', b'K']);
         assert!(bus.slave::<Spi25Eeprom>().unwrap().contains(b"OK"));
+    }
+
+    #[test]
+    fn spi_nor_reports_jedec_and_preserves_page_and_nor_semantics() {
+        let mut flash = SpiNorFlash::new(8192, 8, 4096, [0xef, 0x40, 0x18], 0);
+
+        flash.select();
+        assert_eq!(flash.transfer(0x9f), 0xff);
+        assert_eq!(flash.miso_preview(), Some(0xef));
+        assert_eq!(
+            [
+                flash.transfer(0x00),
+                flash.transfer(0x00),
+                flash.transfer(0x00),
+            ],
+            [0xef, 0x40, 0x18]
+        );
+        flash.deselect();
+
+        // WREN is its own transaction. Program at the final byte of an 8-byte
+        // page; the second byte wraps to the first byte of that same page.
+        flash.select();
+        flash.transfer(0x06);
+        flash.deselect();
+        flash.select();
+        for byte in [0x02, 0x00, 0x00, 0x07, 0xaa, 0x55] {
+            flash.transfer(byte);
+        }
+        flash.deselect();
+        assert_eq!(flash.contents()[7], 0xaa);
+        assert_eq!(flash.contents()[0], 0x55);
+
+        // A second program can clear more bits, but cannot turn a zero back to
+        // one without erase: 0x55 & 0xff remains 0x55.
+        flash.select();
+        flash.transfer(0x06);
+        flash.deselect();
+        flash.select();
+        for byte in [0x02, 0x00, 0x00, 0x00, 0xff] {
+            flash.transfer(byte);
+        }
+        flash.deselect();
+        assert_eq!(flash.contents()[0], 0x55);
+    }
+
+    #[test]
+    fn spi_nor_sector_erase_requires_write_enable() {
+        let mut flash = SpiNorFlash::new(8192, 256, 4096, [0xef, 0x40, 0x18], 0);
+
+        flash.select();
+        flash.transfer(0x06);
+        flash.deselect();
+        flash.select();
+        for byte in [0x02, 0x00, 0x00, 0x10, 0x00] {
+            flash.transfer(byte);
+        }
+        flash.deselect();
+        assert_eq!(flash.contents()[0x10], 0x00);
+
+        // No WREN: erase is ignored.
+        flash.select();
+        for byte in [0x20, 0x00, 0x00, 0x10] {
+            flash.transfer(byte);
+        }
+        flash.deselect();
+        assert_eq!(flash.contents()[0x10], 0x00);
+
+        flash.select();
+        flash.transfer(0x06);
+        flash.deselect();
+        flash.select();
+        for byte in [0x20, 0x00, 0x00, 0x10] {
+            flash.transfer(byte);
+        }
+        flash.deselect();
+        assert_eq!(flash.contents()[0x10], 0xff);
+    }
+
+    #[test]
+    fn spi_nor_reports_real_work_and_refuses_traffic_when_unpowered() {
+        let flash = SpiNorFlash::new(8192, 256, 4096, [0xef, 0x40, 0x18], 0);
+        let mut bus = SpiBus::new("FLASH", Box::new(flash));
+
+        bus.set_powered(false);
+        bus.cs_assert();
+        assert_eq!(bus.transfer(0x9f), 0xff);
+        assert_eq!(bus.transfer(0x00), 0xff);
+        bus.cs_deassert();
+        assert!(bus.take_activity().is_idle());
+
+        bus.set_powered(true);
+        bus.cs_assert();
+        assert_eq!(bus.transfer(0x9f), 0xff);
+        assert_eq!(bus.transfer(0x00), 0xef);
+        assert_eq!(bus.transfer(0x00), 0x40);
+        assert_eq!(bus.transfer(0x00), 0x18);
+        bus.cs_deassert();
+        let read = bus.take_activity();
+        assert_eq!(read.read_units, 3);
+        assert_eq!(read.write_units, 0);
+
+        bus.cs_assert();
+        bus.transfer(0x06);
+        bus.cs_deassert();
+        bus.cs_assert();
+        for byte in [0x02, 0x00, 0x00, 0x10, 0xaa] {
+            bus.transfer(byte);
+        }
+        bus.cs_deassert();
+        let write = bus.take_activity();
+        assert_eq!(write.write_units, 1);
+        assert_eq!(bus.slave::<SpiNorFlash>().unwrap().contents()[0x10], 0xaa);
+
+        bus.cs_assert();
+        bus.transfer(0xb9);
+        bus.cs_deassert();
+        assert!(
+            bus.low_power_mode(),
+            "deep-power-down is observable by the rail model"
+        );
+        bus.cs_assert();
+        bus.transfer(0xab);
+        bus.cs_deassert();
+        assert!(
+            !bus.low_power_mode(),
+            "release command restores the active current class"
+        );
+
+        bus.set_powered(false);
+        bus.cs_assert();
+        for byte in [0x06, 0x02, 0x00, 0x00, 0x10, 0x00] {
+            assert_eq!(bus.transfer(byte), 0xff);
+        }
+        bus.cs_deassert();
+        assert_eq!(bus.slave::<SpiNorFlash>().unwrap().contents()[0x10], 0xaa);
+        assert!(bus.take_activity().is_idle());
     }
 
     #[test]

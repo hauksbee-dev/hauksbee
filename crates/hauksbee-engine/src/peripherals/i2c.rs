@@ -32,7 +32,7 @@ use std::collections::HashMap;
 
 use hauksbee_mcu::I2cEvent;
 
-use super::{Peripheral, TickCtx};
+use super::{BusActivity, Peripheral, TickCtx};
 
 /// A device that answers on the I2C bus at a fixed 7-bit address.
 pub trait I2cSlave: Send {
@@ -71,6 +71,13 @@ pub trait I2cSlave: Send {
         HashMap::new()
     }
 
+    /// Drain protocol work performed since the previous analogue chunk.
+    /// Slaves that do not opt in remain electrically idle rather than gaining
+    /// an invented load profile.
+    fn take_activity(&mut self) -> BusActivity {
+        BusActivity::default()
+    }
+
     /// If this is a temperature sensor, its current reading in milli-degrees
     /// Celsius. Lets a backend that runs the firmware against a real emulated
     /// I2C device (the QEMU ESP32 `tmp105`) push the modeled temperature into
@@ -102,6 +109,9 @@ pub struct I2cBus {
     /// exists there), so `dispatch` records the STOP here and the scheduler
     /// delivers it at the chunk boundary.
     stop_pending: Vec<u8>,
+    /// Below a model card's source-bound operating threshold the bus device is
+    /// electrically off: it does not ACK, mutate storage, or return data.
+    powered: bool,
 }
 
 impl I2cBus {
@@ -112,6 +122,7 @@ impl I2cBus {
             txn_addrs: Vec::new(),
             slaves: Vec::new(),
             stop_pending: Vec::new(),
+            powered: true,
         }
     }
 
@@ -143,6 +154,14 @@ impl I2cBus {
     /// a Read event (`None` otherwise). This is the body of the `on_i2c`
     /// closure the engine installs.
     pub fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
+        if !self.powered {
+            if matches!(ev, I2cEvent::Start { .. } | I2cEvent::Stop { .. }) {
+                self.active = None;
+                self.txn_addrs.clear();
+                self.stop_pending.clear();
+            }
+            return None;
+        }
         match ev {
             I2cEvent::Start { addr, read } => {
                 self.active = self
@@ -189,6 +208,27 @@ impl I2cBus {
                 None
             }
         }
+    }
+
+    pub fn set_powered(&mut self, powered: bool) {
+        if self.powered && !powered {
+            self.active = None;
+            self.txn_addrs.clear();
+            self.stop_pending.clear();
+        }
+        self.powered = powered;
+    }
+
+    pub fn powered(&self) -> bool {
+        self.powered
+    }
+
+    pub fn take_activity(&mut self) -> BusActivity {
+        let mut activity = BusActivity::default();
+        for slave in &mut self.slaves {
+            activity.merge(slave.take_activity());
+        }
+        activity
     }
 
     /// Deliver the deferred transaction-end hooks: call `on_stop(ctx)` on every
@@ -250,6 +290,7 @@ impl Peripheral for I2cBus {
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("slaves".into(), self.slaves.len() as f64);
+        m.insert("powered".into(), if self.powered { 1.0 } else { 0.0 });
         for s in &self.slaves {
             for (k, v) in s.state() {
                 m.insert(format!("0x{:02x}_{k}", s.address()), v);
@@ -267,9 +308,10 @@ impl Peripheral for I2cBus {
 // 24Cxx EEPROM
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A generic 24Cxx I2C EEPROM with a 16-bit word address (covers 24C32..24C512
-/// addressing; smaller parts simply wrap). Write protocol: two address bytes
-/// (hi, lo) then data bytes, auto-incrementing *within the write page*, like
+/// A generic 24Cxx I2C EEPROM. The default 16-bit word address covers
+/// 24C32..24C512; [`Eeprom24c::with_word_address_bytes`] selects the one-byte
+/// phase used by 24C01/02-class parts. Write protocol: word-address bytes then
+/// data bytes, auto-incrementing *within the write page*, like
 /// the real parts, a page write that runs past the page boundary wraps the low
 /// address bits back to the page start and overwrites from there (24C32/24C64
 /// datasheets: "the address roll over during write is from the last byte of the
@@ -281,14 +323,17 @@ pub struct Eeprom24c {
     mem: Vec<u8>,
     /// Internal byte pointer (auto-increments on read/write).
     ptr: usize,
-    /// Bytes consumed of the 2-byte word-address phase in the current write.
+    /// Bytes consumed of the word-address phase in the current write.
     addr_phase: u8,
-    addr_hi: u8,
+    addr_acc: usize,
+    /// Number of word-address bytes consumed before data (1 or 2).
+    word_address_bytes: u8,
     /// Write-page size in bytes (power of two). Defaults to 32, the 24C32/24C64
     /// page size; the smallest parts this 16-bit-address model covers.
     /// Configure via [`Eeprom24c::with_page_size`] for larger parts (64 for
     /// 24C128/24C256, 128 for 24C512).
     page_size: usize,
+    activity: BusActivity,
 }
 
 impl Eeprom24c {
@@ -302,9 +347,22 @@ impl Eeprom24c {
             mem: vec![0xFF; size.max(1)],
             ptr: 0,
             addr_phase: 0,
-            addr_hi: 0,
+            addr_acc: 0,
+            word_address_bytes: 2,
             page_size: Self::DEFAULT_PAGE_SIZE,
+            activity: BusActivity::default(),
         }
+    }
+
+    /// Select a one- or two-byte word-address phase. Refuse any other width
+    /// rather than silently consuming the first firmware data byte as address.
+    pub fn with_word_address_bytes(mut self, bytes: u8) -> Self {
+        assert!(
+            matches!(bytes, 1 | 2),
+            "24Cxx word-address width must be 1 or 2 bytes, got {bytes}"
+        );
+        self.word_address_bytes = bytes;
+        self
     }
 
     /// Set the write-page size (bytes) for the modeled part. Must be a power of
@@ -342,40 +400,43 @@ impl I2cSlave for Eeprom24c {
         // A repeated START for a read keeps the pointer (current-address read).
         if !read {
             self.addr_phase = 0;
+            self.addr_acc = 0;
         }
     }
 
     fn on_write(&mut self, data: u8) {
-        match self.addr_phase {
-            0 => {
-                self.addr_hi = data;
-                self.addr_phase = 1;
+        if self.addr_phase < self.word_address_bytes {
+            self.addr_acc = (self.addr_acc << 8) | data as usize;
+            self.addr_phase += 1;
+            if self.addr_phase == self.word_address_bytes {
+                self.ptr = self.addr_acc % self.mem.len();
             }
-            1 => {
-                self.ptr = (((self.addr_hi as usize) << 8) | data as usize) % self.mem.len();
-                self.addr_phase = 2;
+        } else {
+            // Data byte: store and auto-increment within the page. Real
+            // 24Cxx parts wrap only the low (page-offset) address bits on a
+            // page write, so a write running past the page boundary rolls
+            // back to the page start rather than spilling into the next
+            // page. Pages never exceed the array, so page_size is clamped
+            // to the memory size for tiny test configurations.
+            if self.ptr < self.mem.len() {
+                self.mem[self.ptr] = data;
             }
-            _ => {
-                // Data byte: store and auto-increment within the page. Real
-                // 24Cxx parts wrap only the low (page-offset) address bits on a
-                // page write, so a write running past the page boundary rolls
-                // back to the page start rather than spilling into the next
-                // page. Pages never exceed the array, so page_size is clamped
-                // to the memory size for tiny test configurations.
-                if self.ptr < self.mem.len() {
-                    self.mem[self.ptr] = data;
-                }
-                let page = self.page_size.min(self.mem.len());
-                let page_base = self.ptr - (self.ptr % page);
-                self.ptr = (page_base + (self.ptr % page + 1) % page) % self.mem.len();
-            }
+            self.activity.write_units = self.activity.write_units.saturating_add(1);
+            let page = self.page_size.min(self.mem.len());
+            let page_base = self.ptr - (self.ptr % page);
+            self.ptr = (page_base + (self.ptr % page + 1) % page) % self.mem.len();
         }
     }
 
     fn on_read(&mut self) -> u8 {
         let b = self.mem.get(self.ptr).copied().unwrap_or(0xFF);
         self.ptr = (self.ptr + 1) % self.mem.len();
+        self.activity.read_units = self.activity.read_units.saturating_add(1);
         b
+    }
+
+    fn take_activity(&mut self) -> BusActivity {
+        std::mem::take(&mut self.activity)
     }
 
     fn state(&self) -> HashMap<String, f64> {
@@ -383,6 +444,7 @@ impl I2cSlave for Eeprom24c {
         m.insert("size".into(), self.mem.len() as f64);
         m.insert("ptr".into(), self.ptr as f64);
         m.insert("page_size".into(), self.page_size as f64);
+        m.insert("word_address_bytes".into(), self.word_address_bytes as f64);
         m
     }
 
@@ -621,6 +683,43 @@ mod tests {
         assert!(ee.contains(b"Hi"), "EEPROM should contain 'Hi'");
         assert_eq!(ee.contents()[0x10], b'H');
         assert_eq!(ee.contents()[0x11], b'i');
+    }
+
+    #[test]
+    fn one_byte_word_address_models_at24cs01_primary_array() {
+        // Microchip AT24CS01 DS20006330A: 128-byte array, one 7-bit word
+        // address carried in one byte, and an 8-byte write page. If the generic
+        // model still consumed two address bytes, 0xA5 would become the low
+        // address rather than data and this assertion would fail.
+        let eeprom = Eeprom24c::new(0x50, 128)
+            .with_word_address_bytes(1)
+            .with_page_size(8);
+        let mut bus = I2cBus::new("I2C").with_slave(Box::new(eeprom));
+        for ev in [
+            I2cEvent::Start {
+                addr: 0x50,
+                read: false,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0x7f,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0xa5,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0x5a,
+            },
+            I2cEvent::Stop { addr: 0x50 },
+        ] {
+            bus.dispatch(ev);
+        }
+        let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
+        assert_eq!(ee.contents()[0x7f], 0xa5);
+        assert_eq!(ee.contents()[0x78], 0x5a, "8-byte page wraps at 0x7f");
+        assert_eq!(ee.state()["word_address_bytes"], 1.0);
     }
 
     #[test]

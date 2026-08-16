@@ -25,8 +25,8 @@ export const BOARD_FORMATS: BoardFormat[] = [
   { vendor: 'KiCad', exts: ['.kicad_pcb', '.kicad_sch'] },
   { vendor: 'Eagle', exts: ['.brd'] },
   { vendor: 'Altium', exts: ['.PcbDoc'] },
-  { vendor: 'IPC', exts: ['.d356'] },
-  { vendor: 'gerber', exts: ['.zip'] },
+  { vendor: 'IPC', exts: ['.d356', '.xml'] },
+  { vendor: 'fab archive', exts: ['.zip', '.tgz', '.tar.gz', '.tar'] },
   { vendor: 'board-as-code', exts: ['.board'] },
   { vendor: 'Excellon drill', exts: ['.txt'], quiet: true },
 ]

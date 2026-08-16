@@ -333,7 +333,7 @@ thread_local! {
     /// Memoised resolutions keyed by the CAD strings the query is built from.
     /// Thread-local rather than a global lock: extraction is single-threaded per
     /// board, and a `Mutex` here would serialise parallel board runs.
-    static SHAPE_CACHE: RefCell<HashMap<(String, String, String, String), Option<ResolvedShape>>> =
+    static SHAPE_CACHE: RefCell<HashMap<(String, String, String, String, Vec<(String, String)>), Option<ResolvedShape>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -345,6 +345,7 @@ fn resolved_shape(c: &Component) -> Option<ResolvedShape> {
         c.value.clone(),
         c.footprint.clone(),
         mpn.clone().unwrap_or_default(),
+        c.properties.clone(),
     );
     SHAPE_CACHE.with(|cache| {
         if let Some(hit) = cache.borrow().get(&key) {
@@ -355,6 +356,7 @@ fn resolved_shape(c: &Component) -> Option<ResolvedShape> {
             value: non_empty(&c.value),
             footprint: non_empty(&c.footprint),
             mpn,
+            properties: c.properties.clone(),
             reference: None,
         };
         let shape = ModelLibrary::builtin_shared()

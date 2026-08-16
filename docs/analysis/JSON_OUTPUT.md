@@ -132,7 +132,7 @@ when the corresponding analysis ran.
 | section | present when | shape |
 |---|---|---|
 | `board` | always | board name |
-| `bind` | always | `BindSummary`: `resolved`, `unresolved`, `non_ignored`, `critical_parts_bound` (the `"4/6"` display string), `critical_parts_bound_n`, `critical_parts_total`, `mcu_bound`, `active_path_unresolved[]`, `resolved_but_open_active[]` |
+| `bind` | always | `BindSummary`: `resolved`, `unresolved`, `non_ignored`, `critical_parts_bound` (the `"4/6"` executable-behaviour coverage string, **not** CAD extraction coverage), `critical_parts_bound_n`, `critical_parts_total` (critical active devices discovered), `mcu_bound`, `active_path_unresolved[]`, `resolved_but_open_active[]` |
 | `inputs` | `--report --json` with input inventory context | array of `{path, kind, format, sha256?, contributed[], ignored[], identity[]}` for the board and any `--bom` / `--placement` artifacts |
 | `findings` | lint / SI / co-sim faults ran | array of `Finding` (below) |
 | `drc` | `--drc` / `--check` | `clearance_rule_mm`, `primitive_count`, `shorts[]`, `violations[]`, `at_limit[]`, optional `version_warning` |

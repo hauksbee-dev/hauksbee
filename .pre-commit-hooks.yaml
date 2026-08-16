@@ -23,9 +23,10 @@
   entry: integrations/pre-commit/hauksbee_check_precommit.py
   language: script
   # The board formats `hauksbee run` accepts as single files: KiCad layout and
-  # schematic, KiCad netlist, Eagle .brd, IPC-D-356, Altium .PcbDoc, and
-  # Board-as-Code .board. (Gerber folders/zips cannot be matched per-file.)
-  files: '(?i)\.(kicad_pcb|kicad_sch|net|brd|d356|pcbdoc|board)$'
+  # schematic, KiCad netlist, Eagle .brd, IPC-D-356, Altium .PcbDoc,
+  # Board-as-Code .board, IPC-2581 .xml, and fab/ODB++ archives (.zip, .tgz,
+  # .tar.gz, .tar). The XML match is broad because IPC-2581 is content-sniffed.
+  files: '(?i)\.(kicad_pcb|kicad_sch|net|brd|d356|pcbdoc|board|xml|zip|tgz|tar\.gz|tar)$'
 
 - id: hauksbee-ci
   name: hauksbee-ci hardware check
@@ -36,7 +37,8 @@
     HAUKSBEE_CI_BIN set.
   entry: integrations/pre-commit/hauksbee_ci_precommit.py
   language: script
-  # Trigger when a board or a spec changes; the hook itself then runs only the
-  # specs whose board was actually staged.
-  files: '\.(kicad_sch|kicad_pcb|net|brd|d356)$|/ci/.*\.toml$'
+  # Trigger when a board, exchange/archive, or a spec changes; the hook itself
+  # then runs only the specs whose board was actually staged. The XML match is
+  # broad because IPC-2581 is content-sniffed.
+  files: '(?i)\.(kicad_sch|kicad_pcb|net|brd|d356|pcbdoc|board|xml|zip|tgz|tar\.gz|tar)$|(?:^|/)ci/.*\.toml$'
   pass_filenames: false

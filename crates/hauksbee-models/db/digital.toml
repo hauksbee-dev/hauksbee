@@ -1624,6 +1624,236 @@ max_pin_current_a = 0.005
 max_voltage_v = 6.5
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Microchip AT24CS01 SOT-23-5: executable primary EEPROM array.
+#
+# Primary source: Microchip DS20006330A (2020), exact bytes retained during the
+# source audit with SHA-256
+# 2acc10a565652d40103acdd631bf2837433cee652c1b7170e7c39f92c9b3a6f0:
+# https://ww1.microchip.com/downloads/en/DeviceDoc/20006330A.pdf
+# Sections 3, 6, 7 and 8 specify the SOT-23 pin map, fixed A2:A0=000 addresses,
+# one-byte/7-bit word address, 128-byte array and 8-byte page wrapping. The
+# factory serial-number bytes are unique per physical part, so the model
+# refuses to invent them and declares that separate address block missing.
+[[models]]
+id = "at24cs01_sot23_5"
+kind = "digital"
+description = "Microchip AT24CS01 1-Kbit I2C EEPROM, SOT-23-5 (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/20006330A.pdf"
+title = "Microchip AT24CS01/AT24CS02 I2C-Compatible Serial EEPROM with a Factory-Programmed Serial Number"
+locator = "Sections 3, 4.3, 6, 7 and 8"
+sha256 = "2acc10a565652d40103acdd631bf2837433cee652c1b7170e7c39f92c9b3a6f0"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "factory_serial_number"
+reason = "The 128-bit value is unique to each physical device and cannot be inferred from the PCB or datasheet."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current_at_5v5"
+low = 0.0
+high = 0.000006
+unit = "A"
+kind = "specification-limits"
+basis = "Microchip DS20006330A Table 4-2 ISB maximum at VCC=5.5V"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current_at_5v_400khz"
+low = 0.0
+high = 0.001
+unit = "A"
+kind = "specification-limits"
+basis = "Microchip DS20006330A Table 4-2 ICC1 maximum; zero is the physical lower bound, while the published 0.4mA value is typical rather than guaranteed"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_write_current_at_5v_400khz"
+low = 0.0
+high = 0.003
+unit = "A"
+kind = "specification-limits"
+basis = "Microchip DS20006330A Table 4-2 ICC2 maximum; zero is the physical lower bound, while the published 2mA value is typical rather than guaranteed"
+
+[models.match]
+value_re = "(?i)^AT24CS01-STUM(?:-T)?$"
+footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
+
+[models.params]
+warning = "primary 0x50 EEPROM array is executable; unique serial-number block at 0x58, write-cycle timing, ACK polling and WP enforcement are not modeled"
+
+[models.pins]
+"1" = "scl"
+"2" = "gnd"
+"3" = "sda"
+"4" = "vcc"
+"5" = "wp"
+
+[models.ratings]
+max_voltage_v = 6.25
+max_pin_current_a = 0.005
+max_junction_temp_c = 125.0
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80
+size_bytes = 128
+page_size = 8
+word_address_bytes = 1
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7
+idle_a = 0.000006
+read_a = 0.001
+write_a = 0.003
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["factory_serial_number", "write_cycle_timing", "ack_polling", "write_protect_pin"]
+
+# Winbond W25Q128JV 128-Mbit SPI NOR, executable standard-SPI subset.
+#
+# Primary source: Winbond W25Q128JV Revision F (2018):
+# https://www.winbond.com/resource-files/w25q128jv%20revf%2003272018%20plus.pdf
+# Section 1 gives 16 MiB, 256-byte pages and 4 KiB sectors; Sections 3/4 give
+# the eight-pin package map; Sections 8.1/8.2 give JEDEC EF 40 18 and the
+# command opcodes implemented by the generic SPI-NOR peripheral.
+[[models]]
+id = "w25q128jv_soic8"
+kind = "digital"
+description = "Winbond W25Q128JV 128-Mbit SPI NOR, SOIC-8 (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.winbond.com/resource-files/w25q128jv%20revf%2003272018%20plus.pdf"
+title = "Winbond W25Q128JV 3V 128M-bit Serial Flash Memory with Dual/Quad SPI"
+locator = "Sections 1, 3, 4, 8 and 9.4"
+sha256 = "809f066e62bcde10b12c2202daf05f4776929ad7dc5f9d3b5131cdcc84502bc1"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000060
+unit = "A"
+kind = "specification-limits"
+basis = "Winbond W25Q128JV Revision F Table 9 ICC1 maximum"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020
+unit = "A"
+kind = "specification-limits"
+basis = "Winbond W25Q128JV Revision F Table 9 worst listed ICC3 maximum across read-frequency rows"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025
+unit = "A"
+kind = "specification-limits"
+basis = "Winbond W25Q128JV Revision F Table 9 ICC4 through ICC7 maximum"
+
+[models.match]
+value_re = "(?i)^W25Q128JVS(?:IQ|JQ|Q)?(?:-TR)?$"
+footprint_re = "(?i)(SOIC|SO|SOP)[-_ ]?0?8([^0-9]|$)"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+must_not_float_roles = "wp_n, hold_n"
+
+[models.pins]
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+max_voltage_v = 4.6
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 16777216
+page_size = 256
+sector_size = 4096
+jedec_id = [239, 64, 24]
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7
+idle_a = 0.000060
+read_a = 0.020
+write_a = 0.025
+low_power_a = 0.000020
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# Winbond W25Q80DV SPI NOR, exact board identity and static control contract.
+#
+# Primary sources:
+# - Winbond W25Q80DV datasheet, pin configuration/description (the 8-pin map):
+#   https://www.winbond.com/hq/support/documentation/downloadV2022.jsp?__locale=en&xmlPath=/support/resources/.content/item/DA00-W25Q80DV.html&level=1
+# - Winbond Technical FAQ, "Are external 10K ohm pull up resistors required...":
+#   https://www.winbond.com/hq/support/faq/technical/?__locale=en
+#   /HOLD must be tied high outside Quad mode to prevent unintended HOLD, and
+#   SPI NOR input pins must not be left floating. The model therefore opts WP
+#   and HOLD into the generic must-not-float topology check. It does not assert
+#   that either must be tied high when firmware actively drives Quad IO2/IO3.
+[[models]]
+id = "w25q80dv_identity"
+kind = "digital"
+description = "Winbond W25Q80DV 8-Mbit SPI NOR (identity/pins and static non-floating control contract only)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "flash_behavior"
+reason = "SPI NOR commands, status registers, array contents, timing, Quad mode, and power-loss behavior are not modeled"
+
+[models.match]
+value_re = "(?i)^W25Q80DVS$"
+footprint_re = "(?i)(SOIC|SO|SOP)[-_]?[0]?8([^0-9]|$)"
+
+[models.params]
+identity_only = true
+warning = "W25Q80DV identity, 8-pin map, and non-floating control contract are sourced; flash commands, state, contents, timing, and Quad-mode behavior are not modeled"
+unlocked_by = "a validated W25Q80DV SPI NOR command/register/storage model plus firmware-selected bus mode"
+must_not_float_roles = "wp_n, hold_n"
+
+[models.pins]
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "vss"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BMA423: Bosch Sensortec 12-bit triaxial accelerometer, LGA-12 2 x 2 mm.
 #
 # Source: Bosch Sensortec "BMA423 - Digital, triaxial acceleration sensor" data
@@ -1684,7 +1914,7 @@ max_voltage_v = 6.5
 [[models]]
 id = "bma423"
 kind = "digital"
-description = "Bosch BMA423 triaxial accelerometer, LGA-12 (pad map, logic levels and supply draw; no register map)"
+description = "Bosch BMA423 triaxial accelerometer, LGA-12 (strap-selected I2C CHIP_ID subset, pad map, logic levels and supply draw)"
 
 [models.match]
 # Anchored on the bare part number, with an optional package/variant suffix after
@@ -1737,6 +1967,47 @@ gnd_pin    = "9"           # VDDIO (pin 3) / GNDIO (pin 8) carry no metered draw
 # operating range (-40 to +85 C) and a passive storage range, not a junction
 # limit, and no thermal resistance to reach one with.
 max_voltage_v = 4.0
+
+# Portable firmware-visible identity behavior. The binder attaches it ONLY
+# when CSB resolves directly high (I2C personality) and derives 0x18/0x19 from
+# the exact SDO strap. A floating/pulled/otherwise unresolved strap leaves the
+# device open with a named reason rather than silently choosing this spec's
+# default address.
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x18
+address_when_high = 0x19
+spec_toml = '''
+[sensor]
+name = "BMA423 chip-id subset"
+bus = "i2c"
+i2c_address = 0x18
+
+[[sensor.register]]
+addr = 0x00
+const = [0x13]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+# Same conservative performance-mode current the pre-peripheral digital card
+# stamped. Register traffic does not claim a separately sourced current step;
+# idle/read/write therefore share the one sourced ceiling.
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.62
+idle_a = 0.000150
+read_a = 0.000150
+write_a = 0.000150
+low_power_a = 0.0000035
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_3v3_vddio", "performance_mode_supply_current", "absolute_ratings", "i2c_bus_mode_strap", "i2c_address_strap", "register_map_subset", "chip_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "spi_register_map", "accelerometer_data", "power_mode_state", "fifo", "interrupt_engine", "step_and_activity_engine", "auxiliary_i2c_master", "supply_domain_current_split"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FT231XQ: FTDI USB-to-full-speed-serial UART bridge, QFN-20.
@@ -2356,3 +2627,439 @@ gnd_pin    = "9"
 # Absolute Maximum Ratings.
 max_voltage_v = 6.0         # VCC, VI, VO: -0.5 to 6 V
 max_pin_current_a = 0.05    # IOL 50 mA max / IOH -50 mA max
+# ── Microchip USB2514B: reset/startup and downstream-port power envelope ────
+#
+# Source: Microchip USB251xB/xBi data sheet DS00001692E, pin tables, §5.5 and
+# supply-current Tables 6-2 through 6-7.
+# A valid RESET_N assertion is at least 1 us; the hub is operational 500 us
+# after RESET_N is negated.  Reset disables downstream ports and removes
+# PRTPWR.  OCS_N is active-low and removes port power after an over-current.
+#
+# This first executable card intentionally does NOT pretend the analogue USB
+# PHY or packet engine is an ordinary logic gate.  The `host_requests_power`
+# transition below is an explicit scenario assumption representing a compliant
+# upstream host completing enumeration and requesting port-1 power.  It gives
+# the board's downstream load-switch/power path something causal to simulate,
+# while the coverage list keeps packet routing, descriptors, EEPROM/SMBus
+# configuration and actual host timing outside the claim.
+[[models]]
+id = "usb2514b_qfn36_startup"
+kind = "digital"
+description = "Microchip USB2514B four-port USB 2.0 hub, QFN-36 (reset/startup/port-1 power envelope; USB packet engine excluded)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/aemDocuments/documents/UNG/ProductDocuments/DataSheets/USB251xB-xBi-Data-Sheet-DS00001692.pdf"
+title = "Microchip USB251xB/xBi USB 2.0 Hi-Speed Hub Controller Data Sheet"
+locator = "Section 5.5 and Tables 6-2 through 6-7"
+sha256 = "4ebdca503ca18f8a7a5d787148fc9f488ccd0b1a75743714aa6920c75e9a4ead"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "reset_assertion"
+low = 0.000001
+high = 0.000001
+unit = "s"
+kind = "specification-limits"
+basis = "Microchip DS00001692E section 5.5.1 minimum RESET_N assertion"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "startup_to_operational"
+low = 0.0005
+high = 0.0005
+unit = "s"
+kind = "specification-limits"
+basis = "Microchip DS00001692E section 5.5.1 operational 500us after RESET_N negation"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "upstream_host_command_timing"
+reason = "The board files contain no upstream-host transaction trace; this card assumes the host requests port-1 power after the hub reaches its operational state."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "reset_supply_current_all_rails_usb2514bi"
+low = 0.0
+high = 0.0016
+unit = "A"
+kind = "specification-limits"
+basis = "Microchip DS00001692E Table 6-7 USB2514Bi maximum; zero is the physical lower bound, while the published 0.75mA value is typical rather than guaranteed"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "unconfigured_high_speed_supply_current_usb2514b"
+low = 0.0
+high = 0.050
+unit = "A"
+kind = "specification-limits"
+basis = "Microchip DS00001692E Table 6-2 USB2514B maximum; zero is the physical lower bound, while the published 45mA value is typical rather than guaranteed"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "configured_high_speed_one_port_supply_current_usb2514bi"
+low = 0.0
+high = 0.085
+unit = "A"
+kind = "specification-limits"
+basis = "Microchip DS00001692E Table 6-4 USB2514Bi one-port maximum; zero is the physical lower bound, while the B/Bi typical values are not guaranteed"
+
+[models.match]
+value_re = "(?i)^USB2514B(?:_Bi)?$"
+footprint_re = "(?i)QFN-36.*6x6"
+
+[models.params]
+host_requests_power = true
+warning = "reset, 500us startup, port-1 enable, and active-low over-current shutdown are executable; the transition to port-powered assumes a compliant upstream host requests power after enumeration, while USB packets/PHY/descriptors and EEPROM/SMBus configuration remain unmodeled"
+
+[models.pins]
+"1" = "usbdm_dn1"
+"2" = "usbdp_dn1"
+"3" = "usbdm_dn2"
+"4" = "usbdp_dn2"
+"5" = "vdda33_a"
+"6" = "usbdm_dn3"
+"7" = "usbdp_dn3"
+"8" = "usbdm_dn4"
+"9" = "usbdp_dn4"
+"10" = "vdda33_b"
+"11" = "test"
+"12" = "prtpwr1"
+"13" = "ocs1_n"
+"14" = "crfilt"
+"15" = "vdd33_a"
+"16" = "prtpwr2"
+"17" = "ocs2_n"
+"18" = "prtpwr3"
+"19" = "ocs3_n"
+"20" = "prtpwr4"
+"21" = "ocs4_n"
+"22" = "sda"
+"23" = "vdd33_b"
+"24" = "scl"
+"25" = "hs_ind"
+"26" = "reset_n"
+"27" = "vbus_det"
+"28" = "susp_ind"
+"29" = "vdda33_c"
+"30" = "usbdm_up"
+"31" = "usbdp_up"
+"32" = "xtalout"
+"33" = "xtalin"
+"34" = "pllfilt"
+"35" = "rbias"
+"36" = "vdda33_d"
+"37" = "gnd"
+
+[models.ratings]
+max_voltage_v = 3.6
+max_pin_current_a = 0.012
+
+[models.behavioral.fsm]
+states = ["reset", "starting", "port1_powered", "port1_overcurrent"]
+initial = "reset"
+
+[[models.behavioral.fsm.transitions]]
+from = "reset"
+to = "starting"
+guard = "v_reset_n > 2.0 && v_vbus_det > 2.0"
+
+[[models.behavioral.fsm.transitions]]
+from = "starting"
+to = "reset"
+guard = "v_reset_n < 0.8 || v_vbus_det < 0.8"
+
+[[models.behavioral.fsm.transitions]]
+from = "starting"
+to = "port1_powered"
+guard = "host_requests_power && v_reset_n > 2.0 && v_vbus_det > 2.0 && v_ocs1_n > 2.0"
+min_dwell_s = 0.0005
+
+[[models.behavioral.fsm.transitions]]
+from = "port1_powered"
+to = "reset"
+guard = "v_reset_n < 0.8 || v_vbus_det < 0.8"
+
+[[models.behavioral.fsm.transitions]]
+from = "port1_powered"
+to = "port1_overcurrent"
+guard = "v_ocs1_n < 0.8"
+
+[[models.behavioral.fsm.transitions]]
+from = "port1_overcurrent"
+to = "reset"
+guard = "v_reset_n < 0.8 || v_vbus_det < 0.8"
+
+[[models.behavioral.laws]]
+name = "port1_reset_low"
+kind = "voltage"
+a = "prtpwr1"
+b = "gnd"
+expr = "0.0"
+r_ohms = 20.0
+only_in_state = "reset"
+
+[[models.behavioral.laws]]
+name = "port1_starting_low"
+kind = "voltage"
+a = "prtpwr1"
+b = "gnd"
+expr = "0.0"
+r_ohms = 20.0
+only_in_state = "starting"
+
+[[models.behavioral.laws]]
+name = "port1_powered_high"
+kind = "voltage"
+a = "prtpwr1"
+b = "gnd"
+expr = "v_vdd33_a"
+r_ohms = 20.0
+only_in_state = "port1_powered"
+
+[[models.behavioral.laws]]
+name = "port1_overcurrent_low"
+kind = "voltage"
+a = "prtpwr1"
+b = "gnd"
+expr = "0.0"
+r_ohms = 20.0
+only_in_state = "port1_overcurrent"
+
+# Tables 6-2, 6-4 and 6-7 state that these are all-supplies-combined values.
+# The board under test ties the supply pins to one +3V3 rail, so the model lumps
+# the conservative maximum onto vdd33_a. A board splitting the rails must gate
+# a stronger claim on a future distributed-supply-current capability.
+[[models.behavioral.laws]]
+name = "reset_supply_draw"
+kind = "current"
+a = "vdd33_a"
+b = "gnd"
+expr = "0.0016"
+only_in_state = "reset"
+
+[[models.behavioral.laws]]
+name = "starting_supply_draw"
+kind = "current"
+a = "vdd33_a"
+b = "gnd"
+expr = "0.050"
+only_in_state = "starting"
+
+[[models.behavioral.laws]]
+name = "port1_powered_supply_draw"
+kind = "current"
+a = "vdd33_a"
+b = "gnd"
+expr = "0.085"
+only_in_state = "port1_powered"
+
+[[models.behavioral.laws]]
+name = "port1_overcurrent_supply_draw"
+kind = "current"
+a = "vdd33_a"
+b = "gnd"
+expr = "0.085"
+only_in_state = "port1_overcurrent"
+
+[models.coverage]
+implements = ["hardware_reset", "startup_delay", "vbus_presence_gate", "assumed_host_port1_power_request", "port1_power_enable", "port1_overcurrent_shutdown", "reset_supply_current_max", "unconfigured_high_speed_supply_current_max", "configured_high_speed_one_port_supply_current_max"]
+missing = ["usb_phy", "usb_packet_routing", "enumeration_transactions", "descriptor_engine", "i2c_eeprom_configuration", "smbus_configuration", "strap_sampling", "suspend_resume", "ports_2_to_4_power_control", "battery_charging_protocol", "clock_pll_analog", "distributed_supply_current", "bus_coupled_supply_current"]
+
+# Raspberry Pi Compute Module 4 carrier boundary. `CM4` is a module family,
+# not an executable configuration: RAM, eMMC, wireless option, firmware image,
+# enabled interfaces and workload all change its rail current and I/O behavior.
+# The official CM4 data sheet defines the 2x100 connector and absolute/operating
+# interface requirements, but the PCB Value alone does not identify the fitted
+# module or its runtime state. Retain that exact ambiguity as an authoring target
+# instead of falling through to an unlabelled OPEN component or inventing a
+# representative amp draw.
+# Source: Raspberry Pi Compute Module 4 data sheet,
+# https://pip.raspberrypi.com/categories/545-cm4/documents/RP-008197-DS-1-cm4-datasheet.pdf
+[[models]]
+id = "raspberry_pi_cm4_family_identity"
+kind = "digital"
+description = "Raspberry Pi Compute Module 4 family boundary; fitted variant and workload not specified"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "module_variant"
+reason = "The board value is only 'CM4'; RAM size, eMMC/no-eMMC and wireless option are not identified."
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "runtime_load_profile"
+reason = "Firmware image, enabled peripherals and workload are not board-layout facts."
+
+[models.match]
+value_re = "(?i)^(Raspberry[ _-]*Pi[ _-]*)?CM4$"
+footprint_re = "(?i)(Raspberry[ _-]*Pi[ _-]*4[ _-]*Compute[ _-]*Module|Compute[ _-]*Module[ _-]*4|CM4)"
+
+[models.params]
+identity_only = true
+warning = "the CM4 family and connector boundary are identified, but fitted variant, firmware, enabled peripherals, startup sequence and time-varying rail load are not specified"
+unlocked_by = "an exact CM4 ordering/assembly variant plus a source-bound or measured workload profile, and firmware/backend fixtures for any I/O behavior asserted"
+
+[models.coverage]
+missing = ["pin_roles", "rail_load_profile", "startup_sequence", "firmware_execution", "interface_peripherals", "variant_specific_limits"]
+
+# ── Diodes 74AHCT1G32SE-7 exact single OR gate ────────────────────────────
+[[models]]
+id = "74ahct1g32se_7"
+kind = "digital"
+description = "Diodes 74AHCT1G32SE-7 single 2-input positive OR gate, SOT25/SOT353"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/74AHCT1G32.pdf"
+title = "Diodes Incorporated 74AHCT1G32 single 2-input positive OR gate"
+locator = "Pin assignments, function table and electrical characteristics"
+sha256 = "5bec1094207164bd6109a21a3c7e3ddb61265b5c1fe7102584daa565bdfc1b58"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "logic_levels"
+low = 0.8
+high = 2.0
+unit = "V"
+kind = "specification-limits"
+basis = "74AHCT1G32 DS35184 recommended VIL/VIH at 4.5 V to 5.5 V"
+
+[models.match]
+value_re = "(?i)^74AHCT1G32SE-7$"
+
+[models.params]
+voh = 4.4
+vol = 0.1
+vih = 2.0
+vil = 0.8
+tpd_s = 1.5e-8
+supply_pin = "5"
+gnd_pin = "3"
+supply_static_ua = 1.0
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+"3" = "gnd"
+"4" = "y1"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 6.5
+
+[models.logic]
+inputs = ["a", "b"]
+outputs = ["y1"]
+[models.logic.comb]
+y1 = "a | b"
+
+[models.coverage]
+implements = ["combinational_or", "logic_levels"]
+missing = ["propagation_timing", "input_clamps"]
+
+# ── Toshiba TLP2761 executable DC transfer slice ─────────────────────────────
+# The datasheet supplies enough information to model the isolator's relevant
+# board-level DC transfer without pretending to reproduce sub-100 ns timing or
+# isolation transients.  The current law models the LED, and the FSM drives the
+# inverting totem-pole output at the conservative guaranteed threshold.
+[[models]]
+id = "tlp2761_dc_transfer"
+kind = "digital"
+description = "Toshiba TLP2761 inverting photo-IC coupler, SO6L (executable DC transfer)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://toshiba.semicon-storage.com/info/TLP2761_datasheet_en_20260511.pdf"
+title = "Toshiba TLP2761 photocoupler data sheet Rev. 10.0"
+locator = "Pin assignment, truth table, electrical characteristics and switching characteristics"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "input_forward_voltage_at_2ma"
+low = 1.35
+high = 1.65
+unit = "V"
+kind = "specification-limits"
+basis = "TLP2761 electrical characteristics, IF=2mA at 25C"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "threshold_input_current"
+low = 0.0
+high = 0.0016
+unit = "A"
+kind = "specification-limits"
+basis = "IFHL maximum over -40C to 125C; the model uses the conservative upper endpoint"
+
+[models.match]
+value_re = "(?i)^TLP2761$"
+
+[models.params]
+led_knee_v = 1.35
+led_r_ohms = 75.0
+if_threshold_a = 0.0016
+supply_current_a = 0.00065
+warning = "source-bound DC approximation: input LED and conservative threshold transfer are executable; propagation timing, temperature curve, CMTI pulse behavior and isolation capacitance are not modeled"
+
+[models.pins]
+"1" = "anode"
+"2" = "nc"
+"3" = "cathode"
+"4" = "gnd"
+"5" = "y1"
+"6" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0
+max_pin_current_a = 0.02
+
+[models.behavioral.fsm]
+states = ["input_off", "input_on"]
+initial = "input_off"
+
+[[models.behavioral.fsm.transitions]]
+from = "input_off"
+to = "input_on"
+guard = "max(0.0, (v_anode - v_cathode - led_knee_v) / led_r_ohms) >= if_threshold_a"
+
+[[models.behavioral.fsm.transitions]]
+from = "input_on"
+to = "input_off"
+guard = "max(0.0, (v_anode - v_cathode - led_knee_v) / led_r_ohms) < if_threshold_a"
+
+[[models.behavioral.laws]]
+name = "input_led"
+kind = "current"
+a = "anode"
+b = "cathode"
+expr = "max(0.0, (v_anode - v_cathode - led_knee_v) / led_r_ohms)"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a"
+
+[[models.behavioral.laws]]
+name = "output_high"
+kind = "voltage"
+a = "y1"
+b = "gnd"
+expr = "v_vcc"
+r_ohms = 312.5
+only_in_state = "input_off"
+
+[[models.behavioral.laws]]
+name = "output_low"
+kind = "voltage"
+a = "y1"
+b = "gnd"
+expr = "0.0"
+r_ohms = 125.0
+only_in_state = "input_on"
+
+[models.coverage]
+implements = ["input_led_dc", "threshold_transfer", "inverting_output", "totem_pole_output", "supply_current"]
+missing = ["propagation_timing", "temperature_curve", "cmti_waveform", "isolation_capacitance", "led_reverse_breakdown"]

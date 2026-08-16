@@ -242,8 +242,8 @@ function walkValue(
     // Same enforced-versus-documented split as the numeric bounds. A real Rust
     // enum (schemars writes it as a `oneOf` of consts) is enforced by serde; a
     // string field carrying `#[schemars(extend("enum" = …))]` is only enforced
-    // where `Spec::validate` re-checks the token, which is everywhere except
-    // `peripheral.waveform` (matched at RUN time, and only for a `stimulus`).
+    // where `Spec::validate` re-checks the token; ENFORCED_ENUMS records those
+    // checks so the editor and loader keep the same severity.
     const enforced = !!node.oneOf || ENFORCED_ENUMS.has(`${tableOf(path)}.${key}`);
     out.push({
       span: spanFor(lk, path),
@@ -395,6 +395,10 @@ const ENFORCED_BOUNDS: Record<string, string[]> = {
   ac: ["fstart", "fstop", "points"],
   tolerance: ["percent"],
   override: ["tolerance"],
+  timing: ["min_pulse_us", "max_edge_error_us"],
+  peripheral: ["address", "size"],
+  scenario: ["start_ms"],
+  "decoupling.override": ["esr_ohms", "esl_henries"],
   fuzz: ["seeds"],
   ensemble: ["seeds"],
 };
@@ -403,10 +407,6 @@ const ENFORCED_BOUNDS: Record<string, string[]> = {
  * Closed vocabularies that a `validate` method re-checks at LOAD time, so a bad
  * token fails the build immediately. Rust unit enums are not listed: serde
  * enforces those by construction, and `node.oneOf` identifies them.
- *
- * The one omission is `peripheral.waveform`: nothing reads it during
- * validation. `runner.rs` rejects an unknown waveform once the run reaches the
- * stimulus, so it is a warning here, not an error.
  */
 const ENFORCED_ENUMS = new Set([
   "supply.kind",
@@ -418,6 +418,7 @@ const ENFORCED_ENUMS = new Set([
   "ensemble.mode",
   "tolerance.distribution",
   "override.distribution",
+  "peripheral.waveform",
 ]);
 
 /**

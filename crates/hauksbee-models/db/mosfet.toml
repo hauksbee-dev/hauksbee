@@ -243,6 +243,104 @@ max_voltage_v       = 20.0    # |VDS| (V)
 theta_ja_c_per_w    = 312.5   # RthJA (C/W), datasheet value for t <= 5 s
 max_junction_temp_c = 150.0   # TJ max (C)
 
+# FDS4435BZ / FDS4435BZ_F085: Fairchild (now onsemi) P-channel PowerTrench
+# MOSFET, SO-8.  The pedalboard source uses the automotive-suffix sheet and the
+# exact FDS4435BZ ordering code.  Source: Fairchild Semiconductor data sheet
+# FDS4435BZ_F085, Rev. A, July 2009 (onsemi document fds4435bz_f085-d.pdf).
+# The automated onsemi endpoint currently refuses non-browser downloads; the
+# exact audited Fairchild/onsemi PDF copy has SHA-256
+# fe08ddc4992462830d4435510c03da85af4fe785ed4d519d01b98029df220228.
+#
+# The level-1 DC fit is source-bound rather than a generic package estimate:
+#   VGS(th) = -1.0 / -2.1 / -3.0 V @ ID=-250uA
+#   RDS(on) typ 16mOhm @ VGS=-10V; typ 26mOhm @ VGS=-4.5V
+#   gFS typ 24S @ ID=-8.8A
+# Solving R(VGS)=1/(kp*(|VGS|-|vto|))+(rd+rs) against the two RDS rows gives
+# kp=29.0 A/V^2 and rd+rs=11.64mOhm.  The independent transconductance check is
+# sqrt(2*29*8.8)=22.6S, within 6% of the stated 24S.  This is therefore a good
+# averaged/conduction model, but it is not a switching-loss or SOA model.
+[[models]]
+id = "fds4435bz"
+kind = "pmos"
+description = "FDS4435BZ P-channel SO-8 MOSFET, -30V, -8.8A, source-bound level-1 DC fit"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vto"
+low = -3.0
+high = -1.0
+unit = "V"
+kind = "specification-limits"
+basis = "Fairchild/onsemi VGS(th) limits at ID=-250uA"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "rds_on_10v_max"
+low = 0.0
+high = 0.020
+unit = "ohm"
+kind = "specification-limits"
+basis = "Fairchild/onsemi RDS(on) maximum at VGS=-10V, ID=-8.8A; zero is a physical lower bound, not a claimed production minimum"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "rds_on_10v_typ"
+low = 0.016
+high = 0.016
+unit = "ohm"
+kind = "typical-range"
+basis = "Fairchild/onsemi RDS(on) typical at VGS=-10V, ID=-8.8A"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "rds_on_4p5v_max"
+low = 0.0
+high = 0.035
+unit = "ohm"
+kind = "specification-limits"
+basis = "Fairchild/onsemi RDS(on) maximum at VGS=-4.5V, ID=-6.7A; zero is a physical lower bound, not a claimed production minimum"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "rds_on_4p5v_typ"
+low = 0.026
+high = 0.026
+unit = "ohm"
+kind = "typical-range"
+basis = "Fairchild/onsemi RDS(on) typical at VGS=-4.5V, ID=-6.7A"
+
+[models.match]
+value_re = "(?i)^FDS4435BZ(?:_F085)?$"
+
+[models.params]
+vto = -2.1
+kp = 29.0
+lambda = 0.0
+rd = 0.00582
+rs = 0.00582
+cgd = 2.30e-10
+cgs = 1.155e-9
+warning = "source-bound level-1 DC conduction and typical gate capacitance are executable; body-diode recovery, nonlinear capacitance, avalanche/SOA, temperature-dependent RDS(on), package inductance and switching loss are not modeled"
+
+[models.pins]
+"1-3" = "source"
+"4" = "gate"
+"5-8" = "drain"
+
+[models.ratings]
+max_current_a = 8.8
+max_surge_current_a = 50.0
+max_power_w = 2.5
+max_voltage_v = 30.0
+# The sheet gives 50 C/W on a 1in^2 copper pad and 125 C/W on minimum pad.
+# Copper-area evidence is not part of this model card, so use the conservative
+# minimum-pad value for a whole-board thermal screen.
+theta_ja_c_per_w = 125.0
+max_junction_temp_c = 150.0
+
+[models.coverage]
+implements = ["dc_channel_conduction", "gate_capacitance", "absolute_ratings", "conservative_junction_temperature"]
+missing = ["body_diode_recovery", "nonlinear_capacitance", "avalanche_soa", "rds_temperature_curve", "package_inductance", "switching_loss"]
+
 # ── Generic power-FET fallback models ────────────────────────────────────────
 #
 # These two entries are GENERIC PLACEHOLDER catch-alls. They are NOT sourced

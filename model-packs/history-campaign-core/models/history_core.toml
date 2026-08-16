@@ -1,0 +1,335 @@
+# Source-bound first pack for the frozen history campaign. Every card is
+# intentionally narrow: exact value matching, datasheet pin map, and an
+# explicit limitation. No MCU, charger, hub, memory, or RF behavior is invented.
+
+[[models]]
+id = "ncp1117_3v3_history"
+kind = "vreg"
+description = "NCP1117-3.3 fixed LDO, SOT-223 (pin map and nominal DC rail only)"
+
+[models.source]
+tier = "curated-pack"
+validation = "datasheet-curves"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.267
+high = 3.333
+unit = "V"
+kind = "specification-limits"
+basis = "onsemi NCP1117/D Rev.31 fixed-output accuracy +/-1.0%"
+
+[models.match]
+value_re = "(?i)^NCP1117-3[._]?3[_-]?SOT223$"
+
+[models.params]
+vout = 3.3
+dropout_v = 1.2
+iq_a = 0.006
+
+[models.pins]
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0
+max_voltage_v = 20.0
+max_junction_temp_c = 150.0
+
+[models.coverage]
+implements = ["nominal_dc_regulation"]
+missing = ["startup_transient", "dropout_curve", "current_limit", "thermal_shutdown"]
+
+[[models]]
+id = "ap64501_history_identity"
+kind = "vreg"
+description = "Diodes AP64501SP-13 synchronous buck, SO-8EP (board-divider-derived averaged DC regulation)"
+
+[models.source]
+tier = "curated-pack"
+validation = "datasheet-curves"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.792
+high = 0.808
+unit = "V"
+kind = "specification-limits"
+basis = "Diodes AP64501 DS41980 Rev.4 electrical characteristics, CCM over the recommended range"
+
+[models.match]
+value_re = "(?i)^AP64501SP-13$"
+
+[models.params]
+warning = "source-bound averaged DC model: it regulates the board's real external feedback divider through the SW node and honors EN, but does not claim 570kHz ripple, COMP-loop stability, 4ms/CSS soft-start, PFM/LDO transitions, OVP, thermal shutdown, or cycle-by-cycle peak behavior"
+
+[models.pins]
+"1" = "bst"
+"2" = "in"
+"3" = "en"
+"4" = "ss"
+"5" = "fb"
+"6" = "comp"
+"7" = "gnd"
+"8" = "sw"
+"9" = "gnd_ep"
+
+[models.ratings]
+max_current_a = 5.0
+max_voltage_v = 40.0
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+# A safety ceiling only.  In feedback mode the command is derived from the
+# board's FB divider and, for buck topology, is also clamped to the solved VIN.
+vout_setpoint = 40.0
+iout_limit_a = 5.0
+efficiency = 0.90
+out_r_ohms = 0.02
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.800
+relaxation_gain = 4.0
+
+[models.behavioral.converter.enable]
+pin = "en"
+# Conservative guaranteed-high endpoint (VEN_H max); voltages in the
+# datasheet's 1.03..1.25 V uncertainty band are intentionally treated as off.
+high_threshold_v = 1.25
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power"]
+missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_ldo_modes", "cycle_by_cycle_peak_limit", "ovp", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
+[[models]]
+id = "74ahct1g32_history"
+kind = "digital"
+description = "Diodes 74AHCT1G32SE-7 single 2-input positive OR gate, SOT25/SOT353"
+
+[models.source]
+tier = "curated-pack"
+validation = "datasheet-curves"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "logic_levels"
+low = 0.8
+high = 2.0
+unit = "V"
+kind = "specification-limits"
+basis = "Diodes 74AHCT1G32 DS35184 Rev.1-2 recommended VIL/VIH at 4.5-5.5 V"
+
+[models.match]
+value_re = "(?i)^74AHCT1G32SE-7$"
+
+[models.params]
+voh = 4.4
+vol = 0.1
+vih = 2.0
+vil = 0.8
+tpd_s = 1.5e-8
+supply_pin = "5"
+gnd_pin = "3"
+supply_static_ua = 1.0
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+"3" = "gnd"
+"4" = "y1"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 6.5
+
+[models.logic]
+inputs = ["a", "b"]
+outputs = ["y1"]
+[models.logic.comb]
+y1 = "a | b"
+
+[models.coverage]
+implements = ["combinational_or", "logic_levels"]
+missing = ["propagation_timing", "input_clamps"]
+
+[[models]]
+id = "bmp280_history_identity"
+kind = "digital"
+description = "Bosch BMP280 pressure/temperature sensor, LGA-8 (identity/pins; measurement not modeled)"
+
+[models.source]
+tier = "curated-pack"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "sensor_behavior"
+reason = "BMP280 register map, calibration coefficients, oversampling and pressure/temperature conversion are not modeled by this card."
+
+[models.match]
+value_re = "(?i)^BMP280$"
+
+[models.params]
+identity_only = true
+warning = "BMP280 identity and pin map are sourced; sensor register and conversion behavior are not modeled"
+unlocked_by = "a validated BMP280 I2C/SPI register, calibration, and pressure/temperature conversion model"
+voh = 2.64
+vol = 0.66
+vih = 2.64
+vil = 0.66
+supply_static_ua = 3.6
+supply_pin = "8"
+gnd_pin = "1"
+
+[models.pins]
+"1" = "gnd"
+"2" = "csb"
+"3" = "sda"
+"4" = "scl"
+"5" = "sdo"
+"6" = "vddio"
+"7" = "gnd2"
+"8" = "vdd"
+
+[models.ratings]
+max_voltage_v = 4.25
+
+[models.coverage]
+missing = ["register_map", "temperature_conversion", "pressure_conversion", "calibration"]
+
+[[models]]
+id = "sn65hvd230_history_identity"
+kind = "digital"
+description = "TI SN65HVD230 CAN transceiver (identity/pins; CAN state machine not modeled)"
+
+[models.source]
+tier = "curated-pack"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "can_behavior"
+reason = "CAN dominant/recessive bus arbitration, slew control, receiver thresholds and fail-safe behavior are not modeled by this card."
+
+[models.match]
+value_re = "(?i)^SN65HVD230$"
+
+[models.params]
+identity_only = true
+warning = "SN65HVD230 identity and pin map are sourced; CAN dominant/recessive drive and receiver behavior are not modeled"
+unlocked_by = "a validated SN65HVD230 CAN physical-layer model with receiver thresholds, fail-safe, and slew control"
+
+[models.pins]
+"1" = "d"
+"2" = "gnd"
+"3" = "vcc"
+"4" = "r"
+"5" = "vref"
+"6" = "canl"
+"7" = "canh"
+"8" = "rs"
+
+[models.ratings]
+max_voltage_v = 7.0
+
+[models.coverage]
+missing = ["can_drive", "can_receive", "fail_safe", "slew_control"]
+
+[[models]]
+id = "tlp2761_history_identity"
+kind = "digital"
+description = "Toshiba TLP2761 inverting photo-IC coupler, SO6L (executable DC transfer)"
+
+[models.source]
+tier = "curated-pack"
+validation = "datasheet-curves"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "input_forward_voltage_at_2ma"
+low = 1.35
+high = 1.65
+unit = "V"
+kind = "specification-limits"
+basis = "Toshiba TLP2761 Rev.10 electrical characteristics, IF=2mA at 25C"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "threshold_input_current"
+low = 0.0
+high = 0.0016
+unit = "A"
+kind = "specification-limits"
+basis = "IFHL maximum over -40C to 125C; the model uses the conservative upper endpoint"
+
+[models.match]
+value_re = "(?i)^TLP2761$"
+
+[models.params]
+led_knee_v = 1.35
+led_r_ohms = 75.0
+if_threshold_a = 0.0016
+supply_current_a = 0.00065
+warning = "source-bound DC approximation: the input LED is fit to the 1.35-1.65V at 2mA limits and the output switches at the conservative 1.6mA IFHL maximum; sub-100ns propagation, temperature curve, CMTI pulse behavior and isolation capacitance are not modeled"
+
+[models.pins]
+"1" = "anode"
+"2" = "nc"
+"3" = "cathode"
+"4" = "gnd"
+"5" = "y1"
+"6" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0
+max_pin_current_a = 0.02
+
+[models.behavioral.fsm]
+states = ["input_off", "input_on"]
+initial = "input_off"
+
+[[models.behavioral.fsm.transitions]]
+from = "input_off"
+to = "input_on"
+guard = "max(0.0, (v_anode - v_cathode - led_knee_v) / led_r_ohms) >= if_threshold_a"
+
+[[models.behavioral.fsm.transitions]]
+from = "input_on"
+to = "input_off"
+guard = "max(0.0, (v_anode - v_cathode - led_knee_v) / led_r_ohms) < if_threshold_a"
+
+[[models.behavioral.laws]]
+name = "input_led"
+kind = "current"
+a = "anode"
+b = "cathode"
+expr = "max(0.0, (v_anode - v_cathode - led_knee_v) / led_r_ohms)"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a"
+
+[[models.behavioral.laws]]
+name = "output_high"
+kind = "voltage"
+a = "y1"
+b = "gnd"
+expr = "v_vcc"
+r_ohms = 312.5
+only_in_state = "input_off"
+
+[[models.behavioral.laws]]
+name = "output_low"
+kind = "voltage"
+a = "y1"
+b = "gnd"
+expr = "0.0"
+r_ohms = 125.0
+only_in_state = "input_on"
+
+[models.coverage]
+implements = ["input_led_dc", "threshold_transfer", "inverting_output", "totem_pole_output", "supply_current"]
+missing = ["propagation_timing", "temperature_curve", "cmti_waveform", "isolation_capacitance", "led_reverse_breakdown"]

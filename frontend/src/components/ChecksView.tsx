@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { parse as parseToml } from 'smol-toml'
-import type { ArtifactProvenance, EvidenceAssumption, EvidenceMap, QueuedCheck, WebReport } from '../types/report'
+import type { ArtifactProvenance, EvidenceAssumption, EvidenceMap, QueuedCheck, QueuedPeripheral, QueuedSensor, QueuedSupply, WebReport } from '../types/report'
+import type { ActionResultMsg } from '../types/protocol'
 import type { SelectedComponent } from './SelectionCard'
 import { PlusIcon } from './Icons'
 import { specStemFor, workflowExportAvailable, workflowYaml } from '../lib/ci-workflow'
@@ -26,6 +27,87 @@ import { sessionIdFor } from '../lib/session-store'
 interface SupplyRow {
   net: string
   volts: string
+}
+
+/** A visual co-sim interaction. These are the three controls that can attach
+ * safely to any real board net without pretending a bus model or connector
+ * mapping exists. Rich bus devices remain model-owned or available in raw
+ * mode until the browser can fill every required identity field honestly. */
+interface PeripheralRow {
+  rowId: number
+  id: string
+  kind: 'stimulus' | 'pushbutton' | 'toggle'
+  net: string
+  to: string
+  waveform: 'dc' | 'sine' | 'noise'
+  offset: string
+  amplitude: string
+  freq_hz: string
+  bounce_ms: string
+  initial: string
+  events: Array<{ t_ms: string; value: string }>
+}
+
+interface SensorInputRow {
+  rowId: number
+  name: string
+  value: string
+}
+
+/** A declarative register-map device. The spec bytes are kept inline in the
+ * scenario so a downloaded check is self-contained and a local file path can
+ * never go stale after upload. */
+interface SensorRow {
+  rowId: number
+  id: string
+  componentRef: string
+  modelId: string
+  specName: string
+  spec: string
+  controller: string
+  csNet: string
+  inputs: SensorInputRow[]
+}
+
+interface SensorCatalogEntry {
+  id: string
+  name: string
+  bus: 'i2c' | 'spi'
+  scope: string
+  spec_toml: string
+}
+
+function emptySensor(rowId: number, id = '', componentRef = '', modelId = ''): SensorRow {
+  return {
+    rowId,
+    id: id || `SENSOR${rowId}`,
+    componentRef,
+    modelId,
+    specName: '',
+    spec: '',
+    controller: '',
+    csNet: '',
+    inputs: [],
+  }
+}
+
+const peripheralPrefix = (kind: PeripheralRow['kind']) => kind === 'stimulus' ? 'STIM' : kind === 'pushbutton' ? 'BTN' : 'SW'
+
+function emptyPeripheral(rowId: number, kind: PeripheralRow['kind'], net = ''): PeripheralRow {
+  return {
+    rowId,
+    id: `${peripheralPrefix(kind)}${rowId}`,
+    kind,
+    net,
+    to: 'GND',
+    waveform: 'dc',
+    offset: kind === 'stimulus' ? '0' : '',
+    amplitude: '1',
+    freq_hz: '1000',
+    bounce_ms: kind === 'pushbutton' ? '5' : '',
+    initial: '0',
+    events: [],
+  }
 }
 
 // One plain-language check. `kind` maps 1:1 onto the spec's [[assert]] kinds;
@@ -137,13 +219,49 @@ function numOr(v: string): string | null {
 
 /** Compose the spec BODY (no board/firmware keys; the server injects those
  *  from the uploaded files). */
-function buildToml(name: string, duration: string, supplies: SupplyRow[], checks: CheckRow[]): string {
+export function buildToml(
+  name: string,
+  duration: string,
+  supplies: SupplyRow[],
+  peripherals: PeripheralRow[],
+  checks: CheckRow[],
+  sensors: SensorRow[] = [],
+): string {
   let out = `name = ${tomlString(name)}\n`
   const dur = numOr(duration)
   if (dur) out += `duration_ms = ${dur}\n`
   for (const s of supplies) {
     if (!s.net.trim()) continue
     out += `\n[[supply]]\nnet = ${tomlString(s.net.trim())}\nkind = "ideal"\nvolts = ${numOr(s.volts) ?? '5.0'}\n`
+  }
+  for (const p of peripherals) {
+    out += `\n[[peripheral]]\nid = ${tomlString(p.id.trim())}\ntype = ${tomlString(p.kind)}\nnet = ${tomlString(p.net.trim())}\n`
+    if (p.kind === 'stimulus') {
+      out += `waveform = ${tomlString(p.waveform)}\n`
+      out += `offset = ${numOr(p.offset) ?? '0'}\n`
+      if (p.waveform !== 'dc') out += `amplitude = ${numOr(p.amplitude) ?? '1'}\n`
+      if (p.waveform === 'sine' || p.waveform === 'noise') out += `freq_hz = ${numOr(p.freq_hz) ?? '1000'}\n`
+    } else {
+      if (p.to.trim()) out += `to = ${tomlString(p.to.trim())}\n`
+      if (p.kind === 'pushbutton' && numOr(p.bounce_ms)) out += `bounce_ms = ${numOr(p.bounce_ms)}\n`
+      if (numOr(p.initial)) out += `initial = ${numOr(p.initial)}\n`
+    }
+    for (const event of p.events) {
+      out += `[[peripheral.event]]\nt_ms = ${numOr(event.t_ms) ?? '0'}\nvalue = ${numOr(event.value) ?? '0'}\n`
+    }
+  }
+  for (const sensor of sensors) {
+    out += `\n[[sensor]]\nid = ${tomlString(sensor.id.trim())}\n`
+    // JSON string escaping is valid TOML basic-string escaping and avoids the
+    // delimiter collision of a pasted spec containing triple quotes.
+    out += `spec = ${tomlString(sensor.spec)}\n`
+    if (sensor.controller.trim()) out += `controller = ${tomlString(sensor.controller.trim())}\n`
+    if (sensor.csNet.trim()) out += `cs_net = ${tomlString(sensor.csNet.trim())}\n`
+    const inputs = sensor.inputs.filter(input => input.name.trim() && numOr(input.value))
+    if (inputs.length > 0) {
+      out += `[sensor.inputs]\n`
+      for (const input of inputs) out += `${tomlString(input.name.trim())} = ${numOr(input.value)}\n`
+    }
   }
   for (const c of checks) {
     out += `\n[[assert]]\nkind = ${tomlString(c.kind)}\n`
@@ -177,6 +295,12 @@ function buildToml(name: string, duration: string, supplies: SupplyRow[], checks
 // be silently destroyed on the way back to the builder, so its presence makes
 // tomlToBuilder refuse the conversion.
 const SUPPLY_FIELDS = new Set(['net', 'kind', 'volts'])
+const PERIPHERAL_FIELDS = new Set([
+  'id', 'type', 'net', 'to', 'waveform', 'offset', 'amplitude', 'freq_hz',
+  'bounce_ms', 'initial', 'event',
+])
+const PERIPHERAL_EVENT_FIELDS = new Set(['t_ms', 'value'])
+const SENSOR_FIELDS = new Set(['id', 'spec', 'controller', 'cs_net', 'inputs'])
 const ASSERT_FIELDS = new Set([
   'kind', 'net', 'ref', 'min', 'max', 'after_ms', 'deadline_ms', 'contains',
   'freq_hz', 'tolerance', 'min_toggles', 'amps', 'celsius', 'dip_below',
@@ -187,20 +311,59 @@ const ASSERT_FIELDS = new Set([
  *  spec uses vocabulary the builder doesn't cover (an unknown top-level key,
  *  OR any nested supply/assert field the builder would not write back out);
  *  the caller then stays in raw mode, or warns before discarding. */
-function tomlToBuilder(raw: string): { name: string; duration: string; supplies: SupplyRow[]; checks: CheckRow[] } | null {
+export function tomlToBuilder(raw: string): { name: string; duration: string; supplies: SupplyRow[]; peripherals: PeripheralRow[]; sensors: SensorRow[]; checks: CheckRow[] } | null {
   let doc: Record<string, unknown>
   try {
     doc = parseToml(raw) as Record<string, unknown>
   } catch {
     return null
   }
-  const KNOWN = new Set(['name', 'duration_ms', 'supply', 'assert', 'board', 'firmware', 'mcu'])
+  const KNOWN = new Set(['name', 'duration_ms', 'supply', 'peripheral', 'sensor', 'assert', 'board', 'firmware', 'mcu'])
   if (Object.keys(doc).some(k => !KNOWN.has(k))) return null
   const supplies: SupplyRow[] = []
   for (const s of (doc.supply as Record<string, unknown>[] | undefined) ?? []) {
     if (Object.keys(s).some(k => !SUPPLY_FIELDS.has(k))) return null
     if (s.kind && s.kind !== 'ideal') return null
     supplies.push({ net: String(s.net ?? ''), volts: String(s.volts ?? '') })
+  }
+  const peripherals: PeripheralRow[] = []
+  let peripheralId = 1
+  for (const p of (doc.peripheral as Record<string, unknown>[] | undefined) ?? []) {
+    if (Object.keys(p).some(k => !PERIPHERAL_FIELDS.has(k))) return null
+    const kind = String(p.type ?? '')
+    if (!['stimulus', 'pushbutton', 'toggle'].includes(kind)) return null
+    const events = (p.event as Record<string, unknown>[] | undefined) ?? []
+    if (events.some(event => Object.keys(event).some(k => !PERIPHERAL_EVENT_FIELDS.has(k)))) return null
+    const row = emptyPeripheral(peripheralId++, kind as PeripheralRow['kind'], String(p.net ?? ''))
+    row.id = String(p.id ?? row.id)
+    row.to = String(p.to ?? row.to)
+    row.waveform = String(p.waveform ?? row.waveform) as PeripheralRow['waveform']
+    if (!['dc', 'sine', 'noise'].includes(row.waveform)) return null
+    row.offset = String(p.offset ?? row.offset)
+    row.amplitude = String(p.amplitude ?? row.amplitude)
+    row.freq_hz = String(p.freq_hz ?? row.freq_hz)
+    row.bounce_ms = String(p.bounce_ms ?? row.bounce_ms)
+    row.initial = String(p.initial ?? row.initial)
+    row.events = events.map(event => ({ t_ms: String(event.t_ms ?? ''), value: String(event.value ?? '') }))
+    peripherals.push(row)
+  }
+  const sensors: SensorRow[] = []
+  let sensorId = 1
+  for (const sensor of (doc.sensor as Record<string, unknown>[] | undefined) ?? []) {
+    if (Object.keys(sensor).some(key => !SENSOR_FIELDS.has(key))) return null
+    if (typeof sensor.spec !== 'string') return null
+    const inputsObject = sensor.inputs as Record<string, unknown> | undefined
+    if (inputsObject && (Array.isArray(inputsObject) || typeof inputsObject !== 'object')) return null
+    const row = emptySensor(sensorId++, String(sensor.id ?? ''))
+    row.spec = sensor.spec
+    row.controller = String(sensor.controller ?? '')
+    row.csNet = String(sensor.cs_net ?? '')
+    row.inputs = Object.entries(inputsObject ?? {}).map(([name, value], index) => ({
+      rowId: index + 1,
+      name,
+      value: String(value),
+    }))
+    sensors.push(row)
   }
   const checks: CheckRow[] = []
   let id = 1
@@ -229,6 +392,8 @@ function tomlToBuilder(raw: string): { name: string; duration: string; supplies:
     name: String(doc.name ?? 'board checks'),
     duration: String(doc.duration_ms ?? '100'),
     supplies,
+    peripherals,
+    sensors,
     checks,
   }
 }
@@ -257,6 +422,18 @@ function RawModeSummary({ rawText }: { rawText: string }) {
               {parsed.supplies.map(s => `${s.net} at ${s.volts} V`).join(', ')}
             </div>
           )}
+          {parsed.peripherals.length > 0 && (
+            <div className="mt-2">
+              <span style={{ color: 'var(--silk)' }}>Interactions:</span>{' '}
+              {parsed.peripherals.map(p => `${p.id} (${p.kind}) on ${p.net}`).join(', ')}
+            </div>
+          )}
+          {parsed.sensors.length > 0 && (
+            <div className="mt-2">
+              <span style={{ color: 'var(--silk)' }}>Register-map devices:</span>{' '}
+              {parsed.sensors.map(sensor => `${sensor.id}${sensor.controller ? ` on ${sensor.controller}` : ''}`).join(', ')}
+            </div>
+          )}
           <ul className="mt-2 pl-4" style={{ listStyleType: 'disc' }}>
             {parsed.checks.map((c, i) => {
               const meta = CHECK_KINDS.find(k => k.kind === c.kind)
@@ -276,7 +453,7 @@ function RawModeSummary({ rawText }: { rawText: string }) {
       ) : (
         <div>
           The spec uses vocabulary beyond the visual builder (tolerances, scenarios,
-          overrides, sensors ...), so it cannot be summarized here.
+          overrides ...), so it cannot be summarized here.
         </div>
       )}
       <div className="mt-3 text-[12px]" style={{ color: 'var(--silk-faint)' }}>
@@ -466,6 +643,8 @@ interface SavedChecksState {
   specName?: string
   duration?: string
   supplies?: SupplyRow[]
+  peripherals?: PeripheralRow[]
+  sensors?: SensorRow[]
   checks?: CheckRow[]
   rawMode?: boolean
   rawText?: string
@@ -488,7 +667,16 @@ export function ChecksView({
   selectedNet,
   selectedComponent,
   pendingChecks,
+  pendingPeripherals,
+  pendingSensors,
+  pendingSupplies,
   onPendingConsumed,
+  onPendingPeripheralConsumed,
+  onPendingSensorConsumed,
+  onPendingSupplyConsumed,
+  liveRegisterMapAvailable = false,
+  onAttachRegisterMapLive,
+  liveActionResult,
   onSummary,
   onSpec,
 }: {
@@ -504,8 +692,31 @@ export function ChecksView({
    *  here as ordinary prefilled rows so the spec TOML is exactly what a
    *  hand-built check produces. */
   pendingChecks: QueuedCheck[]
+  /** Scenario controls queued by clicking board copper. */
+  pendingPeripherals: QueuedPeripheral[]
+  /** Register-map devices queued from a clicked component. */
+  pendingSensors: QueuedSensor[]
+  /** Ideal supplies queued from clicked copper. */
+  pendingSupplies: QueuedSupply[]
   /** Every pending check up to (and including) seq has been applied. */
   onPendingConsumed: (upToSeq: number) => void
+  onPendingPeripheralConsumed: (upToSeq: number) => void
+  onPendingSensorConsumed: (upToSeq: number) => void
+  onPendingSupplyConsumed: (upToSeq: number) => void
+  /** True only when the analyzed board owns the current live session. */
+  liveRegisterMapAvailable?: boolean
+  /** Explicit user action after local row validation; never automatic on
+   * paste/select and never invokes a network or LLM model-extraction path. */
+  onAttachRegisterMapLive?: (request: {
+    id: string
+    spec_toml: string
+    inputs: Record<string, number>
+    controller?: string
+    cs_net?: string
+  }) => number
+  /** Latest engine receipt. It is correlated by request_id before being shown,
+   * so editing/re-attaching a reused device id cannot surface stale success. */
+  liveActionResult?: ActionResultMsg | null
   /** Latest run's pass/fail counts for the shell's status chips (null when no
    *  current run result exists). */
   onSummary: (s: ChecksSummary | null) => void
@@ -531,6 +742,8 @@ export function ChecksView({
   }, [storageKey])
   const savedSupplies = saved?.supplies
   const savedChecks = saved?.checks
+  const savedPeripherals = saved?.peripherals
+  const savedSensors = saved?.sensors
   const initialChecks = Array.isArray(savedChecks) && savedChecks.length
     ? savedChecks
     : [emptyCheck(1, 'no_faults')]
@@ -541,6 +754,12 @@ export function ChecksView({
       ? savedSupplies
       : (report.supplies ?? []).map(s => ({ net: s.net, volts: String(s.volts) }))),
   )
+  const [peripherals, setPeripherals] = useState<PeripheralRow[]>(
+    () => (Array.isArray(savedPeripherals) ? savedPeripherals : []),
+  )
+  const [sensors, setSensors] = useState<SensorRow[]>(
+    () => (Array.isArray(savedSensors) ? savedSensors : []),
+  )
   const [checks, setChecks] = useState<CheckRow[]>(initialChecks)
   const [rawMode, setRawMode] = useState(!!(saved?.rawMode && typeof saved.rawText === 'string'))
   const [rawText, setRawText] = useState(typeof saved?.rawText === 'string' ? saved.rawText : '')
@@ -550,11 +769,45 @@ export function ChecksView({
   // be flagged stale the moment the spec diverges.
   const [run, setRun] = useState<{ response: RunResponse; toml: string } | null>(null)
   const [ciOpen, setCiOpen] = useState(false)
+  const [peripheralValidation, setPeripheralValidation] = useState<Map<number, string[]>>(new Map())
+  const [sensorValidation, setSensorValidation] = useState<Map<number, string[]>>(new Map())
+  const [sensorLiveRequests, setSensorLiveRequests] = useState<Map<number, number>>(new Map())
+  const [sensorCatalog, setSensorCatalog] = useState<SensorCatalogEntry[]>([])
+  const [sensorCatalogError, setSensorCatalogError] = useState<string | null>(null)
   const nextId = useRef(initialChecks.reduce((m, c) => Math.max(m, c.id), 0) + 1)
+  const nextPeripheralId = useRef(
+    (Array.isArray(savedPeripherals) ? savedPeripherals : []).reduce((m, p) => Math.max(m, p.rowId ?? 0), 0) + 1,
+  )
+  const nextSensorId = useRef(
+    (Array.isArray(savedSensors) ? savedSensors : []).reduce((m, sensor) => Math.max(m, sensor.rowId ?? 0), 0) + 1,
+  )
+  const nextSensorInputId = useRef(
+    (Array.isArray(savedSensors) ? savedSensors : []).flatMap(sensor => sensor.inputs ?? [])
+      .reduce((m, input) => Math.max(m, input.rowId ?? 0), 0) + 1,
+  )
+
+  useEffect(() => {
+    const abort = new AbortController()
+    void fetch('/api/sensor-specs', { signal: abort.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error(`sensor catalog ${response.status}`)
+        return response.json() as Promise<{ entries?: SensorCatalogEntry[] }>
+      })
+      .then(value => {
+        if (!Array.isArray(value.entries)) throw new Error('sensor catalog has no entries')
+        setSensorCatalog(value.entries)
+        setSensorCatalogError(null)
+      })
+      .catch(error => {
+        if (abort.signal.aborted) return
+        setSensorCatalogError(error instanceof Error ? error.message : String(error))
+      })
+    return () => abort.abort()
+  }, [])
 
   const builtToml = useMemo(
-    () => buildToml(specName, duration, supplies, checks),
-    [specName, duration, supplies, checks],
+    () => buildToml(specName, duration, supplies, peripherals, checks, sensors),
+    [specName, duration, supplies, peripherals, checks, sensors],
   )
   const effectiveToml = rawMode ? rawText : builtToml
   const stale = run !== null && run.toml !== effectiveToml
@@ -562,9 +815,9 @@ export function ChecksView({
   // ── Auto-save (the "things auto load in future" contract). ──
   useEffect(() => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, checks, rawMode, rawText }))
+      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText }))
     } catch { /* storage full/blocked: the session still works */ }
-  }, [storageKey, specName, duration, supplies, checks, rawMode, rawText])
+  }, [storageKey, specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText])
 
   // Report the run summary to the shell's chips; a stale or failed run
   // reports nothing rather than a number that no longer matches the spec.
@@ -588,6 +841,76 @@ export function ChecksView({
       return [...cs, row]
     })
     setAddOpen(false)
+  }
+
+  const addPeripheral = (kind: PeripheralRow['kind'], net = '') => {
+    setPeripherals(rows => [...rows, emptyPeripheral(nextPeripheralId.current++, kind, net)])
+  }
+
+  const updatePeripheral = (rowId: number, patch: Partial<PeripheralRow>) => {
+    setPeripherals(rows => rows.map(row => row.rowId === rowId ? { ...row, ...patch } : row))
+    setPeripheralValidation(previous => {
+      if (!previous.has(rowId)) return previous
+      const next = new Map(previous)
+      next.delete(rowId)
+      return next
+    })
+  }
+
+  const addSensor = (id = '', componentRef = '', modelId = '') => {
+    setSensors(rows => [...rows, emptySensor(nextSensorId.current++, id, componentRef, modelId)])
+  }
+
+  const updateSensor = (rowId: number, patch: Partial<SensorRow>) => {
+    setSensors(rows => rows.map(row => row.rowId === rowId ? { ...row, ...patch } : row))
+    // Any earlier engine receipt describes the bytes before this edit.
+    setSensorLiveRequests(previous => {
+      if (!previous.has(rowId)) return previous
+      const next = new Map(previous)
+      next.delete(rowId)
+      return next
+    })
+    setSensorValidation(previous => {
+      if (!previous.has(rowId)) return previous
+      const next = new Map(previous)
+      next.delete(rowId)
+      return next
+    })
+  }
+
+  const sensorIssues = (sensor: SensorRow): string[] => {
+    const issues: string[] = []
+    if (!sensor.id.trim()) issues.push('Give the register-map device a stable id.')
+    if (!sensor.spec.trim()) {
+      issues.push('Choose or paste a declarative sensor spec. Hauksbee will not guess a bus protocol.')
+    } else {
+      try { parseToml(sensor.spec) } catch { issues.push('The pasted sensor spec is not valid TOML.') }
+    }
+    for (const input of sensor.inputs) {
+      if (!input.name.trim()) issues.push('Every input override needs a name.')
+      if (!numOr(input.value)) issues.push(`Input ${input.name || '(unnamed)'} needs a finite numeric value.`)
+    }
+    return issues
+  }
+
+  const attachSensorLive = (sensor: SensorRow) => {
+    const issues = sensorIssues(sensor)
+    if (issues.length > 0) {
+      setSensorValidation(previous => new Map(previous).set(sensor.rowId, issues))
+      return
+    }
+    const inputs: Record<string, number> = {}
+    for (const input of sensor.inputs) inputs[input.name.trim()] = Number(input.value)
+    const requestId = onAttachRegisterMapLive?.({
+      id: sensor.id.trim(),
+      spec_toml: sensor.spec,
+      inputs,
+      controller: sensor.controller.trim() || undefined,
+      cs_net: sensor.csNet.trim() || undefined,
+    })
+    if (requestId !== undefined) {
+      setSensorLiveRequests(previous => new Map(previous).set(sensor.rowId, requestId))
+    }
   }
 
   // Consume checks queued from a board surface (a net/component click on the
@@ -617,6 +940,72 @@ export function ChecksView({
     onPendingConsumed(upTo)
   }, [pendingChecks, rawMode, onPendingConsumed])
 
+  // A board click can also change the experiment. Keep that operation typed
+  // and separate from assertions, and preserve it in raw mode just as we do a
+  // queued check.
+  useEffect(() => {
+    if (pendingPeripherals.length === 0) return
+    const upTo = pendingPeripherals[pendingPeripherals.length - 1].seq
+    if (rawMode) {
+      setRawText(prev => prev + pendingPeripherals.map(p => {
+        const id = p.id ?? `${peripheralPrefix(p.kind)}${nextPeripheralId.current++}`
+        let s = `\n[[peripheral]]\nid = ${tomlString(id)}\ntype = ${tomlString(p.kind)}\n`
+        if (p.net) s += `net = ${tomlString(p.net)}\n`
+        if (p.kind === 'stimulus') s += 'waveform = "dc"\noffset = 0\n'
+        else s += 'to = "GND"\ninitial = 0\n'
+        return s
+      }).join(''))
+    } else {
+      setPeripherals(rows => [
+        ...rows,
+        ...pendingPeripherals.map(p => {
+          const row = emptyPeripheral(nextPeripheralId.current++, p.kind, p.net ?? '')
+          if (p.id) row.id = p.id
+          return row
+        }),
+      ])
+    }
+    onPendingPeripheralConsumed(upTo)
+  }, [pendingPeripherals, rawMode, onPendingPeripheralConsumed])
+
+  // Register-map behavior is never guessed from the part name. A component
+  // click opens a named row, then the user supplies the exact local spec bytes
+  // before Run becomes available. Raw mode preserves the same incomplete row
+  // as an explicit TODO rather than inventing a protocol.
+  useEffect(() => {
+    if (pendingSensors.length === 0) return
+    const upTo = pendingSensors[pendingSensors.length - 1].seq
+    if (rawMode) {
+      setRawText(previous => previous + pendingSensors.map(sensor =>
+        `\n# TODO: paste a validated register-map spec for ${sensor.ref ?? sensor.id}\n[[sensor]]\nid = ${tomlString(sensor.id)}\nspec = ""\n`,
+      ).join(''))
+    } else {
+      setSensors(rows => [
+        ...rows,
+        ...pendingSensors.map(sensor => emptySensor(
+          nextSensorId.current++, sensor.id, sensor.ref ?? '', sensor.modelId ?? '',
+        )),
+      ])
+    }
+    onPendingSensorConsumed(upTo)
+  }, [pendingSensors, rawMode, onPendingSensorConsumed])
+
+  useEffect(() => {
+    if (pendingSupplies.length === 0) return
+    const upTo = pendingSupplies[pendingSupplies.length - 1].seq
+    if (rawMode) {
+      setRawText(previous => previous + pendingSupplies.map(supply =>
+        `\n[[supply]]\nnet = ${tomlString(supply.net)}\nkind = "ideal"\nvolts = ${supply.volts ?? 3.3}\n`,
+      ).join(''))
+    } else {
+      setSupplies(rows => [
+        ...rows,
+        ...pendingSupplies.map(supply => ({ net: supply.net, volts: String(supply.volts ?? 3.3) })),
+      ])
+    }
+    onPendingSupplyConsumed(upTo)
+  }, [pendingSupplies, rawMode, onPendingSupplyConsumed])
+
   // Builder-mode preflight results: row id -> its missing-field issues.
   // Set when a run is attempted with holes; a row's entry clears the moment
   // that row is edited so the highlight never nags about fixed input.
@@ -639,13 +1028,33 @@ export function ChecksView({
     // `amps`") belong to raw mode, and they also over-named fields that were
     // actually present.
     if (!rawMode) {
+      const peripheralProblems = new Map<number, string[]>()
+      for (const peripheral of peripherals) {
+        const issues: string[] = []
+        if (!peripheral.id.trim()) issues.push('Give the interaction a stable id.')
+        if (!peripheral.net.trim()) issues.push('Choose the board net this interaction attaches to.')
+        if (peripheral.kind === 'stimulus' && peripheral.waveform !== 'dc' && !numOr(peripheral.amplitude)) {
+          issues.push('Enter a numeric waveform amplitude.')
+        }
+        if (peripheral.kind === 'stimulus' && peripheral.waveform !== 'dc' && !numOr(peripheral.freq_hz)) {
+          issues.push('Enter a numeric waveform frequency.')
+        }
+        if (issues.length > 0) peripheralProblems.set(peripheral.rowId, issues)
+      }
+      setPeripheralValidation(peripheralProblems)
+      const sensorProblems = new Map<number, string[]>()
+      for (const sensor of sensors) {
+        const issues = sensorIssues(sensor)
+        if (issues.length > 0) sensorProblems.set(sensor.rowId, issues)
+      }
+      setSensorValidation(sensorProblems)
       const problems = new Map<number, RowIssue[]>()
       for (const c of checks) {
         const issues = rowIssues(c)
         if (issues.length > 0) problems.set(c.id, issues)
       }
       setValidation(problems)
-      if (problems.size > 0) return
+      if (problems.size > 0 || peripheralProblems.size > 0 || sensorProblems.size > 0) return
     }
     setRunning(true)
     const tomlAtRun = effectiveToml
@@ -669,7 +1078,7 @@ export function ChecksView({
     } finally {
       setRunning(false)
     }
-  }, [boardFile, firmwareFile, schematicFile, effectiveToml, rawMode, checks])
+  }, [boardFile, firmwareFile, schematicFile, effectiveToml, rawMode, checks, peripherals, sensors])
 
   const specStem = specStemFor(report.file_name)
   // The runnable spec: the composed body with the board/firmware paths the
@@ -769,14 +1178,40 @@ export function ChecksView({
           <div className="min-w-0 checks-flush">
             {/* Quick adds from the board-surface selection */}
             {selectedNet && !rawMode && (
-              <button
-                type="button"
-                data-testid="quick-add-net"
-                onClick={() => addCheck('voltage', selectedNet)}
-                className="hb-chip hb-press mb-3 px-3 py-1.5 text-[12px]"
-              >
-                + Check a voltage on “{selectedNet}” (clicked on the map)
-              </button>
+              <div className="mb-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-testid="quick-add-net"
+                  onClick={() => addCheck('voltage', selectedNet)}
+                  className="hb-chip hb-press px-3 py-1.5 text-[12px]"
+                >
+                  + Check a voltage on “{selectedNet}”
+                </button>
+                <button
+                  type="button"
+                  data-testid="quick-add-net-stimulus"
+                  onClick={() => addPeripheral('stimulus', selectedNet)}
+                  className="hb-chip hb-press px-3 py-1.5 text-[12px]"
+                >
+                  + Drive “{selectedNet}” with a waveform
+                </button>
+                <button
+                  type="button"
+                  data-testid="quick-add-net-button"
+                  onClick={() => addPeripheral('pushbutton', selectedNet)}
+                  className="hb-chip hb-press px-3 py-1.5 text-[12px]"
+                >
+                  + Put a button on “{selectedNet}”
+                </button>
+                <button
+                  type="button"
+                  data-testid="quick-add-net-supply"
+                  onClick={() => setSupplies(rows => [...rows, { net: selectedNet, volts: '3.3' }])}
+                  className="hb-chip hb-press px-3 py-1.5 text-[12px]"
+                >
+                  + Power “{selectedNet}” from a supply
+                </button>
+              </div>
             )}
             {selectedComponent && !rawMode && (
               <div className="mb-3 flex flex-wrap gap-2">
@@ -795,6 +1230,14 @@ export function ChecksView({
                   className="hb-chip hb-press px-3 py-1.5 text-[12px]"
                 >
                   + “{selectedComponent.ref}” must stay cool
+                </button>
+                <button
+                  type="button"
+                  data-testid="quick-add-ref-sensor"
+                  onClick={() => addSensor(selectedComponent.ref, selectedComponent.ref)}
+                  className="hb-chip hb-press px-3 py-1.5 text-[12px]"
+                >
+                  + Attach register-map behavior to “{selectedComponent.ref}”
                 </button>
               </div>
             )}
@@ -856,6 +1299,364 @@ export function ChecksView({
                     onClick={() => setSupplies(ss => [...ss, { net: '', volts: '5.0' }])}>
                     <PlusIcon size={12} /> add a supply
                   </button>
+                </section>
+
+                {/* Physical interactions are experiment inputs, not verdicts.
+                    They live between supplies and assertions so the visual
+                    flow reads: power it, interact with it, then judge it. */}
+                <section className="hb-card px-4 py-3.5 mb-4" data-testid="interaction-builder">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <div>
+                      <h2 className="text-[11px] font-bold tracking-widest uppercase" style={{ margin: 0, color: 'var(--silk-faint)' }}>
+                        Interactions &amp; stimuli
+                      </h2>
+                      <div className="text-[11px] mt-1" style={{ color: 'var(--silk-faint)' }}>
+                        Real 50 Ω stimulus and contact models attached to board nets; not forced post-solve values.
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button type="button" className="hb-chip hb-press px-2 py-1 text-[11px]" onClick={() => addPeripheral('stimulus')}>
+                        + waveform
+                      </button>
+                      <button type="button" className="hb-chip hb-press px-2 py-1 text-[11px]" onClick={() => addPeripheral('pushbutton')}>
+                        + button
+                      </button>
+                      <button type="button" className="hb-chip hb-press px-2 py-1 text-[11px]" onClick={() => addPeripheral('toggle')}>
+                        + switch
+                      </button>
+                    </div>
+                  </div>
+
+                  {peripherals.length === 0 && (
+                    <div className="text-[12px] py-2" style={{ color: 'var(--silk-dim)' }}>
+                      Click a trace on the board, then add a waveform, button or switch here. Register-map bus devices have their own source-bound section below.
+                    </div>
+                  )}
+
+                  {peripherals.map(peripheral => {
+                    const issues = peripheralValidation.get(peripheral.rowId) ?? []
+                    return (
+                      <div
+                        key={peripheral.rowId}
+                        className="rounded-lg px-3 py-3 mb-2"
+                        data-testid={`interaction-${peripheral.rowId}`}
+                        style={{ background: 'var(--surface-2)', border: `1px solid ${issues.length ? 'var(--err)' : 'var(--hairline)'}` }}
+                      >
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <select
+                            className="hb-input"
+                            value={peripheral.kind}
+                            onChange={event => updatePeripheral(peripheral.rowId, { kind: event.target.value as PeripheralRow['kind'] })}
+                            aria-label="interaction kind"
+                          >
+                            <option value="stimulus">voltage waveform</option>
+                            <option value="pushbutton">pushbutton</option>
+                            <option value="toggle">toggle switch</option>
+                          </select>
+                          <input
+                            className="hb-input min-w-0"
+                            style={{ width: 100 }}
+                            value={peripheral.id}
+                            aria-label="interaction id"
+                            placeholder="stable id"
+                            onChange={event => updatePeripheral(peripheral.rowId, { id: event.target.value })}
+                          />
+                          <input
+                            className="hb-input min-w-0 flex-1"
+                            style={{ minWidth: 130 }}
+                            list="net-options"
+                            value={peripheral.net}
+                            aria-label="interaction net"
+                            placeholder="board net"
+                            onChange={event => updatePeripheral(peripheral.rowId, { net: event.target.value })}
+                          />
+                          <button
+                            type="button"
+                            className="hb-press text-[11px] ml-auto"
+                            style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
+                            onClick={() => setPeripherals(rows => rows.filter(row => row.rowId !== peripheral.rowId))}
+                          >
+                            remove
+                          </button>
+                        </div>
+
+                        {peripheral.kind === 'stimulus' ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="text-[11px] flex items-center gap-1.5" style={{ color: 'var(--silk-faint)' }}>
+                              waveform
+                              <select className="hb-input" value={peripheral.waveform}
+                                onChange={event => updatePeripheral(peripheral.rowId, { waveform: event.target.value as PeripheralRow['waveform'] })}>
+                                <option value="dc">DC</option>
+                                <option value="sine">sine</option>
+                                <option value="noise">noise</option>
+                              </select>
+                            </label>
+                            <Field label="offset (V)" value={peripheral.offset} width={72}
+                              onChange={value => updatePeripheral(peripheral.rowId, { offset: value })} />
+                            {peripheral.waveform !== 'dc' && (
+                              <>
+                                <Field label="amplitude (V)" value={peripheral.amplitude} width={72}
+                                  onChange={value => updatePeripheral(peripheral.rowId, { amplitude: value })} />
+                                <Field label="frequency (Hz)" value={peripheral.freq_hz} width={82}
+                                  onChange={value => updatePeripheral(peripheral.rowId, { freq_hz: value })} />
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="text-[11px] flex items-center gap-1.5" style={{ color: 'var(--silk-faint)' }}>
+                              other terminal
+                              <input className="hb-input" style={{ width: 110 }} list="net-options" value={peripheral.to}
+                                onChange={event => updatePeripheral(peripheral.rowId, { to: event.target.value })} />
+                            </label>
+                            <Field label="initial (0/1)" value={peripheral.initial} width={65}
+                              onChange={value => updatePeripheral(peripheral.rowId, { initial: value })} />
+                            {peripheral.kind === 'pushbutton' && (
+                              <Field label="bounce (ms)" value={peripheral.bounce_ms} width={70}
+                                onChange={value => updatePeripheral(peripheral.rowId, { bounce_ms: value })} />
+                            )}
+                          </div>
+                        )}
+
+                        <div className="mt-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[10px] font-bold tracking-wider uppercase" style={{ color: 'var(--silk-faint)' }}>timeline</span>
+                            <button type="button" className="hb-press text-[11px]" style={{ color: 'var(--copper)', background: 'none', border: 'none' }}
+                              onClick={() => updatePeripheral(peripheral.rowId, { events: [...peripheral.events, { t_ms: '10', value: '1' }] })}>
+                              + event
+                            </button>
+                          </div>
+                          {peripheral.events.map((event, eventIndex) => (
+                            <div key={eventIndex} className="flex flex-wrap items-center gap-2 mt-1">
+                              <Field label="at (ms)" value={event.t_ms} width={70} onChange={value => {
+                                const events = peripheral.events.map((item, index) => index === eventIndex ? { ...item, t_ms: value } : item)
+                                updatePeripheral(peripheral.rowId, { events })
+                              }} />
+                              <Field label="set value" value={event.value} width={70} onChange={value => {
+                                const events = peripheral.events.map((item, index) => index === eventIndex ? { ...item, value } : item)
+                                updatePeripheral(peripheral.rowId, { events })
+                              }} />
+                              <button type="button" className="hb-press text-[11px]" style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
+                                onClick={() => updatePeripheral(peripheral.rowId, { events: peripheral.events.filter((_, index) => index !== eventIndex) })}>
+                                remove event
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        {issues.map(issue => <div key={issue} className="text-[11px] mt-1" style={{ color: 'var(--err-strong)' }}>{issue}</div>)}
+                      </div>
+                    )
+                  })}
+                </section>
+
+                {/* Firmware-visible peripherals are data, not a hard-coded
+                    dropdown of whatever parts Hauksbee happened to ship. A
+                    local validated sensor spec is embedded into the exported
+                    scenario, so the result is portable and never requires an
+                    LLM or a path that exists only on this computer. */}
+                <section className="hb-card px-4 py-3.5 mb-4" data-testid="sensor-builder">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <div>
+                      <h2 className="text-[11px] font-bold tracking-widest uppercase" style={{ margin: 0, color: 'var(--silk-faint)' }}>
+                        Register-map devices
+                      </h2>
+                      <div className="text-[11px] mt-1" style={{ color: 'var(--silk-faint)' }}>
+                        I²C/SPI behavior from validated local TOML. The exact bytes are embedded in this scenario.
+                      </div>
+                    </div>
+                    <button type="button" className="hb-chip hb-press px-2 py-1 text-[11px]" onClick={() => addSensor()}>
+                      + bus device
+                    </button>
+                  </div>
+
+                  {sensors.length === 0 && (
+                    <div className="text-[12px] py-2" style={{ color: 'var(--silk-dim)' }}>
+                      Click a sensor or memory IC on the board, or add one here. Choose a checked-in sensor spec; Hauksbee never guesses register behavior from a part number.
+                    </div>
+                  )}
+
+                  {sensors.map(sensor => {
+                    const issues = sensorValidation.get(sensor.rowId) ?? []
+                    const liveRequestId = sensorLiveRequests.get(sensor.rowId)
+                    const liveReceipt = liveActionResult?.action === 'attach_register_map'
+                      && liveActionResult.request_id === liveRequestId
+                      ? liveActionResult
+                      : null
+                    return (
+                      <div
+                        key={sensor.rowId}
+                        className="rounded-lg px-3 py-3 mb-2"
+                        data-testid={`sensor-${sensor.rowId}`}
+                        style={{ background: 'var(--surface-2)', border: `1px solid ${issues.length ? 'var(--err)' : 'var(--hairline)'}` }}
+                      >
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <input
+                            className="hb-input"
+                            style={{ width: 110 }}
+                            value={sensor.id}
+                            aria-label="sensor id"
+                            placeholder="stable id"
+                            onChange={event => updateSensor(sensor.rowId, { id: event.target.value })}
+                          />
+                          <input
+                            className="hb-input"
+                            style={{ width: 110 }}
+                            value={sensor.controller}
+                            aria-label="sensor controller"
+                            placeholder="spi2 (optional)"
+                            onChange={event => updateSensor(sensor.rowId, { controller: event.target.value })}
+                          />
+                          <input
+                            className="hb-input"
+                            style={{ width: 130 }}
+                            list="net-options"
+                            value={sensor.csNet}
+                            aria-label="sensor chip select net"
+                            placeholder="CS net (SPI optional)"
+                            onChange={event => updateSensor(sensor.rowId, { csNet: event.target.value })}
+                          />
+                          <select
+                            className="hb-input"
+                            style={{ width: 190 }}
+                            data-testid={`sensor-catalog-${sensor.rowId}`}
+                            aria-label="bundled sensor behavior"
+                            value=""
+                            disabled={sensorCatalog.length === 0}
+                            title={sensorCatalogError ?? 'Checked-in local behavior; no network or LLM'}
+                            onChange={event => {
+                              const entry = sensorCatalog.find(item => item.id === event.target.value)
+                              if (!entry) return
+                              let inputs: SensorInputRow[] = []
+                              try {
+                                const parsed = parseToml(entry.spec_toml) as {
+                                  sensor?: { input?: Array<{ name?: unknown; default?: unknown }> }
+                                }
+                                inputs = (parsed.sensor?.input ?? []).flatMap(input =>
+                                  typeof input.name === 'string' && typeof input.default === 'number'
+                                    ? [{ rowId: nextSensorInputId.current++, name: input.name, value: String(input.default) }]
+                                    : [])
+                              } catch { /* catalog endpoint is separately validated; keep exact bytes usable */ }
+                              updateSensor(sensor.rowId, {
+                                spec: entry.spec_toml,
+                                specName: `bundled:${entry.id}`,
+                                inputs,
+                              })
+                            }}
+                          >
+                            <option value="">
+                              {sensorCatalogError
+                                ? 'bundled library unavailable'
+                                : sensorCatalog.length === 0 ? 'loading bundled behavior…' : 'choose bundled behavior…'}
+                            </option>
+                            {sensorCatalog.map(entry => (
+                              <option key={entry.id} value={entry.id} title={entry.scope}>
+                                {entry.name} · {entry.bus.toUpperCase()}
+                              </option>
+                            ))}
+                          </select>
+                          <label className="hb-chip hb-press px-2.5 py-1.5 text-[11px] cursor-pointer">
+                            {sensor.specName ? `loaded ${sensor.specName}` : 'choose sensor TOML'}
+                            <input
+                              type="file"
+                              accept=".toml,text/plain"
+                              className="sr-only"
+                              data-testid={`sensor-file-${sensor.rowId}`}
+                              onChange={event => {
+                                const file = event.target.files?.[0]
+                                if (!file) return
+                                void file.text().then(spec => updateSensor(sensor.rowId, { spec, specName: file.name }))
+                              }}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="hb-press text-[11px] ml-auto"
+                            style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
+                            onClick={() => setSensors(rows => rows.filter(row => row.rowId !== sensor.rowId))}
+                          >
+                            remove
+                          </button>
+                        </div>
+                        {(sensor.componentRef || sensor.modelId) && (
+                          <div className="text-[10px] mb-2" style={{ color: 'var(--silk-faint)' }}>
+                            from clicked component {sensor.componentRef || sensor.id}
+                            {sensor.modelId ? <> · model <code style={{ fontFamily: 'var(--font-mono)' }}>{sensor.modelId}</code></> : null}
+                          </div>
+                        )}
+                        <label className="block text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                          Spec bytes (paste or edit; checked again by the real runner)
+                          <textarea
+                            className="hb-input w-full mt-1 text-[11px]"
+                            style={{ minHeight: 110, fontFamily: 'var(--font-mono)', lineHeight: 1.45, padding: 8 }}
+                            value={sensor.spec}
+                            aria-label="sensor spec"
+                            placeholder={'[sensor]\nname = "my device"\nbus = "i2c"\ni2c_address = 0x48\n...'}
+                            onChange={event => updateSensor(sensor.rowId, { spec: event.target.value, specName: '' })}
+                          />
+                        </label>
+                        <div className="flex flex-wrap items-center gap-2 mt-2">
+                          <span className="text-[10px] font-bold tracking-wider uppercase" style={{ color: 'var(--silk-faint)' }}>physical inputs</span>
+                          <button
+                            type="button"
+                            className="hb-press text-[11px]"
+                            style={{ color: 'var(--copper)', background: 'none', border: 'none' }}
+                            onClick={() => updateSensor(sensor.rowId, {
+                              inputs: [...sensor.inputs, { rowId: nextSensorInputId.current++, name: '', value: '25' }],
+                            })}
+                          >
+                            + override
+                          </button>
+                        </div>
+                        {sensor.inputs.map(input => (
+                          <div key={input.rowId} className="flex flex-wrap items-center gap-2 mt-1">
+                            <input
+                              className="hb-input"
+                              style={{ width: 150 }}
+                              value={input.name}
+                              aria-label="sensor input name"
+                              placeholder="temperature_c"
+                              onChange={event => updateSensor(sensor.rowId, {
+                                inputs: sensor.inputs.map(item => item.rowId === input.rowId ? { ...item, name: event.target.value } : item),
+                              })}
+                            />
+                            <Field label="value" value={input.value} width={80} onChange={value => updateSensor(sensor.rowId, {
+                              inputs: sensor.inputs.map(item => item.rowId === input.rowId ? { ...item, value } : item),
+                            })} />
+                            <button type="button" className="hb-press text-[11px]" style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
+                              onClick={() => updateSensor(sensor.rowId, { inputs: sensor.inputs.filter(item => item.rowId !== input.rowId) })}>
+                              remove input
+                            </button>
+                          </div>
+                        ))}
+                        {liveRegisterMapAvailable && onAttachRegisterMapLive && (
+                          <button
+                            type="button"
+                            data-testid={`sensor-attach-live-${sensor.rowId}`}
+                            className="hb-btn-primary hb-press px-2.5 py-1.5 text-[11px] mt-2"
+                            onClick={() => attachSensorLive(sensor)}
+                          >
+                            Attach these exact bytes to the live simulation
+                          </button>
+                        )}
+                        {liveRequestId !== undefined && (
+                          <div
+                            data-testid={`sensor-live-result-${sensor.rowId}`}
+                            className="text-[11px] mt-2 rounded-md px-2.5 py-2"
+                            style={{
+                              color: liveReceipt ? (liveReceipt.ok ? 'var(--ok)' : 'var(--err)') : 'var(--silk-dim)',
+                              background: liveReceipt ? (liveReceipt.ok ? 'var(--ok-bg)' : 'var(--err-bg)') : 'var(--surface-1)',
+                              border: `1px solid ${liveReceipt ? (liveReceipt.ok ? 'var(--ok-border)' : 'var(--err)') : 'var(--hairline)'}`,
+                            }}
+                          >
+                            {liveReceipt
+                              ? liveReceipt.message
+                              : 'Waiting for the simulation engine to validate and attach these exact bytes…'}
+                          </div>
+                        )}
+                        {issues.map(issue => <div key={issue} className="text-[11px] mt-1" style={{ color: 'var(--err-strong)' }}>{issue}</div>)}
+                      </div>
+                    )
+                  })}
                 </section>
 
                 {/* Assertions, grouped by kind. The groups stagger in once on
@@ -1117,12 +1918,18 @@ export function ChecksView({
                           setSpecName(parsed.name)
                           setDuration(parsed.duration)
                           setSupplies(parsed.supplies)
+                          setPeripherals(parsed.peripherals)
+                          setSensors(parsed.sensors)
                           setChecks(parsed.checks)
                           nextId.current = parsed.checks.reduce((m, c) => Math.max(m, c.id), 0) + 1
+                          nextPeripheralId.current = parsed.peripherals.reduce((m, p) => Math.max(m, p.rowId), 0) + 1
+                          nextSensorId.current = parsed.sensors.reduce((m, sensor) => Math.max(m, sensor.rowId), 0) + 1
+                          nextSensorInputId.current = parsed.sensors.flatMap(sensor => sensor.inputs)
+                            .reduce((m, input) => Math.max(m, input.rowId), 0) + 1
                           setRawMode(false)
                         } else if (window.confirm(
                           'This TOML uses features the visual builder does not cover '
-                          + '(tolerances, scenarios, overrides, sensors...). Going back to the '
+                          + '(tolerances, scenarios, overrides...). Going back to the '
                           + 'builder will DISCARD the raw text. Continue?')) {
                           setRawMode(false)
                         }

@@ -75,6 +75,8 @@ globalThis.hauksbee = {
                                firmware_path: firmwarePath,
                                schematic_path: schematicPath }),
     listCapabilities: () => __call("list_capabilities", {}),
+    modelCoverage: (path, modelsDir) =>
+        __call("model_coverage", { board_path: path, models_dir: modelsDir }),
     boardToCode: (path) => __call("board_to_code", { board_path: path }),
 };
 "#;

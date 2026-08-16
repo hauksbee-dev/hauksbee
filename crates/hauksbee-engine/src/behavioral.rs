@@ -45,7 +45,7 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::behavioral::{
     Behavioral, Converter, Law, LawKind, SenseProgram, StatePinBehaviour,
 };
-use hauksbee_models::Params;
+use hauksbee_models::{LoadProfile, Params};
 
 use crate::stress::{FaultEvent, FaultKind};
 
@@ -189,6 +189,33 @@ struct DriveLeg {
     on_ohms: f64,
 }
 
+/// A state-controlled resistor between two model pin roles. Its current from
+/// `a` to `b` is exposed to FSM guards as `i_<name>`.
+#[derive(Debug, Clone)]
+struct SeriesPathLeg {
+    name: String,
+    a: NodeId,
+    b: NodeId,
+    resistor: DeviceId,
+    default_ohms: f64,
+    state_ohms: BTreeMap<String, f64>,
+    current_ohms: f64,
+}
+
+/// A model-owned dynamic current sink. This uses the same [`LoadProfile`]
+/// evaluator as scenario-level loads, but travels with the resolved part and
+/// therefore needs no duplicate CI wiring.
+#[derive(Debug, Clone)]
+struct ProfiledLoadLeg {
+    name: String,
+    source: DeviceId,
+    profile: LoadProfile,
+    start_s: f64,
+    seed: u64,
+    last_i_a: f64,
+    peak_i_a: f64,
+}
+
 /// The stamped converter realisation.
 #[derive(Debug, Clone)]
 struct ConverterLeg {
@@ -204,6 +231,10 @@ struct ConverterLeg {
     out_r_ohms: f64,
     out_node: NodeId,
     in_node: NodeId,
+    /// Optional external-divider midpoint used by an adjustable converter.
+    feedback_node: Option<NodeId>,
+    /// Optional enable input.  A low level disables both converter legs.
+    enable_node: Option<NodeId>,
     /// Input draw (controllable Isource from in_node to ground).
     in_isource: DeviceId,
     /// Effective input-current limit (A), computed from the sense program at
@@ -353,8 +384,11 @@ fn compile_law_implicit(
         // runtime and must not fold here; those tokens fall through to the
         // refusal below, keeping such a law on the runtime path it actually
         // depends on.
-        let runtime_owned =
-            token == "t" || token == "time" || token == "t_in_state" || token.starts_with("state_");
+        let runtime_owned = token == "t"
+            || token == "time"
+            || token == "temperature_c"
+            || token == "t_in_state"
+            || token.starts_with("state_");
         if !runtime_owned {
             if let Some(v) = params.0.get(token).and_then(|v| v.as_f64()) {
                 // Round-trip-exact literal, parenthesised so `1/x` stays `1/(v)`.
@@ -428,12 +462,16 @@ pub struct BehavioralDevice {
     pulls: Vec<PullLeg>,
     open_drains: Vec<OpenDrainLeg>,
     drives: Vec<DriveLeg>,
+    series_paths: Vec<SeriesPathLeg>,
+    profiled_loads: Vec<ProfiledLoadLeg>,
     converter: Option<ConverterLeg>,
     laws: Vec<LawLeg>,
 
     /// FSM state names (empty when the model has no FSM).
     fsm_states: Vec<String>,
     fsm_transitions: Vec<CompiledTransition>,
+    /// Continuous true-time accumulated independently for each transition.
+    transition_guard_true_s: Vec<f64>,
     /// state -> pin role -> behaviour override.
     state_pins: BTreeMap<String, BTreeMap<String, StatePinBehaviour>>,
     /// Current FSM state index, and time spent in it.
@@ -471,7 +509,15 @@ impl BehavioralDevice {
             c.out_drv_node = map(c.out_drv_node);
             c.out_node = map(c.out_node);
             c.in_node = map(c.in_node);
+            c.feedback_node = c.feedback_node.map(&map);
+            c.enable_node = c.enable_node.map(&map);
         }
+        for path in &mut self.series_paths {
+            path.a = map(path.a);
+            path.b = map(path.b);
+        }
+        // Profiled loads retain only their source DeviceId. Circuit device
+        // terminals are remapped by the as-built circuit rewrite itself.
     }
 
     /// Wrap a user-supplied [`CustomBehavior`] as a behavioural device, stamping
@@ -492,10 +538,13 @@ impl BehavioralDevice {
             pulls: Vec::new(),
             open_drains: Vec::new(),
             drives: Vec::new(),
+            series_paths: Vec::new(),
+            profiled_loads: Vec::new(),
             converter: None,
             laws: Vec::new(),
             fsm_states: Vec::new(),
             fsm_transitions: Vec::new(),
+            transition_guard_true_s: Vec::new(),
             state_pins: BTreeMap::new(),
             state_idx: 0,
             t_in_state: 0.0,
@@ -529,10 +578,13 @@ impl BehavioralDevice {
             pulls: Vec::new(),
             open_drains: Vec::new(),
             drives: Vec::new(),
+            series_paths: Vec::new(),
+            profiled_loads: Vec::new(),
             converter: None,
             laws: Vec::new(),
             fsm_states: Vec::new(),
             fsm_transitions: Vec::new(),
+            transition_guard_true_s: Vec::new(),
             state_pins: BTreeMap::new(),
             state_idx: 0,
             t_in_state: 0.0,
@@ -633,6 +685,7 @@ impl BehavioralDevice {
                     }
                 })
                 .collect();
+            dev.transition_guard_true_s = vec![0.0; dev.fsm_transitions.len()];
             dev.state_pins = fsm.state_pins.clone();
             dev.state_idx = fsm
                 .initial
@@ -678,6 +731,73 @@ impl BehavioralDevice {
             }
         }
 
+        // ── State-controlled series conduction paths ─────────────────────
+        for path in &model.series_paths {
+            let (Some(&a), Some(&b)) = (role_nodes.get(&path.a), role_nodes.get(&path.b)) else {
+                continue;
+            };
+            let active = dev.state();
+            let initial_ohms = path
+                .state_ohms
+                .get(active)
+                .copied()
+                .unwrap_or(path.default_ohms);
+            let resistor = circuit.add(Device::Resistor {
+                name: format!("Rbeh_{reference}_{}", path.name),
+                a,
+                b,
+                ohms: initial_ohms,
+                tc1: None,
+            });
+            dev.series_paths.push(SeriesPathLeg {
+                name: path.name.clone(),
+                a,
+                b,
+                resistor,
+                default_ohms: path.default_ohms,
+                state_ohms: path.state_ohms.clone(),
+                current_ohms: initial_ohms,
+            });
+        }
+
+        // ── Model-owned dynamic current profiles ─────────────────────────
+        for load in &model.profiled_loads {
+            let Some(&supply) = role_nodes.get(&load.supply_pin) else {
+                continue;
+            };
+            let return_node = match load.return_pin.as_ref() {
+                Some(role) => {
+                    let Some(&node) = role_nodes.get(role) else {
+                        continue;
+                    };
+                    node
+                }
+                None => NodeId::GROUND,
+            };
+            let profile = LoadProfile {
+                id: format!("model:{reference}:{}", load.name),
+                description: format!("model-owned current profile for {reference}"),
+                match_rule: Default::default(),
+                segments: load.segments.clone(),
+            };
+            let initial_i = profile.current_at(-1.0, load.seed);
+            let source = circuit.add(Device::Isource {
+                name: format!("Ibeh_{reference}_load_{}", load.name),
+                p: supply,
+                n: return_node,
+                kind: SourceKind::Dc(initial_i),
+            });
+            dev.profiled_loads.push(ProfiledLoadLeg {
+                name: load.name.clone(),
+                source,
+                profile,
+                start_s: load.start_s,
+                seed: load.seed,
+                last_i_a: initial_i,
+                peak_i_a: initial_i,
+            });
+        }
+
         // ── Converter ──────────────────────────────────────────────────────
         if let Some(c) = &model.converter {
             let iin_limit_a = resolve_iin_limit(c, board_resistor);
@@ -688,11 +808,17 @@ impl BehavioralDevice {
                 {
                     let out_r = c.out_r_ohms.unwrap_or(STIFF_R_OHMS).max(STIFF_R_OHMS);
                     let drv = circuit.node(&format!("__beh_{reference}_conv_out"));
+                    let starts_from_feedback = c.feedback.is_some();
+                    let initial_vout = if starts_from_feedback {
+                        0.0
+                    } else {
+                        c.vout_setpoint
+                    };
                     let out_vsource = circuit.add(Device::Vsource {
                         name: format!("Vbeh_{reference}_conv"),
                         p: drv,
                         n: NodeId::GROUND,
-                        kind: SourceKind::Dc(c.vout_setpoint),
+                        kind: SourceKind::Dc(initial_vout),
                     });
                     circuit.add(Device::Resistor {
                         name: format!("Rbeh_{reference}_conv_out"),
@@ -715,9 +841,17 @@ impl BehavioralDevice {
                         out_r_ohms: out_r,
                         out_node,
                         in_node,
+                        feedback_node: c
+                            .feedback
+                            .as_ref()
+                            .and_then(|feedback| role_nodes.get(&feedback.pin).copied()),
+                        enable_node: c
+                            .enable
+                            .as_ref()
+                            .and_then(|enable| role_nodes.get(&enable.pin).copied()),
                         in_isource,
                         iin_limit_a,
-                        last_cmd_vout: c.vout_setpoint,
+                        last_cmd_vout: initial_vout,
                         last_iout_a: 0.0,
                         last_iin_a: 0.0,
                     });
@@ -819,6 +953,8 @@ impl BehavioralDevice {
             && self.pulls.is_empty()
             && self.open_drains.is_empty()
             && self.drives.is_empty()
+            && self.series_paths.is_empty()
+            && self.profiled_loads.is_empty()
             && self.fsm_states.is_empty()
             && self.converter.is_none()
             && self.laws.is_empty()
@@ -873,7 +1009,7 @@ impl BehavioralDevice {
         let leg = self.laws.iter().find(|l| l.law.name == name)?;
         match leg.stamp {
             LawStamp::Implicit => {
-                let ctx = self.build_context(node_v, t);
+                let ctx = self.build_context(node_v, t, circuit.temp_c);
                 eval_number(&leg.program, &ctx)
             }
             LawStamp::Runtime { source, .. } => match circuit.devices.get(source.0 as usize) {
@@ -913,15 +1049,20 @@ impl BehavioralDevice {
             return;
         }
 
+        // 0. Advance model-owned current profiles to the end of this chunk,
+        //    matching the zero-order-hold convention used by scenario loads.
+        self.update_profiled_loads(circuit, t + dt);
+
         // 1. Build the evaluation context from current pin voltages + params +
         //    state booleans.
-        let ctx = self.build_context(node_v, t);
+        let ctx = self.build_context(node_v, t, circuit.temp_c);
 
         // 2. Advance the FSM (guards over the same context).
         self.advance_fsm(&ctx, dt);
 
         // 3. Apply per-state pin overrides (open-drain asserts, drives).
         self.apply_state_pins(circuit);
+        self.apply_series_paths(circuit);
 
         // 4. Converter regulation + limits.
         if self.converter.is_some() {
@@ -933,7 +1074,7 @@ impl BehavioralDevice {
         //    `t_in_state`, and a law's expr can read `state_<name>` / `t_in_state`
         //    / its own gating. Using the pre-advance `ctx` here lagged the law one
         //    chunk behind the state that gates it.
-        let ctx = self.build_context(node_v, t);
+        let ctx = self.build_context(node_v, t, circuit.temp_c);
         let active = self.state().to_string();
         for leg in &self.laws {
             // An implicit law lives inside the Newton loop as a behavioral
@@ -982,11 +1123,24 @@ impl BehavioralDevice {
     }
 
     /// Build an evalexpr context: `v_<role>` for each connected pin's voltage,
-    /// every param key verbatim, `t`, `t_in_state`, and `state_<name>` booleans.
-    fn build_context(&self, node_v: &dyn Fn(NodeId) -> f64, t: f64) -> HashMapContext {
+    /// every param key verbatim, `t`, solver `temperature_c`, `t_in_state`, and
+    /// `state_<name>` booleans.
+    fn build_context(
+        &self,
+        node_v: &dyn Fn(NodeId) -> f64,
+        t: f64,
+        temperature_c: f64,
+    ) -> HashMapContext {
         let mut ctx = HashMapContext::new();
         for (role, &node) in &self.role_nodes {
             let _ = ctx.set_value(format!("v_{role}"), Value::Float(node_v(node)));
+        }
+        for path in &self.series_paths {
+            let current = (node_v(path.a) - node_v(path.b)) / path.current_ohms;
+            let _ = ctx.set_value(format!("i_{}", path.name), Value::Float(current));
+        }
+        for load in &self.profiled_loads {
+            let _ = ctx.set_value(format!("i_load_{}", load.name), Value::Float(load.last_i_a));
         }
         for (k, v) in &self.params.0 {
             if let Some(f) = v.as_f64() {
@@ -994,6 +1148,7 @@ impl BehavioralDevice {
             }
         }
         let _ = ctx.set_value("t".into(), Value::Float(t));
+        let _ = ctx.set_value("temperature_c".into(), Value::Float(temperature_c));
         let _ = ctx.set_value("t_in_state".into(), Value::Float(self.t_in_state));
         for (i, name) in self.fsm_states.iter().enumerate() {
             let on = if i == self.state_idx { 1.0 } else { 0.0 };
@@ -1009,23 +1164,38 @@ impl BehavioralDevice {
             return;
         }
         let cur = self.state().to_string();
-        for ct in &self.fsm_transitions {
-            let tr = &ct.tr;
+        for index in 0..self.fsm_transitions.len() {
+            let tr = self.fsm_transitions[index].tr.clone();
             if tr.from != cur {
+                self.transition_guard_true_s[index] = 0.0;
                 continue;
-            }
-            if let Some(min) = tr.min_dwell_s {
-                if self.t_in_state < min {
-                    continue;
-                }
             }
             // Guard compiled once at stamp time; a guard that failed to parse is
             // `None` and never fires.
-            let fired = ct.guard.as_ref().is_some_and(|p| guard_true(p, ctx));
+            let fired = self.fsm_transitions[index]
+                .guard
+                .as_ref()
+                .is_some_and(|p| guard_true(p, ctx));
+            if fired {
+                self.transition_guard_true_s[index] += dt;
+            } else {
+                self.transition_guard_true_s[index] = 0.0;
+                continue;
+            }
+            if tr.min_dwell_s.is_some_and(|min| self.t_in_state < min) {
+                continue;
+            }
+            if tr
+                .guard_dwell_s
+                .is_some_and(|min| self.transition_guard_true_s[index] < min)
+            {
+                continue;
+            }
             if fired {
                 if let Some(idx) = self.fsm_states.iter().position(|s| s == &tr.to) {
                     self.state_idx = idx;
                     self.t_in_state = 0.0;
+                    self.transition_guard_true_s.fill(0.0);
                 }
                 break;
             }
@@ -1059,12 +1229,50 @@ impl BehavioralDevice {
         }
     }
 
+    /// Retune each series path to the active state's declared resistance.
+    fn apply_series_paths(&mut self, circuit: &mut Circuit) {
+        let active = self.state().to_string();
+        for path in &mut self.series_paths {
+            let ohms = path
+                .state_ohms
+                .get(&active)
+                .copied()
+                .unwrap_or(path.default_ohms);
+            path.current_ohms = ohms;
+            set_resistor_ohms(circuit, path.resistor, ohms);
+        }
+    }
+
+    /// Update each model-owned current sink for the next solve.
+    fn update_profiled_loads(&mut self, circuit: &mut Circuit, t_end: f64) {
+        for load in &mut self.profiled_loads {
+            let current = load.profile.current_at(t_end - load.start_s, load.seed);
+            load.last_i_a = current;
+            load.peak_i_a = load.peak_i_a.max(current);
+            set_source_dc(circuit, load.source, current);
+        }
+    }
+
     /// Converter regulation: hold `vout_setpoint`, fold the output back under an
     /// output-current limit, and throttle so the reflected input draw never
     /// exceeds the (programmable) input-current limit. Mirrors
     /// `power_supply::cc_regulate`, anchored to the previous command.
     fn update_converter(&mut self, circuit: &mut Circuit, node_v: &dyn Fn(NodeId) -> f64) {
         let c = self.converter.as_mut().unwrap();
+        if let Some(enable) = &c.cfg.enable {
+            let enabled = c
+                .enable_node
+                .map(|node| node_v(node) >= enable.high_threshold_v)
+                .unwrap_or(false);
+            if !enabled {
+                c.last_cmd_vout = 0.0;
+                c.last_iout_a = 0.0;
+                c.last_iin_a = 0.0;
+                set_source_dc(circuit, c.out_vsource, 0.0);
+                set_source_dc(circuit, c.in_isource, 0.0);
+                return;
+            }
+        }
         if c.cfg.iin_program.is_some() && c.iin_limit_a.is_none() {
             c.last_iout_a = 0.0;
             c.last_iin_a = 0.0;
@@ -1093,7 +1301,32 @@ impl BehavioralDevice {
 
         // Output CV/CC: if iout exceeds the output limit, fold vout back so the
         // current is held at the limit (anchor to the last command).
-        let mut v_cmd = c.cfg.vout_setpoint;
+        // Fixed-output converters command their declared setpoint. Adjustable
+        // converters instead close a first-order numerical loop around the
+        // board's actual feedback divider. `relaxation_gain` is deliberately a
+        // convergence parameter, not a bandwidth claim; switching/COMP/phase
+        // behavior remains an explicit model gap.
+        let mut v_cmd = if let Some(feedback) = &c.cfg.feedback {
+            let Some(feedback_node) = c.feedback_node else {
+                c.last_cmd_vout = 0.0;
+                c.last_iout_a = 0.0;
+                c.last_iin_a = 0.0;
+                set_source_dc(circuit, c.out_vsource, 0.0);
+                set_source_dc(circuit, c.in_isource, 0.0);
+                return;
+            };
+            c.last_cmd_vout + feedback.relaxation_gain * (feedback.vref_v - node_v(feedback_node))
+        } else {
+            c.cfg.vout_setpoint
+        };
+
+        // A buck cannot command an averaged switch-node voltage above VIN.
+        // `vout_setpoint` remains an explicit hard ceiling for every topology.
+        let command_ceiling = match c.cfg.topology {
+            hauksbee_models::behavioral::Topology::Buck => c.cfg.vout_setpoint.min(vin),
+            _ => c.cfg.vout_setpoint,
+        };
+        v_cmd = v_cmd.clamp(0.0, command_ceiling);
         if let Some(ilim) = c.cfg.iout_limit_a {
             if iout > ilim && iout > 1e-9 {
                 let v_cc = ilim * (c.last_cmd_vout.max(1e-6) / iout);
@@ -1124,7 +1357,7 @@ impl BehavioralDevice {
                 iin = (v_cmd * v_cmd * (iout / vout)) / (eff * vin);
             }
         }
-        v_cmd = v_cmd.clamp(0.0, c.cfg.vout_setpoint);
+        v_cmd = v_cmd.clamp(0.0, command_ceiling);
 
         c.last_cmd_vout = v_cmd;
         c.last_iout_a = iout;
@@ -1295,6 +1528,8 @@ fn guard_true(program: &EvalNode, ctx: &HashMapContext) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hauksbee_models::behavioral::{Fsm, ProfiledLoad, SeriesPath, Transition};
+    use hauksbee_models::Segment;
 
     fn roles() -> BTreeMap<String, NodeId> {
         let mut r = BTreeMap::new();
@@ -1309,6 +1544,188 @@ mod tests {
         p.set_f64("vt_clamp", 1.1);
         p.set_f64("rd_clamp", 0.5);
         p
+    }
+
+    #[test]
+    fn series_path_guard_dwell_measures_continuous_overcurrent_and_opens() {
+        let mut circuit = Circuit::new();
+        let a = circuit.node("a");
+        let b = NodeId::GROUND;
+        let role_nodes: BTreeMap<String, NodeId> =
+            [("a".into(), a), ("b".into(), b)].into_iter().collect();
+        let model = Behavioral {
+            fsm: Some(Fsm {
+                states: vec!["closed".into(), "tripped".into()],
+                initial: Some("closed".into()),
+                transitions: vec![Transition {
+                    from: "closed".into(),
+                    to: "tripped".into(),
+                    guard: "i_fuse * i_fuse >= 64.0".into(),
+                    min_dwell_s: None,
+                    guard_dwell_s: Some(1.5),
+                }],
+                state_pins: BTreeMap::new(),
+            }),
+            series_paths: vec![SeriesPath {
+                name: "fuse".into(),
+                a: "a".into(),
+                b: "b".into(),
+                default_ohms: 0.04,
+                state_ohms: [("closed".into(), 0.04), ("tripped".into(), 1e9)]
+                    .into_iter()
+                    .collect(),
+            }],
+            ..Default::default()
+        };
+        let mut dev = BehavioralDevice::stamp(
+            &mut circuit,
+            "F1",
+            &model,
+            &Params::default(),
+            &role_nodes,
+            &|_| None,
+        )
+        .expect("series path stamps");
+        let no_branch = |_id: DeviceId| None;
+        let high = |node: NodeId| if node == a { 0.36 } else { 0.0 }; // 9 A at 40 mΩ
+        let low = |node: NodeId| if node == a { 0.04 } else { 0.0 }; // 1 A
+
+        dev.update(&mut circuit, &high, &no_branch, 1.0, 1.0);
+        assert_eq!(dev.state(), "closed");
+        // A safe interval resets continuous guard time. Total device age is now
+        // long, but the next short pulse must not trip immediately.
+        dev.update(&mut circuit, &low, &no_branch, 11.0, 10.0);
+        dev.update(&mut circuit, &high, &no_branch, 11.5, 0.5);
+        dev.update(&mut circuit, &high, &no_branch, 12.4, 0.9);
+        assert_eq!(dev.state(), "closed");
+        dev.update(&mut circuit, &high, &no_branch, 12.51, 0.11);
+        assert_eq!(dev.state(), "tripped");
+
+        let resistance = circuit
+            .devices
+            .iter()
+            .find_map(|device| match device {
+                Device::Resistor { name, ohms, .. } if name == "Rbeh_F1_fuse" => Some(*ohms),
+                _ => None,
+            })
+            .expect("stamped series resistor");
+        assert_eq!(resistance, 1e9);
+    }
+
+    #[test]
+    fn behavioral_guards_receive_the_configured_solver_temperature() {
+        let mut circuit = Circuit::new();
+        circuit.temp_c = 25.0;
+        let model = Behavioral {
+            fsm: Some(Fsm {
+                states: vec!["normal".into(), "hot".into()],
+                initial: Some("normal".into()),
+                transitions: vec![Transition {
+                    from: "normal".into(),
+                    to: "hot".into(),
+                    guard: "temperature_c >= 80.0".into(),
+                    min_dwell_s: None,
+                    guard_dwell_s: None,
+                }],
+                state_pins: BTreeMap::new(),
+            }),
+            ..Default::default()
+        };
+        let mut dev = BehavioralDevice::stamp(
+            &mut circuit,
+            "U1",
+            &model,
+            &Params::default(),
+            &BTreeMap::new(),
+            &|_| None,
+        )
+        .expect("temperature-only FSM stamps");
+        let zero = |_node: NodeId| 0.0;
+        let no_branch = |_id: DeviceId| None;
+
+        dev.update(&mut circuit, &zero, &no_branch, 0.1, 0.1);
+        assert_eq!(dev.state(), "normal");
+        circuit.temp_c = 85.0;
+        dev.update(&mut circuit, &zero, &no_branch, 0.2, 0.1);
+        assert_eq!(dev.state(), "hot");
+    }
+
+    #[test]
+    fn model_owned_profile_draws_current_and_can_drive_an_fsm_guard() {
+        let mut circuit = Circuit::new();
+        let vdd = circuit.node("vdd");
+        let roles: BTreeMap<String, NodeId> = [("vdd".into(), vdd), ("gnd".into(), NodeId::GROUND)]
+            .into_iter()
+            .collect();
+        let model = Behavioral {
+            fsm: Some(Fsm {
+                states: vec!["idle".into(), "busy".into()],
+                initial: Some("idle".into()),
+                transitions: vec![Transition {
+                    from: "idle".into(),
+                    to: "busy".into(),
+                    guard: "i_load_core >= 0.2".into(),
+                    min_dwell_s: None,
+                    guard_dwell_s: None,
+                }],
+                state_pins: BTreeMap::new(),
+            }),
+            profiled_loads: vec![ProfiledLoad {
+                name: "core".into(),
+                supply_pin: "vdd".into(),
+                return_pin: Some("gnd".into()),
+                start_s: 0.0,
+                seed: 0,
+                segments: vec![
+                    Segment {
+                        level_a: 0.010,
+                        rise_s: 0.0,
+                        duration_s: 0.001,
+                        period_s: 0.0,
+                        idle_a: None,
+                        jitter_s: 0.0,
+                    },
+                    Segment {
+                        level_a: 0.250,
+                        rise_s: 0.0,
+                        duration_s: 0.0,
+                        period_s: 0.0,
+                        idle_a: None,
+                        jitter_s: 0.0,
+                    },
+                ],
+            }],
+            ..Default::default()
+        };
+        let mut dev = BehavioralDevice::stamp(
+            &mut circuit,
+            "U1",
+            &model,
+            &Params::default(),
+            &roles,
+            &|_| None,
+        )
+        .expect("profile stamps");
+        let zero = |_node: NodeId| 0.0;
+        let no_branch = |_id: DeviceId| None;
+
+        dev.update(&mut circuit, &zero, &no_branch, 0.0, 0.0005);
+        assert_eq!(dev.state(), "idle");
+        dev.update(&mut circuit, &zero, &no_branch, 0.0005, 0.0006);
+        assert_eq!(dev.state(), "busy");
+        let current = circuit
+            .devices
+            .iter()
+            .find_map(|device| match device {
+                Device::Isource { name, kind, p, n } if name == "Ibeh_U1_load_core" => {
+                    assert_eq!(*p, vdd);
+                    assert_eq!(*n, NodeId::GROUND);
+                    Some(kind.eval(0.0))
+                }
+                _ => None,
+            })
+            .expect("profile current source exists");
+        assert!((current - 0.250).abs() < 1e-12, "current={current}");
     }
 
     /// The USBLC6 clamp shape compiles: pin voltages become dependency slots

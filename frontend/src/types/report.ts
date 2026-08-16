@@ -232,6 +232,80 @@ export interface ArtifactProvenance {
   contributed?: Array<{ what: string; detail: string }>
 }
 
+export type ModelCoverageStage =
+  | 'unresolved'
+  | 'identity_only'
+  | 'executable_scope_unspecified'
+  | 'executable_partial'
+  | 'executable_declared'
+  | 'ignored'
+
+export interface ModelCoverageReference {
+  url: string
+  title: string
+  locator: string
+  sha256?: string
+}
+
+export interface ModelCoveragePin {
+  number: string
+  function: string
+  kind: string
+  net?: string | null
+  position_mm?: [number, number] | null
+}
+
+/** One exact extracted component and what its winning model can actually do.
+ *  `stage` is intentionally richer than bound/open: identity-only and partial
+ *  cards must never be presented as complete simulation. */
+export interface ModelCoverageComponent {
+  reference: string
+  value: string
+  lib_id: string
+  footprint: string
+  stage: ModelCoverageStage
+  actionable_behavior_gap: boolean
+  model_id?: string | null
+  model_kind?: string | null
+  layer: string
+  origin: string
+  source: {
+    tier: string
+    layer: string
+    origin: string
+    validation: string
+    uncertainty?: unknown[]
+  }
+  references?: ModelCoverageReference[]
+  properties?: Array<{ name: string; value: string }>
+  static_contracts?: string[]
+  implements?: string[]
+  missing?: string[]
+  pins: ModelCoveragePin[]
+}
+
+export interface ModelCoverageSnapshot {
+  schema_version: number
+  summary: {
+    active_connected: number
+    identified: number
+    executable_available: number
+    unresolved: number
+    identity_only: number
+    executable_scope_unspecified: number
+    executable_partial: number
+    executable_declared: number
+    ignored: number
+    actionable_behavior_gaps: number
+    authoring_targets: number
+    requirements_total: number
+    requirements_met: number
+    requirements_unmet: number
+  }
+  components: ModelCoverageComponent[]
+  authoring_targets: ModelCoverageComponent[]
+}
+
 export interface WebReport {
   ok: boolean
   error?: string | null
@@ -247,6 +321,9 @@ export interface WebReport {
   import_diagnostics?: WebImportDiagnostics | null
   import_failure?: WebImportFailure | null
   bind?: BindSummaryWeb | null
+  /** Exact model identity and executable-behaviour scope, shared with the CLI
+   *  coverage command. Present even when every part technically bound. */
+  model_coverage?: ModelCoverageSnapshot | null
   /** Canonical assumption registry and per-assertion maps from the engine. */
   inventory?: ArtifactProvenance[]
   assumptions?: EvidenceAssumption[]
@@ -361,4 +438,47 @@ export interface QueuedCheck {
   kind: string
   net?: string
   ref?: string
+}
+
+/** One interaction queued from a board trace/component into the visual co-sim
+ * builder. This is deliberately separate from an assertion: a stimulus changes
+ * the experiment, while a check judges it. Keeping the two typed prevents a UI
+ * click from silently turning an input into evidence. */
+export interface QueuedPeripheral {
+  seq: number
+  id?: string
+  kind: 'stimulus' | 'pushbutton' | 'toggle'
+  net?: string
+  ref?: string
+}
+
+/** A register-map device queued from a clicked board component. The browser
+ * never invents its protocol: the builder still requires a validated sensor
+ * spec selected or pasted by the user before the scenario can run. */
+export interface QueuedSensor {
+  seq: number
+  id: string
+  ref?: string
+  modelId?: string | null
+}
+
+/** Exact register-map bytes queued for immediate attachment to the current
+ * live session. This is separate from QueuedSensor: the latter opens an
+ * authoring row, while this request is only created after that row validates. */
+export interface QueuedLiveRegisterMap {
+  seq: number
+  id: string
+  spec_toml: string
+  inputs: Record<string, number>
+  controller?: string
+  cs_net?: string
+}
+
+/** An ideal scenario supply queued from clicked copper. It is not a live
+ * post-solve voltage force; the checks runner rebuilds the circuit with this
+ * source on the next run. */
+export interface QueuedSupply {
+  seq: number
+  net: string
+  volts?: number
 }

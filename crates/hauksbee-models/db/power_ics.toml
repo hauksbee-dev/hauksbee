@@ -438,6 +438,10 @@ high_numerator_a = 1.2
 resistance_scale_ohms = 1000.0
 high_offset = 1.3333333333333333
 
+[models.coverage]
+implements = ["nominal_cv_output", "program_resistor_static_charge_current", "quiescent_current", "absolute_ratings"]
+missing = ["cc_cv_state_machine", "dynamic_current_limit", "input_uvlo", "charge_termination", "recharge_hysteresis", "thermal_regulation", "charge_status_timing"]
+
 # ── TP4056: 1 A single-cell Li-ion linear charger, SOP-8 ─────────────────────
 #
 # The charger on every red "TP4056 module" a hobbyist has in a drawer. Same
@@ -906,6 +910,10 @@ gnd_pin    = "1"
 # Table 3 gives only the -40 to +85 C ambient range.
 max_voltage_v = 7.0
 
+[models.coverage]
+implements = ["pin_roles", "fixed_input_thresholds", "supply_current", "open_drain_output_without_fabricated_high_drive", "absolute_ratings"]
+missing = ["smart_reset_timer", "recovery_timer", "low_voltage_input_ignore", "overvoltage_test_mode", "push_pull_variants"]
+
 # ═════════════════════════════════════════════════════════════════════════════
 # THE VOLTAGE DETECTORS AND THE LED DRIVER DELIBERATELY LEFT UNRESOLVED.
 #
@@ -1045,3 +1053,192 @@ max_power_w = 0.3478         # continuous dissipation at TA = +70 C, SOT23,
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 230.0     # multi-layer board
 theta_jc_c_per_w = 76.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MNT Pocket Reform charger: exact identity/binding entries
+#
+# These two parts are deliberately *not* promoted to charger/gauge behaviour.
+# They close the source-bound component identity and pin-map gap so a board
+# report can say which silicon is fitted, while the dynamic battery, ADC,
+# protection-FET and I2C register behaviour remains an explicit coverage hole.
+# A warning parameter is carried into the evidence report by the digital binder;
+# it prevents an identity bind from being mistaken for a causal battery replay.
+
+# Analog Devices MAX17320 2S-4S ModelGauge m5 EZ fuel gauge/protector.
+# Primary source: MAX17320 Rev. 12 datasheet, pin configurations and pin
+# descriptions (https://www.analog.com/media/en/technical-documentation/data-sheets/max17320.pdf).
+# The fitted MAX17320G20+ is the 24-pin QFN symbol used by the pinned MNT
+# Pocket Reform charger source. Pin numbers and role names below are copied from
+# that symbol and checked against the datasheet; no register-map or gauge law is
+# asserted here.
+[[models]]
+id = "max17320"
+kind = "digital"
+description = "Analog Devices MAX17320G20+ fuel gauge/protector (identity-only; gauge/protection behavior not modeled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[models.match]
+value_re = "(?i)^MAX17320G20\\+$"
+mpn_re = "(?i)^MAX17320G20\\+$"
+
+[models.params]
+identity_only = true
+warning = "MAX17320 gauge/protector identity and pin map are sourced; cell-voltage/current/temperature conversion, protection FET control, I2C/1-Wire registers, and charger state are not modeled"
+unlocked_by = "a validated MAX17320 battery/SOC/protection model with I2C register semantics and a coupled battery plant"
+
+[models.pins]
+"1" = "in"
+"2" = "cp"
+"3" = "chg"
+"4" = "dis"
+"5" = "zvc"
+"6" = "pckp"
+"7" = "alrt"
+"8" = "scl"
+"9" = "sda"
+"10" = "th1"
+"11" = "pfail"
+"12" = "aoldo"
+"13" = "reg3"
+"14" = "csn"
+"15" = "csp"
+"16" = "th2"
+"17" = "reg2"
+"18" = "th3"
+"19" = "th4"
+"20" = "gnd"
+"21" = "cell1"
+"22" = "cell2"
+"23" = "cell3"
+"24" = "batts"
+"25" = "gnd_aux"
+
+# Monolithic Power Systems MP2650 I2C-controlled 5 A buck/boost charger with
+# NVDC power-path management and USB OTG. Primary source: MP2650 Rev. 1.0
+# datasheet, pin descriptions (https://www.monolithicpower.com/en/documentview/productdocument/index/version/2/document_type/Datasheet/lang/en/sku/MP2650GV/document_id/9664/).
+# The source schematic's 30-pad MP2650 symbol is authoritative for the exact
+# fitted pin numbering. This entry intentionally carries no averaged converter,
+# current-limit, ADC or I2C-register behavior.
+[[models]]
+id = "mp2650"
+kind = "digital"
+description = "Monolithic Power Systems MP2650 charger (identity-only; NVDC/OTG/ADC behavior not modeled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[models.match]
+value_re = "(?i)^MP2650$"
+mpn_re = "(?i)^MP2650$"
+
+[models.params]
+identity_only = true
+warning = "MP2650 charger identity and pin map are sourced; buck/boost power-path control, charge-current limits, ADC conversions, protection, USB-OTG and I2C register behavior are not modeled"
+unlocked_by = "a validated MP2650 NVDC buck/boost, CC/CV charge, OTG, ADC, protection, and I2C register model"
+
+[models.pins]
+"1" = "in"
+"2" = "vntc"
+"3" = "ntc"
+"4" = "pgnd"
+"5" = "otg"
+"6" = "sys"
+"7" = "batt"
+"8" = "prochot"
+"9" = "int"
+"10" = "sda"
+"11" = "scl"
+"12" = "psys"
+"13" = "ibm"
+"14" = "iam"
+"15" = "bst2"
+"16" = "batt"
+"17" = "sys"
+"18" = "sw2"
+"19" = "pgnd"
+"20" = "cp1"
+"21" = "sw1"
+"22" = "in"
+"23" = "bst1"
+"24" = "cp2"
+"25" = "vmax_bst"
+"26" = "vcc"
+"27" = "agnd"
+"28" = "acok"
+"29" = "iap"
+"30" = "ian"
+# TPD4EUSB30, Texas Instruments SLVSAC2G (revised June 2021):
+# https://www.ti.com/lit/ds/symlink/tpd4eusb30.pdf
+# Four rail-to-ground TVS channels. The laws use the sourced 7 V minimum
+# positive breakdown, 0.8 V typical negative forward clamp and 0.6 Ohm dynamic
+# resistance. They are intentionally solver-implicit so the clamp conductance
+# is in Newton's Jacobian instead of lagging one scheduler chunk behind.
+[[models]]
+id = "tpd4eusb30_dqa"
+kind = "digital"
+description = "TPD4EUSB30 four-channel USB ESD clamp, DQA-10"
+
+[models.match]
+value_re = "(?i)^TPD4EUSB30[A-Z0-9_-]*$"
+mpn_re = "(?i)^TPD4EUSB30"
+
+[models.pins]
+"1" = "d1p"
+"2" = "d1n"
+"3" = "gnd"
+"4" = "d2p"
+"5" = "d2n"
+"6" = "nc_1"
+"7" = "nc_2"
+"8" = "gnd"
+"9" = "nc_3"
+"10" = "nc_4"
+
+[models.params]
+vbreak_v = 7.0
+vf_v = 0.8
+rdyn_ohms = 0.6
+warning = "source-bound piecewise-linear clamp model: four positive-breakdown and negative-forward paths are executable; 0.8 pF channel capacitance, sub-threshold leakage, IEC pulse waveform, temperature dependence and package parasitics are not represented"
+
+[[models.behavioral.laws]]
+name = "d1p_clamp"
+kind = "current"
+a = "d1p"
+b = "gnd"
+expr = "max(0.0, v_d1p - vbreak_v) / rdyn_ohms + min(0.0, v_d1p + vf_v) / rdyn_ohms"
+
+[[models.behavioral.laws]]
+name = "d1n_clamp"
+kind = "current"
+a = "d1n"
+b = "gnd"
+expr = "max(0.0, v_d1n - vbreak_v) / rdyn_ohms + min(0.0, v_d1n + vf_v) / rdyn_ohms"
+
+[[models.behavioral.laws]]
+name = "d2p_clamp"
+kind = "current"
+a = "d2p"
+b = "gnd"
+expr = "max(0.0, v_d2p - vbreak_v) / rdyn_ohms + min(0.0, v_d2p + vf_v) / rdyn_ohms"
+
+[[models.behavioral.laws]]
+name = "d2n_clamp"
+kind = "current"
+a = "d2n"
+b = "gnd"
+expr = "max(0.0, v_d2n - vbreak_v) / rdyn_ohms + min(0.0, v_d2n + vf_v) / rdyn_ohms"
+
+[models.ratings]
+max_voltage_v = 5.5
+
+[models.coverage]
+implements = ["esd_clamp", "negative_clamp", "positive_breakdown"]
+missing = ["channel_capacitance", "iec_pulse_waveform", "package_parasitics", "subthreshold_leakage", "temperature_dependence"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"

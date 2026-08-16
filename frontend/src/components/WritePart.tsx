@@ -41,7 +41,19 @@ description = "what this part is, in a few words"
 value_re = "^10k$"
 `
 
-function starterFor(part?: WebOpenPart): string {
+export interface ModelAuthoringSuggestion {
+  reference: string
+  value: string
+  lib_id?: string
+  footprint?: string
+  model_kind?: string | null
+  model_id?: string | null
+  stage?: string
+  missing?: string[]
+  properties?: Array<{ name: string; value: string }>
+}
+
+function starterFor(part?: ModelAuthoringSuggestion): string {
   if (!part) return STARTER
   const value = part.value.trim()
   const id = `${part.reference}_${value || 'part'}`
@@ -50,10 +62,15 @@ function starterFor(part?: WebOpenPart): string {
   const description = JSON.stringify(`${value || part.reference}: describe what this part does`)
   const valueRe = JSON.stringify(`^${escaped}$`)
   const passive = /^[RCL]\d+$/i.test(part.reference)
-  const kind = passive ? 'passive' : 'choose_kind'
-  const choice = passive
+  const kind = part.model_kind || (passive ? 'passive' : 'choose_kind')
+  const choice = part.model_kind
+    ? `# Extending ${part.model_id ?? 'the resolved model'} (${part.stage?.replaceAll('_', ' ') ?? 'known scope'}).\n# Preserve its behavior and close only source-supported gaps: ${(part.missing ?? []).join(', ') || 'scope not yet declared'}.`
+    : passive
     ? '# Passive reference prefix inferred; verify it against the datasheet.'
     : '# A reference like U3 does not identify behavior. Replace choose_kind.'
+  const libMatch = part.lib_id?.trim()
+    ? `\nlib_id = ${JSON.stringify(part.lib_id.trim())}`
+    : ''
   return `[[models]]
 id = "${id || 'my_part'}"
 kind = "${kind}"
@@ -61,7 +78,7 @@ ${choice}
 description = ${description}
 
 [models.match]
-value_re = ${valueRe}
+value_re = ${valueRe}${libMatch}
 `
 }
 
@@ -75,7 +92,14 @@ export function isModelCheckCurrent(check: CheckState, body: string, format: For
   return check.phase !== 'idle' && check.body === body && check.format === format
 }
 
-export function WritePart({ onSaved, suggested }: { onSaved?: () => void; suggested?: WebOpenPart }) {
+export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
+  onSaved?: () => void
+  suggested?: WebOpenPart | ModelAuthoringSuggestion
+  /** Changing this explicit signal opens the editor. Merely suggesting a part
+   *  must not pop a panel open while a report arrives. */
+  openSignal?: string | null
+  boardLabel?: string
+}) {
   const [open, setOpen] = useState(false)
   const [format, setFormat] = useState<Format>('toml')
   const [toml, setToml] = useState(() => starterFor(suggested))
@@ -85,8 +109,64 @@ export function WritePart({ onSaved, suggested }: { onSaved?: () => void; sugges
   const [part, setPart] = useState(() => suggested?.value.trim() ?? '')
   const [check, setCheck] = useState<CheckState>({ phase: 'idle' })
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
+  const [drafting, setDrafting] = useState(false)
   const timer = useRef<number | null>(null)
   const checkEpoch = useRef(0)
+
+  useEffect(() => {
+    if (!openSignal || !suggested) return
+    setFormat('toml')
+    setPart(suggested.value.trim() || suggested.reference)
+    setToml(starterFor(suggested))
+    setCheck({ phase: 'idle' })
+    setSaveMsg(null)
+    setOpen(true)
+    setDrafting(true)
+    let cancelled = false
+    const upgradesExisting = 'model_id' in suggested && !!suggested.model_id &&
+      !!suggested.model_kind && suggested.stage?.startsWith('executable_')
+    setSaveMsg(upgradesExisting
+      ? 'Copying the exact resolved behavior into a local extension …'
+      : 'Preparing the conservative evidence-first scaffold …')
+    void (async () => {
+      try {
+        const response = await fetch('/api/models/draft', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            board_label: boardLabel ?? 'uploaded board',
+            reference: suggested.reference,
+            value: suggested.value,
+            lib_id: 'lib_id' in suggested ? suggested.lib_id ?? '' : '',
+            footprint: 'footprint' in suggested ? suggested.footprint ?? '' : '',
+            properties: 'properties' in suggested
+              ? (suggested.properties ?? []).map(property => [property.name, property.value])
+              : [],
+            model_id: 'model_id' in suggested ? suggested.model_id ?? '' : '',
+          }),
+        })
+        const result = await response.json() as { ok?: boolean; toml?: string; error?: string }
+        if (cancelled) return
+        if (!result.ok || !result.toml) {
+          setSaveMsg(result.error ?? 'the server could not prepare the resolved model')
+          setDrafting(false)
+          return
+        }
+        setToml(result.toml)
+        setCheck({ phase: 'idle' })
+        setDrafting(false)
+        setSaveMsg(upgradesExisting
+          ? 'Copied the existing executable model. Review the declared gaps, edit, validate, then choose Save.'
+          : 'Prepared the same unresolved scaffold as models prepare. Choose a source-backed kind and behavior, validate, then choose Save.')
+      } catch (error) {
+        if (!cancelled) {
+          setSaveMsg(error instanceof Error ? error.message : String(error))
+          setDrafting(false)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [openSignal, suggested, boardLabel])
 
   // Debounced, because this runs the real validator on the server and a request
   // per keystroke would queue behind itself while someone types a paragraph.
@@ -293,6 +373,8 @@ export function WritePart({ onSaved, suggested }: { onSaved?: () => void; sugges
         data-testid="write-part-toml"
         value={body}
         onChange={e => setBody(e.target.value)}
+        disabled={format === 'toml' && drafting}
+        aria-busy={format === 'toml' && drafting}
         spellCheck={false}
         className="hb-input w-full text-[12px]"
         style={{ minHeight: 220, fontFamily: 'var(--font-mono)', lineHeight: 1.5, padding: 10 }}
@@ -325,7 +407,7 @@ export function WritePart({ onSaved, suggested }: { onSaved?: () => void; sugges
         <button
           type="button"
           data-testid="write-part-save"
-          disabled={visibleCheck.phase !== 'ok' || part.trim().length === 0}
+          disabled={drafting || visibleCheck.phase !== 'ok' || part.trim().length === 0}
           onClick={() => void save()}
           className="rounded-lg px-3.5 py-1.5 text-[12px] font-semibold cursor-pointer transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
           style={{

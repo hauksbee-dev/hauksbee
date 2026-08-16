@@ -114,7 +114,7 @@ fn fixture(rel: &str) -> String {
 }
 
 #[test]
-fn handshake_lists_all_five_tools_with_schemas() {
+fn handshake_lists_every_tool_with_schemas() {
     let mut c = McpClient::start();
     let resp = c.request("tools/list", json!({}));
     let tools = resp["result"]["tools"].as_array().expect("tools array");
@@ -123,6 +123,7 @@ fn handshake_lists_all_five_tools_with_schemas() {
         "analyze_board",
         "run_checks",
         "list_capabilities",
+        "model_coverage",
         "board_to_code",
         "run_script",
     ] {
@@ -140,6 +141,30 @@ fn handshake_lists_all_five_tools_with_schemas() {
             t["name"]
         );
     }
+}
+
+#[test]
+fn model_coverage_is_read_only_and_keeps_executable_scope() {
+    let mut client = McpClient::start();
+    let board = fixture("testdata/boards/button_pullup.kicad_pcb");
+    let (value, is_error) = client.call_tool("model_coverage", json!({ "board_path": board }));
+    assert!(!is_error, "{value}");
+    assert_eq!(value["read_only"], true);
+    assert_eq!(value["workflow"]["llm_required"], false);
+    assert!(value["workflow"]["agent_steps"]
+        .as_array()
+        .is_some_and(|steps| steps.len() >= 5));
+    assert!(value["workflow"]["approval_required_for"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item.as_str().unwrap().contains("LLM")));
+    assert_eq!(value["next_action"]["requires_user_approval"], true);
+    assert!(value["coverage"]["summary"]["active_connected"].is_number());
+    let components = value["coverage"]["components"].as_array().unwrap();
+    assert!(components
+        .iter()
+        .all(|component| component["stage"].is_string()));
 }
 
 #[test]

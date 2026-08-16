@@ -53,6 +53,15 @@ export interface PeripheralInfo {
   kind: string
 }
 
+export interface InputSourceInfo {
+  id: string
+  kind: string
+  min: number
+  max: number
+  initial: number
+  unit: string
+}
+
 export interface BoardInfoMsg {
   type: 'BoardInfo'
   name: string
@@ -69,6 +78,8 @@ export interface BoardInfoMsg {
   power_supplies?: Record<string, PowerSupplyWire>
   /** Attached peripherals; omitted when empty. */
   peripherals?: PeripheralInfo[]
+  /** Inputs explicitly exposed by the engine. Never inferred from net names. */
+  input_sources?: InputSourceInfo[]
   /** Future: URL to the pre-exported GLB for 3D view. Optional chaining required. */
   glb_url?: string
   /** Copper-short honesty: what happened to the DRC's detected shorts on the
@@ -177,6 +188,17 @@ export interface ErrorMsg {
   message: string
 }
 
+/** Correlated engine receipt for an explicit live mutation. A refusal here is
+ * local to the requested action; it does not mean the simulation died. */
+export interface ActionResultMsg {
+  type: 'ActionResult'
+  action: 'attach_peripheral' | 'attach_register_map' | string
+  id: string
+  request_id?: number
+  ok: boolean
+  message: string
+}
+
 /** Server-held session history replayed right after BoardInfo on subscribe:
  *  the accumulated fault log and the active probe set, so a mid-session
  *  reload rejoins with the story intact. */
@@ -192,7 +214,7 @@ export interface BacklogMsg {
   fatal?: string | null
 }
 
-export type ServerMessage = BoardInfoMsg | SimFrame | StatusMsg | ProbeDataMsg | ErrorMsg | BacklogMsg
+export type ServerMessage = BoardInfoMsg | SimFrame | StatusMsg | ProbeDataMsg | ErrorMsg | ActionResultMsg | BacklogMsg
 
 // ============================================================
 // Client → Server
@@ -214,3 +236,24 @@ export type ClientMessage =
   | { type: 'SetPowerSupply'; net: string; supply: PowerSupplyWire }
   /** Live-control a peripheral by id (value interpreted per peripheral kind). */
   | { type: 'SetPeripheral'; id: string; value: number }
+  /** Attach a real net-level control to the running circuit. */
+  | {
+      type: 'AttachPeripheral'
+      id: string
+      kind: 'stimulus' | 'pushbutton' | 'toggle'
+      net: string
+      to?: string
+      offset?: number
+      bounce_ms?: number
+      initial?: number
+    }
+  /** Attach exact declarative bus behavior to the running co-simulation. */
+  | {
+      type: 'AttachRegisterMap'
+      id: string
+      request_id?: number
+      spec_toml: string
+      inputs?: Record<string, number>
+      controller?: string
+      cs_net?: string
+    }

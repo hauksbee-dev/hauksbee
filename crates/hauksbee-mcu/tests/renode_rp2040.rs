@@ -206,6 +206,17 @@ fn rp2040_reports_drive_direction_from_gpio_oe() {
     );
 }
 
+/// RP2040 splits GPIO register ownership from its physical input receiver:
+/// SIO exposes GPIO_OUT/GPIO_OE, while GPIOPort.RP2040GPIO implements OnGPIO.
+/// This is a live Monitor-command regression for the exact failure mode where
+/// the backend sent `sysbus.sio OnGPIO ...` and Renode rejected it.
+#[test]
+fn rp2040_accepts_external_digital_input_on_gpio_port() {
+    rp2040_or_skip!(mcu, "rp2040_quiet", "quiet.elf");
+
+    mcu.set_digital_in(PinId { port: '0', bit: 24 }, true);
+}
+
 /// Sanity on the descriptor's own honesty claims, so the capability table in
 /// `rp2040.soc.toml` cannot drift away from the shipped config without a test
 /// noticing. These are cheap and need no Renode.

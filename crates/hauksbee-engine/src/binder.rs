@@ -25,7 +25,10 @@ use hauksbee_ir::{
     BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, SourceKind,
 };
 use hauksbee_models::value::parse_value;
-use hauksbee_models::{ComponentKind, ComponentQuery, Confidence, ModelEntry, ModelLibrary};
+use hauksbee_models::{
+    Bus, ComponentKind, ComponentQuery, Confidence, ModelEntry, ModelLibrary, PeripheralPower,
+    PeripheralSpec, SensorSpec,
+};
 
 use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
@@ -97,6 +100,31 @@ pub struct DacBinding {
     pub vout_drivers: [Option<PinDriver>; 4],
 }
 
+/// Firmware-visible peripheral discovered from a resolved model card. The
+/// scheduler constructs the protocol slave automatically; the board supplies
+/// only wiring facts such as the SPI chip-select net.
+#[derive(Debug, Clone)]
+pub struct PeripheralBinding {
+    pub reference: String,
+    pub spec: PeripheralSpec,
+    pub cs_net: Option<NodeId>,
+    /// Address selected by an exact board strap. `None` means use the address
+    /// embedded in the portable sensor spec.
+    pub i2c_address_override: Option<u8>,
+    /// Datasheet current envelope and the exact board rails that power this
+    /// peripheral. `None` means the model deliberately makes no electrical
+    /// current/power-gating claim; protocol behavior remains usable but cannot
+    /// be promoted to bus-coupled electrical behavior in model coverage.
+    pub power: Option<BoundPeripheralPower>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundPeripheralPower {
+    pub spec: PeripheralPower,
+    pub supply_node: NodeId,
+    pub return_node: NodeId,
+}
+
 /// The bound board: a ready-to-solve circuit plus the event-driven layer.
 pub struct BoundBoard {
     pub name: String,
@@ -138,6 +166,8 @@ pub struct BoundBoard {
     /// MCP4728 quad DACs discovered on the board, with their VOUT drivers. The
     /// scheduler turns these into I2C slaves and drives the analog VOUT nets.
     pub dacs: Vec<DacBinding>,
+    /// Source-bound I2C/SPI slaves declared by component model cards.
+    pub peripherals: Vec<PeripheralBinding>,
     pub report: BindReport,
 }
 
@@ -340,6 +370,7 @@ pub fn bind_board_with(
     let mut digital: Vec<DigitalComponent> = Vec::new();
     let mut mcus: Vec<McuBinding> = Vec::new();
     let mut dacs: Vec<DacBinding> = Vec::new();
+    let mut peripherals: Vec<PeripheralBinding> = Vec::new();
     let input_sources: HashMap<String, hauksbee_ir::DeviceId> = HashMap::new();
 
     // Detect whether the board has its own regulator chain we can solve. If a
@@ -443,6 +474,7 @@ pub fn bind_board_with(
                     &mut digital,
                     &mut mcus,
                     &mut dacs,
+                    &mut peripherals,
                     has_vreg,
                     &power_nets,
                     lib.pin_rules(),
@@ -604,6 +636,7 @@ pub fn bind_board_with(
         behavioral,
         device_meta,
         dacs,
+        peripherals,
         report,
     }
 }
@@ -1055,6 +1088,7 @@ pub(crate) fn library_resolution(
         non_empty(&comp.footprint),
     );
     q.reference = Some(comp.reference.clone());
+    q.properties = comp.properties.clone();
     // A refused identity is not a model match even here: the record cannot say
     // WHICH part it is, so no identity string in it is evidence. The extractor
     // keeps the record so connectivity/DRC remain available.
@@ -1067,6 +1101,7 @@ pub(crate) fn library_resolution(
             layer: None,
             origin: None,
             provenance: None,
+            references: Vec::new(),
         };
     }
     // Pull a likely manufacturer part-number out of properties for mpn match.
@@ -1131,6 +1166,7 @@ pub(crate) fn library_resolution(
                 )
                 .expect("static fallback provenance is valid"),
             ),
+            references: Vec::new(),
         };
     }
     res
@@ -1198,7 +1234,7 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             ComponentKind::Ignore,
             "connector / mechanical (engine fallback by reference class)",
             Default::default(),
-            BTreeMap::new(),
+            std::collections::BTreeMap::new(),
         ));
     }
 
@@ -1882,17 +1918,345 @@ fn bind_component(
     digital: &mut Vec<DigitalComponent>,
     mcus: &mut Vec<McuBinding>,
     dacs: &mut Vec<DacBinding>,
+    peripherals: &mut Vec<PeripheralBinding>,
     has_vreg: bool,
     power_nets: &HashMap<String, f64>,
     pin_rules: &hauksbee_models::PinRuleTable,
 ) -> (BindOutcome, Option<String>, Vec<String>) {
     use ComponentKind::*;
 
+    // A source-bound identity is not executable behavior. Older identity cards
+    // were represented as empty `digital` models; the digital binder accepted
+    // them, so `critical_parts_bound` increased even though every functional
+    // pin still floated. Preserve the exact winning model/source on the report
+    // row, but leave the circuit OPEN and state the missing primitive.
+    if model.params.get_bool("identity_only").unwrap_or(false) {
+        let because = model
+            .params
+            .get_str("warning")
+            .unwrap_or("component identity is known, but device behavior is not modeled");
+        let unlocked_by = model
+            .params
+            .get_str("unlocked_by")
+            .unwrap_or("a validated behavioral or solver model for this exact device");
+        let connected = comp.pins.iter().any(|pin| node_of(pin.net).is_some());
+        let warning = connected.then(|| {
+            format!(
+                "{} ({}): {because}; identity matched model '{}', but the part remains OPEN",
+                comp.reference, comp.value, model.id
+            )
+        });
+        return (
+            BindOutcome::Unresolved {
+                reason: format!(
+                    "identity matched model '{}' but behavior is unavailable: {}{}{}",
+                    model.id,
+                    one_line(because),
+                    Assumption::UNLOCKED_BY_MARKER,
+                    one_line(unlocked_by)
+                ),
+            },
+            warning,
+            Vec::new(),
+        );
+    }
+
     // role -> node for this component's connected pins. Explicit pin-functions
     // and the model's pad map come first; for any role-dependent pad still
     // without a role the pin-rule table is consulted, and each such inference is
     // recorded as a guess-warning (so nothing is silently guessed).
     let (role_nets, guesses) = role_node_map_guessed(comp, model, node_of, pin_rules);
+
+    // A model-declared firmware peripheral is executable behavior in its own
+    // right. Validate that the board actually wires the bus roles before
+    // registering it; a flash with no CS or an EEPROM with no SDA is left open,
+    // not counted as modeled because its part number was recognized.
+    if let Some(spec) = model.peripheral.clone() {
+        let power = if let Some(power) = model.peripheral_power.clone() {
+            let Some(supply_node) = role_nets.get(&power.supply_role).copied() else {
+                return (
+                    BindOutcome::Unresolved {
+                        reason: format!(
+                            "model declares peripheral power but supply role '{}' is not connected",
+                            power.supply_role
+                        ),
+                    },
+                    Some(format!(
+                        "{} ({}): peripheral model '{}' cannot attach its electrical load because supply role '{}' is not connected",
+                        comp.reference, comp.value, model.id, power.supply_role
+                    )),
+                    guesses,
+                );
+            };
+            let Some(return_node) = role_nets.get(&power.return_role).copied() else {
+                return (
+                    BindOutcome::Unresolved {
+                        reason: format!(
+                            "model declares peripheral power but return role '{}' is not connected",
+                            power.return_role
+                        ),
+                    },
+                    Some(format!(
+                        "{} ({}): peripheral model '{}' cannot attach its electrical load because return role '{}' is not connected",
+                        comp.reference, comp.value, model.id, power.return_role
+                    )),
+                    guesses,
+                );
+            };
+            Some(BoundPeripheralPower {
+                spec: power,
+                supply_node,
+                return_node,
+            })
+        } else {
+            None
+        };
+        let binding = match &spec {
+            PeripheralSpec::I2cEeprom { .. } => {
+                if !role_nets.contains_key("scl") || !role_nets.contains_key("sda") {
+                    return (
+                        BindOutcome::Unresolved {
+                            reason: "model declares an I2C EEPROM but SCL/SDA are not both connected"
+                                .to_string(),
+                        },
+                        Some(format!(
+                            "{} ({}): I2C EEPROM model '{}' cannot attach because SCL/SDA are not both connected",
+                            comp.reference, comp.value, model.id
+                        )),
+                        guesses,
+                    );
+                }
+                PeripheralBinding {
+                    reference: comp.reference.clone(),
+                    spec,
+                    cs_net: None,
+                    i2c_address_override: None,
+                    power,
+                }
+            }
+            PeripheralSpec::SpiNorFlash {
+                cs_role,
+                clk_role,
+                mosi_role,
+                miso_role,
+                ..
+            } => {
+                let Some(cs_net) = role_nets.get(cs_role).copied() else {
+                    return (
+                        BindOutcome::Unresolved {
+                            reason: format!(
+                                "model declares SPI NOR but chip-select role '{cs_role}' is not connected"
+                            ),
+                        },
+                        Some(format!(
+                            "{} ({}): SPI NOR model '{}' cannot attach because chip-select role '{cs_role}' is not connected",
+                            comp.reference, comp.value, model.id
+                        )),
+                        guesses,
+                    );
+                };
+                if !role_nets.contains_key(clk_role)
+                    || !role_nets.contains_key(mosi_role)
+                    || !role_nets.contains_key(miso_role)
+                {
+                    return (
+                        BindOutcome::Unresolved {
+                            reason: format!(
+                                "model declares SPI NOR but {clk_role}/{mosi_role}/{miso_role} are not all connected"
+                            ),
+                        },
+                        Some(format!(
+                            "{} ({}): SPI NOR model '{}' cannot attach because {clk_role}/{mosi_role}/{miso_role} are not all connected",
+                            comp.reference, comp.value, model.id,
+                        )),
+                        guesses,
+                    );
+                }
+                PeripheralBinding {
+                    reference: comp.reference.clone(),
+                    spec,
+                    cs_net: Some(cs_net),
+                    i2c_address_override: None,
+                    power,
+                }
+            }
+            PeripheralSpec::RegisterMap {
+                spec_toml,
+                scl_role,
+                sda_role,
+                cs_role,
+                clk_role,
+                mosi_role,
+                miso_role,
+                required_high_roles,
+                required_low_roles,
+                address_select_role,
+                address_when_low,
+                address_when_high,
+                ..
+            } => {
+                let sensor = SensorSpec::from_toml(spec_toml)
+                    .expect("model validation guarantees a valid register-map spec");
+                let strap_level = |role: &str| -> Result<bool, String> {
+                    let node = role_nets
+                        .get(role)
+                        .copied()
+                        .ok_or_else(|| format!("strap role '{role}' is not connected"))?;
+                    if node.is_ground() {
+                        Ok(false)
+                    } else if power_nets.contains_key(circuit.node_name(node)) {
+                        Ok(true)
+                    } else {
+                        Err(format!(
+                            "strap role '{role}' is on '{}' rather than a resolved supply or ground",
+                            circuit.node_name(node)
+                        ))
+                    }
+                };
+                for role in required_high_roles {
+                    if strap_level(role) != Ok(true) {
+                        let actual = strap_level(role)
+                            .map(|_| "resolved low".to_string())
+                            .unwrap_or_else(|error| error);
+                        return (
+                            BindOutcome::Unresolved {
+                                reason: format!(
+                                    "register-map bus personality requires role '{role}' high, but it is {actual}"
+                                ),
+                            },
+                            Some(format!(
+                                "{} ({}): model '{}' register-map behavior not attached: role '{role}' must resolve high ({actual})",
+                                comp.reference, comp.value, model.id
+                            )),
+                            guesses,
+                        );
+                    }
+                }
+                for role in required_low_roles {
+                    if strap_level(role) != Ok(false) {
+                        let actual = strap_level(role)
+                            .map(|_| "resolved high".to_string())
+                            .unwrap_or_else(|error| error);
+                        return (
+                            BindOutcome::Unresolved {
+                                reason: format!(
+                                    "register-map bus personality requires role '{role}' low, but it is {actual}"
+                                ),
+                            },
+                            Some(format!(
+                                "{} ({}): model '{}' register-map behavior not attached: role '{role}' must resolve low ({actual})",
+                                comp.reference, comp.value, model.id
+                            )),
+                            guesses,
+                        );
+                    }
+                }
+                let i2c_address_override = match (
+                    address_select_role.as_deref(),
+                    address_when_low,
+                    address_when_high,
+                ) {
+                    (Some(role), Some(low), Some(high)) => match strap_level(role) {
+                        Ok(false) => Some(*low),
+                        Ok(true) => Some(*high),
+                        Err(error) => {
+                            return (
+                                BindOutcome::Unresolved {
+                                    reason: format!(
+                                        "register-map I2C address cannot be selected: {error}"
+                                    ),
+                                },
+                                Some(format!(
+                                    "{} ({}): model '{}' register-map behavior not attached because {error}",
+                                    comp.reference, comp.value, model.id
+                                )),
+                                guesses,
+                            );
+                        }
+                    },
+                    _ => None,
+                };
+                match sensor.sensor.bus {
+                    Bus::I2c => {
+                        if !role_nets.contains_key(scl_role) || !role_nets.contains_key(sda_role) {
+                            return (
+                                BindOutcome::Unresolved {
+                                    reason: format!(
+                                        "model declares an I2C register map but roles '{scl_role}'/'{sda_role}' are not both connected"
+                                    ),
+                                },
+                                Some(format!(
+                                    "{} ({}): register-map model '{}' cannot attach because I2C roles '{scl_role}'/'{sda_role}' are not both connected",
+                                    comp.reference, comp.value, model.id
+                                )),
+                                guesses,
+                            );
+                        }
+                        PeripheralBinding {
+                            reference: comp.reference.clone(),
+                            spec,
+                            cs_net: None,
+                            i2c_address_override,
+                            power,
+                        }
+                    }
+                    Bus::Spi => {
+                        let Some(cs_net) = role_nets.get(cs_role).copied() else {
+                            return (
+                                BindOutcome::Unresolved {
+                                    reason: format!(
+                                        "model declares an SPI register map but chip-select role '{cs_role}' is not connected"
+                                    ),
+                                },
+                                Some(format!(
+                                    "{} ({}): register-map model '{}' cannot attach because chip-select role '{cs_role}' is not connected",
+                                    comp.reference, comp.value, model.id
+                                )),
+                                guesses,
+                            );
+                        };
+                        if !role_nets.contains_key(clk_role)
+                            || !role_nets.contains_key(mosi_role)
+                            || !role_nets.contains_key(miso_role)
+                        {
+                            return (
+                                BindOutcome::Unresolved {
+                                    reason: format!(
+                                        "model declares an SPI register map but {clk_role}/{mosi_role}/{miso_role} are not all connected"
+                                    ),
+                                },
+                                Some(format!(
+                                    "{} ({}): register-map model '{}' cannot attach because {clk_role}/{mosi_role}/{miso_role} are not all connected",
+                                    comp.reference, comp.value, model.id
+                                )),
+                                guesses,
+                            );
+                        }
+                        PeripheralBinding {
+                            reference: comp.reference.clone(),
+                            spec,
+                            cs_net: Some(cs_net),
+                            i2c_address_override: None,
+                            power,
+                        }
+                    }
+                }
+            }
+        };
+        let device = match &binding.spec {
+            PeripheralSpec::I2cEeprom { .. } => "model-declared I2C EEPROM",
+            PeripheralSpec::SpiNorFlash { .. } => "model-declared SPI NOR flash",
+            PeripheralSpec::RegisterMap { .. } => "model-declared register-map peripheral",
+        };
+        peripherals.push(binding);
+        return (
+            BindOutcome::Behavioral {
+                device: device.to_string(),
+            },
+            entry_warning(comp, model),
+            guesses,
+        );
+    }
     // pad number -> node, regardless of role.
     let pad_nodes = |pad: &str| -> Option<NodeId> {
         comp.pins
@@ -2411,6 +2775,76 @@ fn bind_passive(
             )),
         );
     };
+
+    // A passive whose behavioural model declares a series path owns its
+    // between-terminal conduction. Stamping the ordinary scalar passive here
+    // as well would put a permanent resistor in parallel with the FSM-controlled
+    // path, so a fuse could never open and a relay could never disconnect.
+    // `bind_behavioral` stamps the path in pass 3a from the same fitted-part
+    // witness; this row records that ownership without inventing a second path.
+    if !model.behavioral.series_paths.is_empty() {
+        return (
+            BindOutcome::Analog {
+                device: "behavioural state-controlled series path".to_string(),
+            },
+            entry_warning(comp, model),
+        );
+    }
+
+    // A fuse or ferrite's board Value normally names a CURRENT RATING or an
+    // impedance-at-frequency ("1.8A", "120R@100MHz"), not the DC resistance
+    // the solver needs. Exact/family model cards already carry `ohms`; the old
+    // binder ignored it, tried to parse the display string, and either left the
+    // part OPEN or stamped a fantastical 120 H inductor. The declared passive
+    // class is the semantic discriminator, so use the model's sourced DC value
+    // only for the two classes where the display value is not a resistance.
+    if matches!(
+        model.passive_class,
+        Some(
+            hauksbee_models::schema::PassiveClass::Fuse
+                | hauksbee_models::schema::PassiveClass::FerriteBead
+        )
+    ) {
+        let Some(ohms) = model
+            .params
+            .get_f64("ohms")
+            .filter(|v| v.is_finite() && *v > 0.0)
+        else {
+            return (
+                BindOutcome::Unresolved {
+                    reason: format!(
+                        "{} model '{}' has no positive finite DC resistance",
+                        if model.passive_class
+                            == Some(hauksbee_models::schema::PassiveClass::Fuse)
+                        {
+                            "fuse"
+                        } else {
+                            "ferrite-bead"
+                        },
+                        model.id
+                    ),
+                },
+                Some(format!(
+                    "{} ({}): model '{}' identifies the part class but does not provide the DC resistance needed to close the path; left open",
+                    comp.reference, comp.value, model.id
+                )),
+            );
+        };
+        circuit.add(Device::Resistor {
+            name: comp.reference.clone(),
+            a,
+            b,
+            ohms,
+            tc1: None,
+        });
+        return (
+            BindOutcome::Analog {
+                device: format!("R {}", fmt_eng(ohms, "Ω")),
+            },
+            entry_warning(comp, model),
+        );
+    }
+
     let Some(p) = parsed else {
         return (
             BindOutcome::Unresolved {
@@ -2422,10 +2856,118 @@ fn bind_passive(
             )),
         );
     };
+
+    // Source-bound package parasitics are real circuit elements. `esr`/`esl`
+    // have been accepted model vocabulary for years, and exact inductor cards
+    // carry DCR as `ohms`, but the binder previously discarded every one of
+    // those values. Realize them as an explicit series chain with internal
+    // nodes so DC, transient, AC, loss and thermal consumers all see the same
+    // physics. Arrays retain their existing per-element path for now: a single
+    // pack-level ESR/DCR cannot be assigned to multiple elements without a
+    // per-element schema.
+    let prefix = comp
+        .reference
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    let is_inductor = model.passive_class == Some(hauksbee_models::schema::PassiveClass::Inductor)
+        || prefix.starts_with('L')
+        || p.unit
+            .as_deref()
+            .is_some_and(|unit| unit.eq_ignore_ascii_case("H"));
+    if is_inductor {
+        if let Some(dcr) = model
+            .params
+            .get_f64("series_ohms")
+            .or_else(|| model.params.get_f64("ohms"))
+            .filter(|v| v.is_finite() && *v > 0.0)
+        {
+            let mid = circuit.node(&format!("__{}_dcr", comp.reference));
+            circuit.add(Device::Inductor {
+                name: comp.reference.clone(),
+                a,
+                b: mid,
+                henries: p.si,
+                ic: None,
+            });
+            circuit.add(Device::Resistor {
+                name: format!("{}_dcr", comp.reference),
+                a: mid,
+                b,
+                ohms: dcr,
+                tc1: None,
+            });
+            return (
+                BindOutcome::Analog {
+                    device: format!("L {} + DCR {}", fmt_eng(p.si, "H"), fmt_eng(dcr, "Ω")),
+                },
+                entry_warning(comp, model),
+            );
+        }
+    }
+
+    let is_capacitor = model.passive_class
+        == Some(hauksbee_models::schema::PassiveClass::Capacitor)
+        || prefix.starts_with('C')
+        || p.unit
+            .as_deref()
+            .is_some_and(|unit| unit.eq_ignore_ascii_case("F"));
+    if is_capacitor {
+        let esr = model
+            .params
+            .get_f64("esr")
+            .filter(|v| v.is_finite() && *v > 0.0);
+        let esl = model
+            .params
+            .get_f64("esl")
+            .filter(|v| v.is_finite() && *v > 0.0);
+        if esr.is_some() || esl.is_some() {
+            let mut left = a;
+            if let Some(esr) = esr {
+                let mid = circuit.node(&format!("__{}_esr", comp.reference));
+                circuit.add(Device::Resistor {
+                    name: format!("{}_esr", comp.reference),
+                    a: left,
+                    b: mid,
+                    ohms: esr,
+                    tc1: None,
+                });
+                left = mid;
+            }
+            if let Some(esl) = esl {
+                let mid = circuit.node(&format!("__{}_esl", comp.reference));
+                circuit.add(Device::Inductor {
+                    name: format!("{}_esl", comp.reference),
+                    a: left,
+                    b: mid,
+                    henries: esl,
+                    ic: None,
+                });
+                left = mid;
+            }
+            circuit.add(Device::Capacitor {
+                name: comp.reference.clone(),
+                a: left,
+                b,
+                farads: p.si,
+                ic: None,
+            });
+            return (
+                BindOutcome::Analog {
+                    device: format!("C {} with sourced parasitics", fmt_eng(p.si, "F")),
+                },
+                entry_warning(comp, model),
+            );
+        }
+    }
     let (device, note) = passive_device(comp, comp.reference.clone(), a, b, &p);
     let label = device_label(&device);
     circuit.add(device);
-    (BindOutcome::Analog { device: label }, note)
+    (
+        BindOutcome::Analog { device: label },
+        merge_bind_warnings(note, entry_warning(comp, model)),
+    )
 }
 
 /// One electrical terminal reconstructed from one or more physical pin
@@ -2955,7 +3497,7 @@ fn bind_mosfet(
         BindOutcome::Analog {
             device: "mosfet".to_string(),
         },
-        None,
+        entry_warning(comp, model),
     )
 }
 
@@ -2981,6 +3523,14 @@ fn entry_warning(comp: &Component, model: &ModelEntry) -> Option<String> {
         comp.reference,
         comp.value
     ))
+}
+
+fn merge_bind_warnings(a: Option<String>, b: Option<String>) -> Option<String> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (None, None) => None,
+    }
 }
 
 fn bind_vreg(
@@ -3296,6 +3846,100 @@ fn bind_analog_switch(
     roles: &HashMap<String, NodeId>,
     power_nets: &HashMap<String, f64>,
 ) -> (BindOutcome, Option<String>) {
+    // Shared-select DPDT parts (USB differential-pair muxes, dual audio
+    // switches): two independent common/throw groups selected together. A
+    // single-SPDT binder silently handles only one lane; the other differential
+    // conductor then stays OPEN even though the report calls the package
+    // resolved. The numbered roles make the topology explicit and reusable.
+    let vss = pick(roles, &["vss", "gnd"])
+        .copied()
+        .unwrap_or(NodeId::GROUND);
+    let shared_dpdt = (
+        roles.get("com_1").copied(),
+        roles.get("s0_1").copied(),
+        roles.get("s1_1").copied(),
+        roles.get("com_2").copied(),
+        roles.get("s0_2").copied(),
+        roles.get("s1_2").copied(),
+        pick(roles, &["ctrl", "sel", "s"]).copied(),
+        roles.get("vcc").copied(),
+    );
+    if let (
+        Some(com_1),
+        Some(s0_1),
+        Some(s1_1),
+        Some(com_2),
+        Some(s0_2),
+        Some(s1_2),
+        Some(sel),
+        Some(vcc),
+    ) = shared_dpdt
+    {
+        // A VSwitch has one control. It can model this package exactly when
+        // active-low OE is strapped on, as on many boards. If OE is dynamic,
+        // fail closed instead of pretending the mux can never be disabled.
+        if roles
+            .get("oe_n")
+            .or_else(|| roles.get("enable_n"))
+            .is_some_and(|node| *node != vss)
+        {
+            return open_warning(
+                comp,
+                "shared-select DPDT has a dynamic OE_N input; the current switch primitive has one control and cannot combine select with output-enable, so both lanes are left open rather than modeled as always enabled",
+            );
+        }
+        let ron = model.params.get_f64("ron").unwrap_or(50.0);
+        let roff = model.params.get_f64("roff").unwrap_or(1e9);
+        let vth = model.params.get_f64("vth").unwrap_or(1.5);
+        let (vcc_v, vcc_warning) = match power_nets.get(circuit.node_name(vcc)).copied() {
+            Some(value) => (value, None),
+            None => (
+                DEFAULT_VCC,
+                Some(format!(
+                    "{} ({}): shared-select DPDT VCC net '{}' has no resolved rail voltage; modeling select thresholds against an assumed {DEFAULT_VCC} V rail",
+                    comp.reference,
+                    comp.value,
+                    circuit.node_name(vcc),
+                )),
+            ),
+        };
+        for (lane, com, s0, s1) in [(1, com_1, s0_1, s1_1), (2, com_2, s0_2, s1_2)] {
+            circuit.add(Device::VSwitch {
+                name: format!("{}_l{lane}_s1", comp.reference),
+                a: com,
+                b: s1,
+                ctrl_p: sel,
+                ctrl_n: vss,
+                von: vth + 0.25,
+                voff: vth - 0.25,
+                ron,
+                roff,
+            });
+            circuit.add(Device::VSwitch {
+                name: format!("{}_l{lane}_s0", comp.reference),
+                a: com,
+                b: s0,
+                ctrl_p: vcc,
+                ctrl_n: sel,
+                von: vcc_v - vth + 0.25,
+                voff: vcc_v - vth - 0.25,
+                ron,
+                roff,
+            });
+        }
+        let warning = [entry_warning(comp, model), vcc_warning]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("; ");
+        return (
+            BindOutcome::Behavioral {
+                device: "shared-select dpdt".to_string(),
+            },
+            (!warning.is_empty()).then_some(warning),
+        );
+    }
+
     // True SPDT when both throws are wired (com + s0 + s1 + ctrl): two
     // complementary VSwitch legs. select low -> com<->s0, select high ->
     // com<->s1 (the SN74LVC1G3157 convention). The s0 leg senses the
@@ -3304,9 +3948,6 @@ fn bind_analog_switch(
     let s0 = pick(roles, &["s0", "b1"]).copied();
     let s1 = pick(roles, &["s1", "b2"]).copied();
     let sel = pick(roles, &["ctrl", "s", "in"]).copied();
-    let vss = pick(roles, &["vss", "gnd"])
-        .copied()
-        .unwrap_or(NodeId::GROUND);
     if let (Some(com), Some(s0), Some(s1), Some(sel), Some(vcc)) =
         (com, s0, s1, sel, pick(roles, &["vcc"]).copied())
     {
@@ -4113,6 +4754,8 @@ fn is_ctrl_role(role: &str) -> bool {
         || r == "in"
         || r == "s"
         || r == "sel"
+        || r == "oe_n"
+        || r == "enable_n"
         || r.strip_prefix("ctrl_")
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
@@ -6059,6 +6702,7 @@ mod natural_ref_key_tests {
 #[cfg(test)]
 mod digital_ro_tests {
     use super::*;
+    use hauksbee_extract::Pin;
     use hauksbee_models::{ComponentQuery, ModelLibrary};
 
     fn bare_comp(reference: &str) -> Component {
@@ -6073,6 +6717,70 @@ mod digital_ro_tests {
             dnp: false,
             pins: Vec::new(),
         }
+    }
+
+    fn pin(number: &str, net: i64) -> Pin {
+        Pin {
+            number: number.into(),
+            net: Some(net),
+            function: String::new(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+
+    #[test]
+    fn register_map_address_and_bus_personality_come_from_exact_board_straps() {
+        let lib = ModelLibrary::builtin();
+        let model = lib
+            .resolve(&ComponentQuery::new(None, Some("BMA423".into()), None))
+            .model
+            .expect("builtin BMA423");
+        let mut component = bare_comp("U6");
+        component.value = "BMA423".into();
+        component.pins = vec![
+            pin("1", 1), // SDO -> ground selects 0x18
+            pin("2", 2), // SDA
+            pin("3", 3), // VDDIO -> +3V3
+            pin("7", 3), // VDD -> +3V3
+            pin("8", 0),
+            pin("9", 0),
+            pin("10", 3), // CSB -> +3V3 selects I2C
+            pin("12", 4), // SCL
+        ];
+
+        let mut circuit = Circuit::new();
+        let sda = circuit.node("SDA");
+        let rail = circuit.node("+3V3");
+        let scl = circuit.node("SCL");
+        let node_of = |net: Option<i64>| match net {
+            Some(0 | 1) => Some(NodeId::GROUND),
+            Some(2) => Some(sda),
+            Some(3) => Some(rail),
+            Some(4) => Some(scl),
+            _ => None,
+        };
+        let mut peripherals = Vec::new();
+        let (outcome, warning, _) = bind_component(
+            &component,
+            &model,
+            Confidence::Exact,
+            &mut circuit,
+            &node_of,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut peripherals,
+            false,
+            &HashMap::from([("+3V3".to_string(), 3.3)]),
+            lib.pin_rules(),
+        );
+        assert!(
+            matches!(outcome, BindOutcome::Behavioral { .. }),
+            "{outcome:?} / {warning:?}"
+        );
+        assert_eq!(peripherals.len(), 1);
+        assert_eq!(peripherals[0].i2c_address_override, Some(0x18));
     }
 
     #[test]
@@ -6156,6 +6864,61 @@ mod digital_ro_tests {
         );
     }
 
+    #[test]
+    fn identity_only_model_keeps_critical_part_unresolved() {
+        let mut params = hauksbee_models::Params::default();
+        params.set_bool("identity_only", true);
+        params.set_str("warning", "register behavior is not modeled");
+        params.set_str("unlocked_by", "a validated register and bus model");
+        let model = make_entry(
+            "identity_only_sensor",
+            ComponentKind::Digital,
+            "identity only",
+            params,
+            std::collections::BTreeMap::new(),
+        );
+        let comp = bare_comp("U1");
+        let mut circuit = Circuit::new();
+        let mut digital = Vec::new();
+        let mut mcus = Vec::new();
+        let mut dacs = Vec::new();
+        let mut peripherals = Vec::new();
+        let (outcome, _, _) = bind_component(
+            &comp,
+            &model,
+            Confidence::Exact,
+            &mut circuit,
+            &|_| None,
+            &mut digital,
+            &mut mcus,
+            &mut dacs,
+            &mut peripherals,
+            false,
+            &HashMap::new(),
+            ModelLibrary::builtin().pin_rules(),
+        );
+        assert!(
+            matches!(outcome, BindOutcome::Unresolved { .. }),
+            "identity provenance must not become executable coverage: {outcome:?}"
+        );
+        assert!(digital.is_empty(), "identity-only cards stamp no logic");
+
+        let mut report = BindReport::default();
+        report.push(BindRow {
+            reference: "U1".into(),
+            value: "SENSOR".into(),
+            model_id: Some(model.id),
+            confidence: Confidence::Exact,
+            source: None,
+            outcome,
+            warning: Some("identity only; remains OPEN".into()),
+            guesses: Vec::new(),
+        });
+        let summary = crate::result::BindSummary::from_report(&report);
+        assert_eq!(summary.critical_parts_bound, "0/1");
+        assert_eq!(summary.active_path_unresolved.len(), 1);
+    }
+
     /// R23 (vreg-silent-5v-default): a vreg model with no `vout` param falls
     /// back to 5.0 V, which overdrives a 3.3 V board. Regulating there
     /// silently is the hazard, so a missing `vout` must emit a warning that
@@ -6212,7 +6975,7 @@ mod digital_ro_tests {
         // shorting a signal net onto a control net. Every control spelling must be
         // excluded.
         for r in [
-            "ctrl", "ctrl_1", "ctrl_2", "ctrl_3", "ctrl_4", "in", "s", "sel",
+            "ctrl", "ctrl_1", "ctrl_2", "ctrl_3", "ctrl_4", "in", "s", "sel", "oe_n", "enable_n",
         ] {
             assert!(is_ctrl_role(r), "{r} must be recognised as a control role");
         }
@@ -6255,6 +7018,81 @@ mod digital_ro_tests {
         assert!(
             matches!(outcome, BindOutcome::Unresolved { .. }),
             "an unconnected switch path must be reported as open/unresolved, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn shared_select_dpdt_stamps_both_differential_lanes_and_refuses_unmodeled_oe() {
+        let model = make_entry(
+            "generic_shared_select_dpdt",
+            ComponentKind::AnalogSwitch,
+            "two SPDT lanes with one select and active-low output enable",
+            hauksbee_models::Params::default(),
+            std::collections::BTreeMap::new(),
+        );
+        let build_roles = |circuit: &mut Circuit, oe: NodeId| {
+            HashMap::from([
+                ("com_1".to_string(), circuit.node("D_PLUS")),
+                ("s0_1".to_string(), circuit.node("D1_PLUS")),
+                ("s1_1".to_string(), circuit.node("D2_PLUS")),
+                ("com_2".to_string(), circuit.node("D_MINUS")),
+                ("s0_2".to_string(), circuit.node("D1_MINUS")),
+                ("s1_2".to_string(), circuit.node("D2_MINUS")),
+                ("ctrl".to_string(), circuit.node("SELECT")),
+                ("vcc".to_string(), circuit.node("+3V3")),
+                ("vss".to_string(), NodeId::GROUND),
+                ("oe_n".to_string(), oe),
+            ])
+        };
+
+        let mut enabled = Circuit::new();
+        let roles = build_roles(&mut enabled, NodeId::GROUND);
+        let power_nets = HashMap::from([("+3V3".to_string(), 3.3)]);
+        let (outcome, warning) =
+            bind_analog_switch(&bare_comp("U8"), &model, &mut enabled, &roles, &power_nets);
+        assert!(
+            warning.is_none(),
+            "grounded OE_N is fully modeled: {warning:?}"
+        );
+        assert!(
+            matches!(outcome, BindOutcome::Behavioral { ref device } if device == "shared-select dpdt"),
+            "the result must name the complete routed primitive: {outcome:?}"
+        );
+        assert_eq!(
+            enabled
+                .devices
+                .iter()
+                .filter(|device| matches!(device, Device::VSwitch { .. }))
+                .count(),
+            4,
+            "two SPDT lanes require four complementary switch legs"
+        );
+
+        let mut dynamic_oe = Circuit::new();
+        let oe = dynamic_oe.node("OE_N");
+        let roles = build_roles(&mut dynamic_oe, oe);
+        let (outcome, warning) = bind_analog_switch(
+            &bare_comp("U8"),
+            &model,
+            &mut dynamic_oe,
+            &roles,
+            &power_nets,
+        );
+        assert!(matches!(outcome, BindOutcome::Unresolved { .. }));
+        assert_eq!(
+            dynamic_oe
+                .devices
+                .iter()
+                .filter(|device| matches!(device, Device::VSwitch { .. }))
+                .count(),
+            0,
+            "a dynamic OE needs a two-control primitive; never model it as always enabled"
+        );
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|message| message.contains("OE")),
+            "the missing two-control primitive must be named: {warning:?}"
         );
     }
 
@@ -6458,6 +7296,61 @@ mod crystal_fallback_tests {
         assert!(!is_crystal_like("R", "10k"));
     }
 
+    #[test]
+    fn sourced_inductor_dcr_and_ferrite_dc_resistance_reach_the_circuit() {
+        let lib = ModelLibrary::builtin();
+
+        let mut inductor = comp("L5", "SRN6045TA-3R3Y");
+        inductor.pins = vec![pin("1", 1), pin("2", 2)];
+        let l_model = lib
+            .resolve(&ComponentQuery::new(
+                None,
+                Some(inductor.value.clone()),
+                None,
+            ))
+            .model
+            .expect("exact Bourns inductor model");
+        let mut circuit = Circuit::new();
+        let a = circuit.node("VIN");
+        let b = circuit.node("SW");
+        let node_of = |net: Option<i64>| match net {
+            Some(1) => Some(a),
+            Some(2) => Some(b),
+            _ => None,
+        };
+        let (outcome, warning) = bind_passive(&inductor, &l_model, &mut circuit, &node_of);
+        assert!(matches!(outcome, BindOutcome::Analog { .. }));
+        assert!(warning.as_deref().is_some_and(|w| w.contains("saturation")));
+        assert!(circuit.devices.iter().any(|d| matches!(d,
+            Device::Inductor { name, henries, .. }
+                if name == "L5" && (*henries - 3.3e-6).abs() < 1e-12
+        )));
+        assert!(circuit.devices.iter().any(|d| matches!(d,
+            Device::Resistor { name, ohms, .. }
+                if name == "L5_dcr" && (*ohms - 0.021).abs() < 1e-12
+        )));
+
+        let mut bead = comp("FB1", "220@100MHz 1.4A");
+        bead.footprint = "Inductor_SMD:L_0603_1608Metric".into();
+        bead.pins = vec![pin("1", 1), pin("2", 2)];
+        let bead_model = lib
+            .resolve(&ComponentQuery::new(
+                None,
+                Some(bead.value.clone()),
+                Some(bead.footprint.clone()),
+            ))
+            .model
+            .expect("exact rated ferrite family model");
+        let before = circuit.devices.len();
+        let (outcome, _) = bind_passive(&bead, &bead_model, &mut circuit, &node_of);
+        assert!(matches!(outcome, BindOutcome::Analog { .. }));
+        let stamped = &circuit.devices[before..];
+        assert_eq!(stamped.len(), 1, "ferrite DC behavior is one resistor");
+        assert!(
+            matches!(&stamped[0], Device::Resistor { ohms, .. } if (*ohms - 0.1).abs() < 1e-12)
+        );
+    }
+
     /// A crystal the MODEL LIBRARY resolves must be skipped exactly as the
     /// engine's own fallback skips one, and before this it was not.
     ///
@@ -6532,6 +7425,7 @@ mod crystal_fallback_tests {
                 Confidence::Exact,
                 &mut circuit,
                 &node_of,
+                &mut Vec::new(),
                 &mut Vec::new(),
                 &mut Vec::new(),
                 &mut Vec::new(),
@@ -6821,6 +7715,7 @@ mod crystal_fallback_tests {
                 &mut Vec::new(),
                 &mut Vec::new(),
                 &mut Vec::new(),
+                &mut Vec::new(),
                 false,
                 &power_nets,
                 pin_rules,
@@ -6917,6 +7812,7 @@ mod crystal_fallback_tests {
                 &mut Vec::new(),
                 &mut Vec::new(),
                 &mut Vec::new(),
+                &mut Vec::new(),
                 false,
                 &HashMap::new(),
                 pin_rules,
@@ -6982,6 +7878,7 @@ mod crystal_fallback_tests {
             Confidence::Exact,
             &mut circuit,
             &node_of,
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
@@ -7060,6 +7957,7 @@ mod crystal_fallback_tests {
             Confidence::Exact,
             &mut circuit,
             &node_of,
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
@@ -7170,6 +8068,7 @@ mod crystal_fallback_tests {
                 &mut Vec::new(),
                 &mut Vec::new(),
                 &mut Vec::new(),
+                &mut Vec::new(),
                 false,
                 &HashMap::new(),
                 pin_rules,
@@ -7247,6 +8146,7 @@ mod crystal_fallback_tests {
                 Confidence::Exact,
                 &mut circuit,
                 &node_of,
+                &mut Vec::new(),
                 &mut Vec::new(),
                 &mut Vec::new(),
                 &mut Vec::new(),

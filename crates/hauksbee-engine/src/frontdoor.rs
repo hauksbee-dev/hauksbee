@@ -533,6 +533,12 @@ pub struct WebReport {
     /// healthy" while it is. Mirrors the CLI/JSON bind surface (parity fix).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind: Option<BindSummaryWeb>,
+    /// Per-component model identity and executable-behaviour coverage from
+    /// the same resolver as `hauksbee models coverage`. A bound part may still
+    /// be partial; the browser must show `missing` rather than collapsing this
+    /// to the older bound/open bit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_coverage: Option<crate::commands::models::ModelCoverageSnapshot>,
     /// Content-addressed inputs consumed by the analysis.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inventory: Vec<hauksbee_ir::evidence::ArtifactProvenance>,
@@ -862,6 +868,7 @@ fn unreadable_with_import_failure(
         import_diagnostics: None,
         import_failure,
         bind: None,
+        model_coverage: None,
         inventory: Vec::new(),
         assumptions: Vec::new(),
         evidence: Vec::new(),
@@ -1265,6 +1272,7 @@ fn analyze_normalized_with_ties(
         import_diagnostics: Some(web_import_diagnostics(norm)),
         import_failure: None,
         bind: Some(bind_web),
+        model_coverage: Some(crate::commands::models::coverage_snapshot(board, &lib)),
         inventory: evidence.inventory().to_vec(),
         assumptions: evidence.assumptions().to_vec(),
         evidence: evidence.maps().to_vec(),
@@ -3328,6 +3336,7 @@ fn main {
         object.remove("inventory");
         object.remove("import_diagnostics");
         object.remove("import_failure");
+        object.remove("model_coverage");
         let golden_value: serde_json::Value = serde_json::from_str(golden).unwrap();
         assert_eq!(
             value, golden_value,
