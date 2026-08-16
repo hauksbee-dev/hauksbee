@@ -459,8 +459,104 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                 })?,
         );
     }
+    // Circuit-aware refinement for voltage assertions (see
+    // hauksbee_engine::dcpath): a numeric band claim on a net NOTHING
+    // modeled defines is a false green waiting to happen (GMIN pins a
+    // floating node near zero, which reads as a healthy logic low), so it
+    // becomes an ordinary RED traced to the missing element; while a net a
+    // modeled passive path ties to a reference is defined even if every
+    // open part is high-impedance, so the open-part assumptions downgrade
+    // from verdict-blocking to a stated caveat. Both directions use the
+    // run's own stated assumption (opens are absent from the circuit);
+    // neither touches an assertion already invalidated for a different
+    // reason (a held-stale analog span keeps its exit-3 semantics).
+    let dc_definitions = outcomes
+        .first()
+        .map(|o| o.dc_definitions.clone())
+        .unwrap_or_default();
+    let mut floating_reds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (result, map) in results.iter_mut().zip(maps.iter_mut()) {
+        if result.kind != "voltage" || result.invalid {
+            continue;
+        }
+        let statuses: Vec<&runner::DcNetStatus> = result
+            .subject_nets
+            .iter()
+            .filter_map(|net| dc_definitions.get(net))
+            .collect();
+        if statuses.is_empty() {
+            continue;
+        }
+        use hauksbee_engine::dcpath::NetDcDefinition;
+        if statuses
+            .iter()
+            .all(|s| matches!(s.definition, NetDcDefinition::Floating))
+        {
+            let refs = statuses
+                .iter()
+                .flat_map(|s| s.member_refs.iter().cloned())
+                .collect::<Vec<_>>()
+                .join(", ");
+            result.passed = false;
+            result.invalid = false;
+            result.waived = None;
+            result.why = Some(format!(
+                "the net is floating: no modeled element defines its level (parts on it: {refs})"
+            ));
+            result.detail = format!(
+                "RED: {} is floating. No modeled DC path defines this net; the solver's \
+                 number here is a numerical convention, not a level the board holds. Every \
+                 part on it ({refs}) is unmodelled or open, so if those parts are \
+                 high-impedance (an input pin, an unplugged connector), nothing sets this \
+                 line. Fix: add a pull resistor to the intended rest rail, or supply a \
+                 model for a part that drives it. [{}]",
+                result
+                    .subject_nets
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("the net"),
+                result.detail
+            );
+            floating_reds.insert(result.label.clone());
+        } else if statuses.iter().all(|s| {
+            matches!(
+                s.definition,
+                NetDcDefinition::DefinedThroughBoard { .. } | NetDcDefinition::Indeterminate
+            )
+        }) && statuses
+            .iter()
+            .any(|s| matches!(s.definition, NetDcDefinition::DefinedThroughBoard { .. }))
+        {
+            let via = statuses
+                .iter()
+                .find_map(|s| match &s.definition {
+                    NetDcDefinition::DefinedThroughBoard { via } => Some(via.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            *map = evidence
+                .map_assuming_open_parts_high_impedance(map.clone())
+                .map_err(|error| {
+                    SpecError::Invalid(format!(
+                        "recomputing evidence for assertion '{}': {error}",
+                        result.label
+                    ))
+                })?;
+            result.detail = format!(
+                "{} (level defined through {via} by modeled board elements; holds unless \
+                 an unmodelled part on the net drives or loads it)",
+                result.detail
+            );
+        }
+    }
     evidence = evidence.with_maps(maps);
     for result in &mut results {
+        if floating_reds.contains(&result.label) {
+            // A floating-net RED already carries its own diagnosis; the
+            // undermined map stays attached for transparency, but the verdict
+            // is an ordinary failure, not invalid-for-analysis.
+            continue;
+        }
         if evidence
             .maps()
             .iter()

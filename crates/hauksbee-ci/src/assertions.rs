@@ -2043,6 +2043,7 @@ mod tests {
             RunOutcome {
                 bind: None,
                 evidence: None,
+                dc_definitions: Default::default(),
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -2334,6 +2335,7 @@ mod tests {
             RunOutcome {
                 bind: None,
                 evidence: None,
+                dc_definitions: Default::default(),
                 seed,
                 windows,
                 uart: HashMap::new(),
@@ -2782,6 +2784,7 @@ mod tests {
             RunOutcome {
                 bind: None,
                 evidence: None,
+                dc_definitions: Default::default(),
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -2867,6 +2870,7 @@ mod tests {
             RunOutcome {
                 bind: None,
                 evidence: None,
+                dc_definitions: Default::default(),
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -2942,6 +2946,7 @@ mod tests {
             RunOutcome {
                 bind: None,
                 evidence: None,
+                dc_definitions: Default::default(),
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),

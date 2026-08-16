@@ -64,6 +64,7 @@ fn outcome_with(
         windows,
         bind: None,
         evidence: None,
+        dc_definitions: Default::default(),
         uart: HashMap::new(),
         faults: Vec::new(),
         toggles: HashMap::new(),

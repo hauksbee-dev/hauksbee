@@ -467,6 +467,22 @@ pub struct RunOutcome {
     /// `None` only in narrow assertion-unit fixtures; every real runner outcome
     /// carries it and the top-level `run` path fails closed if it is absent.
     pub evidence: Option<hauksbee_engine::BoardEvidence>,
+    /// Per net named by a `voltage` assertion: whether the MODELED circuit
+    /// defines its DC level (see [`hauksbee_engine::dcpath`]), plus the net's
+    /// member references for the human explanation. Lets the verdict layer
+    /// tell a real logic level from GMIN pinning a floating node near zero,
+    /// and downgrade open-part assumptions when a modeled path defines the
+    /// net anyway. Keyed by the spec's net spelling.
+    pub dc_definitions: HashMap<String, DcNetStatus>,
+}
+
+/// One asserted net's DC-definition summary. See [`RunOutcome::dc_definitions`].
+#[derive(Debug, Clone)]
+pub struct DcNetStatus {
+    /// How the modeled circuit relates to this net's DC level.
+    pub definition: hauksbee_engine::dcpath::NetDcDefinition,
+    /// Present components with a pin on the net, for the human message.
+    pub member_refs: Vec<String>,
 }
 
 fn assertion_timing_refusals(
@@ -573,6 +589,90 @@ pub fn unpowered_supply_nets(
 
 /// [`unpowered_supply_nets`] for a run: anything the spec powers or drives has
 /// had its question answered, whatever the name says.
+/// Classify every net a `voltage` assertion names: does the modeled circuit
+/// define its DC level, and who sits on it (for the human message). Computed
+/// after supplies and drives are attached, so a supplied or driven net counts
+/// as defined; see [`hauksbee_engine::dcpath`] for the semantics.
+fn dc_definitions_for_spec(
+    spec: &Spec,
+    board: &ExtractedBoard,
+    bound: &BoundBoard,
+) -> HashMap<String, DcNetStatus> {
+    let mut out = HashMap::new();
+    for assert in &spec.asserts {
+        if assert.kind != "voltage" {
+            continue;
+        }
+        let Some(net_name) = assert.net.as_deref() else {
+            continue;
+        };
+        if out.contains_key(net_name) {
+            continue;
+        }
+        // Node resolution mirrors the circuit's own case-insensitive interning.
+        let Some(node) = bound
+            .net_nodes
+            .get(net_name)
+            .or_else(|| {
+                bound
+                    .net_nodes
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(net_name))
+                    .map(|(_, node)| node)
+            })
+            .copied()
+        else {
+            continue;
+        };
+        let mut definition = hauksbee_engine::dcpath::net_dc_definition(&bound.circuit, node);
+        // "Through a board element" must mean the BOARD: a supply leg's own
+        // series element is harness plumbing, and a net one harness hop from
+        // its source is source-fed for downgrade purposes (its untested
+        // residual is the same hidden load). A board element's circuit device
+        // carries the component reference as (part of) its name.
+        if let hauksbee_engine::dcpath::NetDcDefinition::DefinedThroughBoard { via } = &definition
+        {
+            let is_board_element = board.components.iter().any(|c| {
+                via == &c.reference
+                    || via
+                        .strip_prefix(&c.reference)
+                        .is_some_and(|rest| rest.starts_with(['_', ':', '.', '/']))
+            });
+            if !is_board_element {
+                definition = hauksbee_engine::dcpath::NetDcDefinition::DefinedBySource;
+            }
+        }
+        let board_net = board
+            .nets
+            .iter()
+            .find(|n| n.name == net_name || n.name.eq_ignore_ascii_case(net_name));
+        let member_refs: Vec<String> = board_net
+            .map(|net| {
+                let mut refs = Vec::new();
+                for comp in &board.components {
+                    if comp.dnp {
+                        continue;
+                    }
+                    if comp.pins.iter().any(|p| p.net == Some(net.id))
+                        && !refs.contains(&comp.reference)
+                    {
+                        refs.push(comp.reference.clone());
+                    }
+                }
+                refs
+            })
+            .unwrap_or_default();
+        out.insert(
+            net_name.to_string(),
+            DcNetStatus {
+                definition,
+                member_refs,
+            },
+        );
+    }
+    out
+}
+
 fn dead_rails(board: &ExtractedBoard, bound: &BoundBoard, spec: &Spec) -> Vec<String> {
     let answered: Vec<&str> = spec
         .supplies
@@ -1465,6 +1565,13 @@ fn run_one(
         drive_net(&mut bound, &net, volts);
     }
 
+    // How the modeled circuit defines each voltage-asserted net's DC level,
+    // captured now that every supply and drive is attached, so a supplied or
+    // driven net counts as defined. The verdict layer uses this to refuse a
+    // numeric pass on a floating node and to downgrade open-part assumptions
+    // on a net a modeled path defines anyway.
+    let dc_definitions = dc_definitions_for_spec(spec, &board, &bound);
+
     // Hollow-gate honesty: a voltage/rail_window assertion reading a net that
     // an IDEAL source (a declared `kind = "ideal"` leg, a binder auto-rail, or
     // a [[net_drive]]) feeds directly cannot fail for a board reason: the
@@ -2092,6 +2199,7 @@ fn run_one(
             engine.report(),
         )),
         evidence: Some(evidence),
+        dc_definitions,
         sim_ms: engine.scheduler().sim_time * 1000.0,
         boot_first_cross_ms,
         boot_drop_after_cross_ms,
