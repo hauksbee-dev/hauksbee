@@ -1,0 +1,10 @@
+# Reproduction commands (run from the hauksbee-dev checkout)
+target/debug/hauksbee models lint model-packs/history-campaign-core/models/history_core.toml
+target/debug/hauksbee models add model-packs/history-campaign-core
+python3 model-packs/history-campaign-core/tests/test_resolution.py
+
+# Baseline: point HOME at a fresh directory with no installed packs.
+HOME=/tmp/<empty-home> target/debug/hauksbee run <frozen-input-fix.kicad_pcb> --lint --json --strict
+
+# Pack run: explicit models-dir keeps the comparison source-bound and reviewable.
+target/debug/hauksbee run <frozen-input-fix.kicad_pcb> --lint --json --strict --models-dir model-packs/history-campaign-core/models

@@ -1,0 +1,68 @@
+{
+  "schema": "hauksbee.model-pack-coverage.v1",
+  "pack": "history-campaign-core@0.1.0",
+  "engine_head": "4f5803721b82a6a1095f39793e18d817265e2c64",
+  "surface": "hauksbee run --lint --json --strict",
+  "scope": {
+    "campaign": "hauksbee-blinded-history-campaign",
+    "cases": 3,
+    "note": "Exact frozen input-fix bytes; this is model coverage, not a green or root-cause result."
+  },
+  "boards": [
+    {
+      "case_id": "pedalboard_usb_footprints",
+      "input": "cases/pedalboard_usb_footprints/input-fix.kicad_pcb",
+      "sha256": "3d104bd5c0553fe0749294e695ec2aa5862a06940a7f9fa6b7338f2487aebb49",
+      "critical_before": "1/12",
+      "critical_after": "4/12",
+      "active_unresolved_before": 15,
+      "active_unresolved_after": 12,
+      "exit_before": 3,
+      "exit_after": 3,
+      "verdict_before": "invalid",
+      "verdict_after": "invalid",
+      "behaviorally_resolved_refs": ["U1", "U5", "U7"],
+      "identity_only_refs": ["U2", "U6"]
+    },
+    {
+      "case_id": "fpv_drone_controller",
+      "input": "cases/fpv_drone_controller/input-fix.kicad_pcb",
+      "sha256": "edfae9e68ed509082b48998165cac89522d4e6738744cbf228fcba6a804e0186",
+      "critical_before": "1/6",
+      "critical_after": "1/6",
+      "active_unresolved_before": 8,
+      "active_unresolved_after": 8,
+      "exit_before": 3,
+      "exit_after": 3,
+      "verdict_before": "invalid",
+      "verdict_after": "invalid",
+      "behaviorally_resolved_refs": [],
+      "identity_only_refs": ["U3"]
+    },
+    {
+      "case_id": "libresolar_bms_c1",
+      "input": "cases/libresolar_bms_c1/input-fix.kicad_pcb",
+      "sha256": "5332d80bfc1518f33f0d3b0ae08e1e4bb791616b9fce4ddcc58dcd825459cf2b",
+      "critical_before": "2/5",
+      "critical_after": "2/5",
+      "active_unresolved_before": 17,
+      "active_unresolved_after": 17,
+      "exit_before": 3,
+      "exit_after": 3,
+      "verdict_before": "invalid",
+      "verdict_after": "invalid",
+      "behaviorally_resolved_refs": [],
+      "identity_only_refs": ["U1"]
+    }
+  ],
+  "aggregate": {
+    "critical_before": "4/23",
+    "critical_after": "7/23",
+    "critical_delta": "+3",
+    "active_unresolved_before": 40,
+    "active_unresolved_after": 37,
+    "active_unresolved_delta": "-3",
+    "overall_verdict_after": "invalid",
+    "interpretation": "Seven exact active component identities are source-bound by the pack, but only three add executable behavior. Identity-only cards remain OPEN and do not inflate critical_parts_bound. Unresolved power, MCU, memory, USB and switching behavior remains, so every board still refuses to vouch under strict lint."
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "description": "Source-bound, real-board-style transient comparison. Thresholds are intentionally absent until a fresh measurement campaign establishes them.",
+  "cases": [
+    {
+      "id": "half_wave_power_path",
+      "source": "crates/hauksbee-engine/tests/sim_decks/half_wave.cir",
+      "source_sha256": "b36d3f3d51adebd79330ff1b3406b55416d84335337ffb9d61e0e2401a90262c",
+      "dependencies": [{"path": "crates/hauksbee-engine/tests/sim_decks/diode.lib", "sha256": "400d9889218169cdef6fcf9706128351292883b0838ed7d7540b398187361409"}],
+      "probes": ["v(out)"],
+      "class": "agreement",
+      "settled_fraction": 0.1,
+      "notes": "Supply, nonlinear diode, reservoir capacitor, and resistive load; the same board power path used by the engine simulation fixture. diode.lib is resolved from the source directory."
+    },
+    {
+      "id": "bjt_mirror_membrane",
+      "source": "crates/hauksbee-solve/tests/decks/switch_bjt_mirror_membrane.cir",
+      "source_sha256": "2e6764844417b8f48157b4a93099c9399b0391981bc0f509a5d8315f89c3b566",
+      "probes": ["v(mem0)"],
+      "class": "disclosed_drift",
+      "settled_fraction": 0.1,
+      "notes": "Gated supply, BJT mirror, and RC load. The disclosed class prevents ngspice's switch-event grid from being presented as an accuracy agreement claim."
+    },
+    {
+      "id": "mos_load_switch",
+      "source": "crates/hauksbee-solve/tests/decks/mos_load_switch.cir",
+      "source_sha256": "d36e2c3295b61f4e977e9b655dd07cb9029ab241946a3da2337817898924179f",
+      "probes": ["v(d)"],
+      "class": "disclosed_drift",
+      "settled_fraction": 0.1,
+      "notes": "Gate-charged MOS load switch with a pulsed supply path and Miller-shaped drain edge; model-capacitance drift stays distinct from agreement."
+    },
+    {
+      "id": "diode_rectifier_charge",
+      "source": "crates/hauksbee-solve/tests/decks/diode_rectifier_charge.cir",
+      "source_sha256": "b0fa91ead193ac99e98c76dfeeb8c8039814085b1a695e09e03adf8e80b941aa",
+      "probes": ["v(out)"],
+      "class": "disclosed_drift",
+      "settled_fraction": 0.1,
+      "notes": "100 kHz rectifier with junction and diffusion charge feeding a smoothing capacitor; a stiff nonlinear supply/load edge."
+    },
+    {
+      "id": "flyback_diode",
+      "source": "crates/hauksbee-solve/tests/decks/flyback_diode.cir",
+      "source_sha256": "629dcf08b61f2e649bf719e6ca007464aee18603811c5ee16e365609d455a52b",
+      "probes": ["v(out)"],
+      "class": "disclosed_drift",
+      "settled_fraction": 0.1,
+      "notes": "Coupled-inductor flyback-shaped transfer into a diode, capacitor, and load; sharp turn-off event drift remains disclosed."
+    },
+    {
+      "id": "rc_ladder",
+      "source": "crates/hauksbee-solve/tests/decks/rc_ladder.cir",
+      "source_sha256": "201267d43e27303f14ac53aacccc30c023b5ab838c1854fc26b5bfc85e2b1980",
+      "probes": ["v(n8)"],
+      "class": "agreement",
+      "settled_fraction": 0.1,
+      "notes": "Eight-stage board-style decoupling/trace RC ladder; a linear reference for accuracy and sparse-solve regressions."
+    },
+    {
+      "id": "opamp_subckt",
+      "source": "crates/hauksbee-solve/tests/decks/opamp_subckt.cir",
+      "source_sha256": "2885fd7229c51b7f0956959ef035f340d5e20035ed79f3d64d8cd9d5c5784d5c",
+      "probes": ["v(out)"],
+      "class": "agreement",
+      "settled_fraction": 0.1,
+      "notes": "VCVS op-amp macro-subcircuit, divider, and RC low-pass; exercises hierarchy, a controlled source, and a dynamic load."
+    }
+  ],
+  "next_matrix": [
+    "crates/hauksbee-solve/tests/decks/zener_shunt_regulator.cir",
+    "crates/hauksbee-solve/tests/decks/xfmr_k1.cir",
+    "board-corpus/mnt_reform/reform2-keyboard3-pcb/reform2-keyboard3.kicad_pro",
+    "board-corpus/mnt_reform/reform2-motherboard-pcb/reform2-motherboard.net",
+    "board-corpus/olimex_esp32_poe/HARDWARE/ESP32-PoE-hardware-revision-C1/ESP32-PoE_Rev_C.net"
+  ]
+}

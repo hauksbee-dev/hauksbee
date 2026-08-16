@@ -2924,6 +2924,18 @@ fn attach_sensors(
 
         // Apply per-run input overrides.
         for (name, &value) in &sa.inputs {
+            if !value.is_finite() {
+                return Err(SpecError::Invalid(format!(
+                    "sensor '{}': input '{name}' must be finite",
+                    sa.id
+                )));
+            }
+            if sensor.input(name).is_none() {
+                return Err(SpecError::Invalid(format!(
+                    "sensor '{}': input '{name}' is not declared by the exact register-map spec",
+                    sa.id
+                )));
+            }
             sensor.set_input(name, value);
         }
 
@@ -2931,19 +2943,42 @@ fn attach_sensors(
         // hand-coded slaves are attached in `attach_peripherals`.
         match sensor.bus() {
             Bus::I2c => {
+                if sa.controller.is_some() || sa.cs_net.is_some() {
+                    return Err(SpecError::Invalid(format!(
+                        "sensor '{}': controller/cs_net are SPI-only",
+                        sa.id
+                    )));
+                }
                 let bus = I2cBus::new(&sa.id).with_slave(Box::new(sensor));
                 sched.attach_i2c_bus(Arc::new(Mutex::new(bus)));
             }
             Bus::Spi => {
                 let arc = Arc::new(Mutex::new(SpiBus::new(&sa.id, Box::new(sensor))));
-                // Declarative sensors do not (yet) carry a CS-net field, so they
-                // stay on the chunk-boundary heuristic (coverage reports
-                // `heuristic`). A resolved CS pin can be threaded here the same way
-                // `attach_peripherals` does once the sensor spec grows a cs_net.
-                if let Some(controller) = &sa.controller {
-                    sched.attach_spi_bus_on(controller, arc, None);
+                let cs = if let Some(net_name) = sa.cs_net.as_deref() {
+                    let node = sched.net_nodes.get(net_name).copied().ok_or_else(|| {
+                        SpecError::Invalid(format!(
+                            "sensor '{}': cs_net '{}' does not exist on the board",
+                            sa.id, net_name
+                        ))
+                    })?;
+                    let pin = sched.pin_driving_node(node).ok_or_else(|| {
+                        SpecError::Invalid(format!(
+                            "sensor '{}': cs_net '{}' is not driven by a modeled MCU pin",
+                            sa.id, net_name
+                        ))
+                    })?;
+                    Some(hauksbee_engine::ResolvedCs {
+                        pin,
+                        net: Some(node),
+                        provenance: hauksbee_engine::CsProvenance::SpecDeclared,
+                    })
                 } else {
-                    sched.attach_spi_bus(arc, None);
+                    None
+                };
+                if let Some(controller) = &sa.controller {
+                    sched.attach_spi_bus_on(controller, arc, cs);
+                } else {
+                    sched.attach_spi_bus(arc, cs);
                 }
             }
         }
@@ -4078,6 +4113,7 @@ address = 0x48
             behavioral: Vec::new(),
             device_meta: Vec::new(),
             dacs: Vec::new(),
+            peripherals: Vec::new(),
             report: hauksbee_engine::report::BindReport::default(),
         };
         let assert_block = "[[assert]]\nkind = \"protection_trip\"\n\

@@ -913,6 +913,7 @@ mod tests {
             behavioral: Vec::new(),
             device_meta: Vec::new(),
             dacs: vec![dac],
+            peripherals: Vec::new(),
             report: BindReport::default(),
         };
 

@@ -240,6 +240,9 @@ enum Command {
     ///
     /// Examples:
     ///   hauksbee models lint my_part.toml
+    ///   hauksbee models new U3 --board my_board.kicad_pcb --out U3.toml
+    ///   hauksbee models new U3 --board my_board.kicad_pcb --pack-dir acme-models
+    ///   hauksbee models prepare my_board.kicad_pcb --pack-dir acme-models
     ///   hauksbee models add ./acme-sensors
     ///   hauksbee models resolve my_board.kicad_pcb
     #[command(verbatim_doc_comment)]
@@ -334,10 +337,24 @@ enum ModelsCommand {
     /// Draft a device model from a PDF datasheet. Asks first: this sends the
     /// datasheet's text to an LLM backend.
     Extract(ModelsExtractArgs),
-    /// Scaffold a model entry for one board component, pre-seeded from the
-    /// board's own context (value, guessed kind), plus the lint/resolve
-    /// commands to finish the job. Nothing is sent anywhere.
+    /// Scaffold a model entry for one board component, pre-seeded only from
+    /// the board's own identity (reference and value). It never invents
+    /// datasheet parameters or guesses the device kind; until the author
+    /// chooses a kind and supplies evidence, `models lint` must refuse it.
+    /// Pass --pack-dir to create a pack skeleton alongside the model file.
+    /// Nothing is sent anywhere.
     New(ModelsNewArgs),
+    /// Show the staged model coverage for every connected active device:
+    /// extracted identity, static-only identity, executable behavior, declared
+    /// implemented scope, and remaining scope. Read-only; writes nothing.
+    Coverage(ModelsCoverageArgs),
+    /// Prepare scaffolds for every connected unresolved or identity-only board
+    /// identity and board-narrowed copies of partial executable models,
+    /// including load-bearing discretes and module boundaries. Prints the
+    /// complete write plan and asks for approval before writing anything;
+    /// --yes is the explicit script/CI opt-in. This never invokes a network,
+    /// LLM, installer, or model-pack registration.
+    Prepare(ModelsPrepareArgs),
 }
 
 #[derive(Parser)]
@@ -348,15 +365,59 @@ struct ModelsNewArgs {
     /// The board the component sits on (any format `run` accepts).
     #[arg(long, value_name = "BOARD")]
     board: PathBuf,
-    /// Component kind when the reference prefix is ambiguous (for example U3).
-    /// If omitted, only unambiguous R/C/L/D/Q/connector prefixes are guessed;
-    /// an IC scaffold stays deliberately invalid until you choose its behavior.
+    /// Component kind from the supported schema. If omitted, the scaffold
+    /// uses the deliberate `choose_kind` placeholder and remains lint-invalid;
+    /// a reference designator is not evidence of datasheet behavior.
     #[arg(long, value_name = "KIND")]
     kind: Option<String>,
     /// Where to write the scaffold. Default: `./<id>.toml` in the current
-    /// directory. Refuses to overwrite.
+    /// directory. Refuses to overwrite. When --pack-dir is supplied this is
+    /// the model file inside that pack and defaults to `models/<id>.toml`.
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
+    /// Create a model-pack skeleton at this directory (pack.toml plus
+    /// models/<id>.toml). Existing files are never overwritten. The generated
+    /// pack intentionally omits its license until the author supplies one.
+    #[arg(long, value_name = "DIR", conflicts_with = "out")]
+    pack_dir: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct ModelsPrepareArgs {
+    /// Board to inspect for unresolved, identity-only, or partial components.
+    #[arg(value_name = "BOARD")]
+    board: PathBuf,
+    /// Directory to receive pack.toml and models/<id>.toml files.
+    #[arg(long, value_name = "DIR")]
+    pack_dir: PathBuf,
+    /// Additional model directory to include while deciding which identities
+    /// are unresolved or identity-only. This lets an in-progress pack plan its
+    /// own remaining behavioral work before installation.
+    #[arg(long, value_name = "DIR")]
+    models_dir: Option<PathBuf>,
+    /// Explicitly approve the printed write plan (for scripts/non-TTY use).
+    #[arg(long, short = 'y')]
+    yes: bool,
+}
+
+#[derive(Parser)]
+struct ModelsCoverageArgs {
+    /// Board to inspect (any format `run` accepts).
+    #[arg(value_name = "BOARD")]
+    board: PathBuf,
+    /// Additional model directory to include at the highest resolution layer.
+    #[arg(long, value_name = "DIR")]
+    models_dir: Option<PathBuf>,
+    /// Emit the complete machine-readable inventory, including board-observed
+    /// pad/function/net mappings and source provenance.
+    #[arg(long)]
+    json: bool,
+    /// Require a named capability on one connected active device. Repeat as
+    /// needed. The command exits non-zero unless the winning model explicitly
+    /// declares every REF:CAPABILITY implemented; unspecified scope fails
+    /// closed rather than being guessed complete.
+    #[arg(long = "require", value_name = "REF:CAPABILITY")]
+    require: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -528,7 +589,8 @@ fn json_flag_long_help() -> String {
          --report/--drc/--lint/--si/--resources/--usb-c/--thermal/--ac. Implies \
          non-interactive, stable output; every field is documented at {}. \
          `valid:false` + `reason` is set on AC/thermal results that are \
-         meaningless; the bind section reports critical_parts_bound + \
+         meaningless; the bind section reports critical_parts_bound (executable \
+         behavioural-model coverage, not CAD extraction coverage) + \
          active_path_unresolved by role.",
         hauksbee_ir::docs_url("docs/analysis/JSON_OUTPUT.md")
     )
@@ -769,7 +831,8 @@ struct RunArgs {
     /// --report/--drc/--lint/--si/--resources/--usb-c/--thermal/--ac. Implies
     /// non-interactive, stable output. `valid:false` +
     /// `reason` is set on AC/thermal results that are meaningless; the bind
-    /// section reports critical_parts_bound + active_path_unresolved by role.
+    /// section reports critical_parts_bound (executable behavioural-model
+    /// coverage, not CAD extraction coverage) + active_path_unresolved by role.
     #[arg(long, help_heading = "Start here", long_help = json_flag_long_help())]
     json: bool,
 
@@ -1493,6 +1556,19 @@ fn main() -> anyhow::Result<()> {
                 &args.board,
                 args.out.as_deref(),
                 args.kind.as_deref(),
+                args.pack_dir.as_deref(),
+            ),
+            ModelsCommand::Coverage(args) => hauksbee_engine::commands::models::coverage(
+                &args.board,
+                args.models_dir.as_deref(),
+                args.json,
+                &args.require,
+            ),
+            ModelsCommand::Prepare(args) => hauksbee_engine::commands::models::prepare(
+                &args.board,
+                &args.pack_dir,
+                args.models_dir.as_deref(),
+                args.yes,
             ),
             ModelsCommand::Extract(args) => hauksbee_engine::commands::models::extract(
                 &args.pdf,

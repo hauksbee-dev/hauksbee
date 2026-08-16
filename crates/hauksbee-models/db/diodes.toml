@@ -441,6 +441,10 @@ rd_clamp = 0.5  # Rd, dynamic resistance of a steering diode (Ohm)
 max_voltage_v = 5.25        # VRM, the reverse standoff voltage (leakage test condition)
 max_junction_temp_c = 125.0 # Tj operating max, datasheet Table 1
 
+[models.coverage]
+implements = ["vbus_to_ground_transil", "positive_io_steering_clamps", "negative_io_steering_clamps", "datasheet_piecewise_clamp_voltage", "absolute_ratings"]
+missing = ["io_capacitance", "subthreshold_leakage", "iec_pulse_waveform", "package_parasitics", "temperature_dependence"]
+
 # The four I/O steering diodes, as piecewise-linear clamp laws. Each conducts
 # only once its junction is forward biased past VT, so in every normal operating
 # condition (VBUS at 5 V, data lines between 0 V and 3.3 V) all four evaluate to

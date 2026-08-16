@@ -70,7 +70,10 @@ pub use matcher::ComponentQuery;
 pub use pack::{Pack, PackError, PackManifest, PackRecord, PackStore, Provenance};
 pub use pin_rules::{InferredRole, PinRule, PinRuleTable};
 pub use profile::{LoadProfile, Segment};
-pub use schema::{ComponentKind, ModelEntry, Params, StrapInternalPull, StrapLevel, StrapPin};
+pub use schema::{
+    ComponentKind, ModelCoverage, ModelEntry, ModelSourceReference, Params, PeripheralPower,
+    PeripheralSpec, StrapInternalPull, StrapLevel, StrapPin,
+};
 pub use sensor_spec::{
     Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError,
 };
@@ -239,6 +242,11 @@ pub struct Resolution {
     /// Canonical source/validation/uncertainty record consumed by the evidence
     /// spine. `None` only for an unresolved/open component.
     pub provenance: Option<ModelSource>,
+    /// Human-auditable datasheet/vendor/measurement references retained from
+    /// `[models.source]`. These are separate from numeric uncertainty because a
+    /// citation identifies bytes/sections while uncertainty states what the
+    /// model is allowed to claim.
+    pub references: Vec<schema::ModelSourceReference>,
 }
 
 impl Resolution {
@@ -251,6 +259,7 @@ impl Resolution {
             layer: None,
             origin: None,
             provenance: None,
+            references: Vec::new(),
         }
     }
 }
@@ -278,6 +287,7 @@ struct LayeredEntry {
     /// The db file stem, pack `name@version`, or user file stem.
     origin: String,
     provenance: ModelSource,
+    references: Vec<schema::ModelSourceReference>,
     compiled: CompiledEntry,
 }
 
@@ -389,7 +399,18 @@ impl ModelLibrary {
             }
         }
         for dir in extra_dirs {
-            for e in lib.load_dir_layer(dir, SourceLayer::ModelsDirFlag) {
+            // A model pack is presented to users as one directory containing
+            // `pack.toml` and `models/*.toml`.  Requiring callers to know that
+            // `--models-dir` actually meant the internal `models/` child made
+            // the obvious command silently load zero cards.  Accept both the
+            // loose-card directory and the pack root while preserving the
+            // explicit flag's highest-priority layer.
+            let load_dir = if dir.join("pack.toml").is_file() && dir.join("models").is_dir() {
+                dir.join("models")
+            } else {
+                (*dir).to_path_buf()
+            };
+            for e in lib.load_dir_layer(&load_dir, SourceLayer::ModelsDirFlag) {
                 eprintln!("[models] --models-dir {}: {e}", dir.display());
             }
         }
@@ -644,6 +665,7 @@ impl ModelLibrary {
                 layer: Some(le.layer),
                 origin: Some(le.origin.clone()),
                 provenance: Some(le.provenance.clone()),
+                references: le.references.clone(),
             };
         }
 
@@ -690,15 +712,20 @@ impl ModelLibrary {
             #[serde(default)]
             source: Option<schema::ModelSourceSpec>,
         }
-        let declarations: std::collections::HashMap<String, schema::ModelSourceSpec> =
-            toml::from_str::<SourceFile>(src)
-                .map(|file| {
-                    file.models
-                        .into_iter()
-                        .filter_map(|row| row.source.map(|source| (row.id, source)))
-                        .collect()
-                })
-                .unwrap_or_default();
+        // Parse provenance through its typed schema and fail closed. The model
+        // entry parser intentionally ignores the auxiliary `[models.source]`
+        // table, so swallowing an error here would leave executable physics in
+        // place while silently replacing its citations/uncertainty with a
+        // default unknown record—the worst possible direction of degradation.
+        let source_file = toml::from_str::<SourceFile>(src).map_err(|e| ModelError::TomlParse {
+            source: source_name.to_string(),
+            error: e,
+        })?;
+        let declarations: std::collections::HashMap<String, schema::ModelSourceSpec> = source_file
+            .models
+            .into_iter()
+            .filter_map(|row| row.source.map(|source| (row.id, source)))
+            .collect();
 
         for entry in db_file.models {
             let id = entry.id.clone();
@@ -723,6 +750,38 @@ impl ModelLibrary {
                 error: e,
             })?;
             let declaration = declarations.get(&compiled.entry.id);
+            let references = declaration
+                .map(|source| source.references.clone())
+                .unwrap_or_default();
+            for (index, reference) in references.iter().enumerate() {
+                if !reference.url.starts_with("https://") {
+                    return Err(ModelError::ValidationFailed {
+                        id: compiled.entry.id.clone(),
+                        messages: format!(
+                            "source reference {index} url must use https://, got '{}'",
+                            reference.url
+                        ),
+                    });
+                }
+                if reference.title.trim().is_empty() || reference.locator.trim().is_empty() {
+                    return Err(ModelError::ValidationFailed {
+                        id: compiled.entry.id.clone(),
+                        messages: format!(
+                            "source reference {index} requires non-empty title and locator"
+                        ),
+                    });
+                }
+                if let Some(hash) = reference.sha256.as_deref() {
+                    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                        return Err(ModelError::ValidationFailed {
+                            id: compiled.entry.id.clone(),
+                            messages: format!(
+                                "source reference {index} sha256 must be 64 hexadecimal characters"
+                            ),
+                        });
+                    }
+                }
+            }
             // Pack-manifest provenance is authoritative. An entry in a
             // datasheet-derived pack cannot promote itself to a vendor tier.
             let tier = default_tier
@@ -756,6 +815,7 @@ impl ModelLibrary {
                 layer,
                 origin: source_name.to_string(),
                 provenance,
+                references,
                 compiled,
             });
         }
@@ -811,6 +871,9 @@ impl ModelLibrary {
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
 
@@ -835,6 +898,7 @@ impl ModelLibrary {
                 )
                 .expect("SPICE card names are non-empty after parsing"),
             ),
+            references: Vec::new(),
         }
     }
 }
@@ -1012,6 +1076,72 @@ mod tests {
     #[test]
     fn builtin_loads_without_panic() {
         let _l = lib();
+    }
+
+    #[test]
+    fn malformed_source_metadata_is_not_silently_discarded() {
+        let mut library = ModelLibrary::empty();
+        let malformed = r#"
+            [[models]]
+            id = "bad-source"
+            kind = "passive"
+            [models.match]
+            value_re = "^1k$"
+            [models.source]
+            tier = "user-model"
+            validation = "unvalidated"
+            [[models.source.uncertainty]]
+            status = "interval"
+            parameter = "ohms"
+            low = 900.0
+            high = 1100.0
+            unit = "ohm"
+            kind = "invented-confidence-class"
+            basis = "hostile fixture"
+        "#;
+        let error = library
+            .load_toml_str(malformed, "bad-source.toml", SourceLayer::UserDir)
+            .expect_err("invalid provenance must reject the whole model file");
+        assert!(
+            matches!(error, ModelError::TomlParse { .. }),
+            "source parse failure must not become default unknown provenance: {error:?}"
+        );
+    }
+
+    #[test]
+    fn source_references_require_https_and_well_formed_hashes() {
+        for (name, reference) in [
+            (
+                "http",
+                "url = \"http://vendor.example/device.pdf\"\n                    title = \"Device\"\n                    locator = \"Table 1\"",
+            ),
+            (
+                "hash",
+                "url = \"https://vendor.example/device.pdf\"\n                    title = \"Device\"\n                    locator = \"Table 1\"\n                    sha256 = \"abc\"",
+            ),
+        ] {
+            let source = format!(
+                r#"
+                [[models]]
+                id = "bad-{name}"
+                kind = "passive"
+                [models.match]
+                value_re = "^1k$"
+                [models.source]
+                tier = "user-model"
+                validation = "unvalidated"
+                [[models.source.references]]
+                {reference}
+                "#
+            );
+            let error = ModelLibrary::empty()
+                .load_toml_str(&source, "bad-reference.toml", SourceLayer::UserDir)
+                .expect_err("unsafe citation must reject the model file");
+            assert!(
+                matches!(error, ModelError::ValidationFailed { .. }),
+                "bad {name} reference should be a validation failure: {error:?}"
+            );
+        }
     }
 
     #[test]
@@ -1232,6 +1362,48 @@ mod tests {
                 "an absent auto-discovered dir ({auto:?}) must stay silent"
             );
         }
+    }
+
+    #[test]
+    fn models_dir_flag_accepts_a_pack_root() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("models")).unwrap();
+        std::fs::write(
+            temp.path().join("pack.toml"),
+            "[pack]\nname='test'\nversion='0.1.0'\nlicense='MIT'\nprovenance='hand-written'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("models").join("device.toml"),
+            r#"
+[[models]]
+id = "pack_root_device"
+kind = "digital"
+[models.match]
+value_re = "(?i)^PACK_ROOT_DEVICE$"
+[models.pins]
+"1" = "in"
+"2" = "out"
+[models.coverage]
+missing = ["executable_behavior"]
+"#,
+        )
+        .unwrap();
+
+        let lib = ModelLibrary::builtin_with_user_dirs(&[temp.path()]);
+        let resolved = lib.resolve(&ComponentQuery {
+            value: Some("PACK_ROOT_DEVICE".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(
+            resolved.model.map(|model| model.id),
+            Some("pack_root_device".to_string())
+        );
+        assert_eq!(
+            resolved.source.as_deref(),
+            Some("user"),
+            "an explicit pack-root model must retain user-layer provenance"
+        );
     }
 
     /// Round-8 #10: a `.subckt`, and an unrecognized `.model` type, must NOT be

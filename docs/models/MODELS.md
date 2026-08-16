@@ -1,5 +1,9 @@
 # Device models: built-in, SPICE, and datasheet extraction
 
+For the end-to-end human, CLI, MCP, and evidence workflow, including the public
+Pedalboard reference journey, see
+[`BOARD_MODELING_WORKFLOW.md`](BOARD_MODELING_WORKFLOW.md).
+
 The source-selection, provenance, uncertainty, and fail-closed accuracy policy
 is documented in [SOURCE_LADDER.md](SOURCE_LADDER.md). Source tier and storage
 layer are deliberately separate; inspect both with `hauksbee models resolve`.
@@ -124,12 +128,226 @@ The tool writes `<part>.toml` to the output directory. The library loads any
 TOML in `~/.hauksbee/models/` as a user-dir entry the next time it builds,
 so an extracted part becomes immediately resolvable by value/MPN.
 
+## Start from an unresolved board part (without invented physics)
+
+When a run names an unresolved reference, start with the board itself. The
+scaffold copies only the component identity and its exact Value field into a
+literal match rule. It does **not** infer a device kind from `R`, `D`, `Q`, or
+`U`, and it writes no guessed electrical number:
+
+```bash
+hauksbee models new U3 --board path/to/board.kicad_pcb --out U3-model.toml
+```
+
+The result is valid TOML with a deliberate `kind = "choose_kind"` placeholder,
+an explicit `user-model` / `unvalidated` source record, an `unknown` model interval,
+and TODOs for the evidence that is still missing. That
+placeholder is not a model: `hauksbee models lint U3-model.toml` must refuse it
+until you choose a supported kind and fill the required fields. After editing,
+run the same lint again, then check the board binding:
+
+```bash
+hauksbee models lint U3-model.toml
+hauksbee models resolve path/to/board.kicad_pcb --models-dir .
+```
+
+For a shareable pack, use `--pack-dir` instead. It writes `pack.toml` and
+`models/<id>.toml`, refuses to overwrite either, and leaves the license as an
+explicit TODO. `hauksbee models add` remains the final pack validation step;
+it must reject the untouched scaffold rather than install an unresolved model:
+
+```bash
+hauksbee models new U3 --board path/to/board.kicad_pcb --pack-dir ./acme-models
+hauksbee models lint acme-models/models/u3-*.toml
+hauksbee models add ./acme-models       # only after TODOs and license are complete
+```
+
+The proving tests cover both paths: the generated file parses as TOML, the
+unresolved placeholder exits non-zero under the shared linter, explicit
+`--kind` still requires the kind's parameters, pack output has the expected
+layout, and a second invocation cannot overwrite an existing model or manifest.
+The board and the part documentation remain the authority; comments in a
+scaffold are prompts, not evidence.
+
+### Inspect behavior, and gate the capability you actually need
+
+Extraction and behavior are separate facts. `coverage` reports every connected
+active U/IC/MCU device, its winning model/source, the board-observed pad/function/net
+map, and four deliberately different states: unresolved, identity-only,
+executable with unspecified scope, and executable with declared implemented and
+missing capabilities. Its separate authoring queue also includes connected
+load-bearing discretes and module boundaries such as Q/F/L/CM references:
+
+```bash
+hauksbee models coverage path/to/board.kicad_pcb
+hauksbee models coverage path/to/board.kicad_pcb --json > coverage.json
+```
+
+“Full behavior” is meaningful only relative to a question. A source-bound DC
+converter model may be complete for feedback-divider regulation while explicitly
+missing switching ripple; an RP2040 backend may be complete for GPIO input while
+explicitly missing an external SPI-slave path. Gate that exact scope with one or
+more `REF:CAPABILITY` requirements:
+
+```bash
+hauksbee models coverage board.kicad_pcb \
+  --require U6:board_feedback_divider \
+  --require U3:gpio_external_input
+```
+
+The command exits non-zero unless every winning card explicitly lists the named
+capability under `[models.coverage].implements`. An identity-only card, an
+unspecified legacy scope, a capability listed under `.missing`, a typo, or an
+unknown reference all fail closed; none is guessed complete. JSON retains the
+per-requirement model id, stage, result, and reason.
+
+Executable cards can combine the ordinary solver kinds with `[models.logic]`,
+`[models.behavioral]` pins/FSM/converter/expression laws/state-controlled series
+paths/model-owned current profiles, firmware-visible `[models.peripheral]`
+EEPROM/flash/register-map behavior, and board-resistor-driven `[models.current_program]`
+laws. A peripheral and an analogue behavioural block may coexist on the same
+resolved part: protocol behavior does not prevent that part from loading a rail
+or driving a protection state machine. These are reusable model behavior, not
+CI-only special cases. CI scenarios remain the right place for product/workload
+stimuli that the fitted part and datasheet do not determine (firmware image,
+traffic, ambient, module variant, or a particular user load).
+
+A reusable declarative bus device embeds the already-validated sensor TOML in
+the card. Role names must exist in `[models.pins]`; malformed maps and unwired
+roles fail lint/binding rather than becoming a zero-valued peripheral:
+
+```toml
+[models.peripheral]
+kind = "register_map"
+scl_role = "scl"          # defaults shown; SPI uses cs/sck/mosi/miso
+sda_role = "sda"
+spec_toml = '''
+[sensor]
+name = "Example chip-id subset"
+bus = "i2c"
+i2c_address = 0x18
+[[sensor.register]]
+addr = 0x00
+const = [0x13]
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.coverage]
+implements = ["i2c_chip_id"]
+missing = ["measurement_registers", "interrupt_behavior"]
+```
+
+This exact map auto-attaches when the part resolves. It is intentionally
+partial: declaring one WHO_AM_I register does not claim an accelerometer,
+timing model, interrupt engine, or complete silicon.
+
+A model-owned load uses the same waveform evaluator as scenario loads. Its
+first segment is the documented pre-start/DC current; later segments can ramp,
+hold, or repeat with deterministic jitter:
+
+```toml
+[[models.behavioral.profiled_loads]]
+name = "core"
+supply_pin = "vdd"
+return_pin = "gnd"       # omit only when circuit ground is genuinely correct
+start_s = 0.0
+seed = 0
+
+[[models.behavioral.profiled_loads.segment]]
+level_a = 0.000010        # source-bound standby current
+duration_s = 0.005
+
+[[models.behavioral.profiled_loads.segment]]
+level_a = 0.240           # source-bound active/burst current
+rise_s = 0.0005
+duration_s = 0.010
+period_s = 0.100
+idle_a = 0.040
+```
+
+The runtime stamps the sink on the resolved supply/return pins and exposes its
+current to FSM guards as `i_load_core`. Validation rejects missing pin roles,
+negative/non-finite current or time, impossible burst timing, duplicate names,
+and jitter large enough to erase a period. A datasheet maximum can therefore
+drive a conservative rail/protection test, while a firmware-dependent workload
+remains an explicit scenario input instead of being disguised as universal
+part behavior.
+
+Exact source citations belong in the card, not only in prose:
+
+```toml
+[[models.source.references]]
+url = "https://vendor.example/part-datasheet.pdf"
+title = "Part datasheet"
+locator = "Electrical characteristics, table 6"
+# sha256 = "..."         # include only when those exact bytes were retained
+```
+
+`models coverage --json` and `--require REF:CAPABILITY` retain those references.
+Malformed metadata, non-HTTPS URLs, or malformed hashes reject the model file;
+they are not silently discarded while the electrical model keeps running.
+
+### Prepare a pack for every actionable model gap
+
+When a board has several unresolved, identity-only, or partial executable
+models, `prepare` turns them into one reviewed plan:
+
+```bash
+hauksbee models prepare path/to/board.kicad_pcb --pack-dir ./acme-models
+```
+
+The command resolves against the local model library, lists the broader
+authoring queue (including connected FETs, fuses, inductors, and modules),
+references and the exact `pack.toml`, `inventory.json`, `workplan.json`, and
+`models/<id>.toml` paths it would write, then asks `Write exactly these files?
+[y/N]`. A default answer, a non-terminal
+stdin, or an existing target file writes nothing. Use `--yes` only when a
+script has deliberately reviewed that plan; it is the explicit non-interactive
+opt-in. Preparation is local and deterministic: it performs no network or LLM
+request, does not install/register the pack, and never invents device facts.
+An unresolved or identity-only target remains `choose_kind`, `user-model` /
+`unvalidated`, and `unknown` until its author supplies evidence. A partial
+executable target is different: preparation copies the exact winning card,
+narrows its match to the board-observed identity, preserves every behavior that
+already runs, and demotes the copy to `user-model` / `unvalidated` while it is
+edited. This prevents “add one missing behavior” from accidentally throwing
+away the working model. `workplan.json` maps each component to that prepared
+file, its before-stage, implemented and missing capabilities, and the exact
+lint/coverage/run commands for the handoff. The board pin/net inventory stays
+in `inventory.json`; it is evidence, not an invented pin map.
+
 ## From the browser
 
-`hauksbee serve` offers the same extraction, and holds the same consent
-contract, on the report page. Where the report lists the parts that could not
-be bound ("Parts with no model"), each one carries **Draft a model from a
-datasheet**. The flow is fixed in this order, and the order is the contract:
+`hauksbee serve` makes model coverage part of the board itself. Click a coverage
+row, component, or trace to see the winning model, its validation stage,
+implemented and missing behavior, source reference, exact nets, and affected
+devices. A trace can become a live scope probe or a repeatable assertion in the
+same card. A component with a gap carries **Extend**: that opens a local draft;
+for a partial executable model the server copies the exact winning behavior
+before the user edits it. Drafting is read-only and deterministic. **Save** is
+the separate explicit write approval. None of this requires an LLM.
+
+The same board interaction builds the experiment. A selected trace can become
+a live scope probe, assertion, 50-ohm source, button, switch, or ideal scenario
+supply. A selected I²C/SPI component can open a register-map row: choose/paste
+local declarative TOML or select an exact checked-in behavior from the bundled
+picker, override physical inputs, and optionally provide an SPI
+controller and chip-select net. The browser can attach those exact validated
+bytes immediately to the running bus and keeps the identical `[[sensor]]` entry
+for replay. The row waits for a correlated engine receipt and shows acceptance
+or refusal beside the exact bytes; “sent” is not treated as success. Model
+cards may instead embed a validated
+`[models.peripheral] kind = "register_map"` block; exact resolution then makes
+the bus behavior automatic. Reusable cards can require strap roles high/low and
+derive an I²C address from a resolved supply/ground strap. Floating or ambiguous
+straps leave the behavior open with a named reason. Neither path guesses
+registers from a part name. The bundled picker is local and read-only, so this
+ordinary path needs neither a separate file nor an LLM.
+
+Where a datasheet can accelerate authoring, the page also offers the optional
+extraction workflow. It holds the same consent contract as the CLI. The flow is
+fixed in this order, and the order is the contract:
 
 1. **Can it run at all**, from `GET /api/models/extract/ready`. If codex is
    missing, or installed but not signed in, the blocker and the one command

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useContext } from 'react'
-import type { ServerMessage, SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, BacklogMsg, ClientMessage } from '../types/protocol'
+import type { ServerMessage, SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, BacklogMsg, ClientMessage, ActionResultMsg } from '../types/protocol'
 import { SimSourceContext } from '../demo/simSource'
 
 // Connect to the same origin that served the page, so the viewer works on any
@@ -22,6 +22,9 @@ export interface SimulationState {
    *  after a plain informational error). Optional so replay/demo sources
    *  without an error channel need not provide it. */
   serverError?: string | null
+  /** Correlated receipts for explicit live mutations. Bounded to the current
+   * connection and ordered exactly as the engine accepted/refused them. */
+  actionResults?: ActionResultMsg[]
   /** The session's server-held history (fault log, probe set), replayed once
    *  per (re)connect so a reload rejoins with everything that already fired.
    *  A fresh object per connect; absent on sources without one (the demo). */
@@ -60,6 +63,7 @@ export function useLiveSimulation(): SimulationState {
   const [probeData, setProbeData] = useState<ProbeDataMsg[]>([])
   const [backlog, setBacklog] = useState<BacklogMsg | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
+  const [actionResults, setActionResults] = useState<ActionResultMsg[]>([])
   const wsRef = useRef<WebSocket | null>(null)
 
   // Coalesce high-rate messages to one React commit per animation frame. At
@@ -145,6 +149,9 @@ export function useLiveSimulation(): SimulationState {
             // in the devtools console is not an honest abort.
             setServerError(msg.message)
             break
+          case 'ActionResult':
+            setActionResults(previous => [...previous.slice(-49), msg])
+            break
         }
       }
 
@@ -158,6 +165,7 @@ export function useLiveSimulation(): SimulationState {
         setBoardInfo(null)
         setFrame(null)
         setStatus(null)
+        setActionResults([])
         reconnectTimer = setTimeout(connect, 2000)
       }
 
@@ -175,5 +183,5 @@ export function useLiveSimulation(): SimulationState {
     }
   }, [])
 
-  return { connected, boardInfo, frame, status, probeData, backlog, serverError, send }
+  return { connected, boardInfo, frame, status, probeData, backlog, serverError, actionResults, send }
 }

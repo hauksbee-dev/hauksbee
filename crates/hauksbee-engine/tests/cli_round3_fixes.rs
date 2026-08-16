@@ -406,7 +406,7 @@ fn check_ends_with_a_single_verdict_line() {
 // ── U5: the unresolved-parts heads-up names the scaffolding command ──────────
 
 #[test]
-fn coverage_heads_up_names_models_new_with_the_first_unresolved_ref() {
+fn coverage_heads_up_names_the_draft_pack_command_with_the_board_path() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("mystery.board");
     std::fs::write(
@@ -429,9 +429,12 @@ fn coverage_heads_up_names_models_new_with_the_first_unresolved_ref() {
     ]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let so = stdout(&out);
+    // The heads-up moved from per-ref `models new` scaffolding to the
+    // review-then-approve draft-pack flow; it must still name the exact
+    // runnable command including this board's real path.
     assert!(
-        so.contains("hauksbee models new --board") && so.contains(" U1"),
-        "the heads-up names the exact scaffolding command: {so}"
+        so.contains("hauksbee models prepare") && so.contains("mystery.board"),
+        "the heads-up names the exact draft-pack command: {so}"
     );
 }
 

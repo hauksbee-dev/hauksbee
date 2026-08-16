@@ -161,6 +161,11 @@ max_count = 4095
 # port letter '0', read at SIO offset 0x10. GPIO_OE at 0x20 is one bit per pin.
 letter = "0"
 peripheral = "sio"
+# GPIO_OUT/GPIO_OE are SIO registers, but external pin levels enter through
+# the physical GPIOPort receiver. Do not send OnGPIO to SIO: it has no such
+# method and Renode rejects the command. The RP2040GPIO model's OnGPIO updates
+# the pad state consumed by SIO GPIO_IN and the peripheral mux.
+input_peripheral = "gpio"
 odr_offset = 0x10
 width = 30
 dir = { offset = 0x20, encoding = "dir_bits" }

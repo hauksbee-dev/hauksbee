@@ -135,6 +135,182 @@ test('typed co-sim invalidity and faults cannot retain a green verdict card', ()
   expect(reportVerdictTone(faulted)).toBe('error')
 })
 
+test('model coverage is a clickable human workflow, not an agent-only report', async () => {
+  Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
+  const { BoardView } = await import('../src/components/BoardView')
+  const report = realFrontdoorReport()
+  report.model_coverage = {
+    schema_version: 1,
+    summary: {
+      active_connected: 1, identified: 1, executable_available: 1,
+      unresolved: 0, identity_only: 0, executable_scope_unspecified: 0,
+      executable_partial: 1, executable_declared: 0, ignored: 0,
+      actionable_behavior_gaps: 1, authoring_targets: 1,
+      requirements_total: 0, requirements_met: 0, requirements_unmet: 0,
+    },
+    components: [{
+      reference: 'U4', value: 'W25Q128JVS', lib_id: 'Memory_Flash:W25Q128JVS',
+      footprint: 'Package_SO:SOIC-8', stage: 'executable_partial',
+      actionable_behavior_gap: true, model_id: 'w25q128jvs', model_kind: 'spi_nor',
+      layer: 'builtin', origin: 'digital',
+      source: { tier: 'vendor', layer: 'builtin', origin: 'digital', validation: 'datasheet-checked' },
+      references: [{ title: 'W25Q128JV datasheet', url: 'https://example.test/w25q.pdf', locator: 'sections 7 and 8', sha256: 'a'.repeat(64) }],
+      implements: ['jedec_id', 'read', 'deep_power_down_current_max'],
+      missing: ['program_erase_timing'],
+      pins: [{ number: '8', function: 'VCC', kind: 'power_in', net: '+3V3', position_mm: [12, 8] }],
+    }],
+    authoring_targets: [],
+  }
+  const html = renderToStaticMarkup(<BoardView
+    session={session(report)}
+    onQueueCheck={() => {}}
+    onOpenChecks={() => {}}
+    onDriveLive={() => {}}
+    simMounted={false}
+    engineVersion="0.1.0"
+    spec={null}
+    checks={null}
+    sessionName={null}
+  />)
+
+  expect(html).toContain('1/1 identified')
+  expect(html).toContain('1/1 executable')
+  expect(html).toContain('data-testid="model-author-U4"')
+  expect(html).toContain('This list is deterministic and does not require an LLM')
+})
+
+test('a live trace click offers a scope probe and repeatable checks together', async () => {
+  const { SelectionCard } = await import('../src/components/SelectionCard')
+  const html = renderToStaticMarkup(<SelectionCard
+    net="+3V3"
+    component={null}
+    onAddProbe={() => {}}
+    onQueueCheck={() => {}}
+    onQueuePeripheral={() => {}}
+    onQueueSupply={() => {}}
+    onClose={() => {}}
+  />)
+  expect(html).toContain('data-testid="selection-add-probe"')
+  expect(html).toContain('Watch this trace live')
+  expect(html).toContain('data-testid="assert-rail_window"')
+  expect(html).toContain('data-testid="selection-add-stimulus"')
+  expect(html).toContain('Drive this trace in a co-sim scenario')
+  expect(html).toContain('data-testid="selection-add-supply"')
+  expect(html).toContain('Use this trace as a 3.3 V scenario supply')
+
+  const liveHtml = renderToStaticMarkup(<SelectionCard
+    net="+3V3"
+    component={null}
+    onQueuePeripheral={() => {}}
+    onQueueSupply={() => {}}
+    peripheralMode="live-and-scenario"
+    onClose={() => {}}
+  />)
+  expect(liveHtml).toContain('Drive this trace now and save the interaction')
+  expect(liveHtml).toContain('Attach a pushbutton now and save it')
+  expect(liveHtml).toContain('Power this trace now at 3.3 V and save the supply')
+})
+
+test('visual interaction builder round-trips a real stimulus and timeline', async () => {
+  const { buildToml, tomlToBuilder } = await import('../src/components/ChecksView')
+  const peripheral = {
+    rowId: 1, id: 'STIM_IN', kind: 'stimulus' as const, net: '/SENSE', to: 'GND',
+    waveform: 'sine' as const, offset: '1.65', amplitude: '0.25', freq_hz: '1000',
+    bounce_ms: '', initial: '0', events: [{ t_ms: '25', value: '0.75' }],
+  }
+  const toml = buildToml('interactive board', '100', [], [peripheral], [])
+  expect(toml).toContain('[[peripheral]]')
+  expect(toml).toContain('type = "stimulus"')
+  expect(toml).toContain('net = "/SENSE"')
+  expect(toml).toContain('waveform = "sine"')
+  expect(toml).toContain('[[peripheral.event]]')
+  expect(tomlToBuilder(toml)?.peripherals).toEqual([peripheral])
+})
+
+test('visual bus-device builder embeds exact local spec bytes and round-trips inputs', async () => {
+  const { buildToml, tomlToBuilder } = await import('../src/components/ChecksView')
+  const sensor = {
+    rowId: 1,
+    id: 'U7_ACCEL',
+    componentRef: 'U7',
+    modelId: 'bma423',
+    specName: 'bma423.toml',
+    spec: '[sensor]\nname = "BMA423"\nbus = "i2c"\ni2c_address = 0x18\n[[sensor.register]]\naddr = 0x00\nconst = [0x13]\n[sensor.protocol]\nstyle = "i2c_pointer"\n',
+    controller: '',
+    csNet: '',
+    inputs: [{ rowId: 1, name: 'accel_x_g', value: '0.25' }],
+  }
+  const toml = buildToml('bus device', '100', [], [], [], [sensor])
+  expect(toml).toContain('[[sensor]]')
+  expect(toml).toContain('id = "U7_ACCEL"')
+  expect(toml).toContain('[sensor.inputs]')
+  expect(toml).toContain('"accel_x_g" = 0.25')
+  const parsed = tomlToBuilder(toml)?.sensors[0]
+  expect(parsed?.id).toBe('U7_ACCEL')
+  expect(parsed?.spec).toBe(sensor.spec)
+  expect(parsed?.inputs).toEqual(sensor.inputs)
+})
+
+test('a component with a bus-model gap offers explicit register-map attachment', async () => {
+  const { SelectionCard } = await import('../src/components/SelectionCard')
+  const html = renderToStaticMarkup(<SelectionCard
+    net={null}
+    component={{ ref: 'U7', value: 'BMA423', lib_id: 'Sensor:BMA423' }}
+    modelCoverage={{
+      reference: 'U7', value: 'BMA423', lib_id: 'Sensor:BMA423', footprint: 'LGA-12',
+      stage: 'executable_partial', actionable_behavior_gap: true, model_id: 'bma423',
+      model_kind: 'digital', layer: 'builtin', origin: 'digital',
+      source: { tier: 'vendor', layer: 'builtin', origin: 'digital', validation: 'datasheet-checked' },
+      implements: ['pin_roles'], missing: ['i2c_spi_register_map'], pins: [],
+    }}
+    onQueueSensor={() => {}}
+    onClose={() => {}}
+  />)
+  expect(html).toContain('data-testid="selection-add-sensor"')
+  expect(html).toContain('Open its register-map behavior builder')
+
+  const modelOwned = renderToStaticMarkup(<SelectionCard
+    net={null}
+    component={{ ref: 'U7', value: 'BMA423', lib_id: 'Sensor:BMA423' }}
+    modelCoverage={{
+      reference: 'U7', value: 'BMA423', lib_id: 'Sensor:BMA423', footprint: 'LGA-12',
+      stage: 'executable_partial', actionable_behavior_gap: true, model_id: 'bma423',
+      model_kind: 'digital', layer: 'builtin', origin: 'digital',
+      source: { tier: 'vendor', layer: 'builtin', origin: 'digital', validation: 'datasheet-checked' },
+      implements: ['register_map_subset', 'chip_id_read'], missing: ['full_register_map'], pins: [],
+    }}
+    onQueueSensor={() => {}}
+    onClose={() => {}}
+  />)
+  expect(modelOwned).toContain('data-testid="selection-register-map-owned"')
+  expect(modelOwned).toContain('already auto-attaches model-owned register behavior')
+  expect(modelOwned).not.toContain('selection-add-sensor')
+})
+
+test('live input sliders require an explicit engine source, not an input-looking net name', async () => {
+  const { InputSourcesPanel } = await import('../src/components/InputSourcesPanel')
+  const base = {
+    type: 'BoardInfo' as const, name: 'b', board_url: '/b', num_components: 0,
+    num_nets: 1, nets: ['A0'], component_kinds: {}, mcus: [] as [string, string][],
+  }
+  const guessed = renderToStaticMarkup(<InputSourcesPanel boardInfo={base} frame={null} send={() => {}} />)
+  expect(guessed).toContain('No input sources detected')
+  expect(guessed).toContain('arbitrary net names are never treated as sources')
+  expect(guessed).not.toContain('type="range"')
+
+  const declared = renderToStaticMarkup(<InputSourcesPanel
+    boardInfo={{
+      ...base,
+      input_sources: [{ id: 'A0', kind: 'voltage', min: 0, max: 3.3, initial: 1.65, unit: 'V' }],
+    }}
+    frame={null}
+    send={() => {}}
+  />)
+  expect(declared).toContain('type="range"')
+  expect(declared).toContain('1.65 V')
+  expect(declared).toContain('3.3 V')
+})
+
 test('a report-only restored session does not offer model saves it cannot re-analyze', async () => {
   Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')

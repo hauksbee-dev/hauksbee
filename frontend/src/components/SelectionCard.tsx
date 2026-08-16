@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { CloseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 import { netReadoutText, type NetReading } from '../lib/net-state'
+import type { ModelCoverageComponent } from '../types/report'
 
 // The unified selection card: what a click on the board surface reports, in
 // the same card language on the report map and the live sim. A net shows its
@@ -56,7 +57,8 @@ function OfferButton({ offer, onQueue }: {
 }
 
 export function SelectionCard({
-  net, liveVolts, reading, component, boundKind, onQueueCheck, onClose, onPickNet,
+  net, liveVolts, reading, component, boundKind, modelCoverage, netModels = [],
+  onQueueCheck, onQueuePeripheral, onQueueSensor, onQueueSupply, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet,
 }: {
   /** Selected net, when the click landed on copper. */
   net: string | null
@@ -71,7 +73,28 @@ export function SelectionCard({
   component: SelectedComponent | null
   /** Engine-bound model kind for the component ("mcu", "bjt_npn", ...). */
   boundKind?: string | null
+  /** Winning model plus its declared executable scope. Unlike `boundKind`,
+   *  this distinguishes an identity card from a complete behavioural model. */
+  modelCoverage?: ModelCoverageComponent | null
+  /** Modelled devices touching a selected trace/net. */
+  netModels?: ModelCoverageComponent[]
   onQueueCheck?: (check: { kind: string; net?: string; ref?: string }) => void
+  /** Add a physical interaction to the visual co-sim builder. This changes the
+   *  experiment and is intentionally presented separately from assertions. */
+  onQueuePeripheral?: (peripheral: { id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }) => void
+  /** Start a validated register-map bus-device scenario for this component.
+   * The follow-on builder requires explicit spec bytes; clicking never guesses
+   * a datasheet protocol from a part name. */
+  onQueueSensor?: (sensor: { id: string; ref?: string; modelId?: string | null }) => void
+  onQueueSupply?: (supply: { net: string; volts?: number }) => void
+  /** Say whether the action only prepares a replayable scenario or also
+   *  mutates the connected live solver immediately. */
+  peripheralMode?: 'scenario' | 'live-and-scenario'
+  /** Add the selected copper to the live scope immediately. Only supplied by
+   *  the live view; the report view has no running wire to probe. */
+  onAddProbe?: (net: string) => void
+  /** Open the deterministic local model editor for the selected component. */
+  onAuthorModel?: (component: ModelCoverageComponent) => void
   onClose: () => void
   /** Jump the selection to one of the part's pad nets. */
   onPickNet?: (net: string) => void
@@ -81,6 +104,7 @@ export function SelectionCard({
   const offers: AssertOffer[] = net
     ? [
         { kind: 'voltage', label: 'must sit at a voltage', net },
+        { kind: 'rail_window', label: 'must stay inside a voltage window', net },
         { kind: 'toggle', label: 'must blink', net },
         { kind: 'boot-coverage', label: 'firmware must drive it by a deadline', net },
       ]
@@ -93,6 +117,8 @@ export function SelectionCard({
             : []),
         ]
       : []
+  const needsRegisterMapWork = modelCoverage?.missing?.some(item => /i2c|spi|register|bus/i.test(item)) ?? false
+  const modelOwnsRegisterMap = modelCoverage?.implements?.some(item => /register[_-]map/i.test(item)) ?? false
 
   return (
     // maxHeight 100% + an internal scroll: the card is anchored inside a strip
@@ -174,6 +200,51 @@ export function SelectionCard({
               ? <>bound model: <span style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>{boundKind}</span></>
               : 'no bound model (this part is open on the live circuit)'}
           </div>
+          {modelCoverage && (
+            <div
+              data-testid="selection-model-coverage"
+              className="rounded-md px-2.5 py-2 text-[10px] leading-relaxed"
+              style={{
+                border: `1px solid ${modelCoverage.actionable_behavior_gap ? 'var(--warn-border)' : 'var(--ok-border)'}`,
+                background: modelCoverage.actionable_behavior_gap ? 'var(--warn-bg)' : 'var(--ok-bg)',
+                color: 'var(--silk-dim)',
+              }}
+            >
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <b style={{ color: modelCoverage.actionable_behavior_gap ? 'var(--warn-strong)' : 'var(--ok)' }}>
+                  {modelCoverage.stage.replaceAll('_', ' ')}
+                </b>
+                {modelCoverage.model_id && (
+                  <code style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>{modelCoverage.model_id}</code>
+                )}
+                <span>{modelCoverage.source.validation}</span>
+              </div>
+              {(modelCoverage.implements?.length ?? 0) > 0 && (
+                <div className="mt-1">
+                  <b>Runs:</b> {modelCoverage.implements!.join(', ')}
+                </div>
+              )}
+              {(modelCoverage.missing?.length ?? 0) > 0 && (
+                <div className="mt-1" data-testid="selection-model-missing">
+                  <b>Still missing:</b> {modelCoverage.missing!.join(', ')}
+                </div>
+              )}
+              {(modelCoverage.references?.length ?? 0) > 0 && (() => {
+                const reference = modelCoverage.references![0]
+                const safeUrl = /^https?:\/\//i.test(reference.url) ? reference.url : null
+                return (
+                  <div className="mt-1">
+                    Source: {safeUrl ? (
+                      <a href={safeUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--copper-hi)' }}>
+                        {reference.title}
+                      </a>
+                    ) : reference.title}
+                    {reference.sha256 ? ' · hash pinned' : ' · hash not pinned'}
+                  </div>
+                )
+              })()}
+            </div>
+          )}
           {component.lib_id && (
             <div className="text-[10px]" style={{ color: 'var(--silk-faint)', wordBreak: 'break-all' }}>
               {component.lib_id}
@@ -210,6 +281,106 @@ export function SelectionCard({
           )}
         </>
       ) : null}
+
+      {net && netModels.length > 0 && (
+        <div
+          data-testid="selection-net-models"
+          className="rounded-md px-2.5 py-2 text-[10px] leading-relaxed"
+          style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)', color: 'var(--silk-dim)' }}
+        >
+          <b style={{ color: 'var(--silk)' }}>Devices on this trace</b>
+          {netModels.map(model => (
+            <div key={model.reference} className="mt-1">
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--copper-hi)' }}>{model.reference}</span>{' '}
+              · {model.stage.replaceAll('_', ' ')}
+              {(model.missing?.length ?? 0) > 0 ? ` · missing ${model.missing!.join(', ')}` : ''}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {net && onAddProbe && (
+        <button
+          type="button"
+          data-testid="selection-add-probe"
+          onClick={() => onAddProbe(net)}
+          className="hb-btn-primary hb-press px-2.5 py-1.5 text-[12px] text-left"
+        >
+          + Watch this trace live
+        </button>
+      )}
+
+      {net && onQueuePeripheral && (
+        <div className="flex flex-col gap-1.5">
+          <button
+            type="button"
+            data-testid="selection-add-stimulus"
+            onClick={() => onQueuePeripheral({ kind: 'stimulus', net })}
+            className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
+          >
+            {peripheralMode === 'live-and-scenario'
+              ? '+ Drive this trace now and save the interaction'
+              : '+ Drive this trace in a co-sim scenario'}
+          </button>
+          <button
+            type="button"
+            data-testid="selection-add-button"
+            onClick={() => onQueuePeripheral({ kind: 'pushbutton', net })}
+            className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
+          >
+            {peripheralMode === 'live-and-scenario'
+              ? '+ Attach a pushbutton now and save it'
+              : '+ Attach a pushbutton to this trace'}
+          </button>
+        </div>
+      )}
+
+      {net && onQueueSupply && (
+        <button
+          type="button"
+          data-testid="selection-add-supply"
+          onClick={() => onQueueSupply({ net, volts: 3.3 })}
+          className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
+        >
+          {peripheralMode === 'live-and-scenario'
+            ? '+ Power this trace now at 3.3 V and save the supply'
+            : '+ Use this trace as a 3.3 V scenario supply'}
+        </button>
+      )}
+
+      {component && modelCoverage?.actionable_behavior_gap && onAuthorModel && (
+        <button
+          type="button"
+          data-testid="selection-author-model"
+          onClick={() => onAuthorModel(modelCoverage)}
+          className="hb-btn-primary hb-press px-2.5 py-1.5 text-[12px] text-left"
+        >
+          Extend {component.ref}'s model
+        </button>
+      )}
+
+      {component && onQueueSensor && needsRegisterMapWork && !modelOwnsRegisterMap && (
+        <button
+          type="button"
+          data-testid="selection-add-sensor"
+          onClick={() => onQueueSensor({ id: component.ref, ref: component.ref, modelId: modelCoverage?.model_id })}
+          className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
+        >
+          + Open its register-map behavior builder
+        </button>
+      )}
+
+      {component && needsRegisterMapWork && modelOwnsRegisterMap && (
+        <div
+          data-testid="selection-register-map-owned"
+          className="rounded-md px-2.5 py-2 text-[10px] leading-relaxed"
+          style={{ color: 'var(--silk-dim)', border: '1px solid var(--hairline)', background: 'var(--surface-2)' }}
+        >
+          This part already auto-attaches model-owned register behavior. Extend
+          its model to add the missing registers; adding a second device at the
+          same address would not represent this board.
+        </div>
+      )}
 
       {onQueueCheck && offers.length > 0 && (
         <div className="flex flex-col gap-1.5 mt-0.5">

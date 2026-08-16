@@ -577,6 +577,211 @@ ohms = 2.1    # DCR max; Vishay publishes no typical
 "2" = "b"
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Bourns SRN6045TA-3R3Y, exact 3.3 uH semi-shielded power inductor.
+# Primary source: Bourns SRN6045TA data sheet, Electrical Specifications row
+# SRN6045TA-3R3Y:
+# https://www.bourns.com/docs/product-datasheets/srn6045ta.pdf
+# Source bytes audited 2026-08-15, SHA-256
+# a5144a82a215a9176eef5deb8baa5879f8a261f6cc56027fda4ac47c303905be.
+# The row states L=3.3 uH +/-30%, SRF=45 MHz typ, DCR=21 mOhm +/-20%,
+# Irms=5.00 A typ (40 C rise), Isat=7.80 A typ (30% inductance drop).
+[[models]]
+id = "srn6045ta_3r3y"
+kind = "passive"
+passive_class = "inductor"
+description = "Bourns SRN6045TA-3R3Y 3.3uH power inductor with sourced 21mOhm DCR"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "inductance"
+low = 2.31e-6
+high = 4.29e-6
+unit = "H"
+kind = "specification-limits"
+basis = "Bourns table: 3.3uH +/-30% at 1MHz/1V"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "series_ohms"
+low = 0.0168
+high = 0.0252
+unit = "ohm"
+kind = "specification-limits"
+basis = "Bourns table: DCR 21mOhm +/-20%"
+
+[models.match]
+value_re = "(?i)^SRN6045TA-3R3Y$"
+
+[models.params]
+value_override = "3.3uH"
+series_ohms = 0.021
+warning = "source-bound small-signal inductance and DC copper loss are executable; current-dependent saturation, core-loss frequency dependence, self-capacitance and temperature-dependent DCR are not modeled"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+[models.ratings]
+max_current_a = 5.0
+max_junction_temp_c = 125.0
+
+[models.coverage]
+implements = ["inductance", "dc_series_resistance", "rated_current_threshold"]
+missing = ["current_dependent_saturation", "core_loss", "self_capacitance", "dcr_temperature_coefficient"]
+
+# The pedalboard's visible Value says only "Polyfuse 1.8A", but its retained
+# `KiLib_Generator` source property embeds the exact supplier order code
+# 1812L150-24MR. Match that evidence directly: the Value alone is not the MPN
+# and continues to land on the identity-only family card below.
+[[models]]
+id = "littelfuse_1812l150_24mr"
+kind = "passive"
+passive_class = "fuse"
+description = "Littelfuse 1812L150/24MR resettable PPTC, exact source-property match"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.littelfuse.com/~/media/electronics/datasheets/resettable_ptcs/littelfuse_ptc_1812l_datasheet.pdf.pdf"
+title = "Littelfuse 1812L Series Resettable PTCs, Rev GD 06/10/24"
+locator = "Electrical Characteristics table, 1812L150/24 row; Temperature Rerating table"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "cold_resistance_ohms"
+low = 0.040
+high = 0.120
+unit = "ohm"
+kind = "specification-limits"
+basis = "Official 1812L datasheet Rev GD 06/10/24 gives Rmin=0.040 ohm initial and R1max=0.120 ohm one hour after trip or reflow; the assembled board's exact value inside that interval is not measured."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "hold_current_a_20c"
+low = 1.50
+high = 1.50
+unit = "A"
+kind = "specification-limits"
+basis = "Official 1812L150/24 row gives Ihold=1.50 A at 20 C in still air."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "trip_current_a_20c"
+low = 3.00
+high = 3.00
+unit = "A"
+kind = "specification-limits"
+basis = "Official 1812L150/24 row gives Itrip=3.00 A at 20 C in still air."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "trip_time_s_at_8a_20c"
+low = 0.0
+high = 1.50
+unit = "s"
+kind = "specification-limits"
+basis = "Official 1812L150/24 row specifies 1.50 s maximum time to trip at 8.00 A and 20 C."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "single_event_fault_current_a"
+low = 20.0
+high = 20.0
+unit = "A"
+kind = "specification-limits"
+basis = "Official 1812L150/24 row gives Imax=20 A at Vmax=24 V subject to the datasheet notes; this is not a continuous operating current."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "tripped_power_dissipation_typ_w"
+low = 0.8
+high = 0.8
+unit = "W"
+kind = "typical-range"
+basis = "Official 1812L table gives Pd=0.8 W typical, not a guaranteed absolute maximum."
+
+[models.match]
+value_re = "(?i)^Polyfuse\\s*1(?:[._])?8A$"
+footprint_re = "(?i)(Fuse[_ -])?1812"
+[models.match.properties]
+KiLib_Generator = "1812L150(?:-|/)24MR"
+
+[models.params]
+# The solver uses the published initial Rmin as an optimistic lower-bound rail
+# drop. The warning and uncertainty interval prevent it being mistaken for a
+# measured assembled resistance. Source facts not consumed at runtime live in
+# the typed source uncertainty records above rather than in this runtime bag.
+ohms = 0.040
+trip_test_current_a = 8.0
+warning = "exact 1812L150/24MR identity and published 20 C limits; 0.040 ohm is optimistic initial Rmin, not measured post-reflow resistance; automatic reset/cooling and the full time-current curve are not modeled"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# Executable conservative trip envelope. The official table guarantees a
+# maximum 1.50 s trip time at 8.00 A and 20 C; `guard_dwell_s` measures
+# CONTINUOUS over-current, not time since boot. The high resistance is a circuit
+# protection abstraction, not a claimed hot-state ohmic measurement, so the
+# coverage block continues to mark post-trip resistance/reset as missing.
+[models.behavioral.fsm]
+states = ["closed", "tripped"]
+initial = "closed"
+
+[[models.behavioral.fsm.transitions]]
+from = "closed"
+to = "tripped"
+guard = "i_fuse_path * i_fuse_path >= trip_test_current_a * trip_test_current_a"
+guard_dwell_s = 1.50
+
+[[models.behavioral.series_paths]]
+name = "fuse_path"
+a = "a"
+b = "b"
+default_ohms = 0.040
+[models.behavioral.series_paths.state_ohms]
+closed = 0.040
+tripped = 1.0e9
+
+[models.ratings]
+# Ihold is the maximum current the datasheet says it will pass without tripping
+# in 20 C still air. It is deliberately a conservative operating threshold,
+# not the 20 A one-event fault withstand rating.
+max_current_a = 1.50
+max_voltage_v = 24.0
+
+[models.coverage]
+implements = ["cold_dc_resistance_lower_bound", "hold_current_threshold_20c", "trip_current_threshold_20c", "trip_by_8a_20c_envelope", "fault_current_voltage_ratings"]
+missing = ["assembled_cold_resistance", "time_current_curve_below_8a", "temperature_dependent_trip", "post_trip_resistance", "automatic_reset_cooling", "repetitive_fault_aging"]
+
+# A board carrying the display value but not the exact supplier/order-code
+# property is still ambiguous. Preserve that ambiguity instead of allowing the
+# exact card above to generalise to every 1812 "1.8A" fuse.
+[[models]]
+id = "polyfuse_1812_1p8a_identity"
+kind = "passive"
+passive_class = "fuse"
+description = "Littelfuse 1812L-series resettable fuse, exact ordering code not identified by board"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "ordering_code"
+reason = "The PCB says only 'Polyfuse 1.8A'; the linked 1812L family sheet contains multiple devices and does not establish whether 1.8A means hold, trip, or a design target."
+
+[models.match]
+value_re = "(?i)^Polyfuse\\s*1(?:[._])?8A$"
+footprint_re = "(?i)(Fuse[_ -])?1812"
+
+[models.params]
+identity_only = true
+warning = "1812L-series identity is known, but exact cold/max resistance, hold/trip current and thermal time curve are not determined by the PCB's '1.8A' label"
+unlocked_by = "an exact Littelfuse ordering code from BOM/as-built evidence plus ambient and initial-temperature assumptions"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
 # Crystals and crystal oscillators.
 #
 # The engine already treats a crystal as a part it skips rather than solves (the

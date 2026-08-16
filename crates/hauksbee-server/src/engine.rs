@@ -2,7 +2,9 @@
 //! the real circuit engine plugs in behind this trait, and a lightweight
 //! demo engine exists so the UI stack can run before full integration.
 
-use crate::protocol::{BoardInfo, PowerSupplyConfig, SimFrame, SolverControls};
+use crate::protocol::{
+    BoardInfo, LivePeripheralSpec, LiveRegisterMapSpec, PowerSupplyConfig, SimFrame, SolverControls,
+};
 
 pub trait Engine: Send + 'static {
     fn board_info(&self) -> BoardInfo;
@@ -22,6 +24,15 @@ pub trait Engine: Send + 'static {
     /// Default no-op for engines without peripherals.
     fn set_peripheral(&mut self, _id: &str, _value: f64) -> bool {
         false
+    }
+    /// Attach a control to the running circuit. Default is an explicit refusal,
+    /// not a fake UI control that changes nothing.
+    fn attach_peripheral(&mut self, _spec: LivePeripheralSpec) -> Result<(), String> {
+        Err("this engine does not support attaching live peripherals".into())
+    }
+    /// Attach a source-bound declarative bus device to the live simulation.
+    fn attach_register_map(&mut self, _spec: LiveRegisterMapSpec) -> Result<(), String> {
+        Err("this engine does not support attaching live register-map devices".into())
     }
 
     /// A human-readable reason when this engine's analog solve is failing
@@ -135,6 +146,14 @@ impl Engine for McuDemoEngine {
             mcus: vec![("U1".into(), "simavr:atmega328p".into())],
             power_supplies: Default::default(),
             peripherals: Default::default(),
+            input_sources: vec![crate::protocol::InputSourceInfo {
+                id: "A0".into(),
+                kind: "voltage".into(),
+                min: 0.0,
+                max: 5.0,
+                initial: 2.5,
+                unit: "V".into(),
+            }],
             shorts: None,
         }
     }

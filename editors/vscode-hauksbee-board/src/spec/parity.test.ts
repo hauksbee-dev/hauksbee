@@ -282,9 +282,8 @@ function probeCases(root: any): ProbeCase[] {
         continue;
       }
       const values: (number | string)[] = [...violating(prop)];
-      // One bogus token per closed vocabulary. The enum half of the schema needs
-      // the same enforced-versus-documented split as the numeric half, and
-      // `peripheral.waveform` is the field where they differ.
+      // One bogus token per closed vocabulary. The enum half of the schema uses
+      // the same enforced-versus-documented split as the numeric half.
       if (vocabulary(prop).length > 0) values.push("hauksbee_probe_bogus");
       for (const bad of values) {
         // `kind` is the discriminant itself: probing it under every kind would
@@ -373,8 +372,10 @@ function specWith(table: string, key: string, bad: number | string, kind?: strin
       const k = kind ?? "model_coverage";
       // `phase_margin` / `ac_gain` need an [ac] block; giving every kind one is
       // harmless and keeps the scaffolding uniform.
+      // `boot_coverage` also needs a firmware declaration at load time. The
+      // board is intentionally missing, so this placeholder is never executed.
       return doc(
-        [head],
+        k === "boot_coverage" ? [head, 'firmware = "firmware.elf"'] : [head],
         ["[ac]", "fstart = 10.0", "fstop = 1000.0", "points = 10"],
         block("[[assert]]", `kind = "${k}"`, ...ASSERT_BODIES[k])
       );
@@ -433,6 +434,12 @@ function specWith(table: string, key: string, bad: number | string, kind?: strin
       );
     case "sensor":
       return doc([head], block("[[sensor]]", 'id = "S"', 'spec_file = "s.toml"'), asserts);
+    case "timing":
+      return doc(
+        [head],
+        block("[timing]", "min_pulse_us = 1.0", "max_edge_error_us = 0.5"),
+        asserts
+      );
     default:
       // A table this helper does not know how to build. Returning a spec without
       // the probe would silently pass, so fail loudly instead: the count

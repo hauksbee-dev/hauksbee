@@ -82,14 +82,31 @@ pub(crate) fn merged_image_from_elf(
         chip,
         XtalFrequency::_40Mhz,
     );
-    let image = IdfBootloaderFormat::new(&elf_data, &flash_data, None, None, None, None)
-        .with_context(|| {
+    // espflash 4.5 has an internal `unreachable!` when an ELF advertises a
+    // `.flash.appdesc` section that is not part of any flash segment. Real
+    // build trees can contain exactly that intermediate ELF. A library panic
+    // must not strand a browser launch request or tear down its Tokio worker;
+    // translate it into the same actionable refusal as any other bad input.
+    let image = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        IdfBootloaderFormat::new(&elf_data, &flash_data, None, None, None, None)
+    })) {
+        Ok(result) => result.with_context(|| {
             format!(
                 "converting {} into an ESP32 app image (is it the app ELF your \
                  esp-idf/Arduino build produced, for this exact chip?)",
                 elf_path.display()
             )
-        })?;
+        })?,
+        Err(_) => {
+            bail!(
+                "ESP32 app ELF '{}' has an app-descriptor/flash-segment layout \
+                 the bundled converter cannot safely merge. Use the build's \
+                 merged flash.bin (or produce one with esptool merge_bin) instead; \
+                 no emulator was started.",
+                elf_path.display()
+            )
+        }
+    };
 
     // Lay the segments (bootloader, partition table, app) into a 0xFF-filled
     // flash-sized buffer: byte-identical to what
@@ -132,6 +149,24 @@ mod tests {
         assert!(chip_for_machine("esp32s3").is_some());
         assert!(chip_for_machine("esp32c3").is_some());
         assert!(chip_for_machine("lx60").is_none());
+    }
+
+    #[test]
+    fn unsupported_idf_intermediate_elf_refuses_instead_of_unwinding() {
+        let elf = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/firmware/watchy_display_init/watchy_display_init.elf");
+        if !elf.is_file() {
+            eprintln!("SKIP: {} is not present", elf.display());
+            return;
+        }
+        // This ESP32 image is deliberately offered to the S3 converter: the
+        // current espflash release reaches its internal appdesc unreachable
+        // instead of returning an ordinary error for this layout/chip pairing.
+        let call = std::panic::catch_unwind(|| merged_image_from_elf(&elf, "esp32s3"));
+        assert!(call.is_ok(), "bad user firmware must not escape as a panic");
+        let message = call.unwrap().unwrap_err().to_string();
+        assert!(message.contains("merged flash.bin"), "{message}");
+        assert!(message.contains("no emulator was started"), "{message}");
     }
 
     #[test]

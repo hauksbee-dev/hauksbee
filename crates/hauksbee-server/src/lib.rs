@@ -945,6 +945,7 @@ mod rate_honesty_tests {
                 mcus: Vec::new(),
                 power_supplies: Default::default(),
                 peripherals: Default::default(),
+                input_sources: Default::default(),
                 shorts: None,
             }
         }
@@ -1131,6 +1132,7 @@ mod rate_honesty_tests {
                 mcus: Vec::new(),
                 power_supplies: Default::default(),
                 peripherals: Default::default(),
+                input_sources: Default::default(),
                 shorts: None,
             }
         }
@@ -1628,6 +1630,57 @@ async fn sim_loop(
                     }
                     ClientMessage::SetPeripheral { id, value } => {
                         engine.set_peripheral(&id, value);
+                    }
+                    ClientMessage::AttachPeripheral(spec) => {
+                        let id = spec.id.clone();
+                        match engine.attach_peripheral(spec) {
+                        Ok(()) => {
+                            // The control list is part of the live session
+                            // contract. Refresh it immediately so the newly
+                            // attached button/stimulus appears in the rail and
+                            // can be manipulated without a reconnect.
+                            broadcast_msg(&ServerMessage::BoardInfo(engine.board_info()));
+                            broadcast_msg(&ServerMessage::ActionResult {
+                                action: "attach_peripheral".into(),
+                                id: id.clone(),
+                                request_id: None,
+                                ok: true,
+                                message: format!("Attached {id} to the live circuit."),
+                            });
+                        }
+                        Err(message) => broadcast_msg(&ServerMessage::ActionResult {
+                            action: "attach_peripheral".into(),
+                            id,
+                            request_id: None,
+                            ok: false,
+                            message,
+                        }),
+                    }
+                    }
+                    ClientMessage::AttachRegisterMap(spec) => {
+                        let id = spec.id.clone();
+                        let request_id = spec.request_id;
+                        match engine.attach_register_map(spec) {
+                            Ok(()) => {
+                                broadcast_msg(&ServerMessage::BoardInfo(engine.board_info()));
+                                broadcast_msg(&ServerMessage::ActionResult {
+                                    action: "attach_register_map".into(),
+                                    id: id.clone(),
+                                    request_id,
+                                    ok: true,
+                                    message: format!(
+                                        "Attached exact register-map bytes for {id} to the live co-simulation."
+                                    ),
+                                });
+                            }
+                            Err(message) => broadcast_msg(&ServerMessage::ActionResult {
+                                action: "attach_register_map".into(),
+                                id,
+                                request_id,
+                                ok: false,
+                                message,
+                            }),
+                        }
                     }
                     // Probe DATA is client-derived from the frame stream, but
                     // the active probe SET is session state: holding it here

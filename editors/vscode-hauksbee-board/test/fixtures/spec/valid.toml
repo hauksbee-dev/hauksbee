@@ -1,6 +1,7 @@
 name = "power-up sanity"
 board = "boards/blinky.kicad_pcb"
-duration_ms = 200
+firmware = "../../../../../testdata/firmware/esp32_blinky/flash.bin"
+duration_ms = 500
 frame_ms = 1.0
 suppress_rail = ["ANALOG_VDD"]
 

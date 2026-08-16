@@ -115,7 +115,50 @@ pub fn hooks() -> DatasheetHooks {
         save: Arc::new(save),
         check: Arc::new(check),
         spice_check: Arc::new(spice_report),
+        draft: Arc::new(draft_upgrade),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct UpgradeDraftRequest {
+    board_label: String,
+    reference: String,
+    value: String,
+    lib_id: String,
+    footprint: String,
+    #[serde(default)]
+    properties: Vec<(String, String)>,
+    #[serde(default)]
+    model_id: String,
+}
+
+fn draft_upgrade(body: &str) -> Result<String, String> {
+    let request: UpgradeDraftRequest = serde_json::from_str(body)
+        .map_err(|error| format!("the model draft request is not valid JSON: {error}"))?;
+    if request.reference.trim().is_empty() {
+        return Err("the model draft request needs a component reference".to_string());
+    }
+    if request.model_id.trim().is_empty() {
+        return crate::commands::models::draft_model_scaffold(
+            &request.board_label,
+            &request.reference,
+            &request.value,
+            &request.lib_id,
+            &request.footprint,
+            &request.properties,
+        )
+        .map_err(|error| error.to_string());
+    }
+    crate::commands::models::draft_model_upgrade(
+        &request.board_label,
+        &request.reference,
+        &request.value,
+        &request.lib_id,
+        &request.footprint,
+        &request.properties,
+        &request.model_id,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Which backend an extraction would use, and whether it can run right now.
@@ -987,6 +1030,53 @@ max_current_a = 0.5 # Source: absolute maximum ratings
             assert!(!id.is_empty() && !label.is_empty(), "{id} has a label");
             assert!(!id.contains(' '), "{id} is a machine kind, not a phrase");
         }
+    }
+
+    #[test]
+    fn browser_upgrade_draft_preserves_the_winning_executable_model_without_writing() {
+        let request = serde_json::json!({
+            "board_label": "pedalboard.kicad_pcb",
+            "reference": "U4",
+            "value": "W25Q128JVS",
+            "lib_id": "Memory_Flash:W25Q128JVS",
+            "footprint": "Package_SO:SOIC-8_5.23x5.23mm_P1.27mm",
+            "properties": [],
+            "model_id": "w25q128jv_soic8"
+        });
+        let draft = draft_upgrade(&request.to_string()).expect("resolved model is copied");
+        let parsed: toml::Value = toml::from_str(&draft).expect("draft stays valid TOML");
+        let row = &parsed["models"][0];
+        assert_eq!(row["kind"].as_str(), Some("digital"));
+        assert_eq!(row["peripheral"]["kind"].as_str(), Some("spi_nor_flash"));
+        assert_eq!(row["source"]["tier"].as_str(), Some("user-model"));
+        assert_eq!(row["source"]["validation"].as_str(), Some("unvalidated"));
+        assert!(draft.contains("Copied from winning model 'w25q128jv_soic8'"));
+        assert!(draft.contains("busy_timing"));
+    }
+
+    #[test]
+    fn browser_unresolved_draft_uses_the_same_evidence_first_scaffold_as_prepare() {
+        let request = serde_json::json!({
+            "board_label": "controller.kicad_pcb",
+            "reference": "U9",
+            "value": "LM358(A)+",
+            "lib_id": "Amplifier_Operational:LM358",
+            "footprint": "Package_SO:SOIC-8",
+            "properties": [["Manufacturer Part Number", "LM358DR"]],
+            "model_id": ""
+        });
+        let draft = draft_upgrade(&request.to_string()).expect("unresolved scaffold is prepared");
+        let parsed: toml::Value = toml::from_str(&draft).expect("scaffold stays valid TOML");
+        let row = &parsed["models"][0];
+        assert_eq!(row["kind"].as_str(), Some("choose_kind"));
+        assert_eq!(row["source"]["tier"].as_str(), Some("user-model"));
+        assert_eq!(row["source"]["validation"].as_str(), Some("unvalidated"));
+        assert_eq!(
+            row["match"]["properties"]["Manufacturer Part Number"].as_str(),
+            Some("^LM358DR$")
+        );
+        assert!(draft.contains("No datasheet values are guessed here"));
+        assert!(draft.contains("[models.coverage]"));
     }
 
     /// A pin map the agent could not settle must reach the reviewer.
