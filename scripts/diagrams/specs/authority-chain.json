@@ -1,100 +1,50 @@
 {
-  "background": "#ffffff",
-  "theme": "slate",
-  "layout": {
-    "algorithm": "layered",
-    "direction": "DOWN"
-  },
+  "layout": { "direction": "DOWN" },
   "nodes": [
     {
       "id": "board",
       "label": "Board sources\nKiCad · Eagle · Altium\nIPC-2581 · ODB++\nGerber + IPC-D-356",
-      "role": "primary"
+      "role": "input"
     },
     {
       "id": "assembly",
       "label": "Assembly\nBOM · placement\nfitted variant",
-      "role": "primary"
+      "role": "input"
     },
     {
       "id": "firmware",
       "label": "Firmware\n+ model packs",
-      "role": "primary"
+      "role": "input"
     },
     {
       "id": "inventory",
       "label": "Input authority + SHA-256 inventory",
-      "role": "accent",
-      "emphasis": "strong"
+      "role": "stage"
     },
     {
       "id": "ir",
       "label": "Extracted board IR + explicit model coverage",
-      "role": "accent",
-      "emphasis": "strong"
+      "role": "stage"
     },
-    {
-      "id": "static",
-      "label": "Static checks",
-      "role": "neutral"
-    },
-    {
-      "id": "analog",
-      "label": "Analog / AC / thermal",
-      "role": "neutral"
-    },
-    {
-      "id": "cosim",
-      "label": "MCU co-sim",
-      "role": "neutral"
-    },
+    { "id": "static", "label": "Static checks", "role": "check" },
+    { "id": "analog", "label": "Analog / AC / thermal", "role": "check" },
+    { "id": "cosim", "label": "MCU co-sim", "role": "check" },
     {
       "id": "outputs",
       "label": "Terminal · JSON · JUnit · SARIF · web · MCP",
-      "role": "success",
-      "emphasis": "strong"
+      "role": "output"
     }
   ],
   "edges": [
-    {
-      "from": "board",
-      "to": "inventory"
-    },
-    {
-      "from": "assembly",
-      "to": "inventory"
-    },
-    {
-      "from": "firmware",
-      "to": "inventory"
-    },
-    {
-      "from": "inventory",
-      "to": "ir"
-    },
-    {
-      "from": "ir",
-      "to": "static"
-    },
-    {
-      "from": "ir",
-      "to": "analog"
-    },
-    {
-      "from": "ir",
-      "to": "cosim"
-    },
-    {
-      "from": "static",
-      "to": "outputs"
-    },
-    {
-      "from": "analog",
-      "to": "outputs"
-    },
-    {
-      "from": "cosim",
-      "to": "outputs"
-    }
+    { "from": "board", "to": "inventory" },
+    { "from": "assembly", "to": "inventory" },
+    { "from": "firmware", "to": "inventory" },
+    { "from": "inventory", "to": "ir" },
+    { "from": "ir", "to": "static" },
+    { "from": "ir", "to": "analog" },
+    { "from": "ir", "to": "cosim" },
+    { "from": "static", "to": "outputs" },
+    { "from": "analog", "to": "outputs" },
+    { "from": "cosim", "to": "outputs" }
   ]
 }

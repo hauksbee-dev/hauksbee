@@ -1,0 +1,49 @@
+<mxfile host="hauksbee">
+  <diagram name="pipeline-chain" id="pipeline-chain">
+    <mxGraphModel dx="1100" dy="700" grid="0" page="0" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="board" value="board file&#10;ch 1" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="52" y="52" width="120" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="netlist" value="netlist&#10;ch 1" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="228" y="52" width="120" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="bound" value="bound circuit&#10;ch 1, 9" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="404" y="52" width="120" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="mna" value="MNA system&#10;ch 2" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="580" y="52" width="120" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="dc" value="DC point&#10;ch 3" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="756" y="52" width="120" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="waves" value="waveforms&#10;ch 4–7" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="932" y="52" width="120" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="verdicts" value="verdicts&#10;ch 8" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1108" y="52" width="120" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="board" target="netlist">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="netlist" target="bound">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="bound" target="mna">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="mna" target="dc">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="dc" target="waves">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="waves" target="verdicts">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

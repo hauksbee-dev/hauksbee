@@ -2,16 +2,11 @@
   "name": "hauksbee-diagrams",
   "private": true,
   "type": "module",
-  "description": "Headless Excalidraw diagram generator for the docs. Specs in specs/, output in ../../docs/assets/diagrams/. Regenerate with: bun run generate",
+  "description": "Headless draw.io diagram generator for the docs. Specs in specs/, ELK-laid-out .drawio sources plus SVG exports land in ../../docs/assets/diagrams/, gated by scripts/lint-diagrams.py. Regenerate with: bun run generate",
   "scripts": {
     "generate": "bun render.ts"
   },
   "dependencies": {
-    "@excalidraw/excalidraw": "0.18.1",
-    "@happy-dom/global-registrator": "15",
-    "elkjs": "0.11.0",
-    "happy-dom": "^15.11.7",
-    "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "elkjs": "0.11.0"
   }
 }
