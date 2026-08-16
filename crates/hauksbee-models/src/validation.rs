@@ -5,8 +5,10 @@
 //! collects every violation at once rather than stopping at the first.
 
 use crate::schema::{
-    AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics, ModelEntry,
+    AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics,
+    ModelEntry, PeripheralSpec,
 };
+use crate::sensor_spec::{Bus, SensorSpec};
 use thiserror::Error;
 
 /// A validation error.
@@ -23,6 +25,431 @@ pub struct ValidationError {
 /// Returns `Ok(())` on success, or a list of violations.
 pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
+
+    // An identity-only card is useful provenance, but it is deliberately not a
+    // simulation model. Keep that state explicit and machine-checkable instead
+    // of letting an empty `digital` card count as bound coverage. The engine
+    // leaves these parts OPEN while retaining the winning model id/source.
+    let identity_only = entry.params.get_bool("identity_only").unwrap_or(false);
+    if entry.params.0.contains_key("identity_only")
+        && entry.params.get_bool("identity_only").is_none()
+    {
+        errors.push(ValidationError {
+            id: entry.id.clone(),
+            message: "params.identity_only must be a boolean".to_string(),
+        });
+    }
+    if identity_only {
+        for key in ["warning", "unlocked_by"] {
+            if entry
+                .params
+                .get_str(key)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "identity-only model requires non-empty params.{key} so reports state both the limitation and what would unlock behavior"
+                    ),
+                });
+            }
+        }
+        if !entry.logic.is_empty()
+            || !entry.behavioral.is_empty()
+            || entry.current_program.is_some()
+            || entry.peripheral.is_some()
+            || entry.peripheral_power.is_some()
+        {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "identity-only model cannot also declare logic, behavioral physics, current_program, a firmware peripheral, or peripheral power; remove identity_only only after that behavior is validated"
+                    .to_string(),
+            });
+        }
+        if !entry.coverage.implements.is_empty() {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "identity-only model cannot declare coverage.implements; it has no executable behavior"
+                    .to_string(),
+            });
+        }
+    }
+
+    if let Some(peripheral) = &entry.peripheral {
+        match peripheral {
+            PeripheralSpec::I2cEeprom {
+                address,
+                size_bytes,
+                page_size,
+                word_address_bytes,
+            } => {
+                if *address > 0x7f {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "peripheral I2C address 0x{address:02x} is not a 7-bit address"
+                        ),
+                    });
+                }
+                if *size_bytes == 0 {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: "peripheral I2C EEPROM size_bytes must be positive".into(),
+                    });
+                }
+                if !page_size.is_power_of_two() || *page_size > *size_bytes {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "peripheral I2C EEPROM page_size {page_size} must be a power of two no larger than size_bytes {size_bytes}"
+                        ),
+                    });
+                }
+                if !matches!(word_address_bytes, 1 | 2) {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "peripheral I2C EEPROM word_address_bytes must be 1 or 2, got {word_address_bytes}"
+                        ),
+                    });
+                }
+            }
+            PeripheralSpec::SpiNorFlash {
+                size_bytes,
+                page_size,
+                sector_size,
+                jedec_id,
+                spi_mode,
+                cs_role,
+                clk_role,
+                mosi_role,
+                miso_role,
+            } => {
+                for (name, value) in [
+                    ("size_bytes", *size_bytes),
+                    ("page_size", *page_size),
+                    ("sector_size", *sector_size),
+                ] {
+                    if value == 0 {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: format!("peripheral SPI NOR {name} must be positive"),
+                        });
+                    }
+                }
+                if !page_size.is_power_of_two()
+                    || !sector_size.is_power_of_two()
+                    || (*size_bytes > 0 && (*page_size > *size_bytes || *sector_size > *size_bytes))
+                {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: "peripheral SPI NOR page_size and sector_size must be power-of-two regions no larger than the array".into(),
+                    });
+                }
+                if jedec_id.len() != 3 {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "peripheral SPI NOR jedec_id must contain exactly 3 bytes, got {}",
+                            jedec_id.len()
+                        ),
+                    });
+                }
+                if *spi_mode > 3 {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "peripheral SPI NOR spi_mode must be 0..3, got {spi_mode}"
+                        ),
+                    });
+                }
+                for (name, role) in [
+                    ("cs_role", cs_role),
+                    ("clk_role", clk_role),
+                    ("mosi_role", mosi_role),
+                    ("miso_role", miso_role),
+                ] {
+                    if !entry.pins.values().any(|pin_role| pin_role == role) {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: format!(
+                                "peripheral SPI NOR {name} '{role}' is not a role in [models.pins]"
+                            ),
+                        });
+                    }
+                }
+            }
+            PeripheralSpec::RegisterMap {
+                spec_toml,
+                controller,
+                scl_role,
+                sda_role,
+                cs_role,
+                clk_role,
+                mosi_role,
+                miso_role,
+                required_high_roles,
+                required_low_roles,
+                address_select_role,
+                address_when_low,
+                address_when_high,
+            } => match SensorSpec::from_toml(spec_toml) {
+                Err(error) => errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "peripheral register-map spec_toml must be a valid [sensor] document: {error}"
+                    ),
+                }),
+                Ok(sensor) => {
+                    if controller.as_ref().is_some_and(|name| name.trim().is_empty()) {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: "peripheral register-map controller must not be empty".into(),
+                        });
+                    }
+                    let roles: &[(&str, &String)] = match sensor.sensor.bus {
+                        Bus::I2c => &[("scl_role", scl_role), ("sda_role", sda_role)],
+                        Bus::Spi => &[
+                            ("cs_role", cs_role),
+                            ("clk_role", clk_role),
+                            ("mosi_role", mosi_role),
+                            ("miso_role", miso_role),
+                        ],
+                    };
+                    for (name, role) in roles {
+                        if role.trim().is_empty()
+                            || !entry.pins.values().any(|pin_role| pin_role == *role)
+                        {
+                            errors.push(ValidationError {
+                                id: entry.id.clone(),
+                                message: format!(
+                                    "peripheral register-map {name} '{role}' is not a role in [models.pins]"
+                                ),
+                            });
+                        }
+                    }
+                    for (level, role) in required_high_roles
+                        .iter()
+                        .map(|role| ("high", role))
+                        .chain(required_low_roles.iter().map(|role| ("low", role)))
+                    {
+                        if role.trim().is_empty()
+                            || !entry.pins.values().any(|pin_role| pin_role == role)
+                        {
+                            errors.push(ValidationError {
+                                id: entry.id.clone(),
+                                message: format!(
+                                    "peripheral register-map required-{level} role '{role}' is not a role in [models.pins]"
+                                ),
+                            });
+                        }
+                    }
+                    for role in required_high_roles {
+                        if required_low_roles.contains(role) {
+                            errors.push(ValidationError {
+                                id: entry.id.clone(),
+                                message: format!(
+                                    "peripheral register-map role '{role}' cannot be required both high and low"
+                                ),
+                            });
+                        }
+                    }
+
+                    let address_fields = [
+                        address_select_role.is_some(),
+                        address_when_low.is_some(),
+                        address_when_high.is_some(),
+                    ];
+                    if address_fields.iter().any(|present| *present)
+                        && !address_fields.iter().all(|present| *present)
+                    {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: "peripheral register-map address selection requires address_select_role, address_when_low, and address_when_high together".into(),
+                        });
+                    } else if let (Some(role), Some(low), Some(high)) =
+                        (address_select_role, address_when_low, address_when_high)
+                    {
+                        if sensor.sensor.bus != Bus::I2c {
+                            errors.push(ValidationError {
+                                id: entry.id.clone(),
+                                message: "peripheral register-map address selection is only valid for I2C"
+                                    .into(),
+                            });
+                        }
+                        if role.trim().is_empty()
+                            || !entry.pins.values().any(|pin_role| pin_role == role)
+                        {
+                            errors.push(ValidationError {
+                                id: entry.id.clone(),
+                                message: format!(
+                                    "peripheral register-map address-select role '{role}' is not a role in [models.pins]"
+                                ),
+                            });
+                        }
+                        if *low > 0x7f || *high > 0x7f || low == high {
+                            errors.push(ValidationError {
+                                id: entry.id.clone(),
+                                message: format!(
+                                    "peripheral register-map address strap must select two distinct 7-bit I2C addresses, got 0x{low:02x}/0x{high:02x}"
+                                ),
+                            });
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    if let Some(power) = &entry.peripheral_power {
+        if entry.peripheral.is_none() {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "peripheral_power requires a [models.peripheral] protocol model".into(),
+            });
+        }
+        for (field, role) in [
+            ("supply_role", power.supply_role.as_str()),
+            ("return_role", power.return_role.as_str()),
+        ] {
+            if role.trim().is_empty() {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!("peripheral_power {field} must not be empty"),
+                });
+            } else if !entry.pins.values().any(|pin_role| pin_role == role) {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "peripheral_power {field} '{role}' is not a role in [models.pins]"
+                    ),
+                });
+            }
+        }
+        if !power.power_on_threshold_v.is_finite() || power.power_on_threshold_v <= 0.0 {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "peripheral_power power_on_threshold_v must be finite and positive".into(),
+            });
+        }
+        for (field, value) in [
+            ("idle_a", power.idle_a),
+            ("read_a", power.read_a),
+            ("write_a", power.write_a),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!("peripheral_power {field} must be finite and non-negative"),
+                });
+            }
+        }
+        if power
+            .low_power_a
+            .is_some_and(|value| !value.is_finite() || value < 0.0)
+        {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "peripheral_power low_power_a must be finite and non-negative".into(),
+            });
+        }
+    }
+
+    // A behavior capability is an API key consumed by coverage requirements,
+    // not a marketing sentence. Keep the vocabulary stable enough for exact
+    // matching, reject duplicates, and prevent the same capability being both
+    // implemented and missing.
+    let valid_capability = |value: &str| {
+        !value.is_empty()
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+    };
+    let mut implemented = std::collections::HashSet::new();
+    for capability in &entry.coverage.implements {
+        if !valid_capability(capability) {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: format!(
+                    "coverage capability '{capability}' must use lowercase ASCII letters, digits, and underscores"
+                ),
+            });
+        } else if !implemented.insert(capability.as_str()) {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: format!("coverage.implements repeats '{capability}'"),
+            });
+        }
+    }
+    let mut missing = std::collections::HashSet::new();
+    for capability in &entry.coverage.missing {
+        if !valid_capability(capability) {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: format!(
+                    "coverage capability '{capability}' must use lowercase ASCII letters, digits, and underscores"
+                ),
+            });
+        } else if !missing.insert(capability.as_str()) {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: format!("coverage.missing repeats '{capability}'"),
+            });
+        } else if implemented.contains(capability.as_str()) {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: format!(
+                    "coverage capability '{capability}' cannot be both implemented and missing"
+                ),
+            });
+        }
+    }
+
+    if entry.params.0.contains_key("must_not_float_roles") {
+        match entry.params.get_str("must_not_float_roles") {
+            None => errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "params.must_not_float_roles must be a comma-separated string of [models.pins] roles"
+                    .to_string(),
+            }),
+            Some(raw) => {
+                let roles: Vec<&str> = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|role| !role.is_empty())
+                    .collect();
+                if roles.is_empty() {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: "params.must_not_float_roles names no roles".to_string(),
+                    });
+                }
+                let mut seen = std::collections::HashSet::new();
+                for role in roles {
+                    let normalized = role.to_ascii_lowercase();
+                    if !seen.insert(normalized) {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: format!(
+                                "params.must_not_float_roles repeats role '{role}'"
+                            ),
+                        });
+                    } else if !entry
+                        .pins
+                        .values()
+                        .any(|known| known.eq_ignore_ascii_case(role))
+                    {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: format!(
+                                "params.must_not_float_roles entry '{role}' is not a role in [models.pins]"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
 
     macro_rules! require_f64 {
         ($key:expr) => {
@@ -97,95 +524,111 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         };
     }
 
-    match entry.kind {
-        ComponentKind::Diode => {
-            require_f64!("is");
-            require_f64!("n");
-            require_f64!("rs");
-            check_range!("is", 1e-20, 1e-3);
-            check_range!("n", 0.5, 3.0);
-            check_range!("rs", 0.0, 1000.0);
-            check_range!("cjo", 0.0, 1e-6);
+    // Identity-only entries name the intended part class, but intentionally do
+    // not satisfy that class's solver requirements. Requiring fake vout/gain/
+    // diode constants merely to pass lint would recreate the false coverage
+    // this state exists to prevent.
+    if !identity_only {
+        match entry.kind {
+            ComponentKind::Diode => {
+                require_f64!("is");
+                require_f64!("n");
+                require_f64!("rs");
+                check_range!("is", 1e-20, 1e-3);
+                check_range!("n", 0.5, 3.0);
+                check_range!("rs", 0.0, 1000.0);
+                check_range!("cjo", 0.0, 1e-6);
+            }
+            ComponentKind::BjtNpn | ComponentKind::BjtPnp => {
+                require_f64!("is");
+                require_f64!("bf");
+                require_f64!("nf");
+                require_f64!("vaf");
+                check_range!("is", 1e-20, 1e-3);
+                check_range!("bf", 1.0, 2000.0);
+                check_range!("nf", 0.5, 3.0);
+                check_range!("vaf", 1.0, 500.0);
+                check_range!("rb", 0.0, 1e6);
+                check_range!("rc", 0.0, 1e6);
+                check_range!("re", 0.0, 1e6);
+            }
+            ComponentKind::Nmos | ComponentKind::Pmos => {
+                require_f64!("vto");
+                require_f64!("kp");
+                check_range!("vto", -10.0, 10.0);
+                // kp = k'·(W/L) for the level-1 SPICE model. For a discrete POWER
+                // MOSFET the effective W/L is enormous, so kp legitimately runs into
+                // the tens or hundreds (the repo's own datasheet-cited db/mosfet.toml
+                // has kp up to 200 for ipa045n10n3g). A 1.0 A/V² ceiling false-flagged
+                // 6 of 8 shipped models and rejected any correctly-extracted power
+                // FET. Bound generously, still catches a nonsense hallucination.
+                check_range!("kp", 1e-6, 1000.0);
+                check_range!("lambda", 0.0, 1.0);
+            }
+            ComponentKind::Vreg => {
+                // A declarative converter owns its output, input draw and
+                // regulation semantics; `bind_vreg` deliberately does not read
+                // the simple-LDO `vout/dropout_v/iq_a` tuple in that path.
+                // Requiring authors to invent those unused numbers made a valid
+                // adjustable buck impossible to lint without false facts.
+                if entry.behavioral.converter.is_none() {
+                    require_f64!("vout");
+                    require_f64!("dropout_v");
+                    require_f64!("iq_a");
+                    // Magnitude, not value: a negative rail is a real regulator.
+                    // The 79xx family and every dual-supply analog board regulate
+                    // BELOW ground, and `vout` is stamped as a DC source against
+                    // ground, so the sign carries the whole meaning.
+                    check_signed_range!("vout", 0.5, 30.0);
+                    check_range!("dropout_v", 0.0, 10.0);
+                    check_range!("iq_a", 0.0, 1.0);
+                }
+            }
+            ComponentKind::Opamp => {
+                require_f64!("gain");
+                require_f64!("rail_lo");
+                require_f64!("rail_hi");
+                check_range!("gain", 1.0, 1e9);
+                check_range!("rail_lo", -60.0, 60.0);
+                check_range!("rail_hi", -60.0, 60.0);
+                check_order!("rail_lo", "rail_hi");
+            }
+            ComponentKind::Comparator => {
+                require_f64!("out_lo");
+                require_f64!("out_hi");
+                require_f64!("hysteresis");
+                check_range!("hysteresis", 0.0, 5.0);
+                check_range!("out_lo", -60.0, 60.0);
+                check_range!("out_hi", -60.0, 60.0);
+                check_order!("out_lo", "out_hi");
+            }
+            ComponentKind::AnalogSwitch => {
+                require_f64!("ron");
+                require_f64!("roff");
+                check_range!("ron", 0.01, 10_000.0);
+                check_range!("roff", 1e3, 1e12);
+                // On-resistance must be far below off-resistance; the two ranges
+                // overlap ([0.01,1e4] vs [1e3,1e12]), so a swapped/degenerate pair
+                // (ron=5000, roff=2000) is representable and would model a switch that
+                // conducts MORE when open, an inverted transmission gate the solver
+                // routes the wrong way. Same hazard the R35 opamp/comparator order
+                // checks close.
+                check_order!("ron", "roff");
+            }
+            // Digital / MCU / connector / ignore: no mandatory numeric params
+            _ => {}
         }
-        ComponentKind::BjtNpn | ComponentKind::BjtPnp => {
-            require_f64!("is");
-            require_f64!("bf");
-            require_f64!("nf");
-            require_f64!("vaf");
-            check_range!("is", 1e-20, 1e-3);
-            check_range!("bf", 1.0, 2000.0);
-            check_range!("nf", 0.5, 3.0);
-            check_range!("vaf", 1.0, 500.0);
-            check_range!("rb", 0.0, 1e6);
-            check_range!("rc", 0.0, 1e6);
-            check_range!("re", 0.0, 1e6);
-        }
-        ComponentKind::Nmos | ComponentKind::Pmos => {
-            require_f64!("vto");
-            require_f64!("kp");
-            check_range!("vto", -10.0, 10.0);
-            // kp = k'·(W/L) for the level-1 SPICE model. For a discrete POWER
-            // MOSFET the effective W/L is enormous, so kp legitimately runs into
-            // the tens or hundreds (the repo's own datasheet-cited db/mosfet.toml
-            // has kp up to 200 for ipa045n10n3g). A 1.0 A/V² ceiling false-flagged
-            // 6 of 8 shipped models and rejected any correctly-extracted power
-            // FET. Bound generously, still catches a nonsense hallucination.
-            check_range!("kp", 1e-6, 1000.0);
-            check_range!("lambda", 0.0, 1.0);
-        }
-        ComponentKind::Vreg => {
-            require_f64!("vout");
-            require_f64!("dropout_v");
-            require_f64!("iq_a");
-            // Magnitude, not value: a negative rail is a real regulator. The
-            // 79xx family and every dual-supply analog board regulate BELOW
-            // ground, and `vout` is stamped as a DC source against ground, so
-            // the sign carries the whole meaning.
-            //
-            // Bounding this positive-only would be worse than refusing the
-            // part: the honest way to satisfy such a bound is to drop the sign,
-            // and a -5 V regulator recorded as +5 V validates, binds, and turns
-            // every op-amp's negative supply into a second positive one.
-            check_signed_range!("vout", 0.5, 30.0);
-            check_range!("dropout_v", 0.0, 10.0);
-            check_range!("iq_a", 0.0, 1.0);
-        }
-        ComponentKind::Opamp => {
-            require_f64!("gain");
-            require_f64!("rail_lo");
-            require_f64!("rail_hi");
-            check_range!("gain", 1.0, 1e9);
-            check_range!("rail_lo", -60.0, 60.0);
-            check_range!("rail_hi", -60.0, 60.0);
-            check_order!("rail_lo", "rail_hi");
-        }
-        ComponentKind::Comparator => {
-            require_f64!("out_lo");
-            require_f64!("out_hi");
-            require_f64!("hysteresis");
-            check_range!("hysteresis", 0.0, 5.0);
-            check_range!("out_lo", -60.0, 60.0);
-            check_range!("out_hi", -60.0, 60.0);
-            check_order!("out_lo", "out_hi");
-        }
-        ComponentKind::AnalogSwitch => {
-            require_f64!("ron");
-            require_f64!("roff");
-            check_range!("ron", 0.01, 10_000.0);
-            check_range!("roff", 1e3, 1e12);
-            // On-resistance must be far below off-resistance; the two ranges
-            // overlap ([0.01,1e4] vs [1e3,1e12]), so a swapped/degenerate pair
-            // (ron=5000, roff=2000) is representable and would model a switch that
-            // conducts MORE when open, an inverted transmission gate the solver
-            // routes the wrong way. Same hazard the R35 opamp/comparator order
-            // checks close.
-            check_order!("ron", "roff");
-        }
-        // Digital / MCU / connector / ignore: no mandatory numeric params
-        _ => {}
     }
 
-    check_required_pins(entry, &mut errors);
+    // Identity-only cards deliberately stamp no circuit or firmware behavior,
+    // so requiring a complete pin map here pressures authors to fabricate one
+    // merely to record an exact identity. The board-observed pins remain in
+    // `models coverage` / `models prepare` inventory.json, and the engine keeps
+    // the part OPEN until an executable card supplies the roles it needs.
+    if !identity_only {
+        check_required_pins(entry, &mut errors);
+        check_behavioral_series_path_roles(entry, &mut errors);
+    }
 
     // Absolute-maximum ratings gate the engine's stress/destruction faults. A
     // NaN, negative, or zero rating passes every kind-specific check above (which
@@ -355,6 +798,19 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             CurrentProgramEquation::InverseResistance { k_volts } => {
                 check_positive("k_volts", *k_volts);
             }
+            CurrentProgramEquation::PowerLawResistance {
+                coefficient_a,
+                resistance_scale_ohms,
+                exponent,
+            } => {
+                for (name, value) in [
+                    ("coefficient_a", *coefficient_a),
+                    ("resistance_scale_ohms", *resistance_scale_ohms),
+                    ("exponent", *exponent),
+                ] {
+                    check_positive(name, value);
+                }
+            }
             CurrentProgramEquation::PiecewiseInverseResistance {
                 low_k_volts,
                 transition_current_a,
@@ -467,6 +923,51 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     }
 }
 
+/// A state-controlled series path is solver-facing connectivity: both ends
+/// must name roles the entry actually maps from physical pins. A typo here
+/// otherwise validates, then the runtime silently skips the path and the part
+/// that was supposed to close a rail remains open.
+fn check_behavioral_series_path_roles(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
+    let declared = entry
+        .pins
+        .values()
+        .map(|role| role.to_ascii_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+    for (index, path) in entry.behavioral.series_paths.iter().enumerate() {
+        for (end, role) in [("a", &path.a), ("b", &path.b)] {
+            if !declared.contains(&role.to_ascii_lowercase()) {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "behavioral.series_paths[{index}].{end} role '{role}' is not present in [models.pins]"
+                    ),
+                });
+            }
+        }
+    }
+    for (index, load) in entry.behavioral.profiled_loads.iter().enumerate() {
+        if !declared.contains(&load.supply_pin.to_ascii_lowercase()) {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: format!(
+                    "behavioral.profiled_loads[{index}].supply_pin role '{}' is not present in [models.pins]",
+                    load.supply_pin
+                ),
+            });
+        }
+        if let Some(role) = &load.return_pin {
+            if !declared.contains(&role.to_ascii_lowercase()) {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "behavioral.profiled_loads[{index}].return_pin role '{role}' is not present in [models.pins]"
+                    ),
+                });
+            }
+        }
+    }
+}
+
 /// When an entry supplies an explicit `[models.pins]` map, verify it carries the
 /// signal roles the binder needs for that kind. A role typo (`"1" = "anmode"`)
 /// otherwise passes every check above, then binds the part OPEN at run time with
@@ -562,6 +1063,7 @@ mod tests {
     use super::*;
     use crate::schema::{
         AboveDomainBehavior, ComponentKind, CurrentProgramEquation, ModelEntry, Params,
+        PeripheralPower, PeripheralSpec,
     };
     use std::collections::BTreeMap;
 
@@ -582,6 +1084,9 @@ mod tests {
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         }
     }
@@ -590,6 +1095,195 @@ mod tests {
     fn valid_diode_passes() {
         let entry = make_diode(1e-14, 1.5, 1.0);
         assert!(validate(&entry).is_ok());
+    }
+
+    #[test]
+    fn identity_only_requires_an_explicit_unlock_and_no_behavior() {
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.params = Params::default();
+        entry.params.set_bool("identity_only", true);
+        entry.params.set_str("warning", "pin identity only");
+        let errs = validate(&entry).expect_err("missing unlock must fail");
+        assert!(
+            errs.iter().any(|e| e.message.contains("unlocked_by")),
+            "identity-only cards must say what turns them into behavior: {errs:?}"
+        );
+
+        entry
+            .params
+            .set_str("unlocked_by", "validated diode I-V parameters");
+        assert!(
+            validate(&entry).is_ok(),
+            "identity-only cards do not need invented diode constants: {:?}",
+            validate(&entry)
+        );
+
+        entry.logic.inputs.push("a".into());
+        assert!(
+            validate(&entry)
+                .expect_err("identity plus behavior must fail")
+                .iter()
+                .any(|e| e.message.contains("cannot also declare")),
+            "identity and executable behavior must be distinct states"
+        );
+    }
+
+    #[test]
+    fn must_not_float_roles_are_typed_and_model_bound() {
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.pins = BTreeMap::from([
+            ("1".into(), "wp_n".into()),
+            ("2".into(), "hold_n".into()),
+            ("3".into(), "anode".into()),
+            ("4".into(), "cathode".into()),
+        ]);
+        entry.params.set_str("must_not_float_roles", "wp_n, hold_n");
+        assert!(validate(&entry).is_ok(), "declared roles must pass");
+
+        entry
+            .params
+            .set_str("must_not_float_roles", "wp_n, missing");
+        let errs = validate(&entry).expect_err("unknown role must fail");
+        assert!(
+            errs.iter().any(|e| e.message.contains("missing")),
+            "a static control contract cannot name an absent pad role: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn peripheral_power_requires_protocol_connected_roles_and_physical_values() {
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.kind = ComponentKind::Digital;
+        entry.pins = BTreeMap::from([
+            ("1".into(), "scl".into()),
+            ("2".into(), "gnd".into()),
+            ("3".into(), "sda".into()),
+            ("4".into(), "vcc".into()),
+        ]);
+        entry.peripheral = Some(PeripheralSpec::I2cEeprom {
+            address: 0x50,
+            size_bytes: 128,
+            page_size: 8,
+            word_address_bytes: 1,
+        });
+        entry.peripheral_power = Some(PeripheralPower {
+            supply_role: "vcc".into(),
+            return_role: "gnd".into(),
+            power_on_threshold_v: 1.7,
+            idle_a: 6e-6,
+            read_a: 1e-3,
+            write_a: 3e-3,
+            low_power_a: Some(1e-6),
+        });
+        assert!(validate(&entry).is_ok(), "source-bound power is valid");
+
+        entry.peripheral = None;
+        let errs = validate(&entry).expect_err("power without protocol must fail");
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("requires a [models.peripheral]")));
+
+        entry.peripheral = Some(PeripheralSpec::I2cEeprom {
+            address: 0x50,
+            size_bytes: 128,
+            page_size: 8,
+            word_address_bytes: 1,
+        });
+        entry.peripheral_power.as_mut().unwrap().supply_role = "missing".into();
+        let errs = validate(&entry).expect_err("unknown supply role must fail");
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("missing") && e.message.contains("not a role")));
+
+        entry.peripheral_power.as_mut().unwrap().supply_role = "vcc".into();
+        entry.peripheral_power.as_mut().unwrap().write_a = -1.0;
+        let errs = validate(&entry).expect_err("negative current must fail");
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("write_a") && e.message.contains("non-negative")));
+    }
+
+    #[test]
+    fn register_map_peripheral_requires_valid_spec_and_board_roles() {
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.kind = ComponentKind::Digital;
+        entry.pins = BTreeMap::from([
+            ("1".into(), "scl".into()),
+            ("2".into(), "gnd".into()),
+            ("3".into(), "sda".into()),
+            ("4".into(), "vcc".into()),
+            ("5".into(), "sdo".into()),
+            ("6".into(), "csb".into()),
+        ]);
+        let spec = r#"[sensor]
+name = "WHOAMI"
+bus = "i2c"
+i2c_address = 0x18
+[[sensor.register]]
+addr = 0x00
+const = [0x13]
+[sensor.protocol]
+style = "i2c_pointer"
+"#;
+        entry.peripheral = Some(PeripheralSpec::RegisterMap {
+            spec_toml: spec.into(),
+            controller: None,
+            scl_role: "scl".into(),
+            sda_role: "sda".into(),
+            cs_role: "cs".into(),
+            clk_role: "sck".into(),
+            mosi_role: "mosi".into(),
+            miso_role: "miso".into(),
+            required_high_roles: vec!["csb".into()],
+            required_low_roles: vec![],
+            address_select_role: Some("sdo".into()),
+            address_when_low: Some(0x18),
+            address_when_high: Some(0x19),
+        });
+        assert!(
+            validate(&entry).is_ok(),
+            "a validated data-only device with connected I2C roles should lint: {:?}",
+            validate(&entry)
+        );
+
+        if let Some(PeripheralSpec::RegisterMap {
+            address_when_high, ..
+        }) = &mut entry.peripheral
+        {
+            *address_when_high = None;
+        }
+        let errors = validate(&entry).expect_err("partial address strap must fail closed");
+        assert!(errors
+            .iter()
+            .any(|error| error.message.contains("requires address_select_role")));
+        if let Some(PeripheralSpec::RegisterMap {
+            address_when_high, ..
+        }) = &mut entry.peripheral
+        {
+            *address_when_high = Some(0x19);
+        }
+
+        if let Some(PeripheralSpec::RegisterMap { spec_toml, .. }) = &mut entry.peripheral {
+            *spec_toml = "[sensor]\nname = \"broken\"\nbus = \"i2c\"".into();
+        }
+        let errors = validate(&entry).expect_err("invalid embedded spec must fail closed");
+        assert!(errors
+            .iter()
+            .any(|error| error.message.contains("register-map")));
+
+        if let Some(PeripheralSpec::RegisterMap {
+            spec_toml,
+            sda_role,
+            ..
+        }) = &mut entry.peripheral
+        {
+            *spec_toml = spec.into();
+            *sda_role = "missing_sda".into();
+        }
+        let errors = validate(&entry).expect_err("unmapped bus role must fail closed");
+        assert!(errors.iter().any(|error| {
+            error.message.contains("missing_sda") && error.message.contains("not a role")
+        }));
     }
 
     #[test]
@@ -1012,6 +1706,9 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
@@ -1038,6 +1735,9 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
@@ -1065,6 +1765,9 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
@@ -1091,6 +1794,9 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         assert!(validate(&good).is_ok(), "a well-ordered opamp must pass");
@@ -1118,6 +1824,9 @@ high_offset = 1.3333333333333333
                 behavioral: Default::default(),
                 logic: Default::default(),
                 current_program: None,
+                peripheral: None,
+                peripheral_power: None,
+                coverage: Default::default(),
                 passive_class: None,
             };
             assert!(
@@ -1142,6 +1851,9 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         assert!(
@@ -1174,6 +1886,9 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
@@ -1203,6 +1918,9 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
@@ -1228,6 +1946,9 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         assert!(
@@ -1255,6 +1976,9 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
             passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();

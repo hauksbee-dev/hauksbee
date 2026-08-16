@@ -1774,13 +1774,13 @@ fn run_inner(
                 report.heads_up.push(crate::plain::HeadsUp::note(format!(
                     "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) are \
                      unresolved or open, so firmware/analog/thermal results on their nets are \
-                     INCOMPLETE (the copper/DRC checks are unaffected). Scaffold a model for \
-                     one:  hauksbee models new --board {} {}",
+                     INCOMPLETE (the copper/DRC checks are unaffected). Review every model gap \
+                     and approve a local draft pack with:  hauksbee models prepare {} \
+                     --pack-dir <DIR>",
                     summary.critical_parts_bound_n,
                     summary.critical_parts_total,
                     open.len(),
                     cfg.board.display(),
-                    open[0]
                 )));
             }
             println!();
@@ -1812,13 +1812,12 @@ fn run_inner(
                 println!(
                     "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) \
                      unresolved/open, so firmware/analog results on their nets are INCOMPLETE \
-                     (copper/DRC checks are unaffected). Scaffold a model for one:  \
-                     hauksbee models new --board {} {}",
+                     (copper/DRC checks are unaffected). Review every model gap and approve a \
+                     local draft pack with:  hauksbee models prepare {} --pack-dir <DIR>",
                     summary.critical_parts_bound_n,
                     summary.critical_parts_total,
                     open.len(),
                     cfg.board.display(),
-                    open[0]
                 );
             }
         }
@@ -1887,11 +1886,14 @@ fn run_inner(
                 "WARNING: co-sim analog solve failed to converge for {} chunks in a row \
                  ({} failed chunks total); no fallback integration could carry them, so \
                  the run held stale voltages and cannot vouch for the analog side. The usual cause is unresolved active parts leaving \
-                 nodes floating: {} active IC(s) are unresolved/open here (hauksbee models \
-                 --help). See {}.",
+                 nodes floating: {} active IC(s) are unresolved/open here. Review the exact \
+                 gaps with `hauksbee models coverage {}`, then approve local drafts with \
+                 `hauksbee models prepare {} --pack-dir <DIR>`. See {}.",
                 crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT,
                 failed_chunk_count,
                 unresolved_active_count,
+                cfg.board.display(),
+                cfg.board.display(),
                 hauksbee_ir::docs_url("docs/about/LIMITATIONS.md"),
             );
             if let Some(code) = strict_analog_exit_code(cfg.strict && analog_abort) {

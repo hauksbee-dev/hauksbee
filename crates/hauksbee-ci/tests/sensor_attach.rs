@@ -251,3 +251,52 @@ min = 3.0
         "error must mention mutual exclusivity: {msg}"
     );
 }
+
+#[test]
+fn unknown_sensor_input_is_refused_before_simulation() {
+    let dir = tempfile::tempdir().expect("temporary spec directory");
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/boards/tolerance_divider.kicad_pcb");
+    let spec = format!(
+        r#"name = "bad sensor input"
+board = "{}"
+duration_ms = 1
+
+[[sensor]]
+id = "U_TEMP"
+spec = '''
+[sensor]
+name = "temperature"
+bus = "i2c"
+i2c_address = 0x48
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+[[sensor.register]]
+addr = 0
+bytes = 2
+encoding = "q7.1_be"
+expr = "temperature_c"
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+[sensor.inputs]
+tempereture_c = 40.0
+
+[[assert]]
+kind = "no_faults"
+"#,
+        board.display()
+    );
+    let path = dir.path().join("unknown-input.toml");
+    std::fs::write(&path, spec).expect("write test spec");
+    let error = run(&RunConfig {
+        spec: path,
+        ..Default::default()
+    })
+    .expect_err("unknown register-map input must not silently keep its default");
+    assert!(
+        error.to_string().contains("tempereture_c") && error.to_string().contains("not declared"),
+        "error should name the typo and exact-spec contract: {error}"
+    );
+}

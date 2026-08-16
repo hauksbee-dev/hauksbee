@@ -25,6 +25,17 @@ pub enum ServerMessage {
     Error {
         message: String,
     },
+    /// Correlated receipt for an explicit live-session mutation. This is
+    /// deliberately separate from `Error`: a refused attachment is a local
+    /// action result, not evidence that the simulation itself died.
+    ActionResult {
+        action: String,
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+        ok: bool,
+        message: String,
+    },
     /// Sent once right after `BoardInfo` on every subscribe: the session's
     /// server-held history (accumulated faults, the active probe set), so a
     /// client that reloads mid-session rejoins with the story intact instead
@@ -76,6 +87,11 @@ pub struct BoardInfo {
     /// ("VCD","vcd_sink"). Additive; older clients ignore it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peripherals: Vec<PeripheralInfo>,
+    /// Explicit engine-owned scalar inputs. Never inferred from a net name:
+    /// sending `SetInput` with an arbitrary net does not drive that net, it only
+    /// updates a source device whose id matches. Additive for older clients.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_sources: Vec<InputSourceInfo>,
     /// Copper-short honesty for the live sim: whether the DRC's detected
     /// shorts were bridged into this engine before it started streaming.
     /// Absent when the board has no detected shorts. The UI must disclose
@@ -107,6 +123,20 @@ pub struct PeripheralInfo {
     pub id: String,
     /// Kind string ("pushbutton", "potentiometer", "i2c_bus", ...).
     pub kind: String,
+}
+
+/// One input the running engine explicitly exposes to `SetInput`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputSourceInfo {
+    /// Stable source id accepted by `SetInput.source`.
+    pub id: String,
+    /// Human-facing quantity, currently `voltage` or `current`.
+    pub kind: String,
+    /// Display/control range; an engine contract, not a UI guess.
+    pub min: f64,
+    pub max: f64,
+    pub initial: f64,
+    pub unit: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -322,8 +352,8 @@ pub enum ClientMessage {
         mcu: String,
         data: Vec<u8>,
     },
-    /// Drive an alternative input source bound to a net (slider, signal
-    /// generator, file). The engine decides what "value" means per source.
+    /// Drive an input source explicitly listed in `BoardInfo.input_sources`.
+    /// A board net name alone is never a source id.
     SetInput {
         source: String,
         value: f64,
@@ -342,10 +372,59 @@ pub enum ClientMessage {
         id: String,
         value: f64,
     },
+    /// Attach a real control/stimulus to the running circuit. The browser also
+    /// retains the equivalent `[[peripheral]]` spec for deterministic replay.
+    AttachPeripheral(LivePeripheralSpec),
+    /// Attach a validated declarative I2C/SPI register-map device to the
+    /// running co-simulation. The exact spec bytes are also retained by the
+    /// browser's scenario builder for deterministic replay.
+    AttachRegisterMap(LiveRegisterMapSpec),
     AddProbe {
         net: String,
     },
     RemoveProbe {
         net: String,
     },
+}
+
+/// Safe, deliberately small live-attachment vocabulary. Bus devices require a
+/// model/spec with identity and framing, so they are not smuggled through this
+/// net-only control path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LivePeripheralSpec {
+    pub id: String,
+    /// `stimulus` | `pushbutton` | `toggle`.
+    pub kind: String,
+    pub net: String,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub offset: Option<f64>,
+    #[serde(default)]
+    pub bounce_ms: Option<f64>,
+    #[serde(default)]
+    pub initial: Option<f64>,
+}
+
+/// Explicit live register-map attachment. No part name or selected component
+/// is used to guess bus behavior: the browser sends exact validated spec bytes
+/// and any physical input values the user chose.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveRegisterMapSpec {
+    pub id: String,
+    /// Browser-generated correlation id. It has no simulation meaning and is
+    /// echoed only in `ActionResult`, so repeated edits of the same device id
+    /// cannot display a stale earlier receipt.
+    #[serde(default)]
+    pub request_id: Option<u64>,
+    pub spec_toml: String,
+    #[serde(default)]
+    pub inputs: HashMap<String, f64>,
+    #[serde(default)]
+    pub controller: Option<String>,
+    /// Required for SPI when exact chip-select framing is desired. If omitted,
+    /// the scheduler's explicit controller/chunk framing limitations remain
+    /// visible in the ordinary co-sim report.
+    #[serde(default)]
+    pub cs_net: Option<String>,
 }

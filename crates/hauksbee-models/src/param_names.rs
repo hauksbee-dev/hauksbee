@@ -53,14 +53,18 @@
 
 use crate::schema::{ComponentKind, ModelEntry};
 
-/// Names any kind may carry: the resolve-report annotations and the free-text
-/// `warning` the binder surfaces for an entry that models only part of its part.
+/// Names any kind may carry: resolve-report annotations, the explicit
+/// identity-without-behavior state, and the free-text `warning` the binder
+/// surfaces for an entry that models only part of its part.
 /// `bind_opamp` and `bind_analog_switch` both read it, and a warning carrying
 /// [`hauksbee_ir::evidence::Assumption::PARTIAL_MODEL_MARKER`] also becomes an
 /// assumption on the evidence map, so it reaches `--plain` and `--json` and not
 /// only the bind report.
 const UNIVERSAL: &[&str] = &[
     "warning",
+    "identity_only",
+    "unlocked_by",
+    "must_not_float_roles",
     "auto_bind",
     "auto_bind_family",
     "auto_bind_pin_summary",
@@ -196,7 +200,7 @@ const CONVERTER_COMMON: &[&str] = &[
 /// unread by construction and the lint says so.
 pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
     match kind {
-        ComponentKind::Passive => &["ohms", "value_override", "esr", "esl"],
+        ComponentKind::Passive => &["ohms", "series_ohms", "value_override", "esr", "esl"],
         ComponentKind::Diode => DIODE,
         ComponentKind::BjtNpn | ComponentKind::BjtPnp => BJT,
         ComponentKind::Nmos | ComponentKind::Pmos => MOSFET,
@@ -338,7 +342,7 @@ fn nearest(name: &str, vocab: &[&str]) -> Option<String> {
 /// read, and exempting them would hide the worst version of the bug this lint
 /// looks for: a param that is not merely unused but actively clobbered.
 /// `state_<name>` is prefix-matched, since the runtime derives one per FSM state.
-const RUNTIME_OWNED: &[&str] = &["t", "t_in_state", "state"];
+const RUNTIME_OWNED: &[&str] = &["t", "temperature_c", "t_in_state", "state"];
 
 /// The sandbox's builtin function names. A call in an expression is not a
 /// parameter read either.

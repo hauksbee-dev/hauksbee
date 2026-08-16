@@ -16,7 +16,8 @@ import type { SpecSnapshot } from './hooks/useSessions'
 import type { SavedSession } from './lib/session-store'
 import { BOARD_ACCEPT_ATTR } from './lib/board-formats'
 import { BoardTargetIcon, PlayIcon } from './components/Icons'
-import type { QueuedCheck, Startup, WebReport } from './types/report'
+import type { QueuedCheck, QueuedLiveRegisterMap, QueuedPeripheral, QueuedSensor, QueuedSupply, Startup, WebReport } from './types/report'
+import type { ActionResultMsg } from './types/protocol'
 import { reportVerdictTone } from './lib/report-verdict'
 
 // One web experience (W6 §1) behind an app shell. The app asks the server how
@@ -166,6 +167,11 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   // map or the live sim) for the checks builder. The builder consumes by
   // `seq` so nothing applies twice.
   const [queuedChecks, setQueuedChecks] = useState<QueuedCheck[]>([])
+  const [queuedPeripherals, setQueuedPeripherals] = useState<QueuedPeripheral[]>([])
+  const [queuedSensors, setQueuedSensors] = useState<QueuedSensor[]>([])
+  const [queuedSupplies, setQueuedSupplies] = useState<QueuedSupply[]>([])
+  const [queuedLiveRegisterMaps, setQueuedLiveRegisterMaps] = useState<QueuedLiveRegisterMap[]>([])
+  const [liveActionResult, setLiveActionResult] = useState<ActionResultMsg | null>(null)
   const seqRef = useRef(0)
   const queueCheck = useCallback((check: { kind: string; net?: string; ref?: string }) => {
     seqRef.current += 1
@@ -173,6 +179,40 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   }, [])
   const consumeChecks = useCallback((upToSeq: number) => {
     setQueuedChecks(prev => prev.filter(c => c.seq > upToSeq))
+  }, [])
+  const queuePeripheral = useCallback((peripheral: Omit<QueuedPeripheral, 'seq'>) => {
+    seqRef.current += 1
+    setQueuedPeripherals(prev => [...prev, { ...peripheral, seq: seqRef.current }])
+  }, [])
+  const consumePeripherals = useCallback((upToSeq: number) => {
+    setQueuedPeripherals(prev => prev.filter(p => p.seq > upToSeq))
+  }, [])
+  const queueSensor = useCallback((sensor: Omit<QueuedSensor, 'seq'>) => {
+    seqRef.current += 1
+    setQueuedSensors(prev => [...prev, { ...sensor, seq: seqRef.current }])
+    // A register map cannot be guessed from the clicked part. Unlike a simple
+    // live switch or supply, this action always has a required human-authored
+    // next step, so take the user directly to the exact-byte builder.
+    setView('checks')
+  }, [])
+  const consumeSensors = useCallback((upToSeq: number) => {
+    setQueuedSensors(prev => prev.filter(sensor => sensor.seq > upToSeq))
+  }, [])
+  const queueSupply = useCallback((supply: Omit<QueuedSupply, 'seq'>) => {
+    seqRef.current += 1
+    setQueuedSupplies(previous => [...previous, { ...supply, seq: seqRef.current }])
+  }, [])
+  const consumeSupplies = useCallback((upToSeq: number) => {
+    setQueuedSupplies(previous => previous.filter(supply => supply.seq > upToSeq))
+  }, [])
+  const attachRegisterMapLive = useCallback((request: Omit<QueuedLiveRegisterMap, 'seq'>) => {
+    seqRef.current += 1
+    const seq = seqRef.current
+    setQueuedLiveRegisterMaps(previous => [...previous, { ...request, seq }])
+    return seq
+  }, [])
+  const consumeLiveRegisterMaps = useCallback((upToSeq: number) => {
+    setQueuedLiveRegisterMaps(previous => previous.filter(request => request.seq > upToSeq))
   }, [])
 
   const { report } = session
@@ -289,6 +329,11 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   const runEpoch = session.runEpoch
   useEffect(() => {
     setQueuedChecks([])
+    setQueuedPeripherals([])
+    setQueuedSensors([])
+    setQueuedSupplies([])
+    setQueuedLiveRegisterMaps([])
+    setLiveActionResult(null)
     setChecksSummary(null)
   }, [runEpoch])
 
@@ -654,6 +699,9 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
               <BoardView
                 session={session}
                 onQueueCheck={queueCheck}
+                onQueuePeripheral={queuePeripheral}
+                onQueueSensor={queueSensor}
+                onQueueSupply={queueSupply}
                 onOpenChecks={() => setView('checks')}
                 onDriveLive={driveLive}
                 simMounted={simMounted}
@@ -687,7 +735,16 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
                 selectedNet={session.selectedNet}
                 selectedComponent={session.selectedComponent}
                 pendingChecks={queuedChecks}
+                pendingPeripherals={queuedPeripherals}
+                pendingSensors={queuedSensors}
+                pendingSupplies={queuedSupplies}
                 onPendingConsumed={consumeChecks}
+                onPendingPeripheralConsumed={consumePeripherals}
+                onPendingSensorConsumed={consumeSensors}
+                onPendingSupplyConsumed={consumeSupplies}
+                liveRegisterMapAvailable={simMounted && sessionMatchesCurrent}
+                onAttachRegisterMapLive={attachRegisterMapLive}
+                liveActionResult={liveActionResult}
                 onSummary={setChecksSummary}
                 onSpec={setSpec}
               />
@@ -698,9 +755,16 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
             <div style={{ display: view === 'sim' ? 'block' : 'none', height: '100%' }}>
               <SimView
                 onQueueCheck={queueCheck}
+                onQueuePeripheral={queuePeripheral}
+                onQueueSensor={queueSensor}
+                onQueueSupply={queueSupply}
+                pendingLiveRegisterMaps={queuedLiveRegisterMaps}
+                onLiveRegisterMapsConsumed={consumeLiveRegisterMaps}
+                onLiveActionResult={setLiveActionResult}
                 onStatus={setSimStatus}
                 expectedBoard={session.boardLabel}
                 sessionMatchesCurrent={sessionMatchesCurrent}
+                modelCoverage={report?.model_coverage ?? null}
                 onRelaunch={reportOk && session.liveMode !== 'none' ? relaunchWithCurrent : undefined}
               />
             </div>

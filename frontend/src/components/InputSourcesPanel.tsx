@@ -1,11 +1,9 @@
 import { useState, useCallback } from 'react'
 import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
-import { displayNet } from '../lib/net-name'
 
-// Virtual peripherals for the sim rail's "Inputs" card: the input-shaped nets
-// (A0..An style) as analog sliders with their live solved value, plus any
-// server-attached peripherals as buttons/sliders by kind. Only what the board
-// actually exposes; no invented controls.
+// Virtual peripherals for the sim rail's "Inputs" card. Scalar inputs are
+// listed only when BoardInfo explicitly exposes a SetInput id/range; a net name
+// is never a source id. Attached peripherals remain live controls by kind.
 
 interface InputSourcesPanelProps {
   boardInfo: BoardInfoMsg | null
@@ -13,19 +11,13 @@ interface InputSourcesPanelProps {
   send: (msg: ClientMessage) => void
 }
 
-// Heuristic: nets that look like input sources
-function isInputNet(name: string): boolean {
-  return /^A\d+$/.test(name) || name.startsWith('INPUT') || name.startsWith('IN_')
-}
-
 /** A peripheral that reads as a pushbutton. */
 function isButtonKind(kind: string): boolean {
   return /button|switch|btn/i.test(kind)
 }
 
-export function InputSourcesPanel({ boardInfo, frame, send }: InputSourcesPanelProps) {
-  const nets = boardInfo?.nets ?? []
-  const inputNets = nets.filter(isInputNet)
+export function InputSourcesPanel({ boardInfo, send }: InputSourcesPanelProps) {
+  const inputSources = boardInfo?.input_sources ?? []
   const peripherals = boardInfo?.peripherals ?? []
 
   const [values, setValues] = useState<Record<string, number>>({})
@@ -41,11 +33,11 @@ export function InputSourcesPanel({ boardInfo, frame, send }: InputSourcesPanelP
     send({ type: 'SetPeripheral', id, value })
   }, [send])
 
-  if (inputNets.length === 0 && peripherals.length === 0) {
+  if (inputSources.length === 0 && peripherals.length === 0) {
     return (
       <div className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
         No input sources detected.<br />
-        <span style={{ opacity: 0.7 }}>(Nets named A0..An and attached peripherals appear here)</span>
+        <span style={{ opacity: 0.7 }}>(Add a typed stimulus/control to the co-sim spec; arbitrary net names are never treated as sources.)</span>
       </div>
     )
   }
@@ -97,23 +89,27 @@ export function InputSourcesPanel({ boardInfo, frame, send }: InputSourcesPanelP
             <input
               type="range"
               min={0}
-              max={1}
-              step={0.01}
+              max={p.kind === 'stimulus' ? 5 : 1}
+              step={p.kind === 'stimulus' ? 0.01 : 0.01}
               value={val}
               onChange={e => setPeripheral(p.id, parseFloat(e.target.value))}
               className="w-full h-1.5 rounded cursor-pointer"
               style={{ accentColor: 'var(--copper)' }}
             />
+            {p.kind === 'stimulus' && (
+              <div className="text-right text-[10px] mt-1 tnum" style={{ color: 'var(--copper)' }}>
+                {val.toFixed(2)} V
+              </div>
+            )}
           </div>
         )
       })}
 
-      {inputNets.map(net => {
-        const localVal = values[net] ?? 2.5
-        const liveVolt = frame?.net_voltages[net]
+      {inputSources.map(source => {
+        const localVal = values[source.id] ?? source.initial
         return (
           <div
-            key={net}
+            key={source.id}
             className="rounded-lg px-2.5 py-2"
             style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
           >
@@ -122,34 +118,29 @@ export function InputSourcesPanel({ boardInfo, frame, send }: InputSourcesPanelP
                 className="text-[11px] font-bold"
                 style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}
               >
-                {displayNet(net)}
+                {source.id}
               </span>
               <div className="flex items-center gap-2 tnum">
-                {liveVolt !== undefined && (
-                  <span className="text-[10px]" style={{ color: 'var(--silk-faint)' }}>
-                    live: <span style={{ color: 'var(--ok)' }}>{liveVolt.toFixed(3)}V</span>
-                  </span>
-                )}
                 <span
                   className="text-[12px] font-bold"
                   style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}
                 >
-                  {localVal.toFixed(2)}V
+                  {localVal.toFixed(2)} {source.unit}
                 </span>
               </div>
             </div>
             <input
               type="range"
-              min={0}
-              max={5}
-              step={0.01}
+              min={source.min}
+              max={source.max}
+              step={(source.max - source.min) / 500}
               value={localVal}
-              onChange={e => handleChange(net, parseFloat(e.target.value))}
+              onChange={e => handleChange(source.id, parseFloat(e.target.value))}
               className="w-full h-1.5 rounded cursor-pointer"
               style={{ accentColor: 'var(--copper)' }}
             />
             <div className="flex justify-between text-[9px] mt-0.5" style={{ color: 'var(--silk-faint)' }}>
-              <span>0V</span><span>5V</span>
+              <span>{source.min} {source.unit}</span><span>{source.max} {source.unit}</span>
             </div>
           </div>
         )

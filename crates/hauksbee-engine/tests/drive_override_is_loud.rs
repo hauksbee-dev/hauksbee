@@ -36,6 +36,7 @@ fn board(circuit: Circuit, nets: &[(&str, NodeId)]) -> BoundBoard {
         behavioral: Vec::new(),
         device_meta: Vec::new(),
         dacs: Vec::new(),
+        peripherals: Vec::new(),
         report: BindReport::default(),
     }
 }

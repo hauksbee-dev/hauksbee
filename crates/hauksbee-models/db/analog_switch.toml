@@ -1,5 +1,102 @@
 # Analog switch / transmission gate models.
 
+# FSUSB42, ON Semiconductor Rev. 4 (August 2021), FSUSB42-D:
+# https://www.onsemi.com/download/data-sheet/pdf/fsusb42-d.pdf
+# The MSOP-10 map below is the board-observed package. The datasheet truth table
+# is SEL low -> HSD1, SEL high -> HSD2, while active-low OE must be low. The
+# engine's shared-select DPDT primitive stamps both differential lanes and
+# refuses a dynamic OE rather than silently modelling the mux as always on.
+[[models]]
+id = "fsusb42_msop10"
+kind = "analog_switch"
+description = "FSUSB42 USB 2.0 high-speed DPDT mux, MSOP-10"
+
+[models.match]
+value_re = "(?i)^FSUSB42(MUX)?([A-Z0-9._-]*)?$"
+mpn_re = "(?i)^FSUSB42"
+
+[models.params]
+ron = 3.9       # typical at VCC=3.0 V, VSW=0.4 V, ION=8 mA
+roff = 2.15e6   # 4.3 V / 2 uA worst-case off leakage
+vth = 1.3       # VIH minimum at VCC=2.4..3.6 V
+warning = "source-bound DC routing model: both USB lanes, select polarity, on-resistance and worst-case off leakage are executable only while OE_N is strapped low; dynamic OE, 3.7 pF channel capacitance, 720 MHz bandwidth, edge distortion and ESD behavior are not represented"
+
+[models.pins]
+"1" = "vcc"
+"2" = "ctrl"   # SEL
+"3" = "com_1"  # D+
+"4" = "com_2"  # D-
+"5" = "vss"
+"6" = "s0_2"   # HSD1-
+"7" = "s0_1"   # HSD1+
+"8" = "s1_2"   # HSD2-
+"9" = "s1_1"   # HSD2+
+"10" = "oe_n"
+
+[models.ratings]
+max_voltage_v = 4.6
+max_junction_temp_c = 150.0
+
+[models.coverage]
+implements = ["differential_mux_select", "off_state_leakage", "on_resistance"]
+missing = ["bandwidth", "channel_capacitance", "dynamic_output_enable", "esd_clamp"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+# AP2553, Diodes Incorporated DS35404 Rev. 12 (September 2021):
+# https://www.diodes.com/datasheet/download/AP2553.pdf
+# AP2553 (without the A suffix) is the active-high auto-retry option. Its
+# published typical current-limit curve is not exactly k/R:
+# ILIMIT(A) = 19.94 / (RLIM(kOhm) ^ 0.925). The generic power-law current
+# program below evaluates the fitted board resistor without inventing a load;
+# `protection_limit` is an OCP threshold, not operating current.
+[[models]]
+id = "ap2553_sot26"
+kind = "analog_switch"
+description = "AP2553 active-high adjustable current-limited load switch, SOT-26"
+
+[models.match]
+value_re = "(?i)^AP2553W6(-7)?$"
+mpn_re = "(?i)^AP2553W6(-7)?$"
+
+[models.params]
+ron = 0.070     # typical at VIN=5.0 V, TJ=25 C
+roff = 5.5e6    # 5.5 V / 1 uA worst-case shutdown leakage
+vth = 2.0       # EN VIH minimum
+warning = "source-bound load-switch and programmed-limit model: active-high enable, DC on/off path, worst-case off leakage and fitted ILIM threshold are executable; 1.1 ms rise, output discharge, open-drain FAULT, reverse-current trip, 2 us short response and 140/160 C cycling are not yet dynamic"
+
+[models.pins]
+"1" = "in_out_b" # IN
+"2" = "vss"
+"3" = "ctrl"     # active-high EN
+"4" = "fault_n"  # open-drain FAULT
+"5" = "ilim"
+"6" = "in_out_a" # OUT
+
+[models.current_program]
+pin = "ilim"
+semantics = "protection_limit"
+equation = "power_law_resistance"
+coefficient_a = 19.94
+resistance_scale_ohms = 1000.0
+exponent = 0.925
+
+[models.ratings]
+max_current_a = 2.1
+max_voltage_v = 5.5
+max_junction_temp_c = 125.0
+theta_ja_c_per_w = 120.0
+
+[models.coverage]
+implements = ["enable_gating", "off_state_leakage", "on_resistance", "programmed_current_limit"]
+missing = ["fault_output", "output_discharge", "reverse_current_blocking", "short_circuit_transient", "thermal_shutdown", "turn_on_transient"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
 [[models]]
 id = "sn74lvc1g3157"
 kind = "analog_switch"

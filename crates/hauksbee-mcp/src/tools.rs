@@ -1,6 +1,6 @@
 //! The MCP tool surface: definitions (name, agent-facing description, JSON
 //! Schema) and implementations for `analyze_board`, `run_checks`,
-//! `list_capabilities`, `board_to_code`, and `run_script`. Everything routes
+//! `list_capabilities`, `model_coverage`, `board_to_code`, and `run_script`. Everything routes
 //! through the engine's own library front door (`analyze_json`,
 //! `hauksbee_ci::run`, the doctor's backend resolvers), never a re-implemented
 //! sniff or probe, so what the MCP server reports can never drift from what
@@ -98,6 +98,24 @@ pub fn definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "model_coverage",
+            "description": "Read-only per-component model audit for a board. Returns the exact active-device denominator and, for every component, whether it is unresolved, identity-only, partially executable, or complete for its declared scope; plus implemented/missing capabilities, extracted pins/nets, winning layer and source references. This never writes files, fetches a datasheet, invokes an LLM, or installs a pack. If authoring_targets is non-empty, show the user the proposed `hauksbee models prepare BOARD --pack-dir DIR` command and ask before running it; the CLI separately previews every file and asks again unless the user explicitly supplies --yes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "board_path": {
+                        "type": "string",
+                        "description": "Path to the board design file on this machine."
+                    },
+                    "models_dir": {
+                        "type": "string",
+                        "description": "Optional uninstalled model-pack directory to include in resolution."
+                    }
+                },
+                "required": ["board_path"]
+            }
+        },
+        {
             "name": "board_to_code",
             "description": "Decompile a text-format board file (KiCad .kicad_pcb or Eagle .brd XML) into Board-as-Code: the editable text form a coding agent can diff, modify, and feed back to analyze_board as a .board file. Binary formats (Altium .PcbDoc) and gerber archives have no text form and return an error. Result: {board, code}.",
             "inputSchema": {
@@ -113,7 +131,7 @@ pub fn definitions() -> Value {
         },
         {
             "name": "run_script",
-            "description": "Code mode: run a JavaScript program server-side against the hauksbee API and return the composed result in ONE call, instead of many tool round-trips. The sandbox (embedded QuickJS) exposes exactly one capability, the global `hauksbee` object: analyzeBoard(path, firmwarePath?, schematicPath?), runChecks(path, specToml, firmwarePath?), listCapabilities(), boardToCode(path). Each returns the same JSON object the corresponding tool returns. console.log(...) is captured into the response. The JS environment itself has no filesystem, no network, no imports and no other globals beyond the JS builtins. Note what that does NOT mean: `hauksbee.analyzeBoard(path)` reads any path on the machine and `hauksbee.runChecks(...)` can build a firmware project, which runs that project's build scripts. Treat those two as the capabilities they are, and do not pass a path or a spec that came from content you do not trust. The script runs as a function body: use `return` for its result, which must be JSON-serializable. HONESTY CONTRACT inside the sandbox: a refusal is THROWN as a structured error object with .status === \"invalid_for_analysis\" so a script cannot accidentally treat it as data; catch it if you want to handle it. Tool input errors are thrown as {error: message}. Response: {result, logs}; an uncaught throw comes back as an error with {thrown, logs}. Scripts are killed after 120 seconds.",
+            "description": "Code mode: run a JavaScript program server-side against the hauksbee API and return the composed result in ONE call, instead of many tool round-trips. The sandbox (embedded QuickJS) exposes exactly one capability, the global `hauksbee` object: analyzeBoard(path, firmwarePath?, schematicPath?), runChecks(path, specToml, firmwarePath?), listCapabilities(), modelCoverage(path, modelsDir?), boardToCode(path). Each returns the same JSON object the corresponding tool returns. console.log(...) is captured into the response. The JS environment itself has no filesystem, no network, no imports and no other globals beyond the JS builtins. Note what that does NOT mean: `hauksbee.analyzeBoard(path)` reads any path on the machine and `hauksbee.runChecks(...)` can build a firmware project, which runs that project's build scripts. Treat those two as the capabilities they are, and do not pass a path or a spec that came from content you do not trust. The script runs as a function body: use `return` for its result, which must be JSON-serializable. HONESTY CONTRACT inside the sandbox: a refusal is THROWN as a structured error object with .status === \"invalid_for_analysis\" so a script cannot accidentally treat it as data; catch it if you want to handle it. Tool input errors are thrown as {error: message}. Response: {result, logs}; an uncaught throw comes back as an error with {thrown, logs}. Scripts are killed after 120 seconds.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -135,6 +153,7 @@ pub fn call(name: &str, args: &Value) -> ToolResult {
         "analyze_board" => analyze_board(args),
         "run_checks" => run_checks(args),
         "list_capabilities" => list_capabilities(),
+        "model_coverage" => model_coverage(args),
         "board_to_code" => board_to_code(args),
         "run_script" => run_script(args),
         other => ToolResult::err(format!(
@@ -167,6 +186,78 @@ fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
+}
+
+/// `model_coverage`: the same deterministic coverage inventory as the CLI and
+/// browser, without the CLI renderer and without any authoring side effect.
+fn model_coverage(args: &Value) -> ToolResult {
+    let board_path = match req_str(args, "board_path") {
+        Ok(path) => path,
+        Err(error) => return ToolResult::err(error),
+    };
+    let models_dir = opt_str(args, "models_dir").map(std::path::Path::new);
+    let coverage = match hauksbee_engine::commands::models::coverage_snapshot_for_path(
+        std::path::Path::new(board_path),
+        models_dir,
+    ) {
+        Ok(coverage) => coverage,
+        Err(error) => return ToolResult::err(format!("could not inspect model coverage: {error}")),
+    };
+    let coverage = match serde_json::to_value(coverage) {
+        Ok(value) => value,
+        Err(error) => {
+            return ToolResult::err(format!("could not serialize model coverage: {error}"))
+        }
+    };
+    let prepare_command = format!(
+        "hauksbee models prepare {} --pack-dir <DIR>",
+        shell_display_path(board_path)
+    );
+    ToolResult::ok(json!({
+        "board_path": board_path,
+        "coverage": coverage,
+        "read_only": true,
+        "workflow": {
+            "llm_required": false,
+            "human_default": "Open `hauksbee serve`, select a component or trace, review model coverage, and use the local model/interaction builders.",
+            "agent_steps": [
+                "Inspect this read-only coverage result and the exact pins/nets.",
+                "Ask the user before preparing or writing model-pack files.",
+                "Preserve working behavior; add one source-bound capability at a time.",
+                "For reusable I2C/SPI behavior, use a validated model-card register_map peripheral. Express direct board straps with required_high_roles/required_low_roles and address_select_role; use an explicit [[sensor]] scenario only when the wiring cannot be resolved safely.",
+                "Lint, resolve, gate required capabilities, run positive and hostile controls, then retain hashes and remaining omissions."
+            ],
+            "approval_required_for": [
+                "models prepare or any local model write",
+                "models add/install",
+                "browser Save",
+                "sending datasheet bytes to an LLM backend"
+            ],
+            "approval_not_required_for": [
+                "coverage inspection",
+                "local draft preview",
+                "validation/lint",
+                "read-only analysis"
+            ]
+        },
+        "next_action": {
+            "kind": "prepare_model_pack",
+            "requires_user_approval": true,
+            "command": prepare_command,
+            "note": "Only run this if the user wants local scaffold files. It previews exact writes and asks before writing; no LLM or network is required."
+        }
+    }))
+}
+
+fn shell_display_path(path: &str) -> String {
+    if path
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "-._/:".contains(character))
+    {
+        path.to_string()
+    } else {
+        format!("'{}'", path.replace('\'', "'\\''"))
+    }
 }
 
 /// The display name the front door sees: the file name (it drives format

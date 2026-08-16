@@ -64,6 +64,10 @@ jsonschema = { version = "0.49", default-features = false }
 # The firmware-input parity test zips a committed .hex to prove a spec's
 # `firmware = "fw.zip"` resolves exactly like `run --firmware` does.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+# Parse generated GitHub workflow YAML in integration tests. Keep this pure
+# Rust: the libyaml-backed serde fork can hang inside the C parser on malformed
+# input, which would turn a workflow regression into a wedged test job.
+yaml-rust2 = { version = "0.11", default-features = false }
 tempfile = { workspace = true }
 
 [lints]

@@ -50,6 +50,10 @@ max_pin_current_a = 0.04  # 40mA abs max per I/O pin
 max_current_a = 0.2       # 200mA total VCC/GND
 max_voltage_v = 6.0
 
+[models.coverage]
+implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_external_input", "uart_tx_and_rx", "cycle_exact_virtual_clock_and_timers", "watchdog_reboot", "adc_external_channels_0_to_5", "i2c_controller_bridge", "spi_controller_bridge"]
+missing = ["board_crystal_frequency_binding", "usb_device_controller", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -601,6 +605,10 @@ boot_select = true   # latches the boot memory; firmware cannot undo it
 internal_pull = "none"   # STM32 BOOT0 has NO on-die pull: a floating net is undefined
 note = "BOOT0 low boots main flash; high enters system bootloader/SRAM"
 
+[models.coverage]
+implements = ["cortex_m3_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "uart_tx", "virtual_clock_and_systick", "i2c1_controller_bridge", "spi1_controller_bridge"]
+missing = ["adc_injection", "watchdog_reboot_continuation", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32F401C (UFQFPN48): the 48-pin F401 (F401CB/CC/CD/CE). Modelled primarily so
 # the boot strap-pin lint covers its BOOT0, the rest of the modern STM32 line was
@@ -720,6 +728,10 @@ role = "gpio15"   # MTDO
 level = "high"
 note = "MTDO/GPIO15 high (normal) silences boot log on U0TXD; low enables it"
 
+[models.coverage]
+implements = ["xtensa_lx6_firmware_execution", "boot_to_application", "gpio_output_register_or_mailbox_observation", "uart_tx", "wall_bounded_virtual_time", "gpio_input_mailbox_contract", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract", "tmp105_temperature_injection"]
+missing = ["instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -813,6 +825,10 @@ note = "GPIO46 must be low or floating at reset (joins GPIO0 to pick boot mode)"
 role = "gpio45"
 level = "defined"
 note = "GPIO45 selects VDD_SPI flash voltage (low = 3.3 V default); must be defined"
+
+[models.coverage]
+implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
+missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1016,6 +1032,10 @@ role = "qspi_ss"
 level = "high"
 boot_select = true   # held low at reset selects the USB bootloader (BOOTSEL)
 note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
+
+[models.coverage]
+implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
+missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two_core_firmware", "usb_device_controller", "dma_fidelity", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 

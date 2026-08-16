@@ -73,8 +73,8 @@ pub struct SensorAttach {
     #[serde(default)]
     pub spec_file: Option<String>,
     /// Input overrides: map from input name to value. Applied after parsing,
-    /// before the run starts. Unknown names are silently ignored (they may be
-    /// valid for a different sensor or simply pre-set defaults).
+    /// before the run starts. Unknown names are refused: a typo that quietly
+    /// leaves the datasheet default in place would make the scenario lie.
     #[serde(default)]
     pub inputs: HashMap<String, f64>,
     /// Optional SPI controller name (e.g. `"spi2"`). When set, the sensor is
@@ -84,6 +84,11 @@ pub struct SensorAttach {
     /// Only meaningful for SPI sensors (`bus = "spi"` in the sensor spec).
     #[serde(default)]
     pub controller: Option<String>,
+    /// Optional explicit board net that frames an SPI device's chip select.
+    /// When absent, SPI retains the documented heuristic framing. Invalid net
+    /// names are rejected with the rest of the spec's board references.
+    #[serde(default)]
+    pub cs_net: Option<String>,
 }
 
 /// What a spec does with the Do-Not-Populate parts it does not name in `fit`
@@ -1926,6 +1931,11 @@ impl Spec {
                 for n in nets {
                     out.push((n.clone(), "peripheral"));
                 }
+            }
+        }
+        for sensor in &self.sensors {
+            if let Some(net) = &sensor.cs_net {
+                out.push((net.clone(), "sensor"));
             }
         }
         for n in &self.suppress_rail {

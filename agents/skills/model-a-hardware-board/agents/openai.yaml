@@ -1,0 +1,4 @@
+interface:
+  display_name: "Model a Hardware Board"
+  short_description: "Turn a board into source-bound executable behavior"
+  default_prompt: "Use $model-a-hardware-board to inspect this board, close model gaps with approval, and prove the result."

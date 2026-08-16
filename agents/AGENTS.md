@@ -1,15 +1,18 @@
 # Hauksbee for agents
 
-Hauksbee is CI for hardware. Hand it a PCB design file. Hauksbee
-reconstructs the circuit from the copper. It simulates the circuit with
-real device physics, co-simulates firmware on an emulated MCU, and checks
-the result like a test suite. Every surface an agent needs is
-machine-readable. Nothing requires the browser UI.
+Hauksbee turns hardware design artifacts into an inspectable, executable board
+model. Hand it a PCB, schematic, fab output, assembly inputs, optional firmware,
+and optional peripherals. It reconstructs the circuit, shows exactly which
+device behavior is known or missing, runs electrical and firmware co-simulation,
+and can turn the result into repeatable checks. CI is one consumer, not the
+product definition. Every agent surface is machine-readable, while the same
+workflow remains fully usable by a person in the browser or CLI without an LLM.
 
-## The three commands
+## Four commands to orient yourself
 
 ```bash
 hauksbee run <board> --json            # full analysis, one JSON object on stdout
+hauksbee models coverage <board> --json # staged identity/executable/complete coverage
 hauksbee-ci init <board>               # scaffold a check spec from the board (prints its path)
 hauksbee-ci run <spec.toml> --json     # run the spec's assertions, JSON verdict
 ```
@@ -97,13 +100,14 @@ Launch it as a subprocess, and speak MCP over its stdin/stdout:
 { "command": "hauksbee-mcp" }
 ```
 
-It declares only the `tools` capability. Five tools:
+It declares only the `tools` capability. Six tools:
 
 | tool | arguments | returns |
 |---|---|---|
 | `analyze_board` | `board_path`, `firmware_path?` | the front-door report JSON (headline, `serious`/`total`, per-section findings, `bind` coverage, `nets`, `supplies`, `notes`, and `cosim` when firmware ran) |
 | `run_checks` | `board_path`, `spec_toml`, `firmware_path?` | the `hauksbee-ci --json` verdict: `{passed, assertions_passed, run_valid, exit_code, analog_abort, seeds, coverage, substitutions, coverage_warnings, results[]}` |
 | `list_capabilities` | none | the scope table as data: report kinds, assertion kinds, board/firmware formats, and MCU backend availability probed on this machine with the engine's own discovery (doctor-style `builtin/ok/absent/disabled`) |
+| `model_coverage` | `board_path`, `models_dir?` | the same staged per-device identity/executable/declared coverage used by CLI and browser, plus a read-only next action that says model preparation requires approval |
 | `board_to_code` | `board_path` | `{board, code}`: the editable Board-as-Code text form (text formats only) |
 | `run_script` | `source` | `{result, logs}`: code mode, below |
 
@@ -139,6 +143,7 @@ The sandbox's only capability is the global `hauksbee` object:
 - `hauksbee.analyzeBoard(path, firmwarePath?)`
 - `hauksbee.runChecks(path, specToml, firmwarePath?)`
 - `hauksbee.listCapabilities()`
+- `hauksbee.modelCoverage(path, modelsDir?)`
 - `hauksbee.boardToCode(path)`
 
 Each returns the same object the corresponding tool returns. The sandbox

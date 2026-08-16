@@ -112,6 +112,40 @@ fn sir182dp_resolves_nmos_with_correct_ratings() {
     );
 }
 
+#[test]
+fn fds4435bz_resolves_exact_grouped_so8_and_reproduces_datasheet_dc_points() {
+    let lib = lib();
+    let q = ComponentQuery {
+        value: Some("FDS4435BZ".into()),
+        footprint: Some("Pedalboard Library:SO08-E3".into()),
+        ..Default::default()
+    };
+    let m = lib.resolve(&q).model.expect("FDS4435BZ must resolve");
+    assert_eq!(m.id, "fds4435bz");
+    assert_eq!(m.kind, ComponentKind::Pmos);
+    assert_eq!(m.pins.get("1-3").map(String::as_str), Some("source"));
+    assert_eq!(m.pins.get("4").map(String::as_str), Some("gate"));
+    assert_eq!(m.pins.get("5-8").map(String::as_str), Some("drain"));
+
+    // The card's recorded derivation uses the level-1 channel resistance plus
+    // the sourced ohmic residue. Pin the two fit rows and the independent gFS
+    // cross-check so a later cleanup cannot silently turn this into a generic
+    // SO-8 estimate.
+    let vto = m.params.get_f64("vto").unwrap().abs();
+    let kp = m.params.get_f64("kp").unwrap();
+    let residue = m.params.get_f64("rd").unwrap() + m.params.get_f64("rs").unwrap();
+    let rds = |vgs: f64| 1.0 / (kp * (vgs - vto)) + residue;
+    assert!((rds(10.0) - 0.016).abs() < 2e-4);
+    assert!((rds(4.5) - 0.026).abs() < 2e-4);
+    let gfs = (2.0 * kp * 8.8).sqrt();
+    assert!((gfs - 24.0).abs() / 24.0 < 0.07);
+    assert!(m
+        .coverage
+        .implements
+        .contains(&"dc_channel_conduction".into()));
+    assert!(m.coverage.missing.contains(&"switching_loss".into()));
+}
+
 // ── 6c: AFE + gate drivers + current-sense amps ───────────────────────────────
 
 #[test]

@@ -134,11 +134,11 @@ describe("structural layer (the generated schema)", () => {
     expect(lintSpec(good, schema).issues).toEqual([]);
   });
 
-  test("a bound Spec::validate does not re-check is a warning, not an error", () => {
-    // The schema's bounds come from `#[schemars(...)]` attributes and only some
-    // are re-checked in Rust. `Spec::validate` never looks at a peripheral's
-    // `address`, so hauksbee-ci runs this spec: calling it an error would be a
-    // false claim about what CI will do. See parity.test.ts's bounds sweep.
+  test("a bound Spec::validate re-checks is an error", () => {
+    // The schema's bounds come from `#[schemars(...)]` attributes, and the
+    // loader now re-checks the peripheral address before a run. The extension
+    // must make the same invalid spec actionable instead of downgrading it to
+    // a warning. See parity.test.ts's bounds sweep.
     const src = [
       'board = "b.kicad_pcb"',
       "",
@@ -152,15 +152,14 @@ describe("structural layer (the generated schema)", () => {
     ].join("\n");
     const issues = lintSpec(src, schema).issues;
     expect(issues).toHaveLength(1);
-    expect(issues[0].severity).toBe("warning");
-    expect(issues[0].code).toBe("spec/out-of-range-unchecked");
-    expect(issues[0].message).toContain("hauksbee-ci does not currently reject this");
+    expect(issues[0].severity).toBe("error");
+    expect(issues[0].code).toBe("spec/out-of-range");
+    expect(issues[0].message).not.toContain("does not currently reject this");
   });
 
-  test("a vocabulary Spec::validate does not re-check is a warning too", () => {
-    // `peripheral.waveform` is the one closed vocabulary nothing reads during
-    // validation; the runner rejects it later, and only for a `stimulus`. So
-    // hauksbee-ci ACCEPTS this spec and runs it green.
+  test("a vocabulary Spec::validate re-checks is an error too", () => {
+    // `peripheral.waveform` is a closed vocabulary validated by the loader for
+    // every peripheral, so the editor must reject an unknown token up front.
     const src = [
       'board = "b.kicad_pcb"',
       "",
@@ -175,9 +174,9 @@ describe("structural layer (the generated schema)", () => {
     ].join("\n");
     const issues = lintSpec(src, schema).issues;
     expect(issues).toHaveLength(1);
-    expect(issues[0].severity).toBe("warning");
-    expect(issues[0].code).toBe("spec/bad-enum-unchecked");
-    expect(issues[0].message).toContain("once the run reaches it");
+    expect(issues[0].severity).toBe("error");
+    expect(issues[0].code).toBe("spec/bad-enum");
+    expect(issues[0].message).not.toContain("once the run reaches it");
 
     // Every other vocabulary IS re-checked, so those stay errors.
     for (const [table, line] of [

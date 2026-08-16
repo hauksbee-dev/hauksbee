@@ -1104,15 +1104,25 @@ fn no_entry_names_a_driven_output_it_has_no_logic_to_drive() {
             if y_roles.is_empty() {
                 continue;
             }
-            if m.logic.is_empty() {
+            let behavioral_voltage_roles: std::collections::HashSet<&str> = m
+                .behavioral
+                .laws
+                .iter()
+                .filter(|law| law.kind == hauksbee_models::behavioral::LawKind::Voltage)
+                .map(|law| law.a.as_str())
+                .collect();
+            if m.logic.is_empty()
+                && !y_roles
+                    .iter()
+                    .all(|role| behavioral_voltage_roles.contains(role.as_str()))
+            {
                 failures.push(format!(
-                    "{}: {} names {y_roles:?} but has no [models.logic] block, so \
-                     nothing computes a value for the driver those roles stamp: \
-                     each of those nets is held at 0 V through the driver's ron",
+                    "{}: {} names {y_roles:?} but neither [models.logic] nor a \
+                     behavioral voltage law drives every output role",
                     path.file_name().unwrap().to_string_lossy(),
                     m.id
                 ));
-            } else {
+            } else if !m.logic.is_empty() {
                 with_logic += 1;
                 // And where there IS a logic block, every `y` pin must be one of
                 // its declared outputs, or the role name promises a driver the
@@ -1127,6 +1137,8 @@ fn no_entry_names_a_driven_output_it_has_no_logic_to_drive() {
                         m.logic.outputs
                     );
                 }
+            } else {
+                with_logic += 1;
             }
         }
     }
@@ -1258,6 +1270,12 @@ fn names_a_pickable_pair(roles: &std::collections::HashSet<&str>) -> bool {
         || (roles.contains("in_out_1a") && roles.contains("in_out_1b"))
 }
 
+fn names_a_complete_shared_select_dpdt(roles: &std::collections::HashSet<&str>) -> bool {
+    ["com_1", "com_2", "s0_1", "s0_2", "s1_1", "s1_2", "ctrl"]
+        .iter()
+        .all(|role| roles.contains(role))
+}
+
 /// The predicate has to REJECT the shape it was tightened for, or the sweep that uses
 /// it is decoration. `com` + `s1` is the case: two named switch terminals, neither of
 /// which the single-throw path can pair.
@@ -1282,6 +1300,9 @@ fn a_switch_naming_com_and_only_the_high_throw_has_no_pickable_pair() {
         "in_out_1a",
         "in_out_1b",
         "ctrl_1"
+    ])));
+    assert!(names_a_complete_shared_select_dpdt(&set(&[
+        "com_1", "com_2", "s0_1", "s0_2", "s1_1", "s1_2", "ctrl", "oe_n"
     ])));
 }
 
@@ -1323,7 +1344,7 @@ fn no_single_throw_switch_names_the_control_low_throw() {
             // And an entry that names neither pair has nothing for the binder to
             // stamp between, which would fall to the scan-two-nodes fallback and
             // pick whatever the board happened to wire.
-            if !names_a_pickable_pair(&roles) {
+            if !names_a_pickable_pair(&roles) && !names_a_complete_shared_select_dpdt(&roles) {
                 failures.push(format!(
                     "{file}: {} names no switch-terminal pair, so the binder falls \
                      back to picking two arbitrary non-power nodes",

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection, WebImportDiagnostics } from '../types/report'
+import type { WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection, WebImportDiagnostics, ModelCoverageSnapshot, ModelCoverageComponent } from '../types/report'
 import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from '../lib/cosim-coverage'
 import { summarizeErrorBudget } from '../lib/error-budget'
 import type { BoardSession } from '../hooks/useBoardSession'
@@ -204,11 +204,105 @@ function ImportDiagnosticsPanel({
   )
 }
 
+function ModelCoveragePanel({ coverage, onSelect, onAuthor }: {
+  coverage: ModelCoverageSnapshot
+  onSelect: (component: ModelCoverageComponent) => void
+  onAuthor: (component: ModelCoverageComponent) => void
+}) {
+  const { summary } = coverage
+  const complete = summary.executable_declared
+  const gaps = coverage.components.filter(component => component.actionable_behavior_gap)
+  return (
+    <details
+      data-testid="model-coverage"
+      open={gaps.length > 0}
+      className="mt-3 rounded-lg px-4 py-3"
+      style={{
+        border: `1px solid ${gaps.length > 0 ? 'var(--warn-border)' : 'var(--hairline)'}`,
+        background: 'var(--surface)',
+      }}
+    >
+      <summary className="cursor-pointer text-sm font-semibold" style={{ color: 'var(--silk)' }}>
+        Model coverage
+        <span className="ml-2 text-[11px] font-normal tnum" style={{ color: 'var(--silk-dim)' }}>
+          {summary.identified}/{summary.active_connected} identified ·{' '}
+          {summary.executable_available}/{summary.active_connected} executable ·{' '}
+          {complete} complete for declared scope
+        </span>
+      </summary>
+      <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+        “Identified” means the part and pins are known. “Executable” means some behaviour runs.
+        Only a row with no declared missing capability is complete for the scope its source supports.
+        Click any row to inspect the exact model, datasheet provenance and affected nets on the board.
+      </p>
+      <div className="mt-3 max-h-72 overflow-y-auto rounded-md" style={{ border: '1px solid var(--hairline)' }}>
+        {coverage.components.map((component, index) => (
+          <div
+            key={component.reference}
+            data-testid={`model-coverage-${component.reference}`}
+            className="hb-press grid w-full gap-x-3 gap-y-1 px-3 py-2 text-left text-[11px] sm:grid-cols-[4rem_minmax(8rem,1fr)_minmax(8rem,1fr)]"
+            style={{
+              border: 'none',
+              borderTop: index > 0 ? '1px solid var(--hairline)' : 'none',
+              background: 'transparent',
+              color: 'var(--silk-dim)',
+            }}
+          >
+            <button
+              type="button"
+              className="hb-press text-left"
+              style={{ color: 'var(--copper-hi)', fontFamily: 'var(--font-mono)', background: 'none', border: 'none' }}
+              onClick={() => onSelect(component)}
+            ><b>{component.reference}</b></button>
+            <button
+              type="button"
+              className="hb-press truncate text-left"
+              title={`Inspect ${component.reference}: ${component.value}`}
+              style={{ color: 'var(--silk-dim)', background: 'none', border: 'none' }}
+              onClick={() => onSelect(component)}
+            >{component.value || '(no value)'}</button>
+            <span className="flex items-center justify-between gap-2" style={{ color: component.actionable_behavior_gap ? 'var(--warn-strong)' : 'var(--ok)' }}>
+              <button
+                type="button"
+                className="hb-press text-left"
+                style={{ color: 'inherit', background: 'none', border: 'none' }}
+                onClick={() => onSelect(component)}
+              >
+                {component.stage.replaceAll('_', ' ')}
+                {(component.missing?.length ?? 0) > 0 ? ` · ${component.missing!.length} gap${component.missing!.length === 1 ? '' : 's'}` : ''}
+              </button>
+              {component.actionable_behavior_gap && (
+                <button
+                  type="button"
+                  data-testid={`model-author-${component.reference}`}
+                  className="hb-chip hb-press px-2 py-0.5 text-[10px]"
+                  onClick={() => onAuthor(component)}
+                >
+                  Extend
+                </button>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
+      {gaps.length > 0 && (
+        <p className="mt-2 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+          {gaps.length} component{gaps.length === 1 ? '' : 's'} need more behaviour for a fuller claim.
+          This list is deterministic and does not require an LLM; datasheet drafting below is optional.
+        </p>
+      )}
+    </details>
+  )
+}
+
 export function BoardView({
-  session, onQueueCheck, onOpenChecks, onDriveLive, simMounted, engineVersion, spec, checks, sessionName,
+  session, onQueueCheck, onQueuePeripheral, onQueueSensor, onQueueSupply, onOpenChecks, onDriveLive, simMounted, engineVersion, spec, checks, sessionName,
 }: {
   session: BoardSession
   onQueueCheck: (check: { kind: string; net?: string; ref?: string }) => void
+  onQueuePeripheral?: (peripheral: { id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }) => void
+  onQueueSensor?: (sensor: { id: string; ref?: string; modelId?: string | null }) => void
+  onQueueSupply?: (supply: { net: string; volts?: number }) => void
   onOpenChecks: () => void
   onDriveLive: () => void
   simMounted: boolean
@@ -242,6 +336,13 @@ export function BoardView({
   // it is a "let me look at this properly" gesture, not a setting.
   const [mapFullscreen, setMapFullscreen] = useState(false)
   const [importOverlay, setImportOverlay] = useState(false)
+  const [authoringComponent, setAuthoringComponent] = useState<ModelCoverageComponent | null>(null)
+  const [authoringSignal, setAuthoringSignal] = useState(0)
+  const authoringRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (authoringSignal === 0) return
+    requestAnimationFrame(() => authoringRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+  }, [authoringSignal])
   const focusSeq = useRef(0)
   const mapRef = useRef<HTMLDivElement>(null)
   const locate = useCallback((x: number, y: number, label: string) => {
@@ -511,6 +612,29 @@ export function BoardView({
           </div>
         )}
 
+        {r.model_coverage && (
+          <ModelCoveragePanel
+            coverage={r.model_coverage}
+            onSelect={component => {
+              const padNets = [...new Set(component.pins.flatMap(pin => pin.net ? [pin.net] : []))]
+              setSelectedNet(null)
+              setSelectedComponent({
+                ref: component.reference,
+                value: component.value,
+                lib_id: component.lib_id,
+                padNet: padNets[0] ?? null,
+                padNets,
+              })
+              const located = component.pins.find(pin => pin.position_mm)?.position_mm
+              if (located) locate(located[0], located[1], `${component.reference}: ${component.stage.replaceAll('_', ' ')}`)
+            }}
+            onAuthor={component => {
+              setAuthoringComponent(component)
+              setAuthoringSignal(value => value + 1)
+            }}
+          />
+        )}
+
         {/* Everything this report can become. Below the verdict AND below every
             line that qualifies it (the restored-session caveat, the unbound-parts
             warning): those say how much to trust what is about to be exported,
@@ -539,10 +663,12 @@ export function BoardView({
               openParts={r.bind?.open_parts ?? []}
               onSaved={session.reanalyzeCurrent}
             />
-            <div className="mt-3">
+            <div className="mt-3" ref={authoringRef}>
               <WritePart
                 onSaved={session.reanalyzeCurrent}
-                suggested={r.bind?.open_parts?.find(part => !part.bound)}
+                suggested={authoringComponent ?? r.bind?.open_parts?.find(part => !part.bound)}
+                openSignal={authoringSignal > 0 ? `${authoringComponent?.reference}:${authoringSignal}` : null}
+                boardLabel={boardLabel ?? r.file_name}
               />
             </div>
           </>
@@ -694,7 +820,34 @@ export function BoardView({
                     net={selectedNet}
                     component={selectedComponent}
                     boundKind={selectedComponent ? r.component_kinds?.[selectedComponent.ref] ?? null : null}
-                    onQueueCheck={onQueueCheck}
+                    modelCoverage={selectedComponent
+                      ? r.model_coverage?.components.find(component => component.reference === selectedComponent.ref) ?? null
+                      : null}
+                    netModels={selectedNet
+                      ? (r.model_coverage?.components ?? []).filter(component =>
+                          component.pins.some(pin => pin.net === selectedNet),
+                        )
+                      : []}
+                    onQueueCheck={check => {
+                      onQueueCheck(check)
+                      onOpenChecks()
+                    }}
+                    onQueuePeripheral={onQueuePeripheral ? peripheral => {
+                      onQueuePeripheral(peripheral)
+                      onOpenChecks()
+                    } : undefined}
+                    onQueueSensor={onQueueSensor ? sensor => {
+                      onQueueSensor(sensor)
+                      onOpenChecks()
+                    } : undefined}
+                    onQueueSupply={onQueueSupply ? supply => {
+                      onQueueSupply(supply)
+                      onOpenChecks()
+                    } : undefined}
+                    onAuthorModel={component => {
+                      setAuthoringComponent(component)
+                      setAuthoringSignal(value => value + 1)
+                    }}
                     onClose={() => { setSelectedNet(null); setSelectedComponent(null) }}
                     onPickNet={setSelectedNet}
                   />
@@ -705,7 +858,7 @@ export function BoardView({
             <div className="mt-1.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
               {viewerMode === '3d'
                 ? 'Drag to orbit · scroll to zoom · shift-drag to pan · switch to 2D to select traces and parts'
-                : 'Click the map (or hold ctrl) to zoom · drag to pan · hover a trace to see its net · click a trace or a part to start a check on it'}
+                : 'Click the map (or hold ctrl) to zoom · drag to pan · hover a trace to see its net · click a trace or part to inspect it, drive it, probe it or check it'}
             </div>
           </section>
         ) : r.components?.length > 0 ? (

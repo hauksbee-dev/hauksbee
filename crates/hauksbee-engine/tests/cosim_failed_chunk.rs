@@ -64,6 +64,7 @@ fn impossible_board() -> BoundBoard {
         behavioral: Vec::new(),
         device_meta: Vec::new(),
         dacs: Vec::new(),
+        peripherals: Vec::new(),
         report: BindReport::default(),
     }
 }
@@ -306,6 +307,7 @@ fn cosim_valid_run_reports_analog_valid_true() {
         behavioral: Vec::new(),
         device_meta: Vec::new(),
         dacs: Vec::new(),
+        peripherals: Vec::new(),
         report: BindReport::default(),
     };
 

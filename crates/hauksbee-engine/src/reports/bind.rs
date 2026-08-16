@@ -57,17 +57,29 @@ pub fn emit(
                 // resolved-but-open active ICs (a resolved MCU with all I/O pins
                 // open makes its nets just as untrustworthy).
                 let open = crate::result::coverage_open_active_refs(&summary).len();
+                let open_path = summary.active_path_unresolved.len();
                 println!();
                 if open > 0 {
                     println!(
-                        "Bottom line: {n} of {m} critical parts modelled. {open} active IC(s) above are \
+                        "Bottom line: all {m} critical active devices were discovered; {n} have executable \
+                         behavioural models. {open} active IC(s) above are \
                          unresolved/open, so firmware/analog/AC/thermal results on their nets would be \
                          INCOMPLETE, but the copper checks are unaffected (run --drc). Add models with \
                          --models-dir to cover them."
                     );
+                } else if open_path > 0 {
+                    println!(
+                        "Bottom line: all {m} discovered critical active devices have executable \
+                         behavioural models, but {open_path} connected path element(s) above still \
+                         default to OPEN, so the whole-board electrical path is INCOMPLETE. Run \
+                         `hauksbee models coverage <BOARD>` to inspect the exact gaps, then \
+                         `hauksbee models prepare <BOARD> --pack-dir <DIR>` to review an \
+                         approval-gated local model pack; copper checks remain unaffected."
+                    );
                 } else if m > 0 {
                     println!(
-                        "Bottom line: all {m} critical parts modelled; the board binds cleanly."
+                        "Bottom line: all {m} discovered critical active devices have executable \
+                         behavioural models; the board binds cleanly."
                     );
                 } else {
                     println!("Bottom line: no active ICs to model; this is a passive board.");

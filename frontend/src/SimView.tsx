@@ -14,7 +14,8 @@ import {
   ChevronDownIcon, ChevronRightIcon, CpuIcon, SlidersIcon, PowerIcon,
   ProbeIcon, BoltIcon, TerminalIcon, LayersIcon,
 } from './components/Icons'
-import type { ClientMessage, SimFrame, SimFault } from './types/protocol'
+import type { ActionResultMsg, ClientMessage, SimFrame, SimFault } from './types/protocol'
+import type { ModelCoverageSnapshot, QueuedLiveRegisterMap } from './types/report'
 import { envelopesFromHistory, envelopeSource, readNet } from './lib/net-state'
 
 interface FootprintInfo {
@@ -159,10 +160,19 @@ export interface SimShellStatus {
 // so the shell only mounts it once a live board is actually being served, and
 // keeps it mounted (hidden) so the session's fault log and scope survive
 // navigation.
-export default function SimView({ onQueueCheck, onStatus, expectedBoard, sessionMatchesCurrent, onRelaunch }: {
+export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor, onQueueSupply, pendingLiveRegisterMaps = [], onLiveRegisterMapsConsumed, onLiveActionResult, onStatus, expectedBoard, sessionMatchesCurrent, onRelaunch, modelCoverage }: {
   /** Queue a check into the checks builder from a click on the live board.
    *  Absent on the standalone demo server. */
   onQueueCheck?: (check: { kind: string; net?: string; ref?: string }) => void
+  /** Queue a real scenario interaction (not an assertion) for a clicked net. */
+  onQueuePeripheral?: (peripheral: { id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }) => void
+  onQueueSensor?: (sensor: { id: string; ref?: string; modelId?: string | null }) => void
+  onQueueSupply?: (supply: { net: string; volts?: number }) => void
+  pendingLiveRegisterMaps?: QueuedLiveRegisterMap[]
+  onLiveRegisterMapsConsumed?: (upToSeq: number) => void
+  /** Engine-confirmed receipts, forwarded to the scenario row that originated
+   * the request. This is never an optimistic "sent" acknowledgement. */
+  onLiveActionResult?: (result: ActionResultMsg) => void
   /** Report running state + fault count + session identity up to the shell. */
   onStatus?: (s: SimShellStatus) => void
   /** The board currently analyzed in this tab (for the wrong-board banner). */
@@ -173,8 +183,13 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   sessionMatchesCurrent?: boolean
   /** Replace the running session with the analyzed board (label says so). */
   onRelaunch?: () => void
+  /** Coverage retained from the analysis that launched this session. The live
+   *  wire can run standalone, so this is optional; when present the component
+   *  card keeps the same model-honesty detail while the board is moving. */
+  modelCoverage?: ModelCoverageSnapshot | null
 } = {}) {
-  const { connected, boardInfo, frame: liveFrame, status, send, replay, backlog, serverError } = useSimulation()
+  const { connected, boardInfo, frame: liveFrame, status, send, replay, backlog, serverError, actionResults = [] } = useSimulation()
+  const reportedActionResults = useRef(0)
 
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
@@ -191,8 +206,68 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   const [viewerMode, setViewerMode] = useState<'2d' | '3d'>('2d')
   const [probes, setProbes] = useState<string[]>([])
   const [selectedFaultRef, setSelectedFaultRef] = useState<string | null>(null)
+  const liveInteractionSeq = useRef(0)
   const frameHistory = useRef<SimFrame[]>([])
   const [cardState, setCardState] = useState<Record<string, boolean>>(loadCardState)
+
+  const queueAndAttachPeripheral = useCallback((peripheral: {
+    kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string
+  }) => {
+    if (!peripheral.net) return
+    liveInteractionSeq.current += 1
+    const stem = peripheral.net.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 28) || 'NET'
+    const prefix = peripheral.kind === 'stimulus' ? 'STIM' : peripheral.kind === 'pushbutton' ? 'BTN' : 'SW'
+    const id = `${prefix}_${stem}_${liveInteractionSeq.current}`
+    // Keep the replayable experiment and the immediate circuit mutation tied
+    // to one stable id. The server refuses any unsupported/unknown net.
+    onQueuePeripheral?.({ ...peripheral, id })
+    send({
+      type: 'AttachPeripheral', id, kind: peripheral.kind, net: peripheral.net,
+      to: peripheral.kind === 'stimulus' ? undefined : 'GND',
+      offset: peripheral.kind === 'stimulus' ? 0 : undefined,
+      bounce_ms: peripheral.kind === 'pushbutton' ? 5 : undefined,
+      initial: 0,
+    })
+  }, [onQueuePeripheral, send])
+
+  const queueAndSetSupply = useCallback((supply: { net: string; volts?: number }) => {
+    const volts = supply.volts ?? 3.3
+    onQueueSupply?.({ ...supply, volts })
+    send({ type: 'SetPowerSupply', net: supply.net, supply: { kind: 'ideal', volts } })
+  }, [onQueueSupply, send])
+
+  // The scenario builder owns register-map authoring and validation. Once the
+  // user explicitly presses "attach live", consume those exact bytes here on
+  // the one WebSocket already owned by the live view. The row stays in the
+  // scenario builder, so immediate exploration and deterministic replay never
+  // drift into two separately-authored devices.
+  useEffect(() => {
+    if (!connected || pendingLiveRegisterMaps.length === 0) return
+    for (const request of pendingLiveRegisterMaps) {
+      send({
+        type: 'AttachRegisterMap',
+        id: request.id,
+        request_id: request.seq,
+        spec_toml: request.spec_toml,
+        inputs: request.inputs,
+        controller: request.controller,
+        cs_net: request.cs_net,
+      })
+    }
+    onLiveRegisterMapsConsumed?.(pendingLiveRegisterMaps[pendingLiveRegisterMaps.length - 1].seq)
+  }, [connected, onLiveRegisterMapsConsumed, pendingLiveRegisterMaps, send])
+
+  useEffect(() => {
+    if (!onLiveActionResult) return
+    // A reconnect starts a fresh bounded receipt list.
+    if (actionResults.length < reportedActionResults.current) {
+      reportedActionResults.current = 0
+    }
+    for (const result of actionResults.slice(reportedActionResults.current)) {
+      onLiveActionResult(result)
+    }
+    reportedActionResults.current = actionResults.length
+  }, [actionResults, onLiveActionResult])
 
   const toggleCard = useCallback((id: string, open: boolean) => {
     setCardState(prev => {
@@ -719,7 +794,20 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
                   : undefined}
                 component={selectedFp}
                 boundKind={selectedFp ? boardInfo?.component_kinds?.[selectedFp.ref] ?? null : null}
+                modelCoverage={selectedFp
+                  ? modelCoverage?.components.find(component => component.reference === selectedFp.ref) ?? null
+                  : null}
+                netModels={selectedNet && !selectedFp
+                  ? (modelCoverage?.components ?? []).filter(component =>
+                      component.pins.some(pin => pin.net === selectedNet),
+                    )
+                  : []}
                 onQueueCheck={onQueueCheck}
+                onQueuePeripheral={queueAndAttachPeripheral}
+                onQueueSensor={onQueueSensor}
+                onQueueSupply={queueAndSetSupply}
+                peripheralMode="live-and-scenario"
+                onAddProbe={handleAddProbe}
                 onClose={() => { setSelectedFp(null); setSelectedNet(null) }}
                 onPickNet={net => { setSelectedFp(null); setSelectedNet(net) }}
               />
@@ -900,7 +988,10 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
               background: sessionLost ? 'var(--err)' : running ? 'var(--ok)' : 'var(--silk-faint)',
             }}
           />
-          <span style={{ color: sessionLost ? 'var(--err)' : running ? 'var(--ok)' : 'var(--silk-faint)' }}>
+          <span
+            data-testid="sim-run-state"
+            style={{ color: sessionLost ? 'var(--err)' : running ? 'var(--ok)' : 'var(--silk-faint)' }}
+          >
             {sessionLost ? 'session ended' : running ? 'running' : 'paused'}
           </span>
         </div>

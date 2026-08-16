@@ -33,6 +33,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::profile::Segment;
+
 /// The optional behavioural block of a model entry.
 ///
 /// Every field is optional so a model can describe just a pull (nPM1300), just
@@ -55,6 +57,26 @@ pub struct Behavioral {
     /// Expression-defined laws: extra currents/voltages over pins+state+params.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub laws: Vec<Law>,
+
+    /// Series conduction paths whose resistance may change with FSM state.
+    ///
+    /// This is the reusable seam for resettable fuses, relays, protection
+    /// switches, and other parts whose externally visible behavior is a
+    /// state-dependent resistance between two named pins.  The runtime also
+    /// exposes each path current as `i_<name>` to FSM guards.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub series_paths: Vec<SeriesPath>,
+
+    /// Time-varying current sinks owned by this fitted component.
+    ///
+    /// This is the model-card counterpart to a scenario-level dynamic load:
+    /// datasheet/source-bound boot, active, standby and periodic burst current
+    /// can travel with the part rather than being repeated in every CI spec.
+    /// The runtime stamps an `Isource` from `supply_pin` to `return_pin` (or
+    /// ground) and updates it once per solver chunk from the shared
+    /// [`Segment`] waveform implementation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiled_loads: Vec<ProfiledLoad>,
 }
 
 impl Behavioral {
@@ -64,6 +86,8 @@ impl Behavioral {
             && self.fsm.is_none()
             && self.converter.is_none()
             && self.laws.is_empty()
+            && self.series_paths.is_empty()
+            && self.profiled_loads.is_empty()
     }
 }
 
@@ -160,6 +184,57 @@ pub struct Transition {
     /// Optional minimum dwell time in `from` before the transition may fire (s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_dwell_s: Option<f64>,
+
+    /// Continuous time for which the guard itself must remain true before the
+    /// transition fires. Unlike `min_dwell_s`, this timer resets whenever the
+    /// guard becomes false. This distinction is essential for over-current and
+    /// debounce behavior: five seconds spent safely in a state must not make a
+    /// later one-chunk spike trip immediately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_dwell_s: Option<f64>,
+}
+
+/// A resistor-like path whose value is selected by the active FSM state.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct SeriesPath {
+    /// Identifier used in expressions. The runtime publishes current from
+    /// `a` to `b` as `i_<name>`.
+    pub name: String,
+    /// Named pin roles from `[models.pins]`.
+    pub a: String,
+    pub b: String,
+    /// Resistance before any state-specific override (ohms).
+    pub default_ohms: f64,
+    /// Optional resistance by FSM state (ohms).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub state_ohms: BTreeMap<String, f64>,
+}
+
+/// A source-bound current profile drawn by the fitted component.
+///
+/// The first segment is the pre-start/DC level. Subsequent segments use the
+/// same piecewise/periodic semantics as [`crate::LoadProfile`]. `start_s`
+/// shifts the activity timeline but deliberately does not invent a zero-current
+/// pre-start state: authors must put the documented standby/off current in the
+/// first segment.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct ProfiledLoad {
+    /// Expression-safe identifier, surfaced as `i_load_<name>` at runtime.
+    pub name: String,
+    /// Pin role from which positive load current is drawn.
+    pub supply_pin: String,
+    /// Optional return pin role. Absent means circuit ground.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_pin: Option<String>,
+    /// Activity timeline offset in seconds.
+    #[serde(default)]
+    pub start_s: f64,
+    /// Deterministic seed for per-segment jitter.
+    #[serde(default)]
+    pub seed: u64,
+    /// Ordered current waveform segments.
+    #[serde(default, rename = "segment", skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<Segment>,
 }
 
 /// How a pin behaves while a given state is active. Overrides the pin's default
@@ -220,6 +295,21 @@ pub struct Converter {
     /// programming pin in a future extension; for now it is the setpoint.
     pub vout_setpoint: f64,
 
+    /// Optional board-programmed feedback loop.  When present, the converter
+    /// drives its averaged output until the voltage on `pin` reaches `vref_v`.
+    /// This lets an adjustable buck use the board's actual divider instead of
+    /// baking one product's output voltage into a reusable IC model.  The
+    /// runtime relaxation is a DC convergence aid, not a claim about loop
+    /// bandwidth or compensation stability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<FeedbackControl>,
+
+    /// Optional enable input.  Below `high_threshold_v` the averaged output and
+    /// reflected input draw are both disabled.  Hysteresis and UVLO timing stay
+    /// outside this first-order DC primitive unless an FSM models them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable: Option<EnableControl>,
+
     /// Output-current limit (A). Past this the output folds back (CC mode).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iout_limit_a: Option<f64>,
@@ -245,6 +335,29 @@ pub struct Converter {
     /// exactly the way the real part is programmed on the board.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iin_program: Option<SenseProgram>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct FeedbackControl {
+    /// Pin role connected to the external feedback divider midpoint.
+    pub pin: String,
+    /// Datasheet reference voltage at the feedback pin.
+    pub vref_v: f64,
+    /// Per-chunk numerical relaxation gain in output-volts per feedback-volt.
+    /// This is intentionally explicit because it controls convergence only;
+    /// it must not be confused with physical loop gain or bandwidth.
+    #[serde(default = "default_feedback_relaxation_gain")]
+    pub relaxation_gain: f64,
+}
+
+fn default_feedback_relaxation_gain() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct EnableControl {
+    pub pin: String,
+    pub high_threshold_v: f64,
 }
 
 /// A programmable current limit set by an external sense resistor and a
@@ -435,6 +548,13 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
                     ));
                 }
             }
+            if let Some(d) = tr.guard_dwell_s {
+                if !d.is_finite() || d < 0.0 {
+                    errs.push(format!(
+                        "fsm transition {i}: guard_dwell_s must be a non-negative finite number, got {d}"
+                    ));
+                }
+            }
         }
         for (st, pins) in &fsm.state_pins {
             if !known.contains(st.as_str()) {
@@ -471,6 +591,129 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         }
     }
 
+    let known_states: BTreeSet<&str> = b
+        .fsm
+        .as_ref()
+        .map(|fsm| fsm.states.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let mut path_names = BTreeSet::new();
+    for (i, path) in b.series_paths.iter().enumerate() {
+        let valid_name = !path.name.is_empty()
+            && path.name.chars().enumerate().all(|(index, c)| {
+                c == '_' || c.is_ascii_alphabetic() || (index > 0 && c.is_ascii_digit())
+            });
+        if !valid_name {
+            errs.push(format!(
+                "series_path {i}: name '{}' must be a non-empty expression identifier",
+                path.name
+            ));
+        } else if !path_names.insert(path.name.as_str()) {
+            errs.push(format!("series_path {i}: duplicate name '{}'", path.name));
+        }
+        if path.a.trim().is_empty() || path.b.trim().is_empty() || path.a == path.b {
+            errs.push(format!(
+                "series_path {i}: a and b must be distinct non-empty pin roles"
+            ));
+        }
+        if !path.default_ohms.is_finite() || path.default_ohms <= 0.0 {
+            errs.push(format!(
+                "series_path {i}: default_ohms must be a positive finite number, got {}",
+                path.default_ohms
+            ));
+        }
+        for (state, ohms) in &path.state_ohms {
+            if b.fsm.is_none() {
+                errs.push(format!(
+                    "series_path {i}: state_ohms names '{state}' but no fsm is declared"
+                ));
+            } else if !known_states.contains(state.as_str()) {
+                errs.push(format!(
+                    "series_path {i}: state_ohms names unknown state '{state}'"
+                ));
+            }
+            if !ohms.is_finite() || *ohms <= 0.0 {
+                errs.push(format!(
+                    "series_path {i}: resistance for state '{state}' must be a positive finite number, got {ohms}"
+                ));
+            }
+        }
+    }
+
+    let mut load_names = BTreeSet::new();
+    for (i, load) in b.profiled_loads.iter().enumerate() {
+        let valid_name = !load.name.is_empty()
+            && load.name.chars().enumerate().all(|(index, c)| {
+                c == '_' || c.is_ascii_alphabetic() || (index > 0 && c.is_ascii_digit())
+            });
+        if !valid_name {
+            errs.push(format!(
+                "profiled_load {i}: name '{}' must be a non-empty expression identifier",
+                load.name
+            ));
+        } else if !load_names.insert(load.name.as_str()) {
+            errs.push(format!("profiled_load {i}: duplicate name '{}'", load.name));
+        }
+        if load.supply_pin.trim().is_empty() {
+            errs.push(format!("profiled_load {i}: supply_pin is empty"));
+        }
+        if load
+            .return_pin
+            .as_ref()
+            .is_some_and(|role| role.trim().is_empty() || role == &load.supply_pin)
+        {
+            errs.push(format!(
+                "profiled_load {i}: return_pin must be non-empty and different from supply_pin"
+            ));
+        }
+        if !load.start_s.is_finite() || load.start_s < 0.0 {
+            errs.push(format!(
+                "profiled_load {i}: start_s must be a non-negative finite number, got {}",
+                load.start_s
+            ));
+        }
+        if load.segments.is_empty() {
+            errs.push(format!("profiled_load {i}: no segments declared"));
+        }
+        for (j, segment) in load.segments.iter().enumerate() {
+            if !segment.level_a.is_finite() || segment.level_a < 0.0 {
+                errs.push(format!(
+                    "profiled_load {i} segment {j}: level_a must be a non-negative finite number, got {}",
+                    segment.level_a
+                ));
+            }
+            if segment
+                .idle_a
+                .is_some_and(|value| !value.is_finite() || value < 0.0)
+            {
+                errs.push(format!(
+                    "profiled_load {i} segment {j}: idle_a must be a non-negative finite number"
+                ));
+            }
+            for (name, value) in [
+                ("rise_s", segment.rise_s),
+                ("duration_s", segment.duration_s),
+                ("period_s", segment.period_s),
+                ("jitter_s", segment.jitter_s),
+            ] {
+                if !value.is_finite() || value < 0.0 {
+                    errs.push(format!(
+                        "profiled_load {i} segment {j}: {name} must be a non-negative finite number, got {value}"
+                    ));
+                }
+            }
+            if segment.period_s > 0.0 && segment.rise_s + segment.duration_s > segment.period_s {
+                errs.push(format!(
+                    "profiled_load {i} segment {j}: rise_s + duration_s exceeds period_s"
+                ));
+            }
+            if segment.period_s > 0.0 && segment.jitter_s >= segment.period_s {
+                errs.push(format!(
+                    "profiled_load {i} segment {j}: jitter_s must be smaller than period_s"
+                ));
+            }
+        }
+    }
+
     if let Some(c) = &b.converter {
         if c.out_pin.trim().is_empty() {
             errs.push("converter: out_pin is empty".to_string());
@@ -488,6 +731,34 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
                 "converter: vout_setpoint must be a positive finite number, got {}",
                 c.vout_setpoint
             ));
+        }
+        if let Some(feedback) = &c.feedback {
+            if feedback.pin.trim().is_empty() {
+                errs.push("converter.feedback: pin is empty".to_string());
+            }
+            if !feedback.vref_v.is_finite() || feedback.vref_v <= 0.0 {
+                errs.push(format!(
+                    "converter.feedback: vref_v must be a positive finite number, got {}",
+                    feedback.vref_v
+                ));
+            }
+            if !feedback.relaxation_gain.is_finite() || feedback.relaxation_gain <= 0.0 {
+                errs.push(format!(
+                    "converter.feedback: relaxation_gain must be a positive finite number, got {}",
+                    feedback.relaxation_gain
+                ));
+            }
+        }
+        if let Some(enable) = &c.enable {
+            if enable.pin.trim().is_empty() {
+                errs.push("converter.enable: pin is empty".to_string());
+            }
+            if !enable.high_threshold_v.is_finite() || enable.high_threshold_v < 0.0 {
+                errs.push(format!(
+                    "converter.enable: high_threshold_v must be a non-negative finite number, got {}",
+                    enable.high_threshold_v
+                ));
+            }
         }
         if let Some(e) = c.efficiency {
             if !e.is_finite() || e <= 0.0 || e > 1.0 {
@@ -648,6 +919,7 @@ mod tests {
                 to: "on".into(),
                 guard: "v_en > 1.0".into(),
                 min_dwell_s: Some(f64::NAN),
+                guard_dwell_s: None,
             }],
             state_pins: BTreeMap::new(),
         });
@@ -792,12 +1064,87 @@ mod tests {
                 to: "nowhere".into(),
                 guard: "v_en > 1.0".into(),
                 min_dwell_s: None,
+                guard_dwell_s: None,
             }],
             state_pins: BTreeMap::new(),
         });
         let errs = validate_behavioral(&b);
         assert!(errs.iter().any(|e| e.contains("initial")), "{errs:?}");
         assert!(errs.iter().any(|e| e.contains("nowhere")), "{errs:?}");
+    }
+
+    #[test]
+    fn series_path_and_continuous_guard_dwell_validate_fail_closed() {
+        let mut b = Behavioral::default();
+        b.fsm = Some(Fsm {
+            states: vec!["closed".into(), "tripped".into()],
+            initial: Some("closed".into()),
+            transitions: vec![Transition {
+                from: "closed".into(),
+                to: "tripped".into(),
+                guard: "i_fuse * i_fuse >= 64.0".into(),
+                min_dwell_s: None,
+                guard_dwell_s: Some(1.5),
+            }],
+            state_pins: BTreeMap::new(),
+        });
+        b.series_paths.push(SeriesPath {
+            name: "fuse".into(),
+            a: "a".into(),
+            b: "b".into(),
+            default_ohms: 0.04,
+            state_ohms: [("closed".into(), 0.04), ("tripped".into(), 1e9)]
+                .into_iter()
+                .collect(),
+        });
+        assert!(
+            validate_behavioral(&b).is_empty(),
+            "valid state-controlled series path must pass: {:?}",
+            validate_behavioral(&b)
+        );
+
+        b.series_paths[0].state_ohms.insert("unknown".into(), 0.1);
+        b.fsm.as_mut().unwrap().transitions[0].guard_dwell_s = Some(f64::NAN);
+        let errors = validate_behavioral(&b);
+        assert!(
+            errors.iter().any(|e| e.contains("unknown state")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("guard_dwell_s")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn profiled_load_validates_timing_and_current_fail_closed() {
+        let mut b = Behavioral::default();
+        b.profiled_loads.push(ProfiledLoad {
+            name: "boot".into(),
+            supply_pin: "vdd".into(),
+            return_pin: Some("gnd".into()),
+            start_s: 0.001,
+            seed: 7,
+            segments: vec![Segment {
+                level_a: 0.040,
+                rise_s: 0.001,
+                duration_s: 0.010,
+                period_s: 0.100,
+                idle_a: Some(0.005),
+                jitter_s: 0.001,
+            }],
+        });
+        assert!(
+            validate_behavioral(&b).is_empty(),
+            "valid model-owned current profile must pass: {:?}",
+            validate_behavioral(&b)
+        );
+
+        b.profiled_loads[0].segments[0].level_a = -1.0;
+        b.profiled_loads[0].segments[0].jitter_s = 0.100;
+        let errors = validate_behavioral(&b);
+        assert!(errors.iter().any(|e| e.contains("level_a")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("jitter_s")), "{errors:?}");
     }
 
     #[test]

@@ -6,7 +6,8 @@
 //! array (the wire is a net -> config map).
 
 use hauksbee_server::protocol::{
-    BoardInfo, ClientMessage, FaultInfo, PowerSupplyConfig, ServerMessage, SimFrame, SupplyState,
+    BoardInfo, ClientMessage, FaultInfo, InputSourceInfo, PowerSupplyConfig, ServerMessage,
+    SimFrame, SupplyState,
 };
 
 #[test]
@@ -33,6 +34,78 @@ fn fault_info_serializes_kind_not_fault_kind() {
 }
 
 #[test]
+fn explicit_input_sources_and_live_attachments_match_the_browser_wire() {
+    let mut info = BoardInfo {
+        name: "b".into(),
+        board_url: "/boards/b.kicad_pcb".into(),
+        num_components: 0,
+        num_nets: 1,
+        nets: vec!["A0".into()],
+        component_kinds: Default::default(),
+        mcus: vec![],
+        power_supplies: Default::default(),
+        peripherals: vec![],
+        input_sources: vec![InputSourceInfo {
+            id: "A0".into(),
+            kind: "voltage".into(),
+            min: 0.0,
+            max: 5.0,
+            initial: 2.5,
+            unit: "V".into(),
+        }],
+        shorts: None,
+    };
+    let json = serde_json::to_value(ServerMessage::BoardInfo(info.clone())).unwrap();
+    assert_eq!(json["input_sources"][0]["id"], "A0");
+    assert_eq!(json["input_sources"][0]["max"], 5.0);
+
+    // A similarly named NET is not enough: only the explicit source list is
+    // serialized. This guards the old frontend A0/INPUT-name guess.
+    info.input_sources.clear();
+    let no_sources = serde_json::to_value(ServerMessage::BoardInfo(info)).unwrap();
+    assert!(no_sources.get("input_sources").is_none());
+
+    let message: ClientMessage = serde_json::from_str(
+        r#"{"type":"AttachPeripheral","id":"STIM_A0_1","kind":"stimulus","net":"A0","offset":0.25}"#,
+    )
+    .expect("browser live attachment parses");
+    match message {
+        ClientMessage::AttachPeripheral(spec) => {
+            assert_eq!(spec.id, "STIM_A0_1");
+            assert_eq!(spec.net, "A0");
+            assert_eq!(spec.offset, Some(0.25));
+        }
+        other => panic!("expected AttachPeripheral, got {other:?}"),
+    }
+
+    let message: ClientMessage = serde_json::from_str(
+        r#"{"type":"AttachRegisterMap","id":"U7_ACCEL","request_id":42,"spec_toml":"[sensor]\nname = \"WHOAMI\"\nbus = \"i2c\"\ni2c_address = 24\n[[sensor.register]]\naddr = 0\nconst = [19]\n[sensor.protocol]\nstyle = \"i2c_pointer\"\n","inputs":{"accel_x_g":0.25}}"#,
+    )
+    .expect("browser register-map attachment parses");
+    match message {
+        ClientMessage::AttachRegisterMap(spec) => {
+            assert_eq!(spec.id, "U7_ACCEL");
+            assert_eq!(spec.request_id, Some(42));
+            assert!(spec.spec_toml.contains("i2c_pointer"));
+            assert_eq!(spec.inputs["accel_x_g"], 0.25);
+        }
+        other => panic!("expected AttachRegisterMap, got {other:?}"),
+    }
+
+    let receipt = serde_json::to_value(ServerMessage::ActionResult {
+        action: "attach_register_map".into(),
+        id: "U7_ACCEL".into(),
+        request_id: Some(42),
+        ok: true,
+        message: "Attached exact register-map bytes for U7_ACCEL to the live co-simulation.".into(),
+    })
+    .unwrap();
+    assert_eq!(receipt["type"], "ActionResult");
+    assert_eq!(receipt["request_id"], 42);
+    assert_eq!(receipt["ok"], true);
+}
+
+#[test]
 fn board_info_power_supplies_is_a_map_of_tagged_configs() {
     let mut info = BoardInfo {
         name: "b".into(),
@@ -44,6 +117,7 @@ fn board_info_power_supplies_is_a_map_of_tagged_configs() {
         mcus: vec![],
         power_supplies: Default::default(),
         peripherals: vec![],
+        input_sources: vec![],
         shorts: None,
     };
     info.power_supplies

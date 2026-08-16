@@ -13,17 +13,19 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use hauksbee_extract::ExtractedBoard;
-use hauksbee_models::ModelLibrary;
+use hauksbee_models::{Bus, ModelLibrary};
 use hauksbee_server::engine::Engine;
 use hauksbee_server::protocol::{
-    BoardInfo, ChemistryConfig, FaultInfo, PeripheralInfo, PowerSupplyConfig, ShortsDisclosure,
-    SimFrame, SolverControls, SupplyState, UsbSpecConfig,
+    BoardInfo, ChemistryConfig, FaultInfo, LiveRegisterMapSpec, PeripheralInfo, PowerSupplyConfig,
+    ShortsDisclosure, SimFrame, SolverControls, SupplyState, UsbSpecConfig,
 };
 use hauksbee_solve::{Integration, SolverOptions, StepControl};
 
 use crate::binder::{bind_board, BoundBoard};
+use crate::peripherals::{CsProvenance, I2cBus, RegisterMapSensor, ResolvedCs, SpiBus};
 use crate::power_supply::{Chemistry, PowerSupply, UsbSpec};
 use crate::report::BindReport;
 use crate::scheduler::Scheduler;
@@ -280,6 +282,10 @@ impl Engine for HauksbeeEngine {
                 .into_iter()
                 .map(|(id, kind)| PeripheralInfo { id, kind })
                 .collect(),
+            // Live controls travel through typed peripherals. The engine does
+            // not expose arbitrary internal V/I sources until a model declares
+            // a safe range and purpose for them.
+            input_sources: Vec::new(),
             shorts: self.shorts.clone(),
         }
     }
@@ -394,6 +400,169 @@ impl Engine for HauksbeeEngine {
 
     fn set_peripheral(&mut self, id: &str, value: f64) -> bool {
         self.sched.set_peripheral(id, value)
+    }
+
+    fn attach_peripheral(
+        &mut self,
+        spec: hauksbee_server::protocol::LivePeripheralSpec,
+    ) -> Result<(), String> {
+        use crate::peripherals::controls::{Pushbutton, Stimulus, StimulusKind, ToggleSwitch};
+        use hauksbee_ir::{NodeId, SourceKind};
+
+        if spec.id.trim().is_empty() || spec.id.len() > 96 {
+            return Err("live peripheral id must be 1..=96 characters".into());
+        }
+        if self
+            .sched
+            .peripheral_infos()
+            .iter()
+            .any(|(id, _)| id == &spec.id)
+        {
+            return Err(format!(
+                "a live peripheral named '{}' already exists",
+                spec.id
+            ));
+        }
+        let net = self
+            .sched
+            .net_nodes
+            .get(&spec.net)
+            .copied()
+            .ok_or_else(|| format!("board net '{}' does not exist", spec.net))?;
+        let to = match spec.to.as_deref() {
+            None | Some("") | Some("GND") | Some("gnd") | Some("0") => NodeId::GROUND,
+            Some(name) => self
+                .sched
+                .net_nodes
+                .get(name)
+                .copied()
+                .ok_or_else(|| format!("board net '{name}' does not exist"))?,
+        };
+        match spec.kind.as_str() {
+            "stimulus" => {
+                let offset = spec.offset.unwrap_or(0.0);
+                if !offset.is_finite() {
+                    return Err("stimulus offset must be finite".into());
+                }
+                let stimulus = Stimulus::voltage(
+                    self.sched.circuit_mut(),
+                    &spec.id,
+                    net,
+                    StimulusKind::Wave(SourceKind::Dc(offset)),
+                );
+                self.sched.attach_peripheral(Box::new(stimulus));
+            }
+            "pushbutton" => {
+                let bounce_ms = spec.bounce_ms.unwrap_or(5.0);
+                if !bounce_ms.is_finite() || bounce_ms < 0.0 {
+                    return Err("pushbutton bounce_ms must be finite and non-negative".into());
+                }
+                let button =
+                    Pushbutton::new(self.sched.circuit_mut(), &spec.id, net, to, bounce_ms);
+                self.sched.attach_peripheral(Box::new(button));
+                if spec.initial.unwrap_or(0.0) >= 0.5 {
+                    self.sched.set_peripheral(&spec.id, 1.0);
+                }
+            }
+            "toggle" => {
+                let closed = spec.initial.unwrap_or(0.0) >= 0.5;
+                let toggle = ToggleSwitch::new(self.sched.circuit_mut(), &spec.id, net, to, closed);
+                self.sched.attach_peripheral(Box::new(toggle));
+            }
+            other => {
+                return Err(format!(
+                    "live peripheral type '{other}' is not supported (expected stimulus|pushbutton|toggle)"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn attach_register_map(&mut self, spec: LiveRegisterMapSpec) -> Result<(), String> {
+        if spec.id.trim().is_empty() || spec.id.len() > 96 {
+            return Err("live register-map id must be 1..=96 characters".into());
+        }
+        if spec.spec_toml.is_empty() || spec.spec_toml.len() > 1_048_576 {
+            return Err("live register-map spec must be 1..=1048576 bytes".into());
+        }
+        if spec.inputs.len() > 256 {
+            return Err("live register-map spec has more than 256 input overrides".into());
+        }
+        if spec
+            .controller
+            .as_ref()
+            .is_some_and(|name| name.trim().is_empty() || name.len() > 96)
+        {
+            return Err("live register-map controller must be 1..=96 characters".into());
+        }
+        if self
+            .sched
+            .peripheral_infos()
+            .iter()
+            .any(|(id, _)| id == &spec.id)
+        {
+            return Err(format!(
+                "a live peripheral named '{}' already exists",
+                spec.id
+            ));
+        }
+
+        let mut sensor = RegisterMapSensor::from_toml(&spec.spec_toml)
+            .map_err(|error| format!("register-map spec refused: {error}"))?;
+        for (name, value) in &spec.inputs {
+            if !value.is_finite() {
+                return Err(format!("register-map input '{name}' must be finite"));
+            }
+            if sensor.input(name).is_none() {
+                return Err(format!(
+                    "register-map input '{name}' is not declared by the exact spec"
+                ));
+            }
+            sensor.set_input(name, *value);
+        }
+
+        match sensor.bus() {
+            Bus::I2c => {
+                if spec.controller.is_some() || spec.cs_net.is_some() {
+                    return Err(
+                        "an I2C register-map device must not set controller or cs_net".into(),
+                    );
+                }
+                let bus = Arc::new(Mutex::new(
+                    I2cBus::new(&spec.id).with_slave(Box::new(sensor)),
+                ));
+                self.sched.attach_i2c_bus(bus);
+            }
+            Bus::Spi => {
+                let resolved_cs = if let Some(net_name) = spec.cs_net.as_deref() {
+                    let net = self
+                        .sched
+                        .net_nodes
+                        .get(net_name)
+                        .copied()
+                        .ok_or_else(|| format!("board net '{net_name}' does not exist"))?;
+                    let pin = self.sched.pin_driving_node(net).ok_or_else(|| {
+                        format!(
+                            "SPI chip-select net '{net_name}' is not driven by a modeled MCU pin"
+                        )
+                    })?;
+                    Some(ResolvedCs {
+                        pin,
+                        net: Some(net),
+                        provenance: CsProvenance::SpecDeclared,
+                    })
+                } else {
+                    None
+                };
+                let bus = Arc::new(Mutex::new(SpiBus::new(&spec.id, Box::new(sensor))));
+                if let Some(controller) = spec.controller.as_deref() {
+                    self.sched.attach_spi_bus_on(controller, bus, resolved_cs);
+                } else {
+                    self.sched.attach_spi_bus(bus, resolved_cs);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The strict-abort streak, surfaced to the live server: once

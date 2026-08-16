@@ -58,6 +58,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 | File | Covers |
 |---|---|
 | [`models/MODELS.md`](models/MODELS.md) | Device models: built-in, SPICE, datasheet extraction |
+| [`models/BOARD_MODELING_WORKFLOW.md`](models/BOARD_MODELING_WORKFLOW.md) | Human-first browser/CLI model workflow, approvals, public-board journey, and multi-board regeneration |
 | [`models/PACKS.md`](models/PACKS.md) | Model-pack format: bundle + share model/sensor/logic data |
 
 **"How do I wire it into a pipeline?"**: [`ci/`](ci/)
@@ -114,7 +115,7 @@ hundred files in the development tree, and a release does not carry them. So
 | Path | Covers |
 |---|---|
 | [`../COMPLIANCE.md`](../COMPLIANCE.md) | Licence compliance, one row per shipped artifact and what redistributing it obliges |
-| [`../crates/hauksbee-mcp/README.md`](../crates/hauksbee-mcp/README.md) | The stdio MCP server: the five tools, install, and how to register it |
+| [`../crates/hauksbee-mcp/README.md`](../crates/hauksbee-mcp/README.md) | The stdio MCP server: the six tools, including read-only staged model coverage, install, and registration |
 | [`../agents/AGENTS.md`](../agents/AGENTS.md) | The agent-facing contract: JSON shapes, exit codes, full MCP tool schemas |
 
 Root: `START_HERE.md`, `PROJECT_LAYOUT.md`, `STYLE.md`, and this map.

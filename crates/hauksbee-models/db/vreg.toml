@@ -1,5 +1,41 @@
 # Voltage regulator models (LDO and switching).
 
+# Texas Instruments TLV1117-18 fixed 1.8 V LDO, as fitted at U4 on the pinned
+# MNT Pocket Reform motherboard source. The ideal-source vreg path models the
+# nominal DC rail only; it does not invent foldback, thermal shutdown, line/load
+# regulation, or transient behavior.
+# Primary source: TI TLV1117 datasheet SLVS561O Rev. O (June 2025),
+# https://www.ti.com/lit/ds/symlink/tlv1117.pdf
+[[models]]
+id = "tlv1117_18"
+kind = "vreg"
+description = "TI TLV1117-18 1.8V fixed LDO, 800mA (nominal DC model; protection/transients not modeled)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+
+[models.match]
+value_re = "(?i)^TLV1117-18(?:[A-Z0-9+._/-]*)?$"
+mpn_re = "(?i)^TLV1117-18(?:[A-Z0-9+._/-]*)?$"
+
+[models.params]
+vout = 1.8       # fixed output option, datasheet Recommended Operating Conditions
+dropout_v = 1.3 # maximum VDO at 800 mA, datasheet Detailed Description §6.1
+iq_a = 65.0e-6  # typical fixed-output new-chip IQ at IOUT=0 mA, datasheet §5.6
+warning = "[partial model] TLV1117-18 nominal 1.8 V DC rail and sourced ratings are modeled; foldback current limit, thermal shutdown, dropout-vs-load, line/load regulation, and transients are not modeled"
+
+[models.pins]
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+"4" = "out"     # exposed/tab output on the SOT-223 symbol
+
+[models.ratings]
+max_current_a = 0.8
+max_voltage_v = 15.0
+max_junction_temp_c = 125.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AMS1117-3.3: the LDO on more hobby boards than any other part, usually as the
 # 5 V-to-3.3 V step on a SOT-223 pad.
@@ -501,6 +537,10 @@ theta_ja_c_per_w = 189.4     # JEDEC-standard board, TSOT-23-5
 # max_power_w is deliberately absent: the datasheet publishes no package power
 # rating, only TJ(max) and theta_JA, and the thermal monitor derives the
 # junction temperature from those two directly.
+
+[models.coverage]
+implements = ["nominal_dc_regulation", "dropout_headroom", "quiescent_current", "continuous_current_rating", "junction_temperature_estimate"]
+missing = ["enable_gating", "current_limit", "load_dependent_dropout", "line_and_load_regulation", "psrr", "output_noise", "active_discharge", "thermal_shutdown"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # XC6206-3.3: Torex 200 mA, 1 uA-IQ CMOS LDO in SOT-23. The MCP1700-class part
@@ -1311,3 +1351,122 @@ max_current_a = 0.05   # IOUT guaranteed minimum. The 100 mA short-circuit figur
                        # is a TYPICAL with no min or max, and is a limit rather
                        # than a rating either way.
 max_voltage_v = 20.0   # VIN abs max
+
+# ── NCP1117-3.3, exact pedalboard value ────────────────────────────────────────
+# This is the fixed 3.3 V sibling of the source-audited 5 V entry above.  It is
+# built in because a reusable, exact datasheet card should not require a user to
+# discover and install a historical-campaign pack before a board can bind.
+[[models]]
+id = "ncp1117_3v3_sot223"
+kind = "vreg"
+description = "onsemi NCP1117 3.3V fixed LDO, 1A, SOT-223 (nominal DC model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.onsemi.com/pdf/datasheet/ncp1117-d.pdf"
+title = "onsemi NCP1117/NCP1117I/NCV1117 1.0 A Low-Dropout Positive Fixed and Adjustable Voltage Regulators"
+locator = "SOT-223 pin connections; 3.3 V electrical-characteristics rows; absolute maximum ratings"
+sha256 = "c4989ad7fef42829443273b0c87067450e66a78c68bb6c6fd73aa6ec80a36051"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.267
+high = 3.333
+unit = "V"
+kind = "specification-limits"
+basis = "onsemi NCP1117/D Rev.31 fixed-output accuracy +/-1.0% at the stated test conditions"
+
+[models.match]
+value_re = "(?i)^NCP1117-3[._]?3[_-]?SOT223$"
+
+[models.params]
+vout = 3.3
+dropout_v = 1.2
+iq_a = 0.006
+warning = "source-bound nominal DC regulator; startup, load-dependent dropout, current limiting and thermal shutdown are not modeled"
+
+[models.pins]
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0
+max_voltage_v = 20.0
+max_junction_temp_c = 150.0
+
+[models.coverage]
+implements = ["nominal_dc_regulation"]
+missing = ["startup_transient", "dropout_curve", "current_limit", "thermal_shutdown"]
+
+# ── AP64501SP-13, averaged source-bound buck model ──────────────────────────
+# The executable slice derives the command from the board's real FB divider,
+# honors EN, enforces the published current ceiling, and reflects input power.
+# Switching-frequency waveform physics and protection modes remain explicit
+# coverage gaps rather than guessed behavior.
+[[models]]
+id = "ap64501sp_13"
+kind = "vreg"
+description = "Diodes AP64501SP-13 5A 40V synchronous buck (averaged feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP64501.pdf"
+title = "Diodes Incorporated AP64501 40V 5A synchronous buck converter"
+locator = "Pin descriptions; electrical characteristics; feedback-voltage and enable-threshold rows"
+sha256 = "71e2d1e8b53137e82fac54fc23a79a96882cc2c320c2227b783f66f5abf81d65"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.792
+high = 0.808
+unit = "V"
+kind = "specification-limits"
+basis = "AP64501 DS41980 electrical characteristics, CCM over the recommended operating range"
+
+[models.match]
+value_re = "(?i)^AP64501SP-13$"
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback and EN are executable; switching ripple, loop stability, soft-start, PFM/LDO modes and protection transients are not modeled"
+
+[models.pins]
+"1" = "bst"
+"2" = "in"
+"3" = "en"
+"4" = "ss"
+"5" = "fb"
+"6" = "comp"
+"7" = "gnd"
+"8" = "sw"
+"9" = "gnd_ep"
+
+[models.ratings]
+max_current_a = 5.0
+max_voltage_v = 40.0
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 40.0
+iout_limit_a = 5.0
+efficiency = 0.90
+out_r_ohms = 0.02
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.800
+relaxation_gain = 4.0
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.25
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power"]
+missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_ldo_modes", "cycle_by_cycle_peak_limit", "ovp", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]

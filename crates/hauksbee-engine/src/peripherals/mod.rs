@@ -46,7 +46,32 @@ pub use i2c::{Bme280, Eeprom24c, I2cBus, I2cSlave};
 pub use load::DynamicLoad;
 pub use register_map::RegisterMapSensor;
 pub use sink::VcdSink;
-pub use spi::{CsProvenance, Mcp3008, ResolvedCs, Spi25Eeprom, SpiBus, SpiFramingMode, SpiSlave};
+pub use spi::{
+    CsProvenance, Mcp3008, ResolvedCs, Spi25Eeprom, SpiBus, SpiFramingMode, SpiNorFlash, SpiSlave,
+};
+
+/// Firmware-visible work performed by one bus slave since the previous analog
+/// chunk. Model-owned peripheral power uses this typed signal to select the
+/// datasheet's idle/read/write current; no command strings or board references
+/// leak into the electrical scheduler.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BusActivity {
+    pub read_units: u64,
+    pub write_units: u64,
+    pub other_units: u64,
+}
+
+impl BusActivity {
+    pub fn merge(&mut self, other: Self) {
+        self.read_units = self.read_units.saturating_add(other.read_units);
+        self.write_units = self.write_units.saturating_add(other.write_units);
+        self.other_units = self.other_units.saturating_add(other.other_units);
+    }
+
+    pub fn is_idle(self) -> bool {
+        self.read_units == 0 && self.write_units == 0 && self.other_units == 0
+    }
+}
 
 /// Context handed to a peripheral each chunk so it can read the solved circuit
 /// and command its driver. Kept small and borrow-friendly.

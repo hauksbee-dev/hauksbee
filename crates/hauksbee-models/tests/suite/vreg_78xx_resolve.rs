@@ -37,3 +37,44 @@ fn seven_eight_xx_family_resolves_to_its_own_voltage() {
         );
     }
 }
+
+/// The exact MNT Pocket Reform U4 value gets a source-bound nominal rail model,
+/// while another fixed-output option remains unresolved rather than silently
+/// inheriting 1.8 V.  The warning is part of the model contract: this is a
+/// steady-state DC slice, not a claim about protection or transients.
+#[test]
+fn mnt_pocket_tlv1117_18_is_voltage_specific_and_explicitly_partial() {
+    let lib = ModelLibrary::builtin();
+
+    let red = lib.resolve(&ComponentQuery {
+        value: Some("TLV1117-33".into()),
+        ..Default::default()
+    });
+    assert!(
+        red.model.is_none(),
+        "the unfitted TLV1117-33 option must stay unresolved (RED)"
+    );
+
+    let green = lib.resolve(&ComponentQuery {
+        value: Some("TLV1117-18".into()),
+        mpn: Some("TLV1117-18CDCYR".into()),
+        ..Default::default()
+    });
+    let model = green
+        .model
+        .expect("the exact MNT TLV1117-18 must resolve (GREEN)");
+    assert_eq!(model.id, "tlv1117_18");
+    assert_eq!(model.params.get_f64("vout"), Some(1.8));
+    assert_eq!(model.params.get_f64("dropout_v"), Some(1.3));
+    assert_eq!(model.params.get_f64("iq_a"), Some(65.0e-6));
+    assert_eq!(model.ratings.max_current_a, Some(0.8));
+    assert_eq!(model.ratings.max_voltage_v, Some(15.0));
+    assert_eq!(model.ratings.max_junction_temp_c, Some(125.0));
+    assert_eq!(model.pins.len(), 4);
+    let warning = model
+        .params
+        .get_str("warning")
+        .expect("the nominal-only model must carry an explicit behavior caveat");
+    assert!(warning.starts_with("[partial model] "));
+    assert!(warning.contains("not modeled"));
+}
