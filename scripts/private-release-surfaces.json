@@ -33,6 +33,7 @@
     {"path": "editors/vscode-hauksbee-board/package.json", "classification": "package-metadata", "occurrences": 1},
     {"path": "editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json", "classification": "generated-integration", "occurrences": 1},
     {"path": "frontend/capture/cards.ts", "classification": "generated-integration", "occurrences": 1, "scopes": ["development"]},
+    {"path": "frontend/tests/ci-wiring.test.ts", "classification": "generated-integration-regression", "occurrences": 1, "required_fragments": ["uses: hauksbee-dev/hauksbee/integrations/github-action@"]},
     {"path": "frontend/src/demo/DemoApp.tsx", "classification": "generated-integration", "occurrences": 1},
     {"path": "frontend/src/lib/version.ts", "classification": "generated-integration", "occurrences": 1, "required_fragments": ["ACTION_REPOSITORY = 'hauksbee-dev/hauksbee'"]},
     {"path": "integrations/github-action/README.md", "classification": "integration-documentation", "occurrences": 6},
