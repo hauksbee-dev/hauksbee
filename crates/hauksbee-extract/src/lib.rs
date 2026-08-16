@@ -80,7 +80,7 @@ pub use eagle_sch::{
     declared_net_ties, looks_like_eagle_schematic, schematic_part_identities,
     schematic_pin_net_identities, DeclaredNetTie, SchematicPartIdentity, SchematicPinNetIdentity,
 };
-pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
+pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity, DNP_PULLUP_MESSAGE_MARKER};
 pub use si::{
     cl_board_pf, cl_series, i2c_rise_time_ns, render_si, routed_length_mm, SiCheck, SiFinding,
     SiReport, SiSeverity,
