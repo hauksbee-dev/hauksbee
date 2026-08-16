@@ -296,11 +296,10 @@ async function main() {
     const yml = readFileSync(ymlPath, 'utf8')
     ok('the workflow fetches the private Action at the exact release commit',
       /repository:\s*hauksbee-dev\/hauksbee/.test(yml)
-        && /ref:\s*[0-9a-f]{40}/.test(yml)
         && /hauksbee-ref:\s*[0-9a-f]{40}/.test(yml)
         && /hauksbee-version:\s*v\d/.test(yml)
         && /persist-credentials:\s*false/.test(yml)
-        && /uses:\s*\.\/\.hauksbee-action\/integrations\/github-action/.test(yml)
+        && /uses:\s*hauksbee-dev\/hauksbee\/integrations\/github-action@[0-9a-f]{40}/.test(yml)
         && /permissions:\s*\n\s*contents:\s*read\s*\n\s*checks:\s*write/.test(yml))
   }
 

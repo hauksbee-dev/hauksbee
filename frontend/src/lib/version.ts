@@ -28,6 +28,3 @@ export const RELEASE_COMMIT: string =
  * reader to match the hauksbee they actually have installed.
  */
 export const ACTION_REPOSITORY = 'hauksbee-dev/hauksbee'
-
-/** Secret reference emitted into generated workflows, never a secret value. */
-export const PRIVATE_TOKEN_SECRET = '${{ secrets.HAUKSBEE_READ_TOKEN }}'

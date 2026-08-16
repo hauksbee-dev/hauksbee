@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # test-install-mock.sh - prove the get-hauksbee.sh download/verify/install flow
-# end to end WITHOUT a public release, by mocking GitHub's release endpoints
-# locally. Lets us validate the install "links and all that" while the repo
-# stays private.
+# end to end WITHOUT touching a live release, by mocking GitHub's release
+# endpoints locally. Covers the tokenless public default and the optional
+# with-token path.
 #
 # What it does:
 #   1. Builds the real distributable bundle (scripts/bundle.sh) for THIS platform.
@@ -79,29 +79,52 @@ if [ "$SHAPE" = permissive ]; then
 fi
 
 echo "==> Laying out mock GitHub tree"
+# The mock mirrors the real API contract the installer depends on: an
+# immutable release document whose assets carry GitHub's server-side sha256
+# digests, plus the /commits/<tag> endpoint that resolves the tag to the one
+# source commit the staged binaries must attest.
+RELEASE_SHA="$(git -C "$ROOT" rev-parse HEAD)"
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}';
+  else sha256sum "$1" | awk '{print $1}'; fi
+}
 mkdir -p "$MOCK/repos/${REPO}/releases/assets" \
+         "$MOCK/repos/${REPO}/commits" \
          "$MOCK/raw"
-printf '{"tag_name":"%s","assets":[{"name":"%s.tar.gz","url":"http://127.0.0.1:%s/repos/%s/releases/assets/101"},{"name":"%s.tar.gz.sha256","url":"http://127.0.0.1:%s/repos/%s/releases/assets/102"}' \
-  "$TAG" "$ASSET" "$PORT" "$REPO" "$ASSET" "$PORT" "$REPO" \
-  > "$MOCK/repos/${REPO}/releases/latest"
+printf '{"sha":"%s"}\n' "$RELEASE_SHA" > "$MOCK/repos/${REPO}/commits/${TAG}"
+{
+  printf '{"tag_name":"%s","immutable":true,"assets":[' "$TAG"
+  printf '{"name":"%s.tar.gz","digest":"sha256:%s","url":"http://127.0.0.1:%s/repos/%s/releases/assets/101"}' \
+    "$ASSET" "$(sha256_of "$TARBALL")" "$PORT" "$REPO"
+  printf ',{"name":"%s.tar.gz.sha256","digest":"sha256:%s","url":"http://127.0.0.1:%s/repos/%s/releases/assets/102"}' \
+    "$ASSET" "$(sha256_of "$TARBALL.sha256")" "$PORT" "$REPO"
+  if [ "$SHAPE" = permissive ]; then
+    printf ',{"name":"%s-permissive.tar.gz","digest":"sha256:%s","url":"http://127.0.0.1:%s/repos/%s/releases/assets/103"}' \
+      "$ASSET" "$(sha256_of "$TARBALL_PERM")" "$PORT" "$REPO"
+    printf ',{"name":"%s-permissive.tar.gz.sha256","digest":"sha256:%s","url":"http://127.0.0.1:%s/repos/%s/releases/assets/104"}' \
+      "$ASSET" "$(sha256_of "$TARBALL_PERM.sha256")" "$PORT" "$REPO"
+  fi
+  printf ']}\n'
+} > "$MOCK/repos/${REPO}/releases/latest"
 cp "$TARBALL" "$MOCK/repos/${REPO}/releases/assets/101"
 cp "$TARBALL.sha256" "$MOCK/repos/${REPO}/releases/assets/102"
 if [ "$SHAPE" = permissive ]; then
-  printf ',{"name":"%s-permissive.tar.gz","url":"http://127.0.0.1:%s/repos/%s/releases/assets/103"},{"name":"%s-permissive.tar.gz.sha256","url":"http://127.0.0.1:%s/repos/%s/releases/assets/104"}' \
-    "$ASSET" "$PORT" "$REPO" "$ASSET" "$PORT" "$REPO" \
-    >> "$MOCK/repos/${REPO}/releases/latest"
   cp "$TARBALL_PERM" "$MOCK/repos/${REPO}/releases/assets/103"
   cp "$TARBALL_PERM.sha256" "$MOCK/repos/${REPO}/releases/assets/104"
 fi
-printf ']}\n' >> "$MOCK/repos/${REPO}/releases/latest"
 cp "$HERE/get-hauksbee.sh" "$MOCK/raw/get-hauksbee.sh"
 
-# The negative-test tree: the SAME release, but the tarball is corrupted after
-# the genuine checksum was taken. Served under bad/ so the URL bases select it.
+# The negative-test tree: the SAME release document (genuine digests and
+# checksum), but the served tarball bytes are corrupted afterwards, the way a
+# tampered or truncated download would arrive. Served under bad/ so the URL
+# bases select it.
 echo "==> Laying out the corrupted mock tree (negative test)"
-mkdir -p "$MOCK/bad/repos/${REPO}/releases/assets"
-printf '{"tag_name":"%s","assets":[{"name":"%s.tar.gz","url":"http://127.0.0.1:%s/bad/repos/%s/releases/assets/201"},{"name":"%s.tar.gz.sha256","url":"http://127.0.0.1:%s/bad/repos/%s/releases/assets/202"}]}\n' \
-  "$TAG" "$ASSET" "$PORT" "$REPO" "$ASSET" "$PORT" "$REPO" \
+mkdir -p "$MOCK/bad/repos/${REPO}/releases/assets" \
+         "$MOCK/bad/repos/${REPO}/commits"
+printf '{"sha":"%s"}\n' "$RELEASE_SHA" > "$MOCK/bad/repos/${REPO}/commits/${TAG}"
+printf '{"tag_name":"%s","immutable":true,"assets":[{"name":"%s.tar.gz","digest":"sha256:%s","url":"http://127.0.0.1:%s/bad/repos/%s/releases/assets/201"},{"name":"%s.tar.gz.sha256","digest":"sha256:%s","url":"http://127.0.0.1:%s/bad/repos/%s/releases/assets/202"}]}\n' \
+  "$TAG" "$ASSET" "$(sha256_of "$TARBALL")" "$PORT" "$REPO" \
+  "$ASSET" "$(sha256_of "$TARBALL.sha256")" "$PORT" "$REPO" \
   > "$MOCK/bad/repos/${REPO}/releases/latest"
 cp "$TARBALL.sha256" "$MOCK/bad/repos/${REPO}/releases/assets/202"
 cp "$TARBALL" "$MOCK/bad/repos/${REPO}/releases/assets/201"
@@ -116,10 +139,16 @@ for _ in $(seq 1 30); do
   sleep 0.2
 done
 
-echo "==> Running the README curl|bash install against the mock"
+echo "==> Running the README curl|bash install against the mock (tokenless, the public default)"
 export HAUKSBEE_API_BASE="http://127.0.0.1:${PORT}/repos/${REPO}"
-export HAUKSBEE_GITHUB_TOKEN="mock-private-token"
+unset HAUKSBEE_GITHUB_TOKEN GITHUB_TOKEN GH_TOKEN 2>/dev/null || true
 curl -fsSL "http://127.0.0.1:${PORT}/raw/get-hauksbee.sh" | bash -s -- --prefix "$PREFIX"
+
+echo "==> Running the install again WITH a token (rate-limit / private-mirror path)"
+PREFIX_TOKEN="$WORK/prefix-token"
+HAUKSBEE_GITHUB_TOKEN="mock-optional-token" \
+  bash "$HERE/get-hauksbee.sh" --prefix "$PREFIX_TOKEN"
+"$PREFIX_TOKEN/bin/hauksbee" --version
 
 echo "==> Verifying the installed binaries run"
 "$PREFIX/bin/hauksbee" --version
@@ -160,4 +189,4 @@ done
 echo "    refused, and nothing was installed. Good."
 
 echo ""
-echo "PASS: get-hauksbee.sh installed and ran from a mocked private release."
+echo "PASS: get-hauksbee.sh installed and ran from a mocked public release."
