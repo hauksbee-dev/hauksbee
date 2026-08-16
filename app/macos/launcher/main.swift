@@ -4,10 +4,10 @@
 // Terminal window) that starts the bundled `hauksbee serve` as a child and
 // ties the server's lifetime to the app's:
 //
-//   - launch: spawn Contents/MacOS/hauksbee serve. The child's stdout is a
-//     pipe, not a TTY, so serve's headless-launch detection auto-opens the
-//     system browser at the real bound URL. The launcher itself opens no
-//     windows; the browser tab IS the UI.
+//   - launch: spawn Contents/Resources/bin/hauksbee serve. The launcher sets
+//     HAUKSBEE_EXIT_WITH_PARENT, which is also serve's launched-by-app
+//     signal, so serve auto-opens the system browser at the real bound URL.
+//     The launcher itself opens no windows; the browser tab IS the UI.
 //   - quit (Cmd-Q, Dock right-click > Quit): applicationWillTerminate sends
 //     SIGTERM to the child and waits for it, so the server never outlives the
 //     app. No orphaned processes.
@@ -47,11 +47,15 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         var env = ProcessInfo.processInfo.environment
         env["HAUKSBEE_EXIT_WITH_PARENT"] = String(ProcessInfo.processInfo.processIdentifier)
         proc.environment = env
-        // Pipes, not the launcher's (nonexistent) TTY: serve sees a non-TTY
-        // stdout and auto-opens the browser at whatever port it really bound.
+        // Not Pipes: nobody reads a launcher-held Pipe, so a chatty server
+        // would eventually fill the 64 KB pipe buffer and block mid-write.
+        // stdout goes to /dev/null (still a non-TTY; browser auto-open keys
+        // on HAUKSBEE_EXIT_WITH_PARENT anyway). stderr goes to a log file so
+        // a server that dies after launch leaves a diagnostic instead of a
+        // silently vanishing Dock icon; a plain file can never fill a pipe.
         proc.standardInput = FileHandle.nullDevice
-        proc.standardOutput = Pipe()
-        proc.standardError = Pipe()
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = serveLogHandle() ?? FileHandle.nullDevice
         proc.terminationHandler = { _ in
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }
@@ -70,6 +74,25 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         proc.terminationHandler = nil
         proc.terminate() // SIGTERM
         proc.waitUntilExit()
+    }
+
+    /// ~/Library/Logs/Hauksbee/serve.log, truncated per launch so it records
+    /// the current run and cannot grow without bound. nil on any failure; the
+    /// caller falls back to /dev/null.
+    private func serveLogHandle() -> FileHandle? {
+        let fm = FileManager.default
+        guard let library = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let dir = library.appendingPathComponent("Logs/Hauksbee", isDirectory: true)
+        let log = dir.appendingPathComponent("serve.log")
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            fm.createFile(atPath: log.path, contents: Data())
+            return try FileHandle(forWritingTo: log)
+        } catch {
+            return nil
+        }
     }
 
     private func presentFailure(_ message: String) {
