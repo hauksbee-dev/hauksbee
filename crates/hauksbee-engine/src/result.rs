@@ -155,8 +155,14 @@ pub struct BindSummary {
     pub resolved: usize,
     pub unresolved: usize,
     pub non_ignored: usize,
-    /// `"M/N"`, active ICs (MCU + U/IC-prefixed parts) that bound, over the
-    /// total active ICs on the board. The metric, not a bare percentage.
+    /// `"M/N"`, active ICs (MCU + U/IC-prefixed parts) with executable device
+    /// behaviour bound, over the total active ICs discovered on the board.
+    /// This is deliberately **not extraction coverage**: every member of the
+    /// denominator was already extracted with its reference/value/pads/nets.
+    /// Identity-only or static-contract-only model cards remain outside `M`
+    /// until they can actually participate in the electrical simulation.
+    /// Retain the existing field name for schema compatibility; renderers must
+    /// label it as behavioural model coverage rather than generic "binding".
     pub critical_parts_bound: String,
     pub critical_parts_bound_n: usize,
     pub critical_parts_total: usize,
@@ -343,11 +349,11 @@ impl BindSummary {
         };
         let _ = writeln!(
             s,
-            "\nbind summary: {} of {} non-ignored parts resolved; Critical parts modelled: {} of {} ({})",
-            self.resolved,
+            "\nbind summary: extracted {} non-ignored parts; {} have executable/fallback models. Critical active devices discovered: {}; executable behavioural models: {} ({})",
             self.non_ignored,
-            self.critical_parts_bound_n,
+            self.resolved,
             self.critical_parts_total,
+            self.critical_parts_bound,
             mcu_state,
         );
         // Surface the same union the web/json personas do: active ICs that are
@@ -2245,6 +2251,9 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::MissingI2cPullup => {
             "Add a 2.2k-10k pull-up from the I2C line to its power rail (one per SDA and SCL)."
         }
+        LintCheck::MissingSdPullup => {
+            "Add a 10k-100k pull-up from the SD line to the card's supply rail (the SD spec asks for one on CMD and each DAT line)."
+        }
         LintCheck::FloatingControlPin => {
             "Tie the pin to a defined level with a pull-up/pull-down per the datasheet, or drive it from a known output."
         }
@@ -2578,6 +2587,16 @@ mod tests {
         assert!(
             banner.contains("U1"),
             "the resolved-but-open active IC must be named: {banner}"
+        );
+        assert!(
+            banner.contains(
+                "Critical active devices discovered: 1; executable behavioural models: 1/1"
+            ),
+            "the banner must distinguish CAD discovery from behavioural coverage: {banner}"
+        );
+        assert!(
+            !banner.contains("Critical parts modelled"),
+            "the old label made behavioural coverage look like extraction coverage: {banner}"
         );
         // And the shared union helper the personas consume counts it.
         assert_eq!(coverage_open_active_refs(&s), vec!["U1".to_string()]);
