@@ -292,13 +292,35 @@ pub fn is_zero_ohm_link(comp: &Component) -> bool {
         return true;
     }
     // A resistance at or under the link threshold: "0", "0R", "0.0", "R010".
+    // The unit-less spellings need one more filter: "100n" or "22p" parses
+    // with no unit and a sub-unity SI value, but no discrete resistor is ever
+    // written with a bare p/n/µ multiplier; those are the capacitor BOM
+    // spellings, and calling a DNP decoupling cap a "near 0 ohm link" is a
+    // false statement about the board. When the part's own evidence ladder
+    // says capacitor/inductor, it is not a link whatever the number parses to.
+    if matches!(
+        crate::part_class::classify_two_terminal(comp),
+        crate::part_class::PartClass::Passive(
+            hauksbee_models::schema::PassiveClass::Capacitor
+                | hauksbee_models::schema::PassiveClass::Inductor
+        )
+    ) {
+        return false;
+    }
     match hauksbee_models::value::parse_value(value) {
         Some(v) => {
             let is_ohms = v.unit.as_deref().is_none_or(|u| {
                 let u = u.to_ascii_lowercase();
                 u == "r" || u == "ohm" || u == "ohms" || u == "\u{3a9}"
             });
-            is_ohms && v.si <= LINK_OHMS
+            // A bare sub-unity SI-multiplier spelling with no unit ("100n",
+            // "4u7") is a capacitance/inductance, not a milliohm resistor.
+            let bare_si_multiplier = v.unit.is_none()
+                && v.si < 1.0
+                && value
+                    .chars()
+                    .any(|ch| matches!(ch, 'p' | 'n' | 'u' | 'µ' | 'P' | 'N' | 'U'));
+            is_ohms && v.si <= LINK_OHMS && !bare_si_multiplier
         }
         None => false,
     }
@@ -565,5 +587,46 @@ mod jumper_class_tests {
         assert!(!is_jumper_or_net_tie(&comp(
             "C3", "100n", "Device:C", "C_0402"
         )));
+    }
+
+    /// "100n" parses unit-less to 1e-7, which sat under the link threshold
+    /// and called every DNP decoupling cap a "near 0 ohm link" (printed as a
+    /// false statement about the board on real fixtures). Capacitor spellings
+    /// and capacitor-classified parts are never links; real link spellings
+    /// still are.
+    #[test]
+    fn capacitor_values_are_not_zero_ohm_links() {
+        use super::is_zero_ohm_link;
+        let two_pins = |mut c: Component| {
+            c.pins = vec![
+                crate::Pin {
+                    number: "1".into(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                },
+                crate::Pin {
+                    number: "2".into(),
+                    net: Some(2),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                },
+            ];
+            c
+        };
+        for value in ["100n", "22p", "10u", "4u7", "1n"] {
+            assert!(
+                !is_zero_ohm_link(&two_pins(comp("C16", value, "Device:C", "C_0402"))),
+                "a {value} capacitor is not a near-zero-ohm link"
+            );
+        }
+        for value in ["0", "0R", "0.0", "R010", "0R0"] {
+            assert!(
+                is_zero_ohm_link(&two_pins(comp("R7", value, "Device:R", "R_0402"))),
+                "{value} is a link"
+            );
+        }
     }
 }
