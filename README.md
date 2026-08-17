@@ -200,14 +200,16 @@ to that denominator. Reproduce the matrix with the commands in
 
 [`qc/defect_regressions/`](qc/defect_regressions/) adds exact public
 parent/fix bytes as a growing two-sided suite. The current combined receipt
-runs seven pairs against hash-pinned executables. Two are true RED-to-GREEN
+runs eight pairs against hash-pinned executables. Two are true RED-to-GREEN
 pairs: Watchy (firmware/electrical), and the GLR all2can CAN node, where the
 upstream "add missing pull down resistor for swd" fix is discriminated by a
 plain user assertion (`SWCLK` rests low): the parent's floating net fails red
 with the missing pull named, and the fix's own R33 turns the same assertion
 into a qualified green. C64-Saver, ZSWatch, FPV Controller, LibreSolar
-MPPT2420, and the RockSat-X RSXVT2026 camera board (missing uSD CMD/DAT0
-pull-ups, caught by `missing_sd_pullup`) are qualified detector pairs whose
+MPPT2420, the RockSat-X RSXVT2026 camera board (missing uSD CMD/DAT0
+pull-ups, caught by `missing_sd_pullup`), and the mito keyboard's BQ24075
+safety-timer resistor (a 4.7k-for-47k typo decoding outside every datasheet
+band, caught by `device_decode`) are qualified detector pairs whose
 targeted findings disappear while the fixed board remains coverage-invalid or
 retains unrelated failures. The
 harness never launders `FAIL -> INVALID` or `FAIL -> unrelated FAIL` into

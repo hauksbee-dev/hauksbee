@@ -1595,41 +1595,108 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
     }
 
     // ── Vias (multi-layer discs) ────────────────────────────────────────────
+    // KiCad 7+ vias can carry `(remove_unused_layers yes)`: the annular ring
+    // is stripped on every layer the via does not connect on, keeping only
+    // the bare drilled barrel there. A layer is "used" (keeps its full-size
+    // ring) when it is an END layer under `(keep_end_layers yes)`, when it is
+    // named in `(zone_layer_connections ...)` (the zones that connect), or
+    // when a track/arc on that layer lands on the via. Modeling the removed
+    // ring at FULL size fabricated phantom clearance findings and even
+    // phantom "shorts" against inner-layer copper the real board never
+    // touches (a board with 400 unused-layer stitching vias produced 7 false
+    // SERIOUS shorts); the honest model on a ring-removed layer is the drill
+    // barrel itself, which still owns its hole-to-copper spacing.
+    let track_touch: std::collections::HashMap<String, Vec<(f64, f64)>> = {
+        let mut map: std::collections::HashMap<String, Vec<(f64, f64)>> =
+            std::collections::HashMap::new();
+        for seg in root.find_all("segment").chain(root.find_all("arc")) {
+            let layer = seg.find_value("layer").unwrap_or_default();
+            if !layer.ends_with(".Cu") {
+                continue;
+            }
+            let entry = map.entry(layer).or_default();
+            if let Some(p) = xy_pair(seg, "start") {
+                entry.push(p);
+            }
+            if let Some(p) = xy_pair(seg, "end") {
+                entry.push(p);
+            }
+        }
+        map
+    };
     for via in root.find_all("via") {
         let Some(at) = xy_pair(via, "at") else {
             continue;
         };
         let size = via.find_f64("size").unwrap_or(0.0);
+        let drill = via.find_f64("drill").unwrap_or(size);
         let Some(net) = nets.net_ref(via) else {
             continue;
         };
-        let layer_token = via
+        // `(layers "F.Cu" "B.Cu")` names only the via's END layers; the
+        // barrel physically passes through every copper layer between them.
+        // Expand the named span across the board's ordered copper stack so
+        // inner-layer copper (In1.Cu, ...) is tested too, mirroring how pads
+        // reach all layers via expand_layers.
+        let end_layers: Vec<String> = via
             .find("layers")
-            .and_then(|l| {
-                // `(layers "F.Cu" "B.Cu")` names only the via's END layers; the
-                // barrel physically passes through every copper layer between
-                // them. Expand the named span across the board's ordered
-                // copper stack so inner-layer copper (In1.Cu, ...) is tested
-                // too, mirroring how pads reach all layers via expand_layers.
-                let names: Vec<String> = (0..)
+            .map(|l| {
+                (0..)
                     .map_while(|i| l.arg_value(i))
                     .filter(|n| n.ends_with(".Cu"))
-                    .collect();
-                if names.is_empty() {
-                    None
-                } else {
-                    Some(via_layer_span(&names, &copper_layers))
-                }
+                    .collect()
             })
-            .unwrap_or_else(|| copper_layers.clone());
-        let disc = Capsule {
-            ax: at.0,
-            ay: at.1,
-            bx: at.0,
-            by: at.1,
-            r: size / 2.0,
+            .unwrap_or_default();
+        let layer_token = if end_layers.is_empty() {
+            copper_layers.clone()
+        } else {
+            via_layer_span(&end_layers, &copper_layers)
+        };
+        // A bare `(remove_unused_layers)` and `(remove_unused_layers yes)`
+        // both mean removal; only an explicit `no` (or absence) keeps every
+        // ring, matching what KiCad writes across 7.x/8.x/9.x.
+        let flag_on = |name: &str| {
+            via.find(name)
+                .is_some_and(|n| n.arg_value(0).map(|v| v != "no").unwrap_or(true))
+        };
+        let remove_unused = flag_on("remove_unused_layers");
+        let keep_ends = flag_on("keep_end_layers");
+        let zone_conn: Vec<String> = via
+            .find("zone_layer_connections")
+            .map(|l| (0..).map_while(|i| l.arg_value(i)).collect())
+            .unwrap_or_default();
+        let ring_present = |layer: &String| {
+            if !remove_unused {
+                return true;
+            }
+            if keep_ends && end_layers.contains(layer) {
+                return true;
+            }
+            if zone_conn.contains(layer) {
+                return true;
+            }
+            track_touch
+                .get(layer)
+                .is_some_and(|points| {
+                    let reach = (size / 2.0).max(0.01);
+                    points
+                        .iter()
+                        .any(|(x, y)| (x - at.0).hypot(y - at.1) <= reach)
+                })
         };
         for layer in &layer_token {
+            let r = if ring_present(layer) {
+                size / 2.0
+            } else {
+                drill / 2.0
+            };
+            let disc = Capsule {
+                ax: at.0,
+                ay: at.1,
+                bx: at.0,
+                by: at.1,
+                r,
+            };
             buckets.push(
                 layer,
                 make_prim(Shape::Capsule(disc), net, ItemKind::Via, String::new()),

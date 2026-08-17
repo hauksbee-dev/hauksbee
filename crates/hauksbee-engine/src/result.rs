@@ -1156,6 +1156,11 @@ pub struct DrcGroup {
     pub min_gap_loc_mm: [f64; 2],
     /// The clearance rule for this pair (mm).
     pub rule_mm: f64,
+    /// What pair of copper objects the tightest gap is between ("via \u{2194}
+    /// zone", "track \u{2194} pad"), so a reader knows what to look AT before
+    /// panning to the coordinates. Diagnosability is the point: a via-related
+    /// finding sends the reader to the via's layer settings, not to rerouting.
+    pub between: String,
     /// Human one-line description (`self.label()`), serialized so `--json`
     /// consumers get the same text the human/`--plain` renderers show.
     pub plain: String,
@@ -1181,13 +1186,14 @@ impl DrcGroup {
             )
         } else if self.below_count == self.count {
             format!(
-                "{} vs {}: {} on {}, below the {:.3} mm clearance rule (tightest {:.3} mm)",
+                "{} vs {}: {} on {}, below the {:.3} mm clearance rule (tightest {:.3} mm, {})",
                 self.net_a,
                 self.net_b,
                 loc(self.count),
                 self.layer,
                 self.rule_mm,
-                self.min_gap_mm
+                self.min_gap_mm,
+                self.between
             )
         } else {
             // Mixed: some below, the remainder exactly at the limit.
@@ -1249,7 +1255,14 @@ impl DrcStructured {
         #[allow(clippy::type_complexity)]
         let mut groups: BTreeMap<
             (String, String, String),
-            (usize, usize, f64, f64, [f64; 2]),
+            (
+                usize,
+                usize,
+                f64,
+                f64,
+                [f64; 2],
+                (hauksbee_extract::ItemKind, hauksbee_extract::ItemKind),
+            ),
         > = BTreeMap::new();
 
         // On an unvalidated board format (KiCad 10+) the shorts may be phantom, so
@@ -1333,16 +1346,20 @@ impl DrcStructured {
                         f64::INFINITY,
                         f.required_clearance_mm,
                         [f.x, f.y],
+                        (f.item_a.kind, f.item_b.kind),
                     ));
                     e.0 += 1;
                     if below {
                         e.1 += 1;
                     }
-                    // Track the tightest gap AND where it is, so the group can
-                    // point a UI at its worst spot.
+                    // Track the tightest gap AND where it is (and what pair of
+                    // objects it is between), so the group can point a UI at
+                    // its worst spot and the reader knows whether to look at a
+                    // via, a track, or a zone fill.
                     if f.gap_mm < e.2 {
                         e.2 = f.gap_mm;
                         e.4 = [f.x, f.y];
+                        e.5 = (f.item_a.kind, f.item_b.kind);
                     }
                     e.3 = f.required_clearance_mm;
                 }
@@ -1351,7 +1368,9 @@ impl DrcStructured {
 
         let mut violations = Vec::new();
         let mut at_limit = Vec::new();
-        for ((net_a, net_b, layer), (count, below_count, min_gap, rule, min_gap_loc)) in groups {
+        for ((net_a, net_b, layer), (count, below_count, min_gap, rule, min_gap_loc, kinds)) in
+            groups
+        {
             let any_below = below_count > 0;
             let mut group = DrcGroup {
                 net_a,
@@ -1363,6 +1382,7 @@ impl DrcStructured {
                 min_gap_mm: if min_gap.is_finite() { min_gap } else { rule },
                 min_gap_loc_mm: min_gap_loc,
                 rule_mm: rule,
+                between: format!("{} \u{2194} {}", kinds.0.as_str(), kinds.1.as_str()),
                 plain: String::new(),
                 fix: String::new(),
             };
@@ -2507,6 +2527,7 @@ mod tests {
             net_a: "A".into(),
             net_b: "B".into(),
             layer: "F.Cu".into(),
+            between: "track \u{2194} via".into(),
             count: 3,
             below_count: 3,
             at_limit: false,

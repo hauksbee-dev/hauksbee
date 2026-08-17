@@ -18,9 +18,11 @@
 //! "decode any config pin" engine, because each part has its own pins, its own
 //! band table, and its own consistency rules (e.g. the CYPD3177's VBUS_MIN >
 //! VBUS_MAX override). Each supported part is a hand-written decoder seeded from
-//! its datasheet. Today exactly one part is seeded: the Cypress / Infineon
-//! **CYPD3177** (EZ-PD BCR) USB-C PD sink controller. Adding a second part means
-//! adding a second decoder; this is by design, not a stub.
+//! its datasheet. Two parts are seeded today: the Cypress / Infineon
+//! **CYPD3177** (EZ-PD BCR) USB-C PD sink controller, and the TI **BQ2407x**
+//! charger family's TMR safety-timer resistor (an out-of-band value found as
+//! a real 4.7k-for-47k typo on a published keyboard). Adding a part means
+//! adding a decoder; this is by design, not a stub.
 //!
 //! ## Zero-false-positive discipline (binding)
 //!
@@ -386,16 +388,104 @@ fn leg_resistor_to_ground(board: &ExtractedBoard, node: i64) -> Option<(String, 
     None
 }
 
-/// Run the device-decode check class over a board. Currently seeded with the
-/// CYPD3177; each `is_cypd3177` part is decoded independently.
+/// Run the device-decode check class over a board. Seeded parts: the
+/// CYPD3177 USB-C PD sink, and the TI BQ2407x charger family's TMR safety
+/// timer; each identified part is decoded independently.
 pub fn device_decode_lint(board: &ExtractedBoard, _lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     for comp in &board.components {
         if is_cypd3177(comp) {
             check_cypd3177(board, comp, &mut report);
         }
+        if is_bq2407x(comp) {
+            check_bq2407x_tmr(board, comp, &mut report);
+        }
     }
     report
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BQ2407x (TI bq24072/73/74/75/79) charge safety timer, TMR pin.
+//
+// Datasheet (TI "bq24072, bq24073, bq24074, bq24075, bq24079", timer section):
+//   tPRECHG  = KTMR × RTMR
+//   tMAXCHG  = 10 × KTMR × RTMR         KTMR = 48 s/kΩ
+// with the programming range RTMR = 18 kΩ .. 72 kΩ. TMR left floating selects
+// the internal default timers; TMR tied to VSS disables the timers. Both of
+// those are documented modes and stay silent here; the finding is a resistor
+// that lands OUTSIDE the programming band, where the timer setting is not
+// defined by the datasheet at all. That is the classic decode fault: every
+// net connects, the resistor is a perfectly good resistor, and the charge
+// safety timer is 10× off the design intent (a battery that terminates
+// charge after ~38 minutes instead of ~6 hours on a real board's 4.7 kΩ-for-
+// 47 kΩ typo), which no value/short sweep and no SPICE deck can see.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Seconds per kΩ of TMR resistance for the precharge timer; fast charge is
+/// 10×. From the bq2407x datasheet electrical characteristics.
+const BQ2407X_KTMR_S_PER_KOHM: f64 = 48.0;
+/// The documented TMR programming band (Ω).
+const BQ2407X_TMR_MIN_OHMS: f64 = 18_000.0;
+const BQ2407X_TMR_MAX_OHMS: f64 = 72_000.0;
+/// Below this the strap reads as the documented "timers disabled" tie to VSS
+/// rather than a mis-programmed value.
+const BQ2407X_TMR_DISABLE_OHMS: f64 = 100.0;
+
+/// Does this component's value / MPN positively identify it as a BQ2407x
+/// charger? Covers bq24072/73/74/75/79 and the -Q1 automotive variants.
+fn is_bq2407x(c: &Component) -> bool {
+    let v = c.value.to_ascii_uppercase().replace([' ', '-'], "");
+    let l = c.lib_id.to_ascii_uppercase().replace([' ', '-'], "");
+    v.contains("BQ2407") || l.contains("BQ2407")
+}
+
+/// Decode the TMR programming resistor of one identified BQ2407x.
+fn check_bq2407x_tmr(board: &ExtractedBoard, u: &Component, report: &mut NetLintReport) {
+    let Some((tmr_id, tmr_name)) = pin_net_for_role(board, u, "TMR") else {
+        return; // pin not resolvable: silent, per the zero-false-positive bar
+    };
+    let fd = resolve_fixed_divider(board, tmr_id);
+    let Some((r_ref, ohms)) = fd.r_pd else {
+        return; // floating (internal defaults) or unparseable: silent
+    };
+    if ohms <= BQ2407X_TMR_DISABLE_OHMS {
+        return; // documented "timers disabled" strap
+    }
+    if (BQ2407X_TMR_MIN_OHMS..=BQ2407X_TMR_MAX_OHMS).contains(&ohms) {
+        return; // in-band: a legal programmed value
+    }
+    let naive_maxchg_min = 10.0 * BQ2407X_KTMR_S_PER_KOHM * (ohms / 1000.0) / 60.0;
+    let band_lo_h = 10.0 * BQ2407X_KTMR_S_PER_KOHM * (BQ2407X_TMR_MIN_OHMS / 1000.0) / 3600.0;
+    let band_hi_h = 10.0 * BQ2407X_KTMR_S_PER_KOHM * (BQ2407X_TMR_MAX_OHMS / 1000.0) / 3600.0;
+    report.findings.push(LintFinding {
+        check: LintCheck::DeviceDecode,
+        severity: Severity::Medium,
+        message: format!(
+            "{} charge safety timer: TMR programming resistor {r_ref} = {} lands outside \
+             the datasheet's 18k-72k programming band (that band spans tMAXCHG \
+             {band_lo_h:.1}-{band_hi_h:.1} h at 48 s/kOhm). Taken at face value it would \
+             be ~{naive_maxchg_min:.0} min of fast-charge before the charger gives up, and \
+             below/above the band the behavior is not defined by the datasheet at all; a \
+             battery that never finishes charging looks exactly like this. Fit an in-band \
+             value, tie TMR to VSS to disable the timers deliberately, or leave it open \
+             for the internal defaults",
+            u.reference,
+            format_ohms(ohms),
+        ),
+        refs: vec![u.reference.clone(), r_ref],
+        nets: vec![tmr_name.to_string()],
+    });
+}
+
+/// Human ohms: 4700 -> "4.7k", 470 -> "470".
+fn format_ohms(ohms: f64) -> String {
+    if ohms >= 1_000_000.0 {
+        format!("{:.1}M", ohms / 1_000_000.0)
+    } else if ohms >= 1_000.0 {
+        format!("{:.1}k", ohms / 1_000.0)
+    } else {
+        format!("{ohms:.0}")
+    }
 }
 
 /// Decode a CYPD3177's VBUS_MAX (with its rotary selector, if resolvable) and
@@ -909,5 +999,79 @@ mod tests {
             0,
             "with the permanent pull-down DNP the static divider is uncomputable; the check must stay silent"
         );
+    }
+}
+
+#[cfg(test)]
+mod bq2407x_tests {
+    use super::*;
+    use hauksbee_extract::ExtractedBoard;
+
+    fn bq_board(tmr_value: &str) -> String {
+        format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 7 "/left/power/TMR")
+  (module Package_DFN_QFN:QFN16 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U11 (at 0 0) (layer F.SilkS))
+    (fp_text value BQ24075RGT (at 0 2) (layer F.Fab))
+    (pad 6 smd rect (at 0 0) (net 7 "/left/power/TMR") (pinfunction "TMR"))
+    (pad 11 smd rect (at 0 1) (net 1 "GND"))
+  )
+  (module R (layer F.Cu) (at 110 100)
+    (fp_text reference R31 (at 0 0) (layer F.SilkS))
+    (fp_text value {tmr_value} (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 7 "/left/power/TMR"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+)
+"#
+        )
+    }
+
+    fn lint(board_text: &str) -> NetLintReport {
+        let board = ExtractedBoard::from_kicad_pcb(board_text).expect("board parses");
+        device_decode_lint(&board, &ModelLibrary::builtin())
+    }
+
+    /// The seed case: 4.7k where 47k was intended, below the 18-72k band.
+    #[test]
+    fn out_of_band_tmr_resistor_fires_with_the_timer_math() {
+        let report = lint(&bq_board("4.7k"));
+        let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, Severity::Medium);
+        assert!(
+            f[0].message.contains("18k-72k") && f[0].message.contains("R31"),
+            "{}",
+            f[0].message
+        );
+        assert!(
+            f[0].message.contains("38 min") || f[0].message.contains("~38"),
+            "the naive decode is stated: {}",
+            f[0].message
+        );
+    }
+
+    /// The upstream fix value is in-band and silent; so are the documented
+    /// floating (internal defaults) and VSS-tie (disabled) modes; so is an
+    /// unparseable value (zero-false-positive bar).
+    #[test]
+    fn documented_modes_and_unresolvable_values_stay_silent() {
+        for value in ["47k", "18k", "72k", "0", "RC0402FR-0747KL"] {
+            let report = lint(&bq_board(value));
+            assert_eq!(
+                report.of_check(LintCheck::DeviceDecode).count(),
+                0,
+                "TMR = {value} must stay silent"
+            );
+        }
+        // Floating: no resistor at all on the pin.
+        let floating = bq_board("47k").replace("(net 7 \"/left/power/TMR\")\n    (pad 2", "(net 0 \"\")\n    (pad 2");
+        // (crude: detach R31 pad 1; the pin net keeps only the charger)
+        let report = lint(&floating);
+        assert_eq!(report.of_check(LintCheck::DeviceDecode).count(), 0);
     }
 }

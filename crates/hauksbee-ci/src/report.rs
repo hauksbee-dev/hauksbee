@@ -724,14 +724,29 @@ impl CiResult {
         } else {
             String::new()
         };
-        out.push_str(&format!(
-            "\n{}/{} assertions passed in {:.2}s - {}{}\n",
-            passed,
-            total,
-            self.elapsed.as_secs_f64(),
-            verdict,
-            waived_note
-        ));
+        // Verdict FIRST. An invalid run's line used to read "1/1 assertions
+        // passed ... - INVALID", and in a CI log or a chat notification the
+        // leading "passed" is what a skimming reader keeps; an untrustworthy
+        // run must not lead with the word every green run leads with.
+        if self.analog_invalid() {
+            out.push_str(&format!(
+                "\n{} - {}/{} assertion(s) evaluated in {:.2}s; the counts are not a verdict{}\n",
+                verdict,
+                total,
+                total,
+                self.elapsed.as_secs_f64(),
+                waived_note
+            ));
+        } else {
+            out.push_str(&format!(
+                "\n{} - {}/{} assertions passed in {:.2}s{}\n",
+                verdict,
+                passed,
+                total,
+                self.elapsed.as_secs_f64(),
+                waived_note
+            ));
+        }
         // A RED report ends with where to read about the failing check: the
         // assertion catalog's section for the first gating failure's kind.
         if verdict == "RED" {

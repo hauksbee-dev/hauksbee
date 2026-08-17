@@ -12,6 +12,6 @@ hauksbee-ci: blinky power-up sanity
   [PASS] no stress faults raised
         no stress faults
 
-4/4 assertions passed in 1.63s - GREEN
+GREEN - 4/4 assertions passed in 1.63s
 [32mhauksbee-demo v1..[0m
 [exit 0]

@@ -2562,8 +2562,12 @@ fn tokenize_kv(line: &str) -> Vec<String> {
     split_tokens(line, true)
 }
 
-/// Parse a SPICE number with optional engineering suffix.
-fn parse_spice_number(tok: &str) -> Option<f64> {
+/// Parse a SPICE number with optional engineering suffix. Public because the
+/// CLI's frequency arguments accept the same vocabulary (`1k`, `10meg`):
+/// every engineer types suffixes, and SPICE has accepted them since the
+/// 1970s; a surface that rejects `1k` with "bad fstart" reads as a beginner's
+/// tool.
+pub fn parse_spice_number(tok: &str) -> Option<f64> {
     let t = tok.trim();
     if t.is_empty() {
         return None;
