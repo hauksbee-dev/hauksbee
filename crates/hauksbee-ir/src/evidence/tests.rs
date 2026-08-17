@@ -1400,15 +1400,16 @@ fn a_named_abstention_puts_its_unlocking_input_in_the_what_to_do() {
     let plain = Assumption::open_part("R7", "10k", "no model");
     assert_eq!(plain.because, "No model.");
     assert!(
-        plain.replacement.contains("models directory"),
-        "a part nobody has examined still gets the generic route: {}",
+        plain.replacement.contains("models extract"),
+        "a part nobody has examined is routed to the automated datasheet path \
+         first, not only the hand-authoring wall: {}",
         plain.replacement
     );
 
     // And a reason with no explanation at all keeps both defaults.
     let bare = Assumption::open_part("R7", "10k", "");
     assert_eq!(bare.because, "No model in the library matched this part.");
-    assert!(bare.replacement.contains("models directory"));
+    assert!(bare.replacement.contains("models extract"));
 }
 
 #[test]

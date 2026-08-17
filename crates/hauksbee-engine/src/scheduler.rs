@@ -1393,9 +1393,13 @@ impl Scheduler {
     /// scheduler-side polling.
     fn attach_mcp4728_dacs(&mut self, dacs: Vec<crate::binder::DacBinding>) {
         /// The shipped declarative MCP4728 spec. Embedded (rather than loaded
-        /// from disk at runtime) so an engine binary is self-contained; the
-        /// unit fixtures include the same file, keeping one source of truth.
-        const MCP4728_SPEC: &str = include_str!("../../../testdata/sensor-specs/mcp4728.toml");
+        /// from disk at runtime) so an engine binary is self-contained.
+        /// Embedded from THIS crate's assets/ mirror because `cargo package`
+        /// ships only files under the crate directory; the AUTHORITATIVE copy
+        /// is testdata/sensor-specs/mcp4728.toml (the unit fixtures load it),
+        /// guarded by tests/packaged_asset_sync.rs and refreshed by
+        /// scripts/sync-crate-assets.sh.
+        const MCP4728_SPEC: &str = include_str!("../assets/sensor-specs/mcp4728.toml");
 
         let mut bus = I2cBus::new("MCP4728_BUS");
         for d in dacs {
@@ -4735,6 +4739,53 @@ impl Scheduler {
     /// Clear all forced node-voltage overrides.
     pub fn clear_forced_voltages(&mut self) {
         self.forced_node_volts.clear();
+    }
+
+    /// The net names currently carrying a forced post-solve voltage override,
+    /// sorted for deterministic output. Empty in every ordinary run.
+    pub fn forced_net_names(&self) -> Vec<String> {
+        // Keys are NodeId indices (see force_net_voltage_windowed), so the
+        // circuit's own reverse map is the resolution.
+        let mut names: Vec<String> = self
+            .forced_node_volts
+            .keys()
+            .map(|&node| self.circuit.node_name(NodeId(node as u32)).to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A forced run must be SELF-DECLARING in the published evidence. The
+    /// residual suppression in [`Self::error_budget`] is honest about what the
+    /// residual can vouch for, but an absent residual is indistinguishable
+    /// from an unmeasured one; a reader of the evidence JSON must be told,
+    /// in so many words, that these nets present an override rather than a
+    /// converged solution. Returns at most one assumption, scoped to the
+    /// forced nets; empty when nothing is forced.
+    pub fn forced_voltage_assumptions(
+        &self,
+    ) -> Result<Vec<hauksbee_ir::evidence::Assumption>, hauksbee_ir::evidence::EvidenceError> {
+        use hauksbee_ir::evidence::{Assumption, AssumptionSource, NetScope, Scope, Subject};
+        let nets = self.forced_net_names();
+        if nets.is_empty() {
+            return Ok(Vec::new());
+        }
+        let list = nets.join(", ");
+        Ok(vec![Assumption::reduced_fidelity(
+            AssumptionSource::Scheduler,
+            Subject::new(
+                "scheduler/forced-voltages",
+                "post-solve forced node voltages",
+            ),
+            Scope::Nets(NetScope::new(nets.clone(), None)?),
+            &format!(
+                "the reported voltages on {list} were written by a forced override after \
+                 the solve, not converged in place, and the run's residual is withheld \
+                 because it belongs to the pre-override solution"
+            ),
+            "remove the force, or validate the forced trajectory independently and cite \
+             that validation as the evidence for these nets",
+        )])
     }
 
     /// Restart the sim clock and drop every run-accumulated diagnostic so a

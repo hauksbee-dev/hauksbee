@@ -1439,6 +1439,12 @@ fn run_inner(
                 )?);
             }
         }
+        // A forced run declares itself: without this, the only trace of a
+        // post-solve override in the published evidence is a missing
+        // residual, which reads as "unmeasured" rather than "overridden".
+        let board_evidence = board_evidence
+            .clone()
+            .with_assumptions(engine.scheduler().forced_voltage_assumptions()?)?;
         let run_evidence = board_evidence.clone().with_maps(cosim_maps);
 
         // Rewrite CI artifacts from the final co-sim evidence object before a

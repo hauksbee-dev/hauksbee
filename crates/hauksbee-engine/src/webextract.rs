@@ -169,7 +169,11 @@ enum Backend {
     Api,
     /// codex, signed in and usable.
     Codex,
-    /// codex is the only backend available and it cannot run. Carries the
+    /// The Claude Code CLI (`claude`), present on PATH; picked when codex is
+    /// not usable, because the extraction engine speaks both and a machine
+    /// with a working backend must never be told to install a different one.
+    ClaudeCode,
+    /// No backend can run. Carries the
     /// reason and the one command that fixes it, both from the engine's own
     /// dependency probe so this can never disagree with the Environment page.
     Blocked { reason: String, fix: String },
@@ -190,14 +194,30 @@ fn backend() -> Backend {
     }
     let probe = crate::deps::probe_all();
     let codex = probe.iter().find(|d| d.id == "codex");
+    let claude = probe.iter().find(|d| d.id == "claude-code");
+    // Preference order mirrors the CLI: an explicit API key won above; codex
+    // when usable; otherwise the Claude Code CLI when present. The extraction
+    // engine supports all three (hauksbee_models::datasheet::Backend), and a
+    // machine with a working `claude` on PATH must not be told to go install
+    // codex: which LLM the datasheet goes to is named on the consent surface
+    // either way.
+    if codex.is_some_and(|d| d.present) {
+        return Backend::Codex;
+    }
+    if claude.is_some_and(|d| d.present) {
+        return Backend::ClaudeCode;
+    }
     match codex {
-        Some(d) if d.present => Backend::Codex,
         Some(d) => Backend::Blocked {
             reason: d
                 .detail
                 .clone()
                 .unwrap_or_else(|| "codex is not usable on this machine".to_string()),
-            fix: d.manual.clone(),
+            fix: format!(
+                "{}   # or: npm install -g @anthropic-ai/claude-code (then claude login), \
+                 or set HAUKSBEE_LLM_API_KEY for an OpenAI-compatible endpoint",
+                d.manual
+            ),
         },
         // The probe list is built in this crate, so a missing codex row is a
         // programming error rather than a machine state. Say that instead of
@@ -221,6 +241,7 @@ pub fn ready_json() -> String {
         Backend::Mock => (true, "mock", None, None),
         Backend::Api => (true, "api", None, None),
         Backend::Codex => (true, "codex", None, None),
+        Backend::ClaudeCode => (true, "claude-code", None, None),
         Backend::Blocked { reason, fix } => (false, "codex", Some(reason), Some(fix)),
     };
     let kinds: Vec<serde_json::Value> = KINDS
@@ -267,11 +288,9 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
     // Refuse before sending, not after. The browser already asked
     // `/api/models/extract/ready`, but that answer is a moment old and the
     // route is reachable without it.
-    match backend() {
-        Backend::Blocked { reason, fix } => {
-            return Err(format!("{reason}\n\nFix it with: {fix}"));
-        }
-        Backend::Mock | Backend::Api | Backend::Codex => {}
+    let picked = backend();
+    if let Backend::Blocked { reason, fix } = &picked {
+        return Err(format!("{reason}\n\nFix it with: {fix}"));
     }
 
     // A file that is not a PDF cannot be extracted from, and finding that out
@@ -331,9 +350,21 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
          writes the draft. This usually takes one to three minutes.",
     );
 
+    // The picker's choice rides into the engine explicitly: `datasheet::run`'s
+    // own default is codex, and a picker that chose the Claude CLI must not
+    // have its work silently rerouted. The page's default model name is a
+    // codex model, so it only travels with the codex/api backends; the Claude
+    // CLI keeps its own default.
+    let (engine_backend, model) = match &picked {
+        Backend::ClaudeCode => (Some(datasheet::Backend::ClaudeCode), None),
+        Backend::Api => (Some(datasheet::Backend::Api), Some(job.model.clone())),
+        Backend::Codex => (Some(datasheet::Backend::Codex), Some(job.model.clone())),
+        Backend::Mock | Backend::Blocked { .. } => (None, Some(job.model.clone())),
+    };
     let args = datasheet::Args::new(pdf_path, job.part.clone(), job.kind.clone())
         .out_dir(Some(out_dir.clone()))
-        .model(Some(job.model.clone()));
+        .backend(engine_backend)
+        .model(model);
 
     // On its own thread so the heartbeat below can run: `datasheet::run` is one
     // long blocking call with no callback of its own.
