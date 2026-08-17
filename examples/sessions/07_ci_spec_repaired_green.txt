@@ -6,5 +6,5 @@ hauksbee-ci: tarski power-up brownout (repaired)
   [PASS] ANALOG_VDD comes up across all power-up register states
         ANALOG_VDD: min=4.966V (>= 4.9V) [settled 4.966V] (held across 8 seeds)
 
-1/1 assertions passed in 0.26s - GREEN
+GREEN - 1/1 assertions passed in 0.26s
 [exit 0]

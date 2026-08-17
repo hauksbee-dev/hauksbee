@@ -3,7 +3,8 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/asbuilt.md.
 //!
 //! A `.asbuilt.toml` file describes BOARD state only, solder-blob shorts,
-//! fitted component values, cut traces, lifted pins, jumper wires: the rework
+//! fitted component values, cut traces, lifted pins, jumper wires, parts
+//! wired on: the rework
 //! a technician performed on copper. It deliberately does NOT describe
 //! harness/scenario state (firmware-programmed registers, injected drives,
 //! held enable nets): that is per-run configuration and lives where harness
@@ -24,6 +25,11 @@
 //!   dev-plan 02 §6). `expect_matches` pins the severed-terminal count.
 //! - `[[lift]]`, one lifted pin: like `cut` but for a single named device.
 //! - `[[jumper]]`, a bodge wire: net `to` is merged onto net `from`.
+//! - `[[fit]]`, a part wired ON: a new two-terminal device (`ohms` or
+//!   `farads`) soldered between two named nets, under a fresh reference that
+//!   must not collide with a fabricated part. This is the additive half of
+//!   rework (pull resistors onto floating control lines, a bulk cap across a
+//!   rail) that `replace` cannot express.
 //!
 //! Validation is fail-loud in the house style (`hauksbee-ci`'s spec/error
 //! conventions): unknown TOML keys are rejected (`deny_unknown_fields`),
@@ -33,7 +39,8 @@
 //! much hardware as documented is a lie about the physical board.
 //!
 //! Application order is fixed and semantic: `replace` entries in file order,
-//! then `cut`, then `lift`, then `jumper`. All are pure [`BoundBoard`]
+//! then `cut`, then `lift`, then `jumper`, then `fit` (a rework part is
+//! soldered onto the board the earlier steps produced). All are pure [`BoundBoard`]
 //! mutations, no transient, no DC, preserving the prep-stays-solve-free
 //! invariant `tarski_prep` established.
 
@@ -136,6 +143,31 @@ pub enum AsBuiltError {
     NodeSpace { origin: String, max_seen: u32 },
     #[error("as-built overlay {origin}:{line}: [[jumper]] from and to name the same net \"{net}\"; a jumper to itself is a no-op and therefore a documentation error")]
     JumperSelf {
+        origin: String,
+        line: usize,
+        net: String,
+    },
+    #[error(
+        "as-built overlay {origin}:{line}: [[fit]] ref \"{reference}\" collides with an existing \
+         device name; a rework part needs a fresh reference so the record cannot shadow a \
+         fabricated one"
+    )]
+    FitRefCollision {
+        origin: String,
+        line: usize,
+        reference: String,
+    },
+    #[error(
+        "as-built overlay {origin}:{line}: [[fit]] ref \"{reference}\" must declare exactly one \
+         of `ohms` or `farads`; the value is what says which part was soldered on"
+    )]
+    FitValue {
+        origin: String,
+        line: usize,
+        reference: String,
+    },
+    #[error("as-built overlay {origin}:{line}: [[fit]] from and to name the same net \"{net}\"; a part across one net is a no-op and therefore a documentation error")]
+    FitSelf {
         origin: String,
         line: usize,
         net: String,
@@ -259,6 +291,29 @@ pub struct Jumper {
     pub note: Option<String>,
 }
 
+/// A part wired ON during rework: a new two-terminal device soldered between
+/// two existing nets (a pull resistor onto a floating control line, a bulk
+/// capacitor across a rail). Exactly one of `ohms` / `farads` names the part;
+/// `ref` is the rework record's own designator and must not collide with a
+/// fabricated device, so the overlay can never silently shadow the board.
+/// Nets are named as on the board; a fresh node from a `[[cut]]` cannot be a
+/// terminal (it has no name by construction; when a rework wires into a cut,
+/// record the wire side with a `[[jumper]]` onto a real net instead).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fit {
+    #[serde(rename = "ref")]
+    pub reference: Spanned<String>,
+    pub from: Spanned<String>,
+    pub to: Spanned<String>,
+    #[serde(default)]
+    pub ohms: Option<f64>,
+    #[serde(default)]
+    pub farads: Option<f64>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// The `[board]` provenance block, in the `trace.toml` house style: what
 /// physical board this delta describes and where the record comes from.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -284,6 +339,8 @@ struct AsBuiltDoc {
     lifts: Vec<Lift>,
     #[serde(default, rename = "jumper")]
     jumpers: Vec<Jumper>,
+    #[serde(default, rename = "fit")]
+    fits: Vec<Fit>,
 }
 
 /// A parsed overlay plus the source it came from (kept so semantic errors can
@@ -359,7 +416,95 @@ impl AsBuiltOverlay {
         for jumper in &self.doc.jumpers {
             self.apply_jumper(jumper, bound, &mut report)?;
         }
+        // Fits come last: a rework part is soldered onto the board the earlier
+        // steps produced, so its nets resolve AFTER any jumper merges.
+        for fit in &self.doc.fits {
+            self.apply_fit(fit, bound, &mut report)?;
+        }
         Ok(report)
+    }
+
+    fn apply_fit(
+        &self,
+        fit: &Fit,
+        bound: &mut BoundBoard,
+        report: &mut AsBuiltReport,
+    ) -> Result<(), AsBuiltError> {
+        let reference = fit.reference.get_ref().as_str();
+        if bound
+            .circuit
+            .devices
+            .iter()
+            .any(|d| d.name() == reference)
+        {
+            return Err(AsBuiltError::FitRefCollision {
+                origin: self.origin.clone(),
+                line: self.line_of(&fit.reference),
+                reference: reference.to_string(),
+            });
+        }
+        let resolve = |net: &Spanned<String>, what: &'static str| {
+            let name = net.get_ref().as_str();
+            bound.net_nodes.get(name).copied().ok_or_else(|| {
+                let known: Vec<String> = bound.net_nodes.keys().cloned().collect();
+                AsBuiltError::UnknownNet {
+                    origin: self.origin.clone(),
+                    line: self.line_of(net),
+                    what,
+                    pattern: name.to_string(),
+                    suggestions: near_matches(name, &known, 3),
+                }
+            })
+        };
+        let a = resolve(&fit.from, "[[fit]] from")?;
+        let b = resolve(&fit.to, "[[fit]] to")?;
+        if a == b {
+            return Err(AsBuiltError::FitSelf {
+                origin: self.origin.clone(),
+                line: self.line_of(&fit.to),
+                net: fit.to.get_ref().clone(),
+            });
+        }
+        let (device, described) = match (fit.ohms, fit.farads) {
+            (Some(ohms), None) => (
+                Device::Resistor {
+                    name: reference.to_string(),
+                    a,
+                    b,
+                    ohms,
+                    tc1: None,
+                },
+                format!("{ohms} ohm resistor"),
+            ),
+            (None, Some(farads)) => (
+                Device::Capacitor {
+                    name: reference.to_string(),
+                    a,
+                    b,
+                    farads,
+                    ic: None,
+                },
+                format!("{farads} F capacitor"),
+            ),
+            _ => {
+                return Err(AsBuiltError::FitValue {
+                    origin: self.origin.clone(),
+                    line: self.line_of(&fit.reference),
+                    reference: reference.to_string(),
+                })
+            }
+        };
+        bound.circuit.devices.push(device);
+        report.lines.push(format!(
+            "fit {reference}: {described} between {} and {}{}",
+            fit.from.get_ref(),
+            fit.to.get_ref(),
+            fit.note
+                .as_deref()
+                .map(|n| format!(" ({n})"))
+                .unwrap_or_default()
+        ));
+        Ok(())
     }
 
     fn check_node_space(&self, bound: &BoundBoard) -> Result<u32, AsBuiltError> {
@@ -777,6 +922,85 @@ mod tests {
         assert!(!glob_match("abc", "abcd"));
         assert!(glob_match("*", "anything"));
         assert!(glob_match("a*b*c", "aXXbYYc"));
+    }
+
+    /// A minimal bound board for overlay unit tests: an empty circuit plus
+    /// the named nets, mirroring the runner's own test literal.
+    fn test_board(nets: &[(&str, u32)]) -> BoundBoard {
+        BoundBoard {
+            name: "asbuilt-test".to_string(),
+            circuit: hauksbee_ir::Circuit::new(),
+            net_nodes: nets
+                .iter()
+                .map(|(n, id)| (n.to_string(), NodeId(*id)))
+                .collect(),
+            net_names: nets.iter().map(|(n, _)| n.to_string()).collect(),
+            digital: Vec::new(),
+            mcus: Vec::new(),
+            dnp_mcus: Vec::new(),
+            component_kinds: std::collections::HashMap::new(),
+            input_sources: std::collections::HashMap::new(),
+            supplies: Vec::new(),
+            behavioral: Vec::new(),
+            device_meta: Vec::new(),
+            dacs: Vec::new(),
+            peripherals: Vec::new(),
+            report: crate::report::BindReport::default(),
+        }
+    }
+
+    #[test]
+    fn fit_requires_exactly_one_value_kind() {
+        // Both keys, and neither key, are documentation errors at parse-time
+        // shape level (the apply step raises FitValue; parsing accepts the
+        // struct, so drive apply with a tiny bound board).
+        let overlay = AsBuiltOverlay::parse(
+            "[[fit]]\nref = \"R_PULL\"\nfrom = \"A\"\nto = \"B\"\n",
+            "test.asbuilt.toml",
+        )
+        .unwrap();
+        let mut bound = test_board(&[("A", 1), ("B", 2)]);
+        let err = overlay.apply(&mut bound).unwrap_err().to_string();
+        assert!(err.contains("exactly one of `ohms` or `farads`"), "{err}");
+    }
+
+    #[test]
+    fn fit_adds_the_part_and_fails_loud_on_collision_and_self() {
+        let overlay = AsBuiltOverlay::parse(
+            "[[fit]]\nref = \"R_PULL_OE\"\nfrom = \"OE_N\"\nto = \"+5V\"\nohms = 10000.0\nnote = \"rework: pull-up wired on\"\n",
+            "test.asbuilt.toml",
+        )
+        .unwrap();
+        let mut bound = test_board(&[("OE_N", 1), ("+5V", 2)]);
+        let report = overlay.apply(&mut bound).unwrap();
+        assert_eq!(bound.circuit.devices.len(), 1);
+        match &bound.circuit.devices[0] {
+            Device::Resistor { name, a, b, ohms, .. } => {
+                assert_eq!(name, "R_PULL_OE");
+                assert_eq!((a.0, b.0), (1, 2));
+                assert_eq!(*ohms, 10_000.0);
+            }
+            other => panic!("expected the fitted resistor, got {other:?}"),
+        }
+        assert!(
+            report.lines.iter().any(|l| l.contains("R_PULL_OE") && l.contains("pull-up wired on")),
+            "{report:?}"
+        );
+
+        // Re-applying the same fit onto the result collides with the part it
+        // just added: the record cannot silently shadow a device.
+        let err = overlay.apply(&mut bound).unwrap_err().to_string();
+        assert!(err.contains("collides with an existing device name"), "{err}");
+
+        // And a fit across one net is a documentation error.
+        let self_fit = AsBuiltOverlay::parse(
+            "[[fit]]\nref = \"R_X\"\nfrom = \"OE_N\"\nto = \"OE_N\"\nohms = 1000.0\n",
+            "test.asbuilt.toml",
+        )
+        .unwrap();
+        let mut bound2 = test_board(&[("OE_N", 1)]);
+        let err = self_fit.apply(&mut bound2).unwrap_err().to_string();
+        assert!(err.contains("name the same net"), "{err}");
     }
 
     #[test]

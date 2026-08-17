@@ -197,7 +197,8 @@ fn the_first_run_example_is_real_and_refuses_unresolved_evidence() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("2/2 assertions passed") && stdout.contains("INVALID"),
-        "the checks still execute, but the report must say their evidence is invalid:\n{stdout}"
+        stdout.contains("2/2 assertion(s) evaluated") && stdout.contains("INVALID"),
+        "the checks still execute, but the report must lead with INVALID, not with \
+         the word 'passed' a skimming reader keeps:\n{stdout}"
     );
 }
