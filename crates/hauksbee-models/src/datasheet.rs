@@ -245,7 +245,20 @@ pub fn run(args: Args) -> Result<PathBuf> {
         return Ok(out_path);
     }
 
-    // 2. Build the extraction prompt
+    // 2. An explicit kind the schema cannot accept fails HERE, before any
+    //    datasheet text is sent anywhere: burning consented LLM attempts
+    //    against a parser that can never accept the result helps nobody, and
+    //    the refusal can name the nearest expressible route.
+    if !args.kind_str.is_empty() && !kind_is_legal(&args.kind_str) {
+        bail!(
+            "hauksbee has no '{}' model kind. Legal kinds: {}. Pick the closest \
+             (a charger's power path fits vreg; a level shifter fits digital) and \
+             declare the unmodeled behavior in the description, or omit --kind and \
+             let the extraction choose from the legal list.",
+            args.kind_str,
+            legal_kinds().join(", ")
+        );
+    }
     let prompt = build_prompt(&args.part, &args.kind_str, &pdf_text);
 
     // 3. Call backend and get raw TOML reply
@@ -485,7 +498,7 @@ impl Args {
             part,
             kind_str,
             out_dir: None,
-            retries: 1,
+            retries: 2,
             model: None,
             backend: None,
             api_base: None,
@@ -620,7 +633,7 @@ pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
         part: part.context("--part is required")?,
         kind_str,
         out_dir,
-        retries: 1,
+        retries: 2,
         model,
         backend,
         api_base,
@@ -735,12 +748,54 @@ mod truncate_tests {
 
 // ── Prompt construction ───────────────────────────────────────────────────────
 
+/// The kinds the schema actually deserializes, extracted from serde's own
+/// "unknown variant" error so this list can never drift from the enum. The
+/// extraction surface must speak the same closed vocabulary the validator
+/// enforces: a backend that invents "charger" burns every attempt against a
+/// parser that was never going to accept it.
+pub fn legal_kinds() -> Vec<String> {
+    #[derive(Debug, serde::Deserialize)]
+    struct Probe {
+        #[allow(dead_code)]
+        kind: crate::schema::ComponentKind,
+    }
+    let err = toml::from_str::<Probe>("kind = \"__not_a_kind__\"")
+        .expect_err("sentinel kind must not deserialize")
+        .to_string();
+    let Some(list) = err.split("expected one of ").nth(1) else {
+        return Vec::new();
+    };
+    list.split(',')
+        .map(|t| t.trim().trim_matches(|c| c == '`' || c == '.').to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// Is this kind string one the schema accepts?
+pub fn kind_is_legal(kind: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Probe {
+        #[allow(dead_code)]
+        kind: crate::schema::ComponentKind,
+    }
+    toml::from_str::<Probe>(&format!("kind = \"{kind}\"")).is_ok()
+}
+
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     format!(
         r#"You are a SPICE model extraction assistant. Your task is to extract a simulation
 model entry from the datasheet text below for the component: {part}
 
 Component kind: {kind}
+
+LEGAL KINDS. The schema accepts exactly this closed list and nothing else:
+{legal_kinds}
+If the component kind above is empty, read the datasheet and pick from THIS
+LIST ONLY. If the part's natural category is not on the list (a battery
+charger, a level shifter, an addressable LED driver), do NOT invent a kind:
+pick the closest legal kind for the part's primary electrical behavior (a
+charger's power path fits vreg; a level shifter fits digital) and say in
+`description` what real behavior the chosen kind does not model.
 
 DATASHEET TEXT (truncated):
 ---
@@ -756,6 +811,28 @@ The entry must use [[models]] array syntax and include:
 - [models.params] section with all required numeric params for the kind
 - [models.ratings] section with the absolute-maximum ratings (see below)
 - [models.pins] section mapping pad numbers to pin roles
+
+THE EXACT SHAPE. Field names are matched literally by a strict parser: a
+renamed or invented top-level field (type, part, manufacturer, datasheet, ...)
+fails validation. Start from this skeleton and keep every field name exactly
+as written:
+
+[[models]]
+id = "{part_lower}"
+kind = "{kind}"
+description = "one line"
+
+[models.match]
+value_re = "(?i)^{part_upper}"
+
+[models.params]
+# the required params for this kind, listed below
+
+[models.ratings]
+# only fields the datasheet states
+
+[models.pins]
+"1" = "role_from_the_list_below"
 
 PIN ROLE NAMES for kind="{kind}": {pin_roles}
   Use these exact spellings. They are looked up by exact string, so "output"
@@ -861,6 +938,8 @@ OUTPUT (TOML only, starting with [[models]]):
 "#,
         part = part,
         part_lower = part.to_lowercase(),
+        part_upper = part.to_uppercase(),
+        legal_kinds = legal_kinds().join(", "),
         kind = kind,
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
         required_params = required_params_for_kind(kind),
@@ -1128,7 +1207,8 @@ fn call_agent_backend(
         ws.pages.len()
     );
 
-    let mut prompt = format!("{prompt}\n\n{}", verification_clause(&ws));
+    let base_prompt = format!("{prompt}\n\n{}", verification_clause(&ws));
+    let mut prompt = base_prompt.clone();
     for attempt in 0..=args.retries {
         let started = Instant::now();
         let raw_stdout = run_once(&prompt, &ws, args.model.as_deref())?;
@@ -1150,20 +1230,27 @@ fn call_agent_backend(
         match parse_and_validate_reply(&raw, &args.part, &args.kind_str) {
             Ok(_) => return Ok(raw),
             Err(e) if attempt < args.retries => {
+                // {e:#} = the whole cause chain: the outer context alone told
+                // a retrying model "is it valid TOML?" when the real error
+                // was `missing field id` with a line number, so it repeated
+                // the same shape mistake verbatim. The chain is the feedback.
                 eprintln!(
-                    "[model-extract] attempt {} failed: {}; retrying with feedback...",
+                    "[model-extract] attempt {} failed: {:#}; retrying with feedback...",
                     attempt + 1,
                     e
                 );
                 let _ = std::fs::remove_file(ws.answer_path());
+                // Base + the LATEST failure only: accumulating every prior
+                // failure grew the prompt without bound and timed out the
+                // final attempt of a long extraction.
                 prompt = format!(
-                    "{prompt}\n\nYOUR PREVIOUS ANSWER FAILED VALIDATION WITH:\n{e}\n\n\
+                    "{base_prompt}\n\nYOUR PREVIOUS ANSWER FAILED VALIDATION WITH:\n{e:#}\n\n\
                      Fix exactly those issues and write the corrected TOML to model.toml.",
                 );
                 continue;
             }
             Err(e) => bail!(
-                "{tool} produced a model that failed validation after {} attempt(s): {e}\n\
+                "{tool} produced a model that failed validation after {} attempt(s): {e:#}\n\
                  Raw reply was:\n{raw}",
                 attempt + 1
             ),
@@ -1342,8 +1429,17 @@ pub fn codex_model(explicit: Option<&str>) -> (String, String) {
 fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<String> {
     let (model, effort) = codex_model(model);
     let mut cmd = Command::new("codex");
+    cmd.arg("exec");
+    // An alternative codex auth profile (an Azure/OpenAI-compatible endpoint
+    // configured in ~/.codex/config.toml) rides in via the environment: the
+    // personal ChatGPT account is rate-limited exactly when extraction runs
+    // are heaviest, and a profile flag is codex's own mechanism for that.
+    if let Ok(profile) = std::env::var("HAUKSBEE_CODEX_PROFILE") {
+        if !profile.trim().is_empty() {
+            cmd.args(["-p", profile.trim()]);
+        }
+    }
     cmd.args([
-        "exec",
         // Pick the model rather than inheriting codex's default, which varies
         // by the user's plan and config and silently decides how good the
         // extraction is.
@@ -1734,7 +1830,7 @@ fn call_api_backend(prompt: &str, args: &Args) -> Result<String> {
             Ok(_) => return Ok(raw),
             Err(e) if attempt < args.retries => {
                 eprintln!(
-                    "[model-extract] attempt {} failed: {}; retrying...",
+                    "[model-extract] attempt {} failed: {:#}; retrying...",
                     attempt + 1,
                     e
                 );
@@ -1782,16 +1878,41 @@ fn parse_and_validate_reply(
     if trimmed.is_empty() {
         bail!("empty reply for {part}: the backend returned no TOML at all");
     }
-    if !trimmed.contains("[[models]]") {
-        bail!(
-            "reply for {part} contains no [[models]] table; the backend likely \
-             answered with prose instead of TOML. First 200 chars: {:.200}",
-            trimmed
-        );
-    }
+    // A reply that is the entry BODY without its [[models]] header (a bare
+    // `id = ...` / `kind = ...` opening) is a near-miss worth recovering:
+    // prepending the header changes no content, and burning a whole LLM
+    // attempt on a missing two-token line helps nobody.
+    let wrapped;
+    let trimmed = if !trimmed.contains("[[models]]") {
+        let looks_like_bare_entry = trimmed
+            .lines()
+            .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            .is_some_and(|l| {
+                let l = l.trim_start();
+                l.starts_with("id ") || l.starts_with("id=") || l.starts_with("kind ")
+                    || l.starts_with("kind=")
+            });
+        if looks_like_bare_entry {
+            wrapped = format!("[[models]]\n{trimmed}");
+            wrapped.as_str()
+        } else {
+            bail!(
+                "reply for {part} contains no [[models]] table; the backend likely \
+                 answered with prose instead of TOML. First 200 chars: {:.200}",
+                trimmed
+            );
+        }
+    } else {
+        trimmed
+    };
 
     let db: crate::schema::DbFile = toml::from_str(trimmed)
-        .with_context(|| format!("parsing TOML reply for {part} (is it valid TOML?)"))?;
+        .with_context(|| {
+            format!(
+                "the reply for {part} did not deserialize as a hauksbee [[models]] db file \
+                 (the cause below names the exact field and line)"
+            )
+        })?;
 
     let entry = db
         .models
@@ -2211,7 +2332,7 @@ max_current_a = 0.1\n\
             part: "BC847".to_string(),
             kind_str: "bjt_npn".to_string(),
             out_dir: Some(dir.clone()),
-            retries: 1,
+            retries: 2,
             model: None,
             backend: None,
             api_base: None,
@@ -2255,7 +2376,7 @@ max_current_a = 0.1\n\
             part: "BC847".to_string(),
             kind_str: "bjt_npn".to_string(),
             out_dir: Some(std::env::temp_dir()),
-            retries: 1,
+            retries: 2,
             model: None,
             backend: None,
             api_base: None,
@@ -2304,7 +2425,7 @@ max_current_a = 0.1\n\
             part: "LTC4020".to_string(),
             kind_str: "charger".to_string(),
             out_dir: Some(std::env::temp_dir()),
-            retries: 1,
+            retries: 2,
             model: None,
             backend: None,
             api_base: None,
@@ -2589,5 +2710,24 @@ mod kind_tests {
             !SUPPORTED_KINDS.contains(&""),
             "the empty string means 'identify it', not a part type"
         );
+    }
+}
+
+#[cfg(test)]
+mod legal_kind_tests {
+    use super::{kind_is_legal, legal_kinds};
+
+    /// The list is extracted from serde's own error text, so it cannot drift
+    /// from the enum; this test pins that the extraction keeps working and
+    /// that the vocabulary the prompt teaches matches the validator.
+    #[test]
+    fn legal_kinds_match_the_schema() {
+        let kinds = legal_kinds();
+        assert!(kinds.len() >= 10, "extraction broke: {kinds:?}");
+        for k in &kinds {
+            assert!(kind_is_legal(k), "listed kind must deserialize: {k}");
+        }
+        assert!(kinds.iter().any(|k| k == "vreg"), "{kinds:?}");
+        assert!(!kind_is_legal("charger"), "no charger kind exists (yet)");
     }
 }

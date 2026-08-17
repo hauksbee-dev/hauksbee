@@ -362,7 +362,12 @@ impl RegisterMapSensor {
     /// produce a sensor that quietly drops a register, this panics with a message
     /// pointing the caller at `from_toml`/`validate`. Construct via
     /// [`RegisterMapSensor::from_toml`] (which validates) to avoid this.
-    pub fn from_spec(spec: SensorSpec) -> Self {
+    /// Crate-private on purpose: every panic below documents "this spec
+    /// bypassed validation", and the only door that guarantees validation is
+    /// [`Self::from_toml`]. Public callers get the fallible, validating
+    /// constructor; a malformed community model pack must be an error, not a
+    /// process abort.
+    pub(crate) fn from_spec(spec: SensorSpec) -> Self {
         let mut s = spec.sensor;
 
         let spi_reg_protocol = s.protocol.style == ProtocolStyle::SpiReg;

@@ -812,7 +812,9 @@ pub fn run_spec_with_lib(
     // Distinct after_ms thresholds (plus 0) that windows are bucketed by.
     let mut thresholds: Vec<f64> = spec.asserts.iter().filter_map(|a| a.after_ms).collect();
     thresholds.push(0.0);
-    thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // total_cmp, not partial_cmp().unwrap(): after_ms comes from a user's
+    // spec file, and a NaN there must not take the process down.
+    thresholds.sort_by(f64::total_cmp);
     thresholds.dedup();
 
     // Resolve the tolerance ensemble (if any) and lay out one plan per member.
@@ -2119,6 +2121,11 @@ fn run_one(
     })
     .and_then(|evidence| {
         evidence.with_scoped_substitutions(engine.scheduler().scoped_substitutions())
+    })
+    .and_then(|evidence| {
+        // A forced run declares itself on the CI surface too.
+        let forced = engine.scheduler().forced_voltage_assumptions()?;
+        evidence.with_assumptions(forced)
     })
     .and_then(|evidence| evidence.with_assumptions(production_assumptions))
     .map_err(|e| SpecError::Invalid(format!("building run evidence: {e}")))?;

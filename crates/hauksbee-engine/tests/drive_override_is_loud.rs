@@ -181,3 +181,28 @@ fn a_failed_chunk_names_the_net_and_the_interval() {
         "must name the offending elements: {d}"
     );
 }
+
+#[test]
+fn a_forced_run_declares_itself_in_the_evidence_assumptions() {
+    // The residual suppression in error_budget() is honest about what the
+    // residual can vouch for, but an ABSENT residual reads as "unmeasured".
+    // A forced run must therefore carry a named assumption scoped to the
+    // forced nets, so the evidence JSON says "overridden" in so many words.
+    let mut sched =
+        Scheduler::new(quiet_board(), None, SolverOptions::default()).expect("build scheduler");
+    sched.chunk_s = 1e-4;
+    assert!(
+        sched.forced_voltage_assumptions().unwrap().is_empty(),
+        "an unforced run declares nothing"
+    );
+    assert!(sched.force_net_voltage("RES", 20.0), "RES must exist");
+    let assumptions = sched.forced_voltage_assumptions().unwrap();
+    assert_eq!(assumptions.len(), 1, "{assumptions:?}");
+    let a = &assumptions[0];
+    let text = format!("{} {} {}", a.statement(), a.because(), a.consequence());
+    assert!(text.contains("RES"), "the forced net is named: {text}");
+    assert!(
+        text.contains("forced") || text.contains("override"),
+        "the mechanism is named: {text}"
+    );
+}

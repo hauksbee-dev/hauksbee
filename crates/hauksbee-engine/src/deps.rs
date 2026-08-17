@@ -73,7 +73,52 @@ pub fn probe_all() -> Vec<DepStatus> {
         probe_kicad_cli(),
         probe_avr(),
         probe_codex(),
+        probe_claude_code(),
     ]
+}
+
+/// Claude Code, the second datasheet-to-model extractor backend. Same shape
+/// and same privacy honesty as the codex probe: using it sends datasheet
+/// text to Anthropic, nothing runs unless the user asks, and it is never
+/// auto-installed. Presence = the `claude` CLI resolves on PATH and answers
+/// `--version`; sign-in state is the CLI's own business and failures surface
+/// as the extraction's typed error rather than a silent hang.
+fn probe_claude_code() -> DepStatus {
+    let unlocks = "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI";
+    let cost = "free if you already pay for Claude: the CLI signs in with that account".to_string();
+    let manual = "npm install -g @anthropic-ai/claude-code   # then: claude login".to_string();
+    let privacy = "Using this sends the datasheet's text to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.";
+    let Some(bin) = which_on_path("claude") else {
+        return DepStatus {
+            id: "claude-code",
+            name: "Claude Code (datasheet extraction)",
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            installable: false,
+            cost,
+            manual,
+            detail: Some(
+                "claude not found on PATH. This is optional: extraction also runs via                  codex or an API key, and a model can always be written by hand (one                  TOML file, see docs/extending/)."
+                    .to_string(),
+            ),
+            sends_data_offhost: Some(privacy),
+        };
+    };
+    DepStatus {
+        id: "claude-code",
+        name: "Claude Code (datasheet extraction)",
+        present: true,
+        version: codex_version(&bin),
+        path: Some(bin.display().to_string()),
+        unlocks,
+        installable: false,
+        cost,
+        manual,
+        detail: None,
+        sends_data_offhost: Some(privacy),
+    }
 }
 
 /// Codex, the optional datasheet-to-model extractor.
@@ -201,17 +246,22 @@ fn codex_login_state(bin: &std::path::Path) -> CodexLogin {
 }
 
 fn which_codex() -> Option<std::path::PathBuf> {
+    which_on_path("codex")
+}
+
+/// Resolve one binary name on PATH (with the Windows .exe/.cmd variants).
+fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         if cfg!(windows) {
-            for ext in ["codex.exe", "codex.cmd"] {
-                let c = dir.join(ext);
+            for ext in [format!("{name}.exe"), format!("{name}.cmd")] {
+                let c = dir.join(&ext);
                 if c.is_file() {
                     return Some(c);
                 }
             }
         }
-        let c = dir.join("codex");
+        let c = dir.join(name);
         if c.is_file() {
             return Some(c);
         }
@@ -645,25 +695,32 @@ fn first_line(msg: &str) -> String {
 /// defect 3). Embedding the script keeps ONE maintained installer
 /// implementation while making it available from any binary, bundle or bare;
 /// an on-disk copy still wins so a user-patched script is honored.
+///
+/// The include paths point INSIDE this crate (`assets/scripts/`) because
+/// `cargo package` ships only files under the crate directory; a
+/// `../../../scripts/` include compiles from a git checkout and from nowhere
+/// else. The AUTHORITATIVE copies stay at repo-root `scripts/` (users and CI
+/// run them from there); `tests/packaged_asset_sync.rs` fails the build when
+/// the mirror drifts, and `scripts/sync-crate-assets.sh` refreshes it.
 #[cfg(not(windows))]
-const INSTALL_SIMS_SH: &str = include_str!("../../../scripts/install-sims.sh");
+const INSTALL_SIMS_SH: &str = include_str!("../assets/scripts/install-sims.sh");
 #[cfg(not(windows))]
-const COMMON_SH: &str = include_str!("../../../scripts/common.sh");
+const COMMON_SH: &str = include_str!("../assets/scripts/common.sh");
 #[cfg(not(windows))]
 const REQUIRED_SIMULATOR_VERSIONS: &str =
-    include_str!("../../../scripts/required-simulator-versions.env");
+    include_str!("../assets/scripts/required-simulator-versions.env");
 #[cfg(not(windows))]
-const RENODE_CHECKSUMS: &str = include_str!("../../../scripts/renode-checksums.txt");
+const RENODE_CHECKSUMS: &str = include_str!("../assets/scripts/renode-checksums.txt");
 #[cfg(not(windows))]
 const ESPRESSIF_QEMU_CHECKSUMS: &str =
-    include_str!("../../../scripts/espressif-qemu-checksums.txt");
+    include_str!("../assets/scripts/espressif-qemu-checksums.txt");
 #[cfg(not(windows))]
-const SIMULATOR_PROVENANCE_PY: &str = include_str!("../../../scripts/simulator-provenance.py");
+const SIMULATOR_PROVENANCE_PY: &str = include_str!("../assets/scripts/simulator-provenance.py");
 #[cfg(not(windows))]
 const SIMAVR_PAYLOAD_PROVENANCE_SH: &str =
-    include_str!("../../../scripts/simavr-payload-provenance.sh");
+    include_str!("../assets/scripts/simavr-payload-provenance.sh");
 #[cfg(windows)]
-const INSTALL_SIMS_WINDOWS_PS1: &str = include_str!("../../../scripts/install-sims-windows.ps1");
+const INSTALL_SIMS_WINDOWS_PS1: &str = include_str!("../assets/scripts/install-sims-windows.ps1");
 
 struct MaterializedInstaller {
     path: PathBuf,
@@ -1121,7 +1178,15 @@ mod tests {
         let ids: Vec<&str> = deps.iter().filter_map(|d| d["id"].as_str()).collect();
         assert_eq!(
             ids,
-            ["renode", "esp-qemu", "ngspice", "kicad-cli", "avr", "codex"],
+            [
+                "renode",
+                "esp-qemu",
+                "ngspice",
+                "kicad-cli",
+                "avr",
+                "codex",
+                "claude-code"
+            ],
             "the panel renders this list in order, so adding a probe is a \
              deliberate change to what a user sees, not an incidental one"
         );
@@ -1150,6 +1215,11 @@ mod tests {
                 assert!(
                     offhost.is_some_and(|s| s.contains("OpenAI")),
                     "codex must state where the data goes: {d}"
+                );
+            } else if d["id"] == "claude-code" {
+                assert!(
+                    offhost.is_some_and(|s| s.contains("Anthropic")),
+                    "claude-code must state where the data goes: {d}"
                 );
             } else {
                 assert!(

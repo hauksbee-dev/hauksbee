@@ -769,9 +769,11 @@ pub fn inconclusive_verdict(refs: &[String]) -> String {
     let list = refs.join(", ");
     format!(
         "INCONCLUSIVE: {} current-carrying / active part(s) have no model ({list}), \
-         so a clean result here is not a clean bill. Supply device models \
-         (--models-dir; scaffold one with `hauksbee models new`) or BOM identity \
-         (--bom) for them to make this verdict conclusive.",
+         so a clean result here is not a clean bill. Draft models from their \
+         datasheets (`hauksbee models extract --pdf <datasheet.pdf> --part <MPN>`, \
+         or the Extend button in `hauksbee serve`), scaffold one by hand \
+         (`hauksbee models new`, then --models-dir), or supply BOM identity \
+         (--bom) to make this verdict conclusive.",
         refs.len(),
     )
 }
