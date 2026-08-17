@@ -46,8 +46,12 @@ const MAX_NAMED: usize = 3;
 /// except for device-private internal unknowns appended past the netlist nodes,
 /// which have no `NodeId` and are named by index.
 pub fn name_node_unknown(circuit: &Circuit, unknown: usize) -> String {
-    let id = NodeId((unknown + 1) as u32);
-    if (unknown + 1) < circuit.node_count() {
+    let layout = Layout::new(circuit);
+    name_node_unknown_with_layout(circuit, &layout, unknown)
+}
+
+fn name_node_unknown_with_layout(circuit: &Circuit, layout: &Layout, unknown: usize) -> String {
+    if let Some(id) = layout.node_id(unknown) {
         format!("net '{}'", circuit.node_name(id))
     } else {
         format!("device-internal unknown #{unknown}")
@@ -288,16 +292,15 @@ fn elide(names: &[String]) -> String {
 /// nothing rather than an empty parenthetical.
 pub fn blame_clause(
     circuit: &Circuit,
-    _layout: &Layout,
+    layout: &Layout,
     stall: Option<(f64, usize)>,
 ) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     if let Some((step, unknown)) = stall {
         if step.is_finite() && step > 0.0 {
-            let where_ = name_node_unknown(circuit, unknown);
+            let where_ = name_node_unknown_with_layout(circuit, layout, unknown);
             let mut clause = format!("worst-moving unknown {where_} (last step {step:.3e} V)");
-            let id = NodeId((unknown + 1) as u32);
-            if (unknown + 1) < circuit.node_count() {
+            if let Some(id) = layout.node_id(unknown) {
                 let on = devices_on_node(circuit, id);
                 if !on.is_empty() {
                     clause.push_str(&format!(", devices on it: {}", elide(&on)));

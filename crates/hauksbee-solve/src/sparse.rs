@@ -873,7 +873,26 @@ fn min_degree_order(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
     let mut g: Vec<Vec<usize>> = adj.to_vec();
     let mut perm = Vec::with_capacity(n);
 
-    for _ in 0..n {
+    // Drain structurally isolated unknowns in one pass. The general minimum
+    // scan below is intentionally simple and O(n^2), which is fine for a real
+    // connected circuit but disastrous when a sparse external node id has
+    // accidentally created a huge diagonal-only block: it would rescan every
+    // ghost row once per elimination and appear to run forever. Isolated rows
+    // cannot create fill, so emitting them first is the exact min-degree order
+    // (degree zero is unbeatable) and preserves ascending tie-breaking.
+    for v in 0..n {
+        // Preserve the historical adjacency (including diagonal self-edges)
+        // and therefore the exact healthy-matrix ordering. A vertex whose only
+        // neighbour is itself is nevertheless isolated for elimination: its
+        // gmin diagonal cannot create fill.
+        let isolated = g[v].is_empty() || (g[v].len() == 1 && g[v][0] == v);
+        if isolated {
+            perm.push(v);
+            eliminated[v] = true;
+        }
+    }
+
+    for _ in perm.len()..n {
         let mut best = usize::MAX;
         let mut best_deg = usize::MAX;
         for v in 0..n {
@@ -930,6 +949,37 @@ mod tests {
         let mut scratch = vec![0.0; x.len()];
         sym.solve(&mut x, &mut scratch);
         x
+    }
+
+    #[test]
+    fn structurally_empty_row_is_anchored_instead_of_spinning() {
+        let mut m = SparseMatrix::new(2);
+        m.add(0, 0, 2.0);
+        // Row and column 1 are structurally empty. The dynamic singular-block
+        // convention anchors that genuinely floating unknown to zero.
+        let x = solve_dynamic(&m, &[4.0, 0.0]);
+        assert!((x[0] - 2.0).abs() < 1e-12, "defined row changed: {}", x[0]);
+        assert_eq!(x[1], 0.0, "floating unknown was not anchored");
+    }
+
+    #[test]
+    fn gmin_only_unknowns_are_drained_without_quadratic_symbolic_scan() {
+        // This is the exact ghost-row shape that a high as-built NodeId used to
+        // manufacture: every unknown has only its gmin diagonal. Large enough
+        // that the former rescan-per-elimination path is prohibitive, while the
+        // correct isolated drain is linear.
+        const N: usize = 20_000;
+        let mut m = SparseMatrix::new(N);
+        for i in 0..N {
+            m.add(i, i, 1e-12);
+        }
+        let mut symbolic = m.factorize_symbolic();
+        assert_eq!(symbolic.perm.len(), N);
+        assert!(symbolic.refactor(&m));
+        let mut x = vec![0.0; N];
+        let mut scratch = vec![0.0; N];
+        symbolic.solve(&mut x, &mut scratch);
+        assert!(x.iter().all(|v| *v == 0.0));
     }
 
     #[test]
