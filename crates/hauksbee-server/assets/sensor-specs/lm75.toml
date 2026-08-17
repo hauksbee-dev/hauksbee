@@ -1,0 +1,30 @@
+# LM75 temperature sensor — deliberately narrow declarative I2C behavior.
+#
+# Source family: Texas Instruments LM75 / LM75A digital temperature sensor,
+# temperature register and pointer protocol. This portable subset models the
+# default 0x48 address (A2/A1/A0 low), the signed Q7.1 temperature register and
+# the power-on configuration byte. It does not model address straps, hysteresis
+# and overtemperature threshold writes, OS output timing, shutdown state,
+# conversion cadence/latency, noise, or thermal dynamics.
+
+[sensor]
+name = "LM75 temperature subset (A2/A1/A0 low)"
+bus = "i2c"
+i2c_address = 0x48
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.register]]
+addr = 0x00
+bytes = 2
+encoding = "q7.1_be"
+expr = "temperature_c"
+
+[[sensor.register]]
+addr = 0x01
+const = [0x00]
+
+[sensor.protocol]
+style = "i2c_pointer"

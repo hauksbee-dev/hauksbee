@@ -1,0 +1,24 @@
+# Bosch BMA423 — deliberately narrow, board-strapped I2C identity model.
+#
+# Source: Bosch Sensortec, "BMA423 - Digital, triaxial acceleration sensor",
+# BST-BMA423-DS000-01 revision 1.1 (May 2019), register map section 5.2 and
+# interface/address description. CHIP_ID register 0x00 returns 0x13. The SDO
+# strap selects 0x18 when low and 0x19 when high; this portable scenario file
+# intentionally selects 0x18 and must only be attached after the board shows
+# SDO tied low. A model-card address-select rule can automate that board fact.
+#
+# This is not a complete accelerometer model. It proves firmware-visible part
+# identity only; data conversion, FIFO, interrupts, feature engine, power-mode
+# state and auxiliary I2C behavior remain explicitly outside its scope.
+
+[sensor]
+name = "BMA423 chip-id subset (SDO low)"
+bus = "i2c"
+i2c_address = 0x18
+
+[[sensor.register]]
+addr = 0x00
+const = [0x13]
+
+[sensor.protocol]
+style = "i2c_pointer"

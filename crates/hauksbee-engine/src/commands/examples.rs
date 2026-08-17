@@ -11,17 +11,27 @@ use std::path::PathBuf;
 use anyhow::Context;
 
 /// The example boards `run --example` accepts.
+///
+/// Embedded from THIS crate's `assets/examples/` mirror: `cargo package`
+/// ships only files under the crate directory, so an include reaching into
+/// `crates/hauksbee-ci/` or the repo root compiles from a git checkout and
+/// from nowhere else. The AUTHORITATIVE copies are
+/// `crates/hauksbee-ci/examples/boards/blinky.kicad_pcb` (the example's home,
+/// where the blinky CI specs reference it) and repo-root
+/// `examples/decks/rlc_ringdown.cir` (the user-facing runnable demos);
+/// `tests/packaged_asset_sync.rs` fails when this mirror drifts, and
+/// `scripts/sync-crate-assets.sh` refreshes it.
 const BOARDS: &[(&str, &str, &[u8])] = &[(
     "blinky",
     "blinky.kicad_pcb",
-    include_bytes!("../../../hauksbee-ci/examples/boards/blinky.kicad_pcb"),
+    include_bytes!("../../assets/examples/blinky.kicad_pcb"),
 )];
 
 /// The example decks `sim --example` accepts.
 const DECKS: &[(&str, &str, &[u8])] = &[(
     "rlc_ringdown",
     "rlc_ringdown.cir",
-    include_bytes!("../../../../examples/decks/rlc_ringdown.cir"),
+    include_bytes!("../../assets/examples/rlc_ringdown.cir"),
 )];
 
 fn materialize(table: &[(&str, &str, &[u8])], what: &str, name: &str) -> anyhow::Result<PathBuf> {
