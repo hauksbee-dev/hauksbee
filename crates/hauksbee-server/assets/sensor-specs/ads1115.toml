@@ -1,0 +1,128 @@
+# ADS1115 16-bit delta-sigma ADC — declarative I2C sensor spec (write→read)
+# -----------------------------------------------------------------------------
+# Part: Texas Instruments ADS1115 (4-channel/2-differential 16-bit ADC with
+#       PGA and comparator).
+# Bus:  I2C. 7-bit address 0x48 with ADDR tied to GND (datasheet §8.5.1.1,
+#       Table 4: GND=0x48, VDD=0x49, SDA=0x4A, SCL=0x4B). This spec uses 0x48.
+# Ref:  TI datasheet SBAS444 (ADS111x). Section/table numbers below.
+#
+# ── Why this part is here ─────────────────────────────────────────────────────
+# The ADS1115 is the write→read coupling proof for the declarative write side
+# (05 §3.2 / §6.1 item 3): the firmware WRITES the config register to select
+# the input mux and PGA, and what the conversion register subsequently READS
+# depends on that write. The config write decodes into stored `mux`/`pga`
+# field variables (bit extraction is framing-layer data — evalexpr has no bit
+# ops), and the conversion register's value expression selects the driven
+# input and full-scale range from them.
+#
+# ── What this models ──────────────────────────────────────────────────────────
+#   * Register map (§8.6): 0x00 Conversion (R), 0x01 Config (R/W, POR 0x8583),
+#     0x02 Lo_thresh (R/W, POR 0x8000), 0x03 Hi_thresh (R/W, POR 0x7FFF).
+#   * Input mux (Table 8, config bits 14:12): 000 AIN0-AIN1, 001 AIN0-AIN3,
+#     010 AIN1-AIN3, 011 AIN2-AIN3, 100 AIN0-GND, 101 AIN1-GND, 110 AIN2-GND,
+#     111 AIN3-GND.
+#   * PGA full-scale range (Table 8, bits 11:9): 000 ±6.144 V, 001 ±4.096 V,
+#     010 ±2.048 V (POR), 011 ±1.024 V, 100 ±0.512 V, 101/110/111 ±0.256 V.
+#   * Conversion code = Vin * 32768 / FSR (§8.3.3: 1 LSB = FSR/2^15, e.g.
+#     125 uV at ±4.096 V per Table 1), saturating at the ±full-scale codes —
+#     the i16_be encoding's clamp IS the datasheet clipping behaviour.
+#
+# ── What this does NOT model (stated, not faked) ──────────────────────────────
+#   * Conversion TIMING. The DR bits (7:5) are stored but ignored: the
+#     conversion register always reflects the currently driven inputs (an
+#     "infinitely fast" ADC). The OS bit reads back as written — a driver that
+#     writes OS=1 (start single-shot) and polls for OS=1 (conversion done,
+#     §8.6.3) sees an instantly-completed conversion, which is the correct
+#     chunk-rate simplification, not a hang.
+#   * The comparator / ALERT pin. COMP_* config bits and both threshold
+#     registers are stored (and read back exactly), but no ALERT net is
+#     driven; a board that needs ALERT needs an output law and a bound pin.
+#
+# evalexpr reminder: comparisons use FLOAT literals (mux == 4.0) — equality is
+# type-strict and every spec variable is bound as a float.
+
+[sensor]
+name        = "ADS1115"
+bus         = "i2c"
+i2c_address = 0x48   # ADDR = GND. See Table 4 for the other pin strappings.
+
+# ── Physical inputs: volts at the AINx pins, driven by the harness ────────────
+[[sensor.input]]
+name    = "a0"
+default = 0.0
+
+[[sensor.input]]
+name    = "a1"
+default = 0.0
+
+[[sensor.input]]
+name    = "a2"
+default = 0.0
+
+[[sensor.input]]
+name    = "a3"
+default = 0.0
+
+# ── Config register write (0x01, §8.6.4) ─────────────────────────────────────
+# POR value 0x8583 (§8.6.4): OS=1, MUX=000 (AIN0-AIN1), PGA=010 (±2.048 V),
+# MODE=1, DR=100 (128 SPS), COMP_QUE=11 (comparator disabled). The mux/pga
+# fields below are seeded by extraction from this default, so reads are
+# well-defined before any firmware write.
+
+[[sensor.write_register]]
+addr     = 0x01
+encoding = "u16_be"
+store    = "config"
+default  = 34179.0   # 0x8583 POR
+
+[[sensor.write_register.field]]
+name = "mux"
+bits = [14, 12]
+
+[[sensor.write_register.field]]
+name = "pga"
+bits = [11, 9]
+
+# Threshold registers: stored and read back exactly; not evaluated (no ALERT
+# pin modeled — see header).
+[[sensor.write_register]]
+addr     = 0x02
+encoding = "i16_be"
+store    = "lo_thresh"
+default  = -32768.0  # 0x8000 POR
+
+[[sensor.write_register]]
+addr     = 0x03
+encoding = "i16_be"
+store    = "hi_thresh"
+default  = 32767.0   # 0x7FFF POR
+
+# ── Read registers ────────────────────────────────────────────────────────────
+
+# Conversion register (0x00, §8.6.2): the mux-selected input divided by the
+# PGA full-scale range, scaled to the 16-bit code. Table 8 mux / PGA maps as
+# nested selects; the i16_be clamp provides the datasheet full-scale clipping.
+[[sensor.register]]
+addr     = 0x00
+encoding = "i16_be"
+expr     = "if(mux == 4.0, a0, if(mux == 5.0, a1, if(mux == 6.0, a2, if(mux == 7.0, a3, if(mux == 0.0, a0 - a1, if(mux == 1.0, a0 - a3, if(mux == 2.0, a1 - a3, a2 - a3))))))) * 32768 / if(pga == 0.0, 6.144, if(pga == 1.0, 4.096, if(pga == 2.0, 2.048, if(pga == 3.0, 1.024, if(pga == 4.0, 0.512, 0.256)))))"
+
+# Config readback (0x01): the stored written value, byte-exact.
+[[sensor.register]]
+addr     = 0x01
+encoding = "u16_be"
+expr     = "config"
+
+# Threshold readbacks.
+[[sensor.register]]
+addr     = 0x02
+encoding = "i16_be"
+expr     = "lo_thresh"
+
+[[sensor.register]]
+addr     = 0x03
+encoding = "i16_be"
+expr     = "hi_thresh"
+
+[sensor.protocol]
+style = "i2c_pointer"

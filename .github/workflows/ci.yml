@@ -34,6 +34,18 @@ jobs:
       - run: cargo fmt --all --check
       - name: enforce runtime dependency licence boundary
         run: python3 scripts/test-runtime-dependency-licenses.py
+      # Publishability gate: `cargo package` ships only files under a crate's
+      # own directory, so a production include_str!/include_bytes! reaching
+      # outside it compiles from a git checkout and from nowhere else. The
+      # full `cargo package --verify` build cannot run until every workspace
+      # dependency is on crates.io (it resolves against the registry), and
+      # --no-verify never parses Rust source, so neither catches the class;
+      # this script resolves every production include across the publish set
+      # and fails naming file:line. Crate asset mirrors are refreshed by
+      # scripts/sync-crate-assets.sh and pinned byte-identical to their
+      # authoritative copies by each crate's tests/packaged_asset_sync.rs.
+      - name: enforce publish-set includes stay inside their crates
+        run: python3 scripts/check-package-includes.py
 
   clippy:
     name: cargo clippy
