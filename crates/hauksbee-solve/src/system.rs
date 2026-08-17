@@ -9,12 +9,31 @@
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/system.md
 
-use hauksbee_ir::{BOutput, Circuit, Device, DeviceId};
+use std::collections::HashMap;
+
+use hauksbee_ir::{BOutput, Circuit, Device, DeviceId, NodeId};
+
+/// Translation between externally stable `NodeId`s and the dense unknown block.
+///
+/// Parsed netlists use dense node ids, and that overwhelmingly common case keeps
+/// the original subtraction-only lookup. As-built cuts deliberately allocate
+/// ids from a high reserved range; those ids must be compacted or one cut would
+/// manufacture hundreds of thousands of nonexistent MNA rows.
+#[derive(Debug, Clone)]
+enum NodeMap {
+    Dense,
+    Sparse {
+        unknown_of: HashMap<NodeId, usize>,
+        node_of: Vec<NodeId>,
+    },
+}
 
 /// Maps circuit nodes and extra branches to dense unknown indices.
 ///
-/// Node `k` (k >= 1) maps to unknown `k - 1`. Voltage sources and inductors
-/// each get an appended branch-current unknown. Ground is never an unknown.
+/// Dense netlist node `k` (k >= 1) maps to unknown `k - 1`. Sparse out-of-band
+/// ids used by as-built cuts are compacted after the named nodes. Voltage
+/// sources and inductors each get an appended branch-current unknown. Ground
+/// is never an unknown.
 ///
 /// Device-private INTERNAL nodes (dev-plan 04 §3.2): a BJT whose model carries
 /// a positive series resistance (`rb`/`re`/`rc`) owns one internal unknown per
@@ -41,6 +60,9 @@ pub struct Layout {
     pub n_nodes: usize,
     /// Total unknowns = nodes (incl. internal) + extra branches.
     pub size: usize,
+    /// Number of external (netlist/as-built) nodes before private device nodes.
+    external_nodes: usize,
+    node_map: NodeMap,
     /// For each device that owns a branch current, its unknown index.
     /// `None` for devices without a branch.
     branch_of: Vec<Option<usize>>,
@@ -76,7 +98,42 @@ pub struct Layout {
 impl Layout {
     /// Build the layout for a circuit.
     pub fn new(circuit: &Circuit) -> Layout {
-        let n_real = circuit.max_node() as usize;
+        let named_nodes = circuit.node_count().saturating_sub(1);
+        let max_node = circuit.max_node() as usize;
+        let (n_real, node_map) = if max_node == named_nodes {
+            (named_nodes, NodeMap::Dense)
+        } else {
+            // Preserve every ordinary named node's historical unknown index,
+            // then append only the actually referenced out-of-band ids. This
+            // keeps dense circuits bit-identical while a cut node such as
+            // NodeId(800_000) costs one row, not 800_000 rows.
+            let mut node_of: Vec<NodeId> = (1..circuit.node_count())
+                .map(|i| NodeId(i as u32))
+                .collect();
+            let mut extra: Vec<NodeId> = circuit
+                .devices
+                .iter()
+                .flat_map(Device::nodes)
+                .filter(|n| !n.is_ground() && n.0 as usize >= circuit.node_count())
+                .collect();
+            extra.sort_unstable();
+            extra.dedup();
+            node_of.extend(extra);
+            let unknown_of = node_of
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(i, n)| (n, i))
+                .collect();
+            let n_real = node_of.len();
+            (
+                n_real,
+                NodeMap::Sparse {
+                    unknown_of,
+                    node_of,
+                },
+            )
+        };
         let mut branch_of = vec![None; circuit.devices.len()];
         // Internal nodes first (extending the node block), then branches.
         let mut bjt_internal_of: Vec<[Option<usize>; 3]> = Vec::new();
@@ -223,6 +280,8 @@ impl Layout {
         Layout {
             n_nodes,
             size: next,
+            external_nodes: n_real,
+            node_map,
             branch_of,
             bjt_internal_of,
             mos_internal_of,
@@ -237,7 +296,26 @@ impl Layout {
         if node.is_ground() {
             None
         } else {
-            Some(node.0 as usize - 1)
+            match &self.node_map {
+                NodeMap::Dense => {
+                    let i = node.0 as usize - 1;
+                    (i < self.external_nodes).then_some(i)
+                }
+                NodeMap::Sparse { unknown_of, .. } => unknown_of.get(&node).copied(),
+            }
+        }
+    }
+
+    /// External node id represented by a node-block unknown. Device-private
+    /// internal unknowns and branch-current unknowns return `None`.
+    #[inline]
+    pub fn node_id(&self, unknown: usize) -> Option<NodeId> {
+        if unknown >= self.external_nodes {
+            return None;
+        }
+        match &self.node_map {
+            NodeMap::Dense => Some(NodeId((unknown + 1) as u32)),
+            NodeMap::Sparse { node_of, .. } => node_of.get(unknown).copied(),
         }
     }
 
@@ -299,6 +377,32 @@ impl Layout {
         } else {
             Some(ints)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hauksbee_ir::BjtModel;
+
+    #[test]
+    fn sparse_asbuilt_node_id_uses_one_dense_unknown() {
+        let mut c = Circuit::new();
+        let collector = c.node("collector");
+        let floated_base = NodeId(800_000);
+        c.add(Device::Bjt {
+            name: "Q_cut".into(),
+            c: collector,
+            b: floated_base,
+            e: NodeId::GROUND,
+            model: BjtModel::default(),
+        });
+
+        let layout = Layout::new(&c);
+        assert_eq!(layout.n_nodes, 2, "one named node plus one cut terminal");
+        assert_eq!(layout.node(collector), Some(0));
+        assert_eq!(layout.node(floated_base), Some(1));
+        assert_eq!(layout.node_id(1), Some(floated_base));
     }
 }
 
