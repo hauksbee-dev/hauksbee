@@ -1135,7 +1135,8 @@ impl Assumption {
                      DNP if the board does not fit them."
                 ),
                 (None, false) => format!(
-                    "Add a model for {reference} to your models directory, or mark it DNP if \
+                    "Add a model for {reference} (draft one from its datasheet with `hauksbee \
+                     models extract`, or the web UI's Extend button), or mark it DNP if \
                      the board does not fit it."
                 ),
             },
