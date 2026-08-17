@@ -22,6 +22,7 @@ mod exact_override_tiebreak;
 mod external_five_coverage;
 mod extract_model_choice;
 mod layer_docs;
+mod mito_open_part_noise;
 mod module_carrier_resolve;
 mod negative_rail_validation;
 mod pack_format;

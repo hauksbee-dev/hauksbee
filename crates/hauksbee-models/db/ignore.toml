@@ -200,7 +200,11 @@ kind = "ignore"
 description = "Panel breakaway tab / mouse-bite rail, no electrical function"
 
 [models.match]
-footprint_re = "(?i)Breakaway|breakaway[0-9]*|mouse[_ ]?bite"
+# The mouse-bite arm accepts hyphen, underscore, space, or nothing between the
+# words: the mito badge panelizes with `panelization:mouse-bite-2mm-slot`, and
+# the hyphen spelling fell through as three unresolved open parts on tabs whose
+# whole job is to snap off.
+footprint_re = "(?i)Breakaway|mouse[-_ ]?bite"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
