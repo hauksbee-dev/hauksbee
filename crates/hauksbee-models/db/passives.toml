@@ -387,6 +387,29 @@ ohms = 0.01
 "1" = "a"
 "2" = "b"
 
+# Same wire, matched by footprint. A board extracted from copper alone has no
+# schematic lib_id to offer, so the `Device:Fuse` rule above never fires there;
+# the mito badge's two `Fuse:Fuse_0603_1608Metric` parts (value "500mA", a
+# rating, unparseable as ohms) sat as unresolved opens dragging the verdict for
+# a piece of wire. KiCad's stock fuse footprints all live in the `Fuse:`
+# library, and the caveats above (cannot open, 0.01 Ohm is not a datasheet
+# figure) apply verbatim.
+[[models]]
+id = "fuse_footprint"
+kind = "passive"
+passive_class = "fuse"
+description = "Fuse, low-ohm wire (footprint-matched; pre-fault, cannot open)"
+
+[models.match]
+footprint_re = "^Fuse:"
+
+[models.params]
+ohms = 0.01
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Resistors matched by footprint prefix (catch-all for non-Device: lib_ids)
 

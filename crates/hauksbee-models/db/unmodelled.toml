@@ -158,3 +158,31 @@ If it really is a BFP181, the footprint needs its fourth (second emitter) pad, a
 the model then needs a Gummel-Poon card from Infineon's RF SPICE library, which is \
 available on request from them and is not redistributable from third-party mirrors.
 """
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chip antennas labeled generically ("Antenna_Chip"), seen on the mito badge as
+# a Johanson 2450AT42A100E ceramic antenna and a 0402 inductor footprint pressed
+# into monopole duty. The two constructions have OPPOSITE DC behaviour: a
+# ceramic patch is a DC open at its feed, while a conductive monopole or
+# inductor-as-antenna is a DC short from feed to its far pad. Guessing "open"
+# deletes a real DC path on one board; guessing "short" invents one on another.
+# The RF function itself (radiation, tuning, S11) is outside this tool's
+# analysis scope either way, so the only thing a model here could contribute is
+# that DC fact, and the generic label does not carry it.
+[[unmodelled]]
+id = "chip_antenna_generic"
+value_re = "(?i)^Antenna([_ ]?Chip)?$"
+because = """
+"Antenna_Chip" names a function, not a construction. A ceramic chip antenna is \
+a DC open at its feed pad; a monopole or inductor-as-antenna is a DC short \
+across its pads. Those are opposite answers to the one question this tool \
+would ask of the part, and the generic value cannot say which applies, so this \
+library states neither.
+"""
+unlocked_by = """
+The actual part number. Its datasheet's DC continuity (ceramic patch = open, \
+conductive element = short) turns into a one-line model card: an `ignore` \
+entry for the open case, or a `passive` entry with the element's DC resistance \
+for the conductive case. Put it in your models directory keyed on this board's \
+value or footprint.
+"""
