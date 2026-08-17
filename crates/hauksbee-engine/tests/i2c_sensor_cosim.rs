@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
-use hauksbee_server::engine::Engine;
 
 /// Minimal board: U1 ATmega328P with PB0 (pad 14) on net "FLAG", power/ground
 /// wired, and an SDA/SCL pair on the ADC4/ADC5 pads (the AVR TWI pins). The

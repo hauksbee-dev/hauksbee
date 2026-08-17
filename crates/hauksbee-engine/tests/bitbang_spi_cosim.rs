@@ -23,8 +23,8 @@ use std::sync::{Arc, Mutex};
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::{BitBangSpiPins, HauksbeeEngine, RegisterMapSensor, SpiBus};
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
-use hauksbee_server::engine::Engine;
 
 /// The shipped declarative ICM-42605 spec (same file the boot-coverage hunts
 /// use); WHO_AM_I = 0x42, GYRO_CONFIG1/GYRO_ACCEL_CONFIG0 = 0x06.

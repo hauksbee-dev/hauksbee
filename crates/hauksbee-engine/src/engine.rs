@@ -16,12 +16,12 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use hauksbee_extract::ExtractedBoard;
-use hauksbee_models::{Bus, ModelLibrary};
-use hauksbee_server::engine::Engine;
-use hauksbee_server::protocol::{
+use hauksbee_frontdoor_api::engine::Engine;
+use hauksbee_frontdoor_api::protocol::{
     BoardInfo, ChemistryConfig, FaultInfo, LiveRegisterMapSpec, PeripheralInfo, PowerSupplyConfig,
     ShortsDisclosure, SimFrame, SolverControls, SupplyState, UsbSpecConfig,
 };
+use hauksbee_models::{Bus, ModelLibrary};
 use hauksbee_solve::{Integration, SolverOptions, StepControl};
 
 use crate::binder::{bind_board, BoundBoard};
@@ -404,7 +404,7 @@ impl Engine for HauksbeeEngine {
 
     fn attach_peripheral(
         &mut self,
-        spec: hauksbee_server::protocol::LivePeripheralSpec,
+        spec: hauksbee_frontdoor_api::protocol::LivePeripheralSpec,
     ) -> Result<(), String> {
         use crate::peripherals::controls::{Pushbutton, Stimulus, StimulusKind, ToggleSwitch};
         use hauksbee_ir::{NodeId, SourceKind};

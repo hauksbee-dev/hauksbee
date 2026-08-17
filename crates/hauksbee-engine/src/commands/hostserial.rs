@@ -401,7 +401,7 @@ pub fn run_session(
     cfg: &SerialSessionConfig,
     announce: &mut dyn FnMut(&str),
 ) -> Result<SerialSessionSummary> {
-    use hauksbee_server::engine::Engine;
+    use hauksbee_frontdoor_api::engine::Engine;
 
     if engine.scheduler().mcu_identities().is_empty() {
         bail!(

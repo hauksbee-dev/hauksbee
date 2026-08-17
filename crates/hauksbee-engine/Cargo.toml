@@ -19,10 +19,11 @@ description = "Integration heart: binds an extracted board to models and co-simu
 # dependency here sets `default-features = false` and each feature forwards
 # explicitly (cargo cannot un-default a dependency from the command line).
 # See docs/about/release-and-licensing.md.
-default = ["avr", "renode", "qemu"]
-avr = ["hauksbee-mcu/avr", "hauksbee-server/avr"]
-renode = ["hauksbee-mcu/renode", "hauksbee-server/renode"]
-qemu = ["hauksbee-mcu/qemu", "hauksbee-server/qemu"]
+default = ["serve", "avr", "renode", "qemu"]
+serve = ["dep:hauksbee-server"]
+avr = ["hauksbee-mcu/avr", "hauksbee-server?/avr"]
+renode = ["hauksbee-mcu/renode", "hauksbee-server?/renode"]
+qemu = ["hauksbee-mcu/qemu", "hauksbee-server?/qemu"]
 # Embed the built web app (frontend/dist, minus the large 3D demo models) into
 # the binary, extracted to ~/.cache/hauksbee on first `serve`. OFF by default:
 # a source checkout serves the live frontend/dist directly (fresher, and the
@@ -59,7 +60,8 @@ hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
 hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
 hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
 hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false }
-hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false }
+hauksbee-frontdoor-api = { version = "0.1.0", path = "../hauksbee-frontdoor-api" }
+hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false, optional = true }
 forge-model = { workspace = true }
 forge-codegen = { workspace = true }
 forge-sexpr.workspace = true

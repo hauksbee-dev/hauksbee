@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "serve")]
 use hauksbee_server::Server;
 
 use crate::engine::HauksbeeEngine;
@@ -105,9 +106,9 @@ pub fn file_name(p: &Path) -> String {
 /// (`deps::install_dep`, which enforces its own one-at-a-time slot, timeout, and
 /// output cap), and datasheet extraction goes through `webextract` (which holds
 /// the same consent contract `hauksbee models extract` holds).
-pub fn deps_hooks() -> hauksbee_server::frontdoor::ToolHooks {
+pub fn deps_hooks() -> hauksbee_frontdoor_api::frontdoor::ToolHooks {
     use std::sync::Arc;
-    hauksbee_server::frontdoor::ToolHooks {
+    hauksbee_frontdoor_api::frontdoor::ToolHooks {
         deps_status: Arc::new(crate::deps::deps_json),
         install: Arc::new(|id, progress| crate::deps::install_dep(id, progress)),
         datasheet: crate::webextract::hooks(),
@@ -117,7 +118,7 @@ pub fn deps_hooks() -> hauksbee_server::frontdoor::ToolHooks {
 /// The shipped browser analyzer, including optional Eagle schematic identity
 /// and net-tie evidence. A supplied but invalid companion is a report refusal,
 /// never a silent fallback to board-only analysis.
-pub fn schematic_analyzer() -> hauksbee_server::frontdoor::SchematicAnalyzer {
+pub fn schematic_analyzer() -> hauksbee_frontdoor_api::frontdoor::SchematicAnalyzer {
     std::sync::Arc::new(|name, contents, firmware, schematic| {
         let norm = match crate::board_input::from_bytes(name, contents) {
             Ok(norm) => norm,
@@ -169,7 +170,7 @@ pub fn schematic_analyzer() -> hauksbee_server::frontdoor::SchematicAnalyzer {
 /// message comes back as the launch error instead of a silent board-only
 /// downgrade. Engine-build failures (unloadable firmware, missing emulator)
 /// surface verbatim too; the frontend keeps the report up and shows them.
-pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
+pub fn live_launcher() -> hauksbee_frontdoor_api::frontdoor::LiveLauncher {
     let launch = schematic_live_launcher();
     std::sync::Arc::new(move |name, contents, firmware| launch(name, contents, firmware, None))
 }
@@ -194,8 +195,8 @@ pub(crate) fn resumable_board_file(
         .map(|text| (name.to_string(), text.to_string()))
 }
 
-pub fn schematic_live_launcher() -> hauksbee_server::frontdoor::SchematicLiveLauncher {
-    use hauksbee_server::frontdoor::LiveLaunch;
+pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::SchematicLiveLauncher {
+    use hauksbee_frontdoor_api::frontdoor::LiveLaunch;
     use std::io::Write as _;
     use std::sync::Arc;
     Arc::new(
@@ -294,6 +295,7 @@ pub fn schematic_live_launcher() -> hauksbee_server::frontdoor::SchematicLiveLau
     )
 }
 
+#[cfg(feature = "serve")]
 pub fn serve(
     mut engine: HauksbeeEngine,
     port: u16,
@@ -329,7 +331,7 @@ pub fn serve(
         let analyze = schematic_analyzer();
         // Same checks backend as `hauksbee serve`, so the web checks panel works
         // in the preloaded (`run --serve`) flow too.
-        let check: hauksbee_server::frontdoor::SchematicCheckRunner =
+        let check: hauksbee_frontdoor_api::frontdoor::SchematicCheckRunner =
             Arc::new(|name, contents, fw, schematic, spec| {
                 crate::webcheck::run_web_check_with_schematic(name, contents, fw, schematic, spec)
             });
@@ -382,6 +384,19 @@ pub fn serve(
             )
             .await
     })
+}
+
+/// Preserve the CLI contract in builds that deliberately omit the web server.
+#[cfg(not(feature = "serve"))]
+pub fn serve(
+    _engine: HauksbeeEngine,
+    _port: u16,
+    _board_file: Option<(String, String)>,
+    _startup_json: String,
+    _open: bool,
+    _no_open: bool,
+) -> anyhow::Result<()> {
+    anyhow::bail!("hauksbee was built without the serve feature")
 }
 
 /// Advisory staleness check for the served React bundle. `frontend/dist` is a

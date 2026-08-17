@@ -383,7 +383,7 @@ fn npm1300_shphld_feeds_gpio_on_120_and_is_clean_on_121() {
 #[test]
 fn behavioral_parts_do_not_manufacture_faults_on_clean_board() {
     use hauksbee_engine::HauksbeeEngine;
-    use hauksbee_server::engine::Engine;
+    use hauksbee_frontdoor_api::engine::Engine;
     let Some(root) = corpus_root() else {
         return;
     };

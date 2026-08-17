@@ -13,9 +13,9 @@ use hauksbee_engine::binder::bind_board;
 #[cfg(feature = "avr")]
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
-use hauksbee_models::ModelLibrary;
 #[cfg(feature = "avr")]
-use hauksbee_server::engine::Engine;
+use hauksbee_frontdoor_api::engine::Engine;
+use hauksbee_models::ModelLibrary;
 
 #[test]
 fn synthetic_board_binds() {

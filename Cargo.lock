@@ -1324,6 +1324,7 @@ dependencies = [
  "clap",
  "hauksbee-engine",
  "hauksbee-extract",
+ "hauksbee-frontdoor-api",
  "hauksbee-ir",
  "hauksbee-mcu",
  "hauksbee-models",
@@ -1353,6 +1354,7 @@ dependencies = [
  "forge-sexpr",
  "hauksbee-extract",
  "hauksbee-forge-codegen",
+ "hauksbee-frontdoor-api",
  "hauksbee-ir",
  "hauksbee-mcu",
  "hauksbee-models",
@@ -1407,6 +1409,13 @@ version = "0.1.0"
 dependencies = [
  "forge-model",
  "forge-sexpr",
+]
+
+[[package]]
+name = "hauksbee-frontdoor-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1481,6 +1490,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "hauksbee-frontdoor-api",
  "hauksbee-mcu",
  "serde",
  "serde_json",

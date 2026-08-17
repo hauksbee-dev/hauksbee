@@ -11,10 +11,10 @@ use std::collections::HashMap;
 use hauksbee_engine::stress::{DeviceMeta, FaultKind, StressMonitor};
 use hauksbee_engine::thermal::{junction_temp_c, theta_ja_from_footprint};
 use hauksbee_engine::HauksbeeEngine;
+use hauksbee_frontdoor_api::engine::Engine;
+use hauksbee_frontdoor_api::protocol::SolverControls;
 use hauksbee_ir::{Circuit, Device, NodeId};
 use hauksbee_models::schema::{ComponentKind, Ratings};
-use hauksbee_server::engine::Engine;
-use hauksbee_server::protocol::SolverControls;
 
 /// The canonical hand-check: 0.5 W in a SOT-23 (theta_JA = 250 C/W) at 25 C
 /// ambient reaches Tj = 25 + 0.5*250 = 150 C. We drive the StressMonitor

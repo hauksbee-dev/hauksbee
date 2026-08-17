@@ -56,7 +56,11 @@ fn board(dir: &Path, with_pulldown: bool) -> PathBuf {
          \x20   (net (code \"1\") (name \"SWCLK\")\n{swclk_nodes})\n\
          \x20   (net (code \"2\") (name \"GND\")\n{gnd_nodes})\n  ))\n"
     );
-    let name = if with_pulldown { "fixed.net" } else { "faulty.net" };
+    let name = if with_pulldown {
+        "fixed.net"
+    } else {
+        "faulty.net"
+    };
     let path = dir.join(name);
     std::fs::write(&path, net).expect("write board");
     path
@@ -139,7 +143,9 @@ fn a_modeled_pulldown_defines_the_net_and_the_opens_become_a_caveat() {
     assert!(!voltage.invalid);
     assert!(
         voltage.detail.contains("R33")
-            && voltage.detail.contains("unmodelled part on the net drives or loads it"),
+            && voltage
+                .detail
+                .contains("unmodelled part on the net drives or loads it"),
         "the caveat names the defining element and the residual assumption: {}",
         voltage.detail
     );

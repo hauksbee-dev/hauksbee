@@ -10,8 +10,8 @@ mod common;
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
-use hauksbee_server::engine::Engine;
 
 /// The stormduino board, if this machine has the corpus. It is a private
 /// board, so it is absent from corpus.toml and from any public checkout.
