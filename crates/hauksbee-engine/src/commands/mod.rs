@@ -12,6 +12,7 @@ pub mod hostserial;
 pub mod install;
 pub mod models;
 pub mod run;
+#[cfg(feature = "serve")]
 pub mod serve;
 pub mod sim;
 pub mod watch;

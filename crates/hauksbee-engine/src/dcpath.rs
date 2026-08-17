@@ -149,7 +149,11 @@ fn device_nodes(device: &Device) -> Vec<NodeId> {
             nodes
         }
         Device::VSwitch {
-            a, b, ctrl_p, ctrl_n, ..
+            a,
+            b,
+            ctrl_p,
+            ctrl_n,
+            ..
         } => vec![*a, *b, *ctrl_p, *ctrl_n],
         other => other_nodes_conservative(other),
     }

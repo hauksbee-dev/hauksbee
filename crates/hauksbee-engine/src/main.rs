@@ -1516,7 +1516,17 @@ fn main() -> anyhow::Result<()> {
             )
         }
         Command::Serve(args) => {
-            hauksbee_engine::commands::serve::run(args.port, args.open, args.no_open)
+            #[cfg(feature = "serve")]
+            {
+                hauksbee_engine::commands::serve::run(args.port, args.open, args.no_open)
+            }
+            #[cfg(not(feature = "serve"))]
+            {
+                let _ = args;
+                Err(anyhow::anyhow!(
+                    "hauksbee was built without the serve feature"
+                ))
+            }
         }
         Command::Doctor(args) => hauksbee_engine::commands::doctor::run(args.backends, args.json),
         // Same no-`?` rule as Run above: an unknown `--example` name must

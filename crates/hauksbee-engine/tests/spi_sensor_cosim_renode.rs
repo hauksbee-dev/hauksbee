@@ -24,9 +24,9 @@ use std::sync::{Arc, Mutex};
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::{HauksbeeEngine, Mcp3008, SpiBus};
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_mcu::renode::is_available;
 use hauksbee_models::ModelLibrary;
-use hauksbee_server::engine::Engine;
 use std::path::PathBuf;
 
 fn board_text() -> String {

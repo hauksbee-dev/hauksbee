@@ -16,7 +16,7 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use hauksbee_server::engine::Engine;
+use hauksbee_frontdoor_api::engine::Engine;
 
 use crate::engine::HauksbeeEngine;
 

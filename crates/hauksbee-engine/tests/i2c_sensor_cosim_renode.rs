@@ -47,8 +47,8 @@
 use std::sync::{Arc, Mutex};
 
 use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_mcu::renode::is_available;
-use hauksbee_server::engine::Engine;
 use std::path::PathBuf;
 
 /// Minimal board: U1 STM32F103, power/ground on the usual pads, I2C bus on

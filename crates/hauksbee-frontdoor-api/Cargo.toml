@@ -1,0 +1,18 @@
+[package]
+name = "hauksbee-frontdoor-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared engine, protocol, and front-door callback contracts for hauksbee."
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

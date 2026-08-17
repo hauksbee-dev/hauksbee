@@ -390,7 +390,10 @@ fn is_resistor_array(c: &Component) -> bool {
     let fp = c.footprint.to_ascii_lowercase();
     r.starts_with('R')
         && connected_pads(c) >= 3
-        && (fp.contains("r_array") || fp.contains("cay16") || fp.contains("cat16") || fp.contains("exb"))
+        && (fp.contains("r_array")
+            || fp.contains("cay16")
+            || fp.contains("cat16")
+            || fp.contains("exb"))
 }
 
 /// Is this an I2C level translator that provides its own bus pull-ups, so an
@@ -897,10 +900,8 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                         continue;
                     }
                     if let Some(oid) = op.net {
-                        let far_is_ground = board
-                            .net(oid)
-                            .map(|n| is_ground(&n.name))
-                            .unwrap_or(false);
+                        let far_is_ground =
+                            board.net(oid).map(|n| is_ground(&n.name)).unwrap_or(false);
                         if !far_is_ground && net_is_raillike(board, oid) {
                             if crate::dnp::fitted_from_dnp_policy(c) {
                                 dnp_pullup_ref.get_or_insert_with(|| c.reference.clone());
@@ -1085,9 +1086,30 @@ fn sd_role(name: &str) -> Option<&'static str> {
 fn is_card_socket_by_name(c: &Component) -> bool {
     let hay = format!("{} {} {}", c.footprint, c.lib_id, c.value).to_ascii_lowercase();
     [
-        "microsd", "micro_sd", "micro-sd", "micro sd", "sdcard", "sd_card", "sd-card", "sd card",
-        "tf_card", "tf-card", "tfcard", "tf-01", "tf_01", "tf01", "memorycard", "memory_card",
-        "connector_card", "sd_socket", "usd_", "emmc_socket", "dm3at", "dm3bt", "dm3d", "dm1aa",
+        "microsd",
+        "micro_sd",
+        "micro-sd",
+        "micro sd",
+        "sdcard",
+        "sd_card",
+        "sd-card",
+        "sd card",
+        "tf_card",
+        "tf-card",
+        "tfcard",
+        "tf-01",
+        "tf_01",
+        "tf01",
+        "memorycard",
+        "memory_card",
+        "connector_card",
+        "sd_socket",
+        "usd_",
+        "emmc_socket",
+        "dm3at",
+        "dm3bt",
+        "dm3d",
+        "dm1aa",
     ]
     .iter()
     .any(|p| hay.contains(p))
@@ -1109,8 +1131,25 @@ fn is_card_socket_structurally(board: &ExtractedBoard, c: &Component) -> bool {
     let fp = format!("{} {}", c.footprint, c.lib_id).to_ascii_lowercase();
     if is_pin_array_package(&c.footprint)
         || [
-            "header", "pinhead", "fpc", "ffc", "b2b", "board-to-board", "sodimm", "dimm", "edge",
-            "df40", "df12", "fh12", "fh34", "jst", "slimstack", "mezz", "m.2", "m2_", "minipcie",
+            "header",
+            "pinhead",
+            "fpc",
+            "ffc",
+            "b2b",
+            "board-to-board",
+            "sodimm",
+            "dimm",
+            "edge",
+            "df40",
+            "df12",
+            "fh12",
+            "fh34",
+            "jst",
+            "slimstack",
+            "mezz",
+            "m.2",
+            "m2_",
+            "minipcie",
             "sim",
         ]
         .iter()
@@ -1165,9 +1204,11 @@ fn is_test_point_or_hole(c: &Component) -> bool {
 fn is_emmc_device(c: &Component) -> bool {
     let v = c.value.to_ascii_uppercase();
     v.contains("EMMC")
-        || ["KLM", "THGBM", "THGAF", "THGAM", "MTFC", "H26M", "SDINB", "SDINA"]
-            .iter()
-            .any(|p| v.starts_with(p))
+        || [
+            "KLM", "THGBM", "THGAF", "THGAM", "MTFC", "H26M", "SDINB", "SDINA",
+        ]
+        .iter()
+        .any(|p| v.starts_with(p))
 }
 
 /// SD-bus level translators / port expanders that integrate their own
@@ -1179,7 +1220,14 @@ fn is_emmc_device(c: &Component) -> bool {
 fn is_sd_bus_switch(c: &Component) -> bool {
     let v = c.value.to_ascii_uppercase();
     [
-        "TXS0206", "TXS0208", "TXS02612", "FSA2567", "NVT4857", "TS3A27518", "NLSX", "PI4ULS",
+        "TXS0206",
+        "TXS0208",
+        "TXS02612",
+        "FSA2567",
+        "NVT4857",
+        "TS3A27518",
+        "NLSX",
+        "PI4ULS",
     ]
     .iter()
     .any(|p| v.contains(p))
@@ -1265,10 +1313,7 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                         continue;
                     }
                     let Some(oid) = op.net else { continue };
-                    let far_is_ground = board
-                        .net(oid)
-                        .map(|n| is_ground(&n.name))
-                        .unwrap_or(false);
+                    let far_is_ground = board.net(oid).map(|n| is_ground(&n.name)).unwrap_or(false);
                     if !far_is_ground && net_is_raillike(board, oid) {
                         if parsed.is_none() {
                             unjudgeable = true;
@@ -1367,8 +1412,7 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                                 dnp_pullup_ref = far_dnp;
                             }
                             for (fc, _fp) in members(board, oid) {
-                                if !AssemblyState::of(fc).is_present()
-                                    || is_test_point_or_hole(fc)
+                                if !AssemblyState::of(fc).is_present() || is_test_point_or_hole(fc)
                                 {
                                     continue;
                                 }
@@ -2093,20 +2137,42 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "sd_cmd".into() },
-                Net { id: 2, name: "sd_data_1".into() },
+                Net {
+                    id: 1,
+                    name: "sd_cmd".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "sd_data_1".into(),
+                },
             ],
             components: vec![
-                part("U1", "STM32H533VET6", "LQFP-100", vec![pin("1", Some(1)), pin("2", Some(2))]),
-                part("J3", "0472192001", "microSD_socket", vec![pin("3", Some(1)), pin("5", Some(2))]),
+                part(
+                    "U1",
+                    "STM32H533VET6",
+                    "LQFP-100",
+                    vec![pin("1", Some(1)), pin("2", Some(2))],
+                ),
+                part(
+                    "J3",
+                    "0472192001",
+                    "microSD_socket",
+                    vec![pin("3", Some(1)), pin("5", Some(2))],
+                ),
             ],
         };
         let report = board.net_lint();
         let f: Vec<_> = report.of_check(LintCheck::MissingSdPullup).collect();
         assert_eq!(f.len(), 2, "CMD and DAT1 both lack pull-ups: {f:?}");
-        let cmd = f.iter().find(|x| x.nets == ["sd_cmd"]).expect("cmd finding");
+        let cmd = f
+            .iter()
+            .find(|x| x.nets == ["sd_cmd"])
+            .expect("cmd finding");
         assert_eq!(cmd.severity, Severity::Medium);
-        let dat1 = f.iter().find(|x| x.nets == ["sd_data_1"]).expect("dat1 finding");
+        let dat1 = f
+            .iter()
+            .find(|x| x.nets == ["sd_data_1"])
+            .expect("dat1 finding");
         assert_eq!(dat1.severity, Severity::Low);
     }
 
@@ -2117,13 +2183,24 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "sd_cmd".into() },
-                Net { id: 3, name: "+3V3".into() },
+                Net {
+                    id: 1,
+                    name: "sd_cmd".into(),
+                },
+                Net {
+                    id: 3,
+                    name: "+3V3".into(),
+                },
             ],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part("R11", "10k", "R_0402", vec![pin("1", Some(1)), pin("2", Some(3))]),
+                part(
+                    "R11",
+                    "10k",
+                    "R_0402",
+                    vec![pin("1", Some(1)), pin("2", Some(3))],
+                ),
             ],
         };
         let report = board.net_lint();
@@ -2136,7 +2213,10 @@ mod sd_pullup_tests {
     fn breakout_without_host_is_silent() {
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "sd_cmd".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "sd_cmd".into(),
+            }],
             components: vec![
                 part("J1", "HEADER", "PinHeader_1x08", vec![pin("1", Some(1))]),
                 part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
@@ -2154,11 +2234,22 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "SD_D0".into() },
-                Net { id: 2, name: "SD_D3".into() },
+                Net {
+                    id: 1,
+                    name: "SD_D0".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "SD_D3".into(),
+                },
             ],
             components: vec![
-                part("U1", "STM32F429ZIT6", "LQFP-144", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part(
+                    "U1",
+                    "STM32F429ZIT6",
+                    "LQFP-144",
+                    vec![pin("1", Some(1)), pin("2", Some(2))],
+                ),
                 part(
                     "U2",
                     "MT48LC16M16A2",
@@ -2182,7 +2273,10 @@ mod sd_pullup_tests {
     fn breakout_with_esd_array_is_silent() {
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "sd_cmd".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "sd_cmd".into(),
+            }],
             components: vec![
                 part("J1", "HEADER", "PinHeader_1x08", vec![pin("1", Some(1))]),
                 part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
@@ -2190,7 +2284,12 @@ mod sd_pullup_tests {
                     "D1",
                     "TPD4E05U06",
                     "SOT-23-6",
-                    vec![pin("1", Some(1)), pin("2", None), pin("3", None), pin("6", None)],
+                    vec![
+                        pin("1", Some(1)),
+                        pin("2", None),
+                        pin("3", None),
+                        pin("6", None),
+                    ],
                 ),
             ],
         };
@@ -2205,15 +2304,34 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "sd_cmd".into() },
-                Net { id: 2, name: "sd_cmd_f".into() },
-                Net { id: 9, name: "GND".into() },
+                Net {
+                    id: 1,
+                    name: "sd_cmd".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "sd_cmd_f".into(),
+                },
+                Net {
+                    id: 9,
+                    name: "GND".into(),
+                },
             ],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part("R5", "33", "R_0402", vec![pin("1", Some(1)), pin("2", Some(2))]),
-                part("C7", "22p", "C_0402", vec![pin("1", Some(2)), pin("2", Some(9))]),
+                part(
+                    "R5",
+                    "33",
+                    "R_0402",
+                    vec![pin("1", Some(1)), pin("2", Some(2))],
+                ),
+                part(
+                    "C7",
+                    "22p",
+                    "C_0402",
+                    vec![pin("1", Some(2)), pin("2", Some(9))],
+                ),
             ],
         };
         let report = board.net_lint();
@@ -2230,7 +2348,10 @@ mod sd_pullup_tests {
     fn hierarchical_sheet_name_still_fires() {
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "/uSD Connector/CMD".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "/uSD Connector/CMD".into(),
+            }],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
@@ -2250,21 +2371,39 @@ mod sd_pullup_tests {
     fn dnp_pullup_does_not_silently_clear() {
         use crate::dnp::DnpPolicy;
         let make = || {
-            let mut r =
-                part("R11", "10k", "R_0402", vec![pin("1", Some(1)), pin("2", Some(3))]);
+            let mut r = part(
+                "R11",
+                "10k",
+                "R_0402",
+                vec![pin("1", Some(1)), pin("2", Some(3))],
+            );
             r.dnp = true;
             ExtractedBoard {
                 name: "b".into(),
                 nets: vec![
-                    Net { id: 1, name: "sd_cmd".into() },
-                    Net { id: 3, name: "+3V3".into() },
-                    Net { id: 4, name: "sd_data_1".into() },
+                    Net {
+                        id: 1,
+                        name: "sd_cmd".into(),
+                    },
+                    Net {
+                        id: 3,
+                        name: "+3V3".into(),
+                    },
+                    Net {
+                        id: 4,
+                        name: "sd_data_1".into(),
+                    },
                 ],
                 components: vec![
                     // The host reaches DAT1 too, so the socket reads as
                     // SD-mode wiring (the SPI heuristic would otherwise
                     // soften the severity).
-                    part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1)), pin("2", Some(4))]),
+                    part(
+                        "U1",
+                        "MCU",
+                        "LQFP-100",
+                        vec![pin("1", Some(1)), pin("2", Some(4))],
+                    ),
                     part(
                         "J3",
                         "SOCKET",
@@ -2326,13 +2465,24 @@ mod sd_pullup_tests {
     #[test]
     fn i2c_dnp_pullup_surfaces_instead_of_clearing() {
         use crate::dnp::DnpPolicy;
-        let mut r = part("R2", "4k7", "R_0402", vec![pin("1", Some(1)), pin("2", Some(3))]);
+        let mut r = part(
+            "R2",
+            "4k7",
+            "R_0402",
+            vec![pin("1", Some(1)), pin("2", Some(3))],
+        );
         r.dnp = true;
         let mut board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "SDA".into() },
-                Net { id: 3, name: "+3V3".into() },
+                Net {
+                    id: 1,
+                    name: "SDA".into(),
+                },
+                Net {
+                    id: 3,
+                    name: "+3V3".into(),
+                },
             ],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
@@ -2346,7 +2496,11 @@ mod sd_pullup_tests {
         let report = board.net_lint();
         let f: Vec<_> = report.of_check(LintCheck::MissingI2cPullup).collect();
         assert_eq!(f.len(), 1);
-        assert_eq!(f[0].severity, Severity::Medium, "regime severity, not a flat note");
+        assert_eq!(
+            f[0].severity,
+            Severity::Medium,
+            "regime severity, not a flat note"
+        );
         assert!(f[0].message.contains("R2") && f[0].message.contains("do-not-populate"));
     }
 
@@ -2359,13 +2513,19 @@ mod sd_pullup_tests {
         for (value, footprint) in [("TF-01A", "TF-01A"), ("SOCKET", "Hirose_DM3AT-SF-PEJM5")] {
             let board = ExtractedBoard {
                 name: "b".into(),
-                nets: vec![Net { id: 1, name: "SD_CMD".into() }],
+                nets: vec![Net {
+                    id: 1,
+                    name: "SD_CMD".into(),
+                }],
                 components: vec![
                     part("U1", "STM32H7", "LQFP-100", vec![pin("1", Some(1))]),
                     part("J2", value, footprint, vec![pin("3", Some(1))]),
                 ],
             };
-            let n = board.net_lint().of_check(LintCheck::MissingSdPullup).count();
+            let n = board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count();
             assert_eq!(n, 1, "socket {value}/{footprint} not recognised");
         }
         // Structural: nothing in the name says card, but one connector spans
@@ -2373,9 +2533,18 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "SD_CMD".into() },
-                Net { id: 2, name: "SD_D0".into() },
-                Net { id: 3, name: "SD_CLK".into() },
+                Net {
+                    id: 1,
+                    name: "SD_CMD".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "SD_D0".into(),
+                },
+                Net {
+                    id: 3,
+                    name: "SD_CLK".into(),
+                },
             ],
             components: vec![
                 part(
@@ -2393,7 +2562,10 @@ mod sd_pullup_tests {
             ],
         };
         assert_eq!(
-            board.net_lint().of_check(LintCheck::MissingSdPullup).count(),
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
             2,
             "structural socket recognition (CMD and D0 fire; CLK never does)"
         );
@@ -2405,14 +2577,28 @@ mod sd_pullup_tests {
     fn test_point_does_not_disable() {
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "sd_cmd".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "sd_cmd".into(),
+            }],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part("TP4", "TestPoint", "TestPoint:TestPoint_Pad_D1.5mm", vec![pin("1", Some(1))]),
+                part(
+                    "TP4",
+                    "TestPoint",
+                    "TestPoint:TestPoint_Pad_D1.5mm",
+                    vec![pin("1", Some(1))],
+                ),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 1);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            1
+        );
     }
 
     /// SD buses routinely interpose a small series damper between host and
@@ -2422,22 +2608,54 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "sd_cmd".into() },
-                Net { id: 2, name: "sd_cmd_mcu".into() },
-                Net { id: 3, name: "+3V3".into() },
+                Net {
+                    id: 1,
+                    name: "sd_cmd".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "sd_cmd_mcu".into(),
+                },
+                Net {
+                    id: 3,
+                    name: "+3V3".into(),
+                },
             ],
             components: vec![
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part("R5", "33", "R_0402", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part(
+                    "R5",
+                    "33",
+                    "R_0402",
+                    vec![pin("1", Some(1)), pin("2", Some(2))],
+                ),
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(2))]),
-                part("R11", "10k", "R_0402", vec![pin("1", Some(2)), pin("2", Some(3))]),
+                part(
+                    "R11",
+                    "10k",
+                    "R_0402",
+                    vec![pin("1", Some(2)), pin("2", Some(3))],
+                ),
                 // An ESD array on the socket-side net so the active-part
                 // guard is not what saves this board.
-                part("D2", "TPD4E05U06", "SOT-23-6", vec![pin("1", Some(1)), pin("2", None), pin("3", None), pin("4", None)]),
+                part(
+                    "D2",
+                    "TPD4E05U06",
+                    "SOT-23-6",
+                    vec![
+                        pin("1", Some(1)),
+                        pin("2", None),
+                        pin("3", None),
+                        pin("4", None),
+                    ],
+                ),
             ],
         };
         assert_eq!(
-            board.net_lint().of_check(LintCheck::MissingSdPullup).count(),
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
             0,
             "the 10k behind the 33R damper is the pull-up"
         );
@@ -2449,14 +2667,28 @@ mod sd_pullup_tests {
     fn bus_switch_on_the_net_abstains() {
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "sd_cmd".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "sd_cmd".into(),
+            }],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part("U7", "FSA2567", "QFN-16", vec![pin("2", Some(1)), pin("3", None), pin("4", None)]),
+                part(
+                    "U7",
+                    "FSA2567",
+                    "QFN-16",
+                    vec![pin("2", Some(1)), pin("3", None), pin("4", None)],
+                ),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            0
+        );
     }
 
     /// A soldered-down eMMC is the card; the JEDEC pull-up requirement is the
@@ -2465,7 +2697,10 @@ mod sd_pullup_tests {
     fn down_emmc_without_pullup_fires() {
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "EMMC_CMD".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "EMMC_CMD".into(),
+            }],
             components: vec![
                 part("U1", "iMX6ULL", "BGA-289", vec![pin("A1", Some(1))]),
                 part("U8", "KLM8G1GETF-B041", "BGA-153", vec![pin("M5", Some(1))]),
@@ -2488,22 +2723,52 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "sd_cmd".into() },
-                Net { id: 2, name: "sd_data_0".into() },
-                Net { id: 3, name: "sd_clk".into() },
+                Net {
+                    id: 1,
+                    name: "sd_cmd".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "sd_data_0".into(),
+                },
+                Net {
+                    id: 3,
+                    name: "sd_clk".into(),
+                },
             ],
             components: vec![
-                part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1)), pin("5", Some(2)), pin("4", Some(3))]),
+                part(
+                    "J2",
+                    "SOCKET",
+                    "microSD_socket",
+                    vec![pin("3", Some(1)), pin("5", Some(2)), pin("4", Some(3))],
+                ),
                 part(
                     "J1",
                     "HEADER",
                     "Connector_PinHeader:PinHeader_2x05_P2.54mm",
                     vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))],
                 ),
-                part("D1", "TPD4E05U06", "SOT-23-6", vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", None), pin("4", None)]),
+                part(
+                    "D1",
+                    "TPD4E05U06",
+                    "SOT-23-6",
+                    vec![
+                        pin("1", Some(1)),
+                        pin("2", Some(2)),
+                        pin("3", None),
+                        pin("4", None),
+                    ],
+                ),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            0
+        );
     }
 
     /// A mezzanine/FPC carrying the bus to a daughtercard is the bus leaving
@@ -2513,12 +2778,26 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "sd_cmd".into() },
-                Net { id: 2, name: "sd_data_0".into() },
-                Net { id: 3, name: "sd_clk".into() },
+                Net {
+                    id: 1,
+                    name: "sd_cmd".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "sd_data_0".into(),
+                },
+                Net {
+                    id: 3,
+                    name: "sd_clk".into(),
+                },
             ],
             components: vec![
-                part("U1", "STM32H7", "LQFP-100", vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))]),
+                part(
+                    "U1",
+                    "STM32H7",
+                    "LQFP-100",
+                    vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))],
+                ),
                 part(
                     "J5",
                     "FH12",
@@ -2527,7 +2806,13 @@ mod sd_pullup_tests {
                 ),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            0
+        );
     }
 
     /// SDRAM broken out to a SODIMM: many SD_D* roles on one connector, but
@@ -2537,22 +2822,55 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "SD_D0".into() },
-                Net { id: 2, name: "SD_D1".into() },
-                Net { id: 3, name: "SD_D2".into() },
-                Net { id: 4, name: "SD_CLK".into() },
+                Net {
+                    id: 1,
+                    name: "SD_D0".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "SD_D1".into(),
+                },
+                Net {
+                    id: 3,
+                    name: "SD_D2".into(),
+                },
+                Net {
+                    id: 4,
+                    name: "SD_CLK".into(),
+                },
             ],
             components: vec![
-                part("U1", "FPGA", "BGA-256", vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3)), pin("4", Some(4))]),
+                part(
+                    "U1",
+                    "FPGA",
+                    "BGA-256",
+                    vec![
+                        pin("1", Some(1)),
+                        pin("2", Some(2)),
+                        pin("3", Some(3)),
+                        pin("4", Some(4)),
+                    ],
+                ),
                 part(
                     "J1",
                     "SODIMM-144",
                     "Connector_SODIMM:SODIMM-144",
-                    vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3)), pin("4", Some(4))],
+                    vec![
+                        pin("1", Some(1)),
+                        pin("2", Some(2)),
+                        pin("3", Some(3)),
+                        pin("4", Some(4)),
+                    ],
                 ),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            0
+        );
     }
 
     /// The series-element hop must never walk into ground: everything touches
@@ -2562,19 +2880,41 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "sd_cmd".into() },
-                Net { id: 8, name: "GND".into() },
-                Net { id: 3, name: "+3V3".into() },
+                Net {
+                    id: 1,
+                    name: "sd_cmd".into(),
+                },
+                Net {
+                    id: 8,
+                    name: "GND".into(),
+                },
+                Net {
+                    id: 3,
+                    name: "+3V3".into(),
+                },
             ],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part("R2", "100", "R_0402", vec![pin("1", Some(1)), pin("2", Some(8))]),
-                part("R9", "100k", "R_0402", vec![pin("1", Some(3)), pin("2", Some(8))]),
+                part(
+                    "R2",
+                    "100",
+                    "R_0402",
+                    vec![pin("1", Some(1)), pin("2", Some(8))],
+                ),
+                part(
+                    "R9",
+                    "100k",
+                    "R_0402",
+                    vec![pin("1", Some(3)), pin("2", Some(8))],
+                ),
             ],
         };
         assert_eq!(
-            board.net_lint().of_check(LintCheck::MissingSdPullup).count(),
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
             1,
             "the +3V3-to-GND bleeder is not a pull-up on sd_cmd"
         );
@@ -2588,12 +2928,23 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "sd_cmd".into() },
-                Net { id: 2, name: "sd_cmd_mcu".into() },
+                Net {
+                    id: 1,
+                    name: "sd_cmd".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "sd_cmd_mcu".into(),
+                },
             ],
             components: vec![
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part("R5", "33", "R_0402", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part(
+                    "R5",
+                    "33",
+                    "R_0402",
+                    vec![pin("1", Some(1)), pin("2", Some(2))],
+                ),
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(2))]),
             ],
         };
@@ -2609,14 +2960,28 @@ mod sd_pullup_tests {
     fn integrated_pullup_translator_abstains() {
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "sd_cmd".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "sd_cmd".into(),
+            }],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part("U9", "TXS0108E", "TSSOP-20", vec![pin("2", Some(1)), pin("3", None), pin("4", None)]),
+                part(
+                    "U9",
+                    "TXS0108E",
+                    "TSSOP-20",
+                    vec![pin("2", Some(1)), pin("3", None), pin("4", None)],
+                ),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            0
+        );
     }
 
     /// A passive adapter whose header sits one damper away from the socket:
@@ -2627,13 +2992,34 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "SD_CMD".into() },
-                Net { id: 2, name: "SD_CMD_H".into() },
+                Net {
+                    id: 1,
+                    name: "SD_CMD".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "SD_CMD_H".into(),
+                },
             ],
             components: vec![
                 part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part("D1", "TPD4E05U06", "SOT-23-6", vec![pin("1", Some(1)), pin("2", None), pin("3", None), pin("4", None)]),
-                part("R5", "33", "R_0402", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part(
+                    "D1",
+                    "TPD4E05U06",
+                    "SOT-23-6",
+                    vec![
+                        pin("1", Some(1)),
+                        pin("2", None),
+                        pin("3", None),
+                        pin("4", None),
+                    ],
+                ),
+                part(
+                    "R5",
+                    "33",
+                    "R_0402",
+                    vec![pin("1", Some(1)), pin("2", Some(2))],
+                ),
                 part(
                     "J1",
                     "HEADER",
@@ -2642,7 +3028,13 @@ mod sd_pullup_tests {
                 ),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            0
+        );
     }
 
     /// TXS0206A is the dedicated SD-card translator with integrated
@@ -2651,14 +3043,28 @@ mod sd_pullup_tests {
     fn txs0206_translator_abstains() {
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "sd_cmd".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "sd_cmd".into(),
+            }],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part("U9", "TXS0206A", "DSBGA-12", vec![pin("2", Some(1)), pin("3", None), pin("4", None)]),
+                part(
+                    "U9",
+                    "TXS0206A",
+                    "DSBGA-12",
+                    vec![pin("2", Some(1)), pin("3", None), pin("4", None)],
+                ),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            0
+        );
     }
 
     /// A real host-side pull-up whose node also carries an EMI cap to ground
@@ -2669,22 +3075,62 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "SD_CMD".into() },
-                Net { id: 2, name: "SD_CMD_MCU".into() },
-                Net { id: 3, name: "+3V3".into() },
-                Net { id: 8, name: "GND".into() },
+                Net {
+                    id: 1,
+                    name: "SD_CMD".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "SD_CMD_MCU".into(),
+                },
+                Net {
+                    id: 3,
+                    name: "+3V3".into(),
+                },
+                Net {
+                    id: 8,
+                    name: "GND".into(),
+                },
             ],
             components: vec![
                 part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part("D1", "TPD4E05U06", "SOT-23-6", vec![pin("1", Some(1)), pin("2", None), pin("3", None), pin("4", None)]),
-                part("R5", "33", "R_0402", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part(
+                    "D1",
+                    "TPD4E05U06",
+                    "SOT-23-6",
+                    vec![
+                        pin("1", Some(1)),
+                        pin("2", None),
+                        pin("3", None),
+                        pin("4", None),
+                    ],
+                ),
+                part(
+                    "R5",
+                    "33",
+                    "R_0402",
+                    vec![pin("1", Some(1)), pin("2", Some(2))],
+                ),
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(2))]),
-                part("R9", "47k", "R_0402", vec![pin("1", Some(2)), pin("2", Some(3))]),
-                part("C7", "22p", "C_0402", vec![pin("1", Some(2)), pin("2", Some(8))]),
+                part(
+                    "R9",
+                    "47k",
+                    "R_0402",
+                    vec![pin("1", Some(2)), pin("2", Some(3))],
+                ),
+                part(
+                    "C7",
+                    "22p",
+                    "C_0402",
+                    vec![pin("1", Some(2)), pin("2", Some(8))],
+                ),
             ],
         };
         assert_eq!(
-            board.net_lint().of_check(LintCheck::MissingSdPullup).count(),
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
             0,
             "the 47k on the EMI-capped host node is the pull-up"
         );
@@ -2696,7 +3142,10 @@ mod sd_pullup_tests {
     fn emmc_module_is_silent() {
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "EMMC_CMD".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "EMMC_CMD".into(),
+            }],
             components: vec![
                 part("U8", "KLM8G1GETF-B041", "BGA-153", vec![pin("M5", Some(1))]),
                 part(
@@ -2707,7 +3156,13 @@ mod sd_pullup_tests {
                 ),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 0);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            0
+        );
     }
 
     /// A socket wired for SPI mode (DAT1/DAT2 unused) still deserves the
@@ -2718,11 +3173,22 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "/uSD/CMD".into() },
-                Net { id: 2, name: "/uSD/DAT0".into() },
+                Net {
+                    id: 1,
+                    name: "/uSD/CMD".into(),
+                },
+                Net {
+                    id: 2,
+                    name: "/uSD/DAT0".into(),
+                },
             ],
             components: vec![
-                part("U1", "SAMD21", "TQFP-48", vec![pin("1", Some(1)), pin("2", Some(2))]),
+                part(
+                    "U1",
+                    "SAMD21",
+                    "TQFP-48",
+                    vec![pin("1", Some(1)), pin("2", Some(2))],
+                ),
                 part(
                     "J3",
                     "SOCKET",
@@ -2736,7 +3202,8 @@ mod sd_pullup_tests {
         assert_eq!(f.len(), 2);
         assert!(f.iter().all(|x| x.severity == Severity::Low), "{f:?}");
         assert!(
-            f.iter().all(|x| x.message.contains(super::SPI_PULLUP_MESSAGE_MARKER)),
+            f.iter()
+                .all(|x| x.message.contains(super::SPI_PULLUP_MESSAGE_MARKER)),
             "the plain renderer keys on the marker, so the message must carry it: {f:?}"
         );
     }
@@ -2749,18 +3216,43 @@ mod sd_pullup_tests {
         let board = ExtractedBoard {
             name: "b".into(),
             nets: vec![
-                Net { id: 1, name: "sd_cmd".into() },
-                Net { id: 8, name: "GND".into() },
-                Net { id: 9, name: "AGND".into() },
+                Net {
+                    id: 1,
+                    name: "sd_cmd".into(),
+                },
+                Net {
+                    id: 8,
+                    name: "GND".into(),
+                },
+                Net {
+                    id: 9,
+                    name: "AGND".into(),
+                },
             ],
             components: vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part("R9", "100k", "R_0402", vec![pin("1", Some(1)), pin("2", Some(8))]),
-                part("C9", "100n", "C_0402", vec![pin("1", Some(8)), pin("2", Some(9))]),
+                part(
+                    "R9",
+                    "100k",
+                    "R_0402",
+                    vec![pin("1", Some(1)), pin("2", Some(8))],
+                ),
+                part(
+                    "C9",
+                    "100n",
+                    "C_0402",
+                    vec![pin("1", Some(8)), pin("2", Some(9))],
+                ),
             ],
         };
-        assert_eq!(board.net_lint().of_check(LintCheck::MissingSdPullup).count(), 1);
+        assert_eq!(
+            board
+                .net_lint()
+                .of_check(LintCheck::MissingSdPullup)
+                .count(),
+            1
+        );
     }
 }
 

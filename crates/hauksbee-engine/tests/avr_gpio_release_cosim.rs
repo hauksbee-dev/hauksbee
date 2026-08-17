@@ -20,8 +20,8 @@
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
-use hauksbee_server::engine::Engine;
 
 /// Nano with A2 (pad 21, PC2) on net "BUS", pulled down through 10k.
 const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)

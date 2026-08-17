@@ -39,7 +39,7 @@ fn engine_for(rload_ohms: &str) -> HauksbeeEngine {
 /// Run `n` chunks of `dt` and return the settled +5V rail voltage and the
 /// supply's last rail current.
 fn settle(engine: &mut HauksbeeEngine, dt: f64, n: usize) -> (f64, f64) {
-    use hauksbee_server::engine::Engine;
+    use hauksbee_frontdoor_api::engine::Engine;
     let mut last_v = 0.0;
     for _ in 0..n {
         let frame = engine.step(dt);

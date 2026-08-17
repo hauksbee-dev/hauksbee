@@ -7,8 +7,8 @@
 #![cfg(feature = "renode")]
 
 use hauksbee_engine::HauksbeeEngine;
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_mcu::renode::is_available;
-use hauksbee_server::engine::Engine;
 use std::path::PathBuf;
 
 fn firmware() -> Option<PathBuf> {

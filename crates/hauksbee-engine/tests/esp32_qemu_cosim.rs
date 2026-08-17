@@ -23,8 +23,8 @@
 #![cfg(feature = "qemu")]
 
 use hauksbee_engine::HauksbeeEngine;
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_mcu::qemu::{is_available, QemuArch};
-use hauksbee_server::engine::Engine;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 

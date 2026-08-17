@@ -111,7 +111,7 @@ fn a_one_percent_over_limit_draw_settles_at_the_limit_with_a_positive_rail() {
         "bench supply applied to +5V"
     );
 
-    use hauksbee_server::engine::Engine;
+    use hauksbee_frontdoor_api::engine::Engine;
     let mut v = 0.0;
     let mut history = Vec::new();
     for _ in 0..400 {
@@ -158,7 +158,7 @@ fn a_draw_under_the_limit_does_not_fold() {
             current_limit_a: 0.5,
         },
     );
-    use hauksbee_server::engine::Engine;
+    use hauksbee_frontdoor_api::engine::Engine;
     let mut v = 0.0;
     for _ in 0..200 {
         v = *engine.step(1e-4).net_voltages.get("+5V").unwrap_or(&0.0);

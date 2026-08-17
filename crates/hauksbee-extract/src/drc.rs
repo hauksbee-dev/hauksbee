@@ -1675,14 +1675,12 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             if zone_conn.contains(layer) {
                 return true;
             }
-            track_touch
-                .get(layer)
-                .is_some_and(|points| {
-                    let reach = (size / 2.0).max(0.01);
-                    points
-                        .iter()
-                        .any(|(x, y)| (x - at.0).hypot(y - at.1) <= reach)
-                })
+            track_touch.get(layer).is_some_and(|points| {
+                let reach = (size / 2.0).max(0.01);
+                points
+                    .iter()
+                    .any(|(x, y)| (x - at.0).hypot(y - at.1) <= reach)
+            })
         };
         for layer in &layer_token {
             let r = if ring_present(layer) {

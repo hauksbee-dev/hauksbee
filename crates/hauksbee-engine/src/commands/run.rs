@@ -1218,7 +1218,7 @@ fn run_inner(
         // BoardInfo, matching the report co-sim's "ran WITH the shorts
         // bridged" note.
         if cfg.serve && report.short_count() > 0 {
-            engine.set_shorts_disclosure(hauksbee_server::protocol::ShortsDisclosure {
+            engine.set_shorts_disclosure(hauksbee_frontdoor_api::protocol::ShortsDisclosure {
                 detected: report.short_count(),
                 bridged: applied,
                 unapplied_reason: (applied == 0).then(|| {

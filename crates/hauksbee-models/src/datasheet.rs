@@ -1902,7 +1902,9 @@ fn parse_and_validate_reply(
             .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
             .is_some_and(|l| {
                 let l = l.trim_start();
-                l.starts_with("id ") || l.starts_with("id=") || l.starts_with("kind ")
+                l.starts_with("id ")
+                    || l.starts_with("id=")
+                    || l.starts_with("kind ")
                     || l.starts_with("kind=")
             });
         if looks_like_bare_entry {
@@ -1919,13 +1921,12 @@ fn parse_and_validate_reply(
         trimmed
     };
 
-    let db: crate::schema::DbFile = toml::from_str(trimmed)
-        .with_context(|| {
-            format!(
-                "the reply for {part} did not deserialize as a hauksbee [[models]] db file \
+    let db: crate::schema::DbFile = toml::from_str(trimmed).with_context(|| {
+        format!(
+            "the reply for {part} did not deserialize as a hauksbee [[models]] db file \
                  (the cause below names the exact field and line)"
-            )
-        })?;
+        )
+    })?;
 
     let entry = db
         .models

@@ -1069,7 +1069,10 @@ mod bq2407x_tests {
             );
         }
         // Floating: no resistor at all on the pin.
-        let floating = bq_board("47k").replace("(net 7 \"/left/power/TMR\")\n    (pad 2", "(net 0 \"\")\n    (pad 2");
+        let floating = bq_board("47k").replace(
+            "(net 7 \"/left/power/TMR\")\n    (pad 2",
+            "(net 0 \"\")\n    (pad 2",
+        );
         // (crude: detach R31 pad 1; the pin net keeps only the charger)
         let report = lint(&floating);
         assert_eq!(report.of_check(LintCheck::DeviceDecode).count(), 0);

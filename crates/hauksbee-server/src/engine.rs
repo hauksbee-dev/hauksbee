@@ -1,66 +1,10 @@
-//! The engine boundary. The server streams whatever an [`Engine`] produces;
-//! the real circuit engine plugs in behind this trait, and a lightweight
-//! demo engine exists so the UI stack can run before full integration.
+//! The server's lightweight demo engine.
+//!
+//! The transport-independent [`Engine`] boundary lives in
+//! `hauksbee-frontdoor-api` and is re-exported here for compatibility.
 
-use crate::protocol::{
-    BoardInfo, LivePeripheralSpec, LiveRegisterMapSpec, PowerSupplyConfig, SimFrame, SolverControls,
-};
-
-pub trait Engine: Send + 'static {
-    fn board_info(&self) -> BoardInfo;
-    /// Advance simulation by `dt` seconds and produce a frame.
-    fn step(&mut self, dt: f64) -> SimFrame;
-    fn reset(&mut self);
-    fn set_controls(&mut self, controls: SolverControls);
-    fn controls(&self) -> SolverControls;
-    /// Write bytes to an MCU's serial input.
-    fn serial(&mut self, mcu: &str, data: &[u8]);
-    /// Drive a bound input source.
-    fn set_input(&mut self, source: &str, value: f64);
-    /// Configure the power supply on a supply net (Feature 1). Default no-op
-    /// for engines without configurable supplies.
-    fn set_power_supply(&mut self, _net: &str, _supply: PowerSupplyConfig) {}
-    /// Live-control a peripheral by id. Returns true if a peripheral matched.
-    /// Default no-op for engines without peripherals.
-    fn set_peripheral(&mut self, _id: &str, _value: f64) -> bool {
-        false
-    }
-    /// Attach a control to the running circuit. Default is an explicit refusal,
-    /// not a fake UI control that changes nothing.
-    fn attach_peripheral(&mut self, _spec: LivePeripheralSpec) -> Result<(), String> {
-        Err("this engine does not support attaching live peripherals".into())
-    }
-    /// Attach a source-bound declarative bus device to the live simulation.
-    fn attach_register_map(&mut self, _spec: LiveRegisterMapSpec) -> Result<(), String> {
-        Err("this engine does not support attaching live register-map devices".into())
-    }
-
-    /// A human-readable reason when this engine's analog solve is failing
-    /// irrecoverably (a divergence no retry will cure), `None` while healthy.
-    ///
-    /// The sim loop polls this after every step: a live session whose solve
-    /// has genuinely died must END with this reason on the wire, not grind
-    /// the failing chunk forever while the client watches a frozen clock.
-    /// Default `None` for engines with no such failure mode.
-    fn analog_failure(&self) -> Option<String> {
-        None
-    }
-
-    /// Smallest step worth asking this engine for, in simulated seconds.
-    ///
-    /// An engine whose cost is dominated by a FIXED per-step price (an external
-    /// emulator advances its guest over a control socket: one round-trip costs
-    /// tens of milliseconds of wall time whatever slice of guest time it buys)
-    /// gets no cheaper as the step shrinks, so the sim loop's "pace by taking
-    /// smaller steps" degrades into paying full price for nothing. Reporting a
-    /// floor here tells the loop to spend longer than one tick on a step
-    /// instead of shrinking it below the point where the overhead dominates.
-    /// Zero (the default) means the engine has no such price and may be paced
-    /// arbitrarily fine.
-    fn min_step_dt(&self) -> f64 {
-        0.0
-    }
-}
+use crate::protocol::{BoardInfo, SimFrame, SolverControls};
+pub use hauksbee_frontdoor_api::engine::Engine;
 
 /// Demo engine: an emulated AVR running real firmware with a synthetic
 /// analog environment. Proves the server/MCU/frontend stack end to end.

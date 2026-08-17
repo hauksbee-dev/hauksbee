@@ -431,12 +431,7 @@ impl AsBuiltOverlay {
         report: &mut AsBuiltReport,
     ) -> Result<(), AsBuiltError> {
         let reference = fit.reference.get_ref().as_str();
-        if bound
-            .circuit
-            .devices
-            .iter()
-            .any(|d| d.name() == reference)
-        {
+        if bound.circuit.devices.iter().any(|d| d.name() == reference) {
             return Err(AsBuiltError::FitRefCollision {
                 origin: self.origin.clone(),
                 line: self.line_of(&fit.reference),
@@ -975,7 +970,9 @@ mod tests {
         let report = overlay.apply(&mut bound).unwrap();
         assert_eq!(bound.circuit.devices.len(), 1);
         match &bound.circuit.devices[0] {
-            Device::Resistor { name, a, b, ohms, .. } => {
+            Device::Resistor {
+                name, a, b, ohms, ..
+            } => {
                 assert_eq!(name, "R_PULL_OE");
                 assert_eq!((a.0, b.0), (1, 2));
                 assert_eq!(*ohms, 10_000.0);
@@ -983,14 +980,20 @@ mod tests {
             other => panic!("expected the fitted resistor, got {other:?}"),
         }
         assert!(
-            report.lines.iter().any(|l| l.contains("R_PULL_OE") && l.contains("pull-up wired on")),
+            report
+                .lines
+                .iter()
+                .any(|l| l.contains("R_PULL_OE") && l.contains("pull-up wired on")),
             "{report:?}"
         );
 
         // Re-applying the same fit onto the result collides with the part it
         // just added: the record cannot silently shadow a device.
         let err = overlay.apply(&mut bound).unwrap_err().to_string();
-        assert!(err.contains("collides with an existing device name"), "{err}");
+        assert!(
+            err.contains("collides with an existing device name"),
+            "{err}"
+        );
 
         // And a fit across one net is a documentation error.
         let self_fit = AsBuiltOverlay::parse(

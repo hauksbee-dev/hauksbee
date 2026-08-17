@@ -26,6 +26,13 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
+pub use hauksbee_frontdoor_api::frontdoor::{
+    Analyzer, CheckRunner, DatasheetChecker, DatasheetExtractor, DatasheetHooks, DatasheetJob,
+    DatasheetReady, DatasheetSaver, DepInstaller, DepsStatus, FirmwareAnalyzer, LiveLaunch,
+    LiveLauncher, ModelDrafter, SchematicAnalyzer, SchematicCheckRunner, SchematicLiveLauncher,
+    ToolHooks,
+};
+
 /// Reject a request that a *website* in the user's browser made cross-origin to
 /// our loopback server. The analysis/check endpoints can run an uploaded
 /// PlatformIO project (`pio run` executes arbitrary `extra_scripts`), so a
@@ -54,160 +61,6 @@ fn reject_cross_site(
         }
     }
     None
-}
-
-/// Analyze an uploaded board: `(file_name, board_bytes) -> JSON report string`.
-/// The board is passed as raw `&[u8]` (never lossy-decoded) so a binary format
-/// (Altium `.PcbDoc`, an OLE2 container) survives intact; the analyzer's
-/// extractor sniffs binary-vs-text itself. Boxed so the engine can supply its
-/// `analyze_json` without the server crate depending on the engine.
-pub type Analyzer = Arc<dyn Fn(&str, &[u8]) -> String + Send + Sync>;
-
-/// Analyze a board AND an optional firmware: `(board_name, board_bytes,
-/// Option<(firmware_name, firmware_bytes)>) -> JSON report string`. Board and
-/// firmware are both passed as raw `&[u8]` (never lossy-decoded) so an uploaded
-/// binary board or ELF stays intact. Parallel to [`Analyzer`] so the server
-/// crate stays engine-free and the existing `/api/analyze` path + call sites
-/// are untouched.
-pub type FirmwareAnalyzer = Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> String + Send + Sync>;
-
-/// Firmware-aware analysis with an optional companion Eagle schematic. This is
-/// a distinct callback instead of changing [`FirmwareAnalyzer`], preserving
-/// embedders while allowing the browser to supply the identity evidence needed
-/// to qualify declared Eagle net ties.
-pub type SchematicAnalyzer =
-    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>) -> String + Send + Sync>;
-
-/// Run the checks a web builder composed: `(board_name, board_bytes,
-/// Option<(firmware_name, firmware_bytes)>, spec_fragment) -> JSON string`.
-/// Boxed like [`FirmwareAnalyzer`] so the engine supplies its `hauksbee-ci`
-/// shell-out without the server crate depending on it.
-pub type CheckRunner =
-    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, &str) -> String + Send + Sync>;
-
-/// Schematic-aware checks runner. Kept beside [`CheckRunner`] so existing
-/// embedders retain the four-argument callback while the shipped app can carry
-/// the same Eagle companion into analysis, live launch, and checks.
-pub type SchematicCheckRunner = Arc<
-    dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>, &str) -> String + Send + Sync,
->;
-
-/// Everything a successful live-launch callback hands back: the engine to run,
-/// plus the session metadata the hub serves (identity for `/api/live/status`,
-/// the board's own layout text for the geometry viewer, and any staged temp
-/// file the session must keep alive).
-pub struct LiveLaunch {
-    pub engine: Box<dyn crate::engine::Engine>,
-    pub board_name: String,
-    /// (file name, KiCad layout text) for `/boards/<file name>`; None when the
-    /// format has no client-drawable text (Altium, gerber zip).
-    pub board_file: Option<(String, String)>,
-    /// Kept alive for the session's lifetime (e.g. the staged firmware file).
-    pub keepalive: Option<Box<dyn std::any::Any + Send>>,
-}
-
-/// Build a live engine for an uploaded board: `(board_name, board_bytes,
-/// Option<(firmware_name, firmware_bytes)>) -> LiveLaunch or a user-facing
-/// refusal`. The error string is shown verbatim in the UI, so the engine's
-/// implementation surfaces the SAME refusals the CLI gives (e.g. firmware on a
-/// board that bound no processor). Boxed like the analyzers so the server
-/// crate stays engine-free.
-pub type LiveLauncher =
-    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> Result<LiveLaunch, String> + Send + Sync>;
-
-/// Live launcher which additionally receives an optional Eagle schematic.
-pub type SchematicLiveLauncher = Arc<
-    dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>) -> Result<LiveLaunch, String>
-        + Send
-        + Sync,
->;
-
-/// Report the optional-dependency status: `() -> JSON string` (the engine's
-/// `deps::deps_json`, which runs the engine's OWN discovery). Boxed like the
-/// analyzers so the server crate stays engine-free.
-pub type DepsStatus = Arc<dyn Fn() -> String + Send + Sync>;
-
-/// Run one dependency install, streaming human-readable progress lines through
-/// the sink: `(dep_id, line_sink) -> Result<(), error_message>`. The engine's
-/// implementation enforces its own one-at-a-time slot, timeout, and output cap;
-/// on failure the message already carries the child's real output tail.
-pub type DepInstaller = Arc<dyn Fn(&str, &mut dyn FnMut(&str)) -> Result<(), String> + Send + Sync>;
-
-/// Everything one datasheet extraction needs. A struct rather than a tuple of
-/// four strings and a byte vector: the last time this was positional, `part`
-/// and `reference` were passed the wrong way round and the model came back
-/// named after a board refdes.
-pub struct DatasheetJob {
-    /// The uploaded PDF's own file name, for the progress log only.
-    pub pdf_name: String,
-    pub pdf: Vec<u8>,
-    /// The board reference this model is meant to bind (e.g. `U3`). Carried so
-    /// the reviewed card can say which part on the board it came from.
-    pub reference: String,
-    /// The manufacturer part number the model is for.
-    pub part: String,
-    /// The component-kind hint (`vreg`, `bjt_npn`, `i2c_sensor`, ...).
-    pub kind: String,
-    /// Model the extraction agent should run on. Empty means "the default",
-    /// which is the strong tier at high reasoning effort; see
-    /// `hauksbee_models::datasheet::codex_model`.
-    pub model: String,
-}
-
-/// Whether an extraction could run at all, as a JSON string: `() -> JSON`.
-///
-/// Asked BEFORE the user is offered a file picker. An extraction that fails
-/// because codex is missing (or installed but not signed in) fails after the
-/// user has read the privacy notice, said yes, and chosen a datasheet, which is
-/// the worst possible moment to learn it was never going to work.
-pub type DatasheetReady = Arc<dyn Fn() -> String + Send + Sync>;
-
-/// Run one extraction, streaming human-readable progress through the sink:
-/// `(job, line_sink) -> Ok(model_card_json) | Err(message)`.
-///
-/// The Ok payload is the reviewable model card, NOT a saved file: nothing
-/// reaches the user's model library until they accept it through
-/// [`DatasheetSaver`].
-pub type DatasheetExtractor =
-    Arc<dyn Fn(DatasheetJob, &mut dyn FnMut(&str)) -> Result<String, String> + Send + Sync>;
-
-/// Save a reviewed model card into the user's model library:
-/// `(part, kind, toml) -> Ok(JSON) | Err(message)`. Called only after an
-/// explicit accept, and it re-validates the TOML it is handed rather than
-/// trusting that it is the same text the extractor produced.
-pub type DatasheetSaver = Arc<dyn Fn(&str, &str, &str) -> Result<String, String> + Send + Sync>;
-/// Validate a model and describe what it is, without writing anything.
-pub type DatasheetChecker = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
-/// Draft a board-local extension from an already resolved model. The request
-/// and response are JSON/text so the server crate remains engine-independent.
-/// Read-only: the returned TOML is reviewed and validated before the separate
-/// save route is allowed to write it.
-pub type ModelDrafter = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
-
-/// The datasheet-extraction backend, as one value. The three calls are a single
-/// consent contract (can it run, run it, keep the result) and a deployment that
-/// wired up one without the others would offer a flow that dead-ends.
-pub struct DatasheetHooks {
-    pub ready: DatasheetReady,
-    pub extract: DatasheetExtractor,
-    pub save: DatasheetSaver,
-    /// Validate a model without keeping it, for the write-your-own editor.
-    pub check: DatasheetChecker,
-    /// Report what the SPICE front end makes of a pasted deck.
-    pub spice_check: DatasheetChecker,
-    pub draft: ModelDrafter,
-}
-
-/// The engine-backed hooks the browser's tool panels need beyond board
-/// analysis: the dependency probe and installer, and datasheet extraction.
-///
-/// Grouped because they arrive together (one embedding binary supplies all of
-/// them, or none) and because the alternative was a router signature carrying
-/// five more positional `Arc`s.
-pub struct ToolHooks {
-    pub deps_status: DepsStatus,
-    pub install: DepInstaller,
-    pub datasheet: DatasheetHooks,
 }
 
 /// Largest board upload accepted (256 MiB). Real flagship layouts blow past a

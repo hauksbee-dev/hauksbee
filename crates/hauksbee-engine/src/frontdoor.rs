@@ -1874,7 +1874,7 @@ fn run_web_cosim(
 ) -> (WebCosimSection, Option<WebCosimEvidence>) {
     use crate::plain::plain_faults;
     use crate::stress::{FaultEvent, FaultKind};
-    use hauksbee_server::engine::Engine;
+    use hauksbee_frontdoor_api::engine::Engine;
     use std::io::Write;
 
     /// Simulated window this synchronous report runs, mirroring run_headless's

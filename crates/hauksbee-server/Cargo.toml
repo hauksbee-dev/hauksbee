@@ -27,6 +27,7 @@ qemu = ["hauksbee-mcu/qemu"]
 [dependencies]
 anyhow.workspace = true
 axum = { version = "0.8.9", features = ["ws", "multipart"] }
+hauksbee-frontdoor-api = { version = "0.1.0", path = "../hauksbee-frontdoor-api" }
 hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
