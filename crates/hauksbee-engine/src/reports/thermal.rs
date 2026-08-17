@@ -157,7 +157,7 @@ pub fn emit(
 /// estimate per dissipating device. Returns `(reference, peak_Tj_C, over_limit)`
 /// rows, sorted hottest-first.
 fn collect_thermal(engine: &mut HauksbeeEngine, seconds: f64) -> Vec<(String, f64, bool)> {
-    use hauksbee_server::engine::Engine;
+    use hauksbee_frontdoor_api::engine::Engine;
     use std::collections::HashMap;
 
     eprintln!("thermal: {seconds:.2}s co-sim...");

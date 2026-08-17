@@ -263,7 +263,7 @@ fn is_unconnected_net(name: &str) -> bool {
 /// Build the net list with DC voltages from the operating point, falling back to
 /// voltage-less nets if the engine can't be built.
 fn dc_nets(board_text: &str, net_names: &[String]) -> Vec<Net> {
-    use hauksbee_server::engine::Engine;
+    use hauksbee_frontdoor_api::engine::Engine;
     let voltages = crate::engine::HauksbeeEngine::from_board_file(board_text, None, "/dc")
         .ok()
         .map(|mut e| {

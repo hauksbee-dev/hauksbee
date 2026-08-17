@@ -389,7 +389,7 @@ pub fn run_headless(
     chunk_us: Option<f64>,
 ) -> anyhow::Result<HeadlessRun> {
     use crate::{FaultEvent, FaultKind};
-    use hauksbee_server::engine::Engine;
+    use hauksbee_frontdoor_api::engine::Engine;
     // External emulator backends (Renode/QEMU) advance over a socket: a fine 1 ms
     // chunk means thousands of round-trips and a co-sim that looks frozen for
     // minutes. Use a coarse 10 ms chunk for them and print progress so a slow

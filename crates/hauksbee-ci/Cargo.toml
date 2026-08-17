@@ -16,10 +16,11 @@ description = "CI for hardware: run a board+firmware spec headless, assert on ra
 # --no-default-features --features renode,qemu` (the GPL-free release shape;
 # see docs/about/release-and-licensing.md) resolves against THIS package. All on by
 # default, matching the engine. `avr` pulls in GPL-3.0 libsimavr.
-default = ["avr", "renode", "qemu"]
-avr = ["hauksbee-engine/avr", "hauksbee-server/avr"]
-renode = ["hauksbee-engine/renode", "hauksbee-server/renode"]
-qemu = ["hauksbee-engine/qemu", "hauksbee-server/qemu"]
+default = ["serve", "avr", "renode", "qemu"]
+serve = ["dep:hauksbee-server", "hauksbee-engine/serve"]
+avr = ["hauksbee-engine/avr", "hauksbee-server?/avr"]
+renode = ["hauksbee-engine/renode", "hauksbee-server?/renode"]
+qemu = ["hauksbee-engine/qemu", "hauksbee-server?/qemu"]
 
 [[bin]]
 name = "hauksbee-ci"
@@ -45,7 +46,8 @@ hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
 hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
 hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
 hauksbee-engine = { version = "0.1.0", path = "../hauksbee-engine", default-features = false }
-hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false }
+hauksbee-frontdoor-api = { version = "0.1.0", path = "../hauksbee-frontdoor-api" }
+hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false, optional = true }
 # Direct dep (was dev-only) for two uses: main() installs the emulator child
 # signal reaper (hauksbee_mcu::children), and the boot-coverage tests reuse
 # the backend's real Espressif-QEMU / Renode discovery (is_available) so heavy

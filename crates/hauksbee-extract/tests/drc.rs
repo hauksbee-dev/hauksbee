@@ -1532,9 +1532,7 @@ fn ring_removed_inner_layer_via_is_silent_at_real_kicad_spacing() {
     let report = hauksbee_extract::ExtractedBoard::drc(&board4_ring(&items)).expect("drc runs");
     assert_eq!(report.shorts().count(), 0, "no phantom short");
     assert!(
-        !report
-            .clearance_violations()
-            .any(|v| v.layer == "In1.Cu"),
+        !report.clearance_violations().any(|v| v.layer == "In1.Cu"),
         "the bare barrel (0.15 mm radius) clears the fill by 0.30 mm; a finding here \
          would be the phantom-ring bug"
     );

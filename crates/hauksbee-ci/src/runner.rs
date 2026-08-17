@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use hauksbee_engine::power_supply::{Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 use hauksbee_engine::{bind_board, BoundBoard, HauksbeeEngine};
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_ir::evidence::{
     ArtifactKind, ArtifactProvenance, ArtifactRole, Contribution, IgnoredInput,
 };
 use hauksbee_ir::{Device, NodeId, SourceKind};
 use hauksbee_models::ModelLibrary;
-use hauksbee_server::engine::Engine;
 
 use crate::error::SpecError;
 use crate::spec::{Spec, SupplySpec};
@@ -630,8 +630,7 @@ fn dc_definitions_for_spec(
         // its source is source-fed for downgrade purposes (its untested
         // residual is the same hidden load). A board element's circuit device
         // carries the component reference as (part of) its name.
-        if let hauksbee_engine::dcpath::NetDcDefinition::DefinedThroughBoard { via } = &definition
-        {
+        if let hauksbee_engine::dcpath::NetDcDefinition::DefinedThroughBoard { via } = &definition {
             let is_board_element = board.components.iter().any(|c| {
                 via == &c.reference
                     || via

@@ -51,8 +51,8 @@
 use std::sync::{Arc, Mutex};
 
 use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_mcu::qemu::{is_available, QemuArch};
-use hauksbee_server::engine::Engine;
 use std::path::PathBuf;
 
 /// Minimal board: U1 ESP32-WROOM-32, power/ground on pads 1/2, I2C bus on

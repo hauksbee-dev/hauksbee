@@ -8,8 +8,8 @@
 
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::{ExtractedBoard, ViolationKind};
-use hauksbee_server::engine::Engine;
-use hauksbee_server::protocol::SolverControls;
+use hauksbee_frontdoor_api::engine::Engine;
+use hauksbee_frontdoor_api::protocol::SolverControls;
 
 /// A tiny two-net board: +5V and SIG, each with a pad, plus two tracks that
 /// physically CROSS on F.Cu, a deliberate copper short between +5V and SIG.

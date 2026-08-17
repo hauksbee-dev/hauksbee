@@ -6,6 +6,7 @@ members = [
     "crates/hauksbee-extract",
     "crates/hauksbee-models",
     "crates/hauksbee-mcu",
+    "crates/hauksbee-frontdoor-api",
     "crates/hauksbee-server",
     "crates/hauksbee-engine",
     "crates/hauksbee-ci",

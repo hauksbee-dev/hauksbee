@@ -3,8 +3,8 @@
 //! a product-wire test rather than a React-only button test.
 
 use hauksbee_engine::HauksbeeEngine;
-use hauksbee_server::engine::Engine;
-use hauksbee_server::protocol::{LivePeripheralSpec, LiveRegisterMapSpec};
+use hauksbee_frontdoor_api::engine::Engine;
+use hauksbee_frontdoor_api::protocol::{LivePeripheralSpec, LiveRegisterMapSpec};
 use std::collections::HashMap;
 
 #[test]

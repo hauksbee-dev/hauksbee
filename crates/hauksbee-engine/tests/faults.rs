@@ -9,10 +9,10 @@ use std::collections::HashMap;
 use hauksbee_engine::stress::{resistor_power_from_footprint, DeviceMeta, StressMonitor};
 use hauksbee_engine::{bind_board, HauksbeeEngine};
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_frontdoor_api::engine::Engine;
+use hauksbee_frontdoor_api::protocol::SolverControls;
 use hauksbee_ir::{Circuit, Device, NodeId};
 use hauksbee_models::schema::{ComponentKind, Ratings};
-use hauksbee_server::engine::Engine;
-use hauksbee_server::protocol::SolverControls;
 
 /// A red LED `D1` driven from +5V through a series resistor `R1` of the given
 /// value, LED cathode to GND. Nets: 1 GND, 2 +5V, 3 LED_A.
