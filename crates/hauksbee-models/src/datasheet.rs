@@ -249,12 +249,19 @@ pub fn run(args: Args) -> Result<PathBuf> {
     //    datasheet text is sent anywhere: burning consented LLM attempts
     //    against a parser that can never accept the result helps nobody, and
     //    the refusal can name the nearest expressible route.
-    if !args.kind_str.is_empty() && !kind_is_legal(&args.kind_str) {
+    // Legal = a schema kind, or a behavioral FAMILY the prompt knows how to
+    // express on a base kind (charger/pmic on vreg, balancer on digital):
+    // those append the [models.behavioral] guidance and the draft comes back
+    // under the base kind, which the schema accepts.
+    if !args.kind_str.is_empty()
+        && !kind_is_legal(&args.kind_str)
+        && behavioral_family_base_kind(&args.kind_str).is_none()
+    {
         bail!(
-            "hauksbee has no '{}' model kind. Legal kinds: {}. Pick the closest \
-             (a charger's power path fits vreg; a level shifter fits digital) and \
-             declare the unmodeled behavior in the description, or omit --kind and \
-             let the extraction choose from the legal list.",
+            "hauksbee has no '{}' model kind. Legal kinds: {}; behavioral families \
+             (drafted on a base kind with a [models.behavioral] block): charger, pmic, \
+             balancer. Pick the closest and declare the unmodeled behavior in the \
+             description, or omit --kind and let the extraction choose.",
             args.kind_str,
             legal_kinds().join(", ")
         );
@@ -783,19 +790,25 @@ pub fn kind_is_legal(kind: &str) -> bool {
 
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     format!(
-        r#"You are a SPICE model extraction assistant. Your task is to extract a simulation
-model entry from the datasheet text below for the component: {part}
+        r#"You are a SPICE model extraction assistant.
+
+YOUR ANSWER IS ONE THING ONLY: the complete [[models]] TOML entry for the
+component {part}, extracted from the datasheet below, written in full to
+model.toml. There is no shorter valid answer. In particular, a component
+kind, a classification, a summary, or any single field on its own is NOT an
+answer and fails validation.
 
 Component kind: {kind}
 
-LEGAL KINDS. The schema accepts exactly this closed list and nothing else:
-{legal_kinds}
-If the component kind above is empty, read the datasheet and pick from THIS
-LIST ONLY. If the part's natural category is not on the list (a battery
-charger, a level shifter, an addressable LED driver), do NOT invent a kind:
-pick the closest legal kind for the part's primary electrical behavior (a
-charger's power path fits vreg; a level shifter fits digital) and say in
-`description` what real behavior the chosen kind does not model.
+The `kind` FIELD inside your entry must come from this closed list (the
+schema accepts nothing else): {legal_kinds}.
+When the "Component kind" line above is empty, choosing the kind is merely
+the first field you fill in while writing the complete entry. If the part's
+natural category is not on the list (a battery charger, a level shifter, an
+addressable LED driver), do not invent a kind: use the closest legal kind
+for the part's primary electrical behavior (a charger's power path fits
+vreg; a level shifter fits digital) and say in `description` what real
+behavior the chosen kind does not model.
 
 DATASHEET TEXT (truncated):
 ---
