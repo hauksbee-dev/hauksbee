@@ -1,0 +1,18 @@
+# sha256 of the pinned Renode release assets, for scripts/install-sims.sh.
+#
+# The install is reachable from a browser button and the macOS path strips the
+# Gatekeeper quarantine flag from what it unpacks, so TLS alone is not enough
+# provenance to justify that. An asset with no hash here stops the install
+# rather than proceeding unverified.
+#
+# Measured by downloading each asset from the pinned release and hashing it.
+# The two macOS assets were re-measured on 2026-08-11 and cross-checked against
+# GitHub's asset digests. To bump the version: change RENODE_VERSION in
+# required-simulator-versions.env, download the new assets, hash them, and
+# replace these lines. Never copy a hash without also hashing the asset itself.
+#
+# Renode 1.16.1  https://github.com/renode/renode/releases/tag/v1.16.1
+99b8ae5897b8926ef179868d39a504fe5296555dc9c9b973718ddf3ab09175d9  renode-1.16.1-dotnet.osx-arm64-portable.dmg
+7879b2851b446ff99e1d3910b499af278fbd76a3fa8fe5c0d379f30afa0c4ed1  renode_1.16.1.dmg
+fff3a098c96ed0a4ffbdff3f028c9c5fde432db09587c7bd7c99406180f90007  renode-1.16.1.linux-arm64-portable-dotnet.tar.gz
+00e113cdbd0f5354cf2f64bbe3f5a070d8958409542fca66e45ac97d982938c0  renode-1.16.1.linux-portable-dotnet.tar.gz

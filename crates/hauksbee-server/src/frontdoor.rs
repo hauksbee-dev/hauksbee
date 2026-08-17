@@ -625,20 +625,26 @@ pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
 /// Checked-in, product-bundled register behavior for the no-LLM browser path.
 /// The response carries the exact same TOML bytes accepted by models lint,
 /// live attachment and CI scenarios; choosing an item never writes a model.
+///
+/// The specs are embedded from THIS crate's `assets/sensor-specs/` mirror,
+/// because `cargo package` ships only files under the crate directory. The
+/// AUTHORITATIVE copies live at repo-root `testdata/sensor-specs/` (a dozen
+/// engine tests load them by path); `tests/packaged_asset_sync.rs` fails when
+/// the mirror drifts, and `scripts/sync-crate-assets.sh` refreshes it.
 fn sensor_catalog_json() -> serde_json::Value {
     serde_json::json!({
         "schema_version": 1,
         "read_only": true,
         "llm_required": false,
         "entries": [
-            {"id":"lm75","name":"LM75 temperature subset","bus":"i2c","scope":"temperature register at 0x48; no timing/OS/thermal dynamics","spec_toml":include_str!("../../../testdata/sensor-specs/lm75.toml")},
-            {"id":"bma423_chip_id","name":"BMA423 chip identity","bus":"i2c","scope":"CHIP_ID at 0x18 for SDO low; no acceleration/FIFO/interrupts","spec_toml":include_str!("../../../testdata/sensor-specs/bma423_chip_id.toml")},
-            {"id":"bme280","name":"BME280 environmental sensor","bus":"i2c","scope":"declarative environmental register subset","spec_toml":include_str!("../../../testdata/sensor-specs/bme280.toml")},
-            {"id":"mpu6050","name":"MPU6050 motion sensor","bus":"i2c","scope":"declarative motion register subset","spec_toml":include_str!("../../../testdata/sensor-specs/mpu6050.toml")},
-            {"id":"ads1115","name":"ADS1115 ADC","bus":"i2c","scope":"mux/PGA/config/conversion subset; conversion timing omitted","spec_toml":include_str!("../../../testdata/sensor-specs/ads1115.toml")},
-            {"id":"ina219","name":"INA219 current monitor","bus":"i2c","scope":"declarative shunt/bus register subset","spec_toml":include_str!("../../../testdata/sensor-specs/ina219.toml")},
-            {"id":"mcp4728","name":"MCP4728 quad DAC","bus":"i2c","scope":"declarative DAC register/output subset","spec_toml":include_str!("../../../testdata/sensor-specs/mcp4728.toml")},
-            {"id":"icm42605","name":"ICM-42605 motion sensor","bus":"spi","scope":"declarative SPI register subset","spec_toml":include_str!("../../../testdata/sensor-specs/icm42605.toml")}
+            {"id":"lm75","name":"LM75 temperature subset","bus":"i2c","scope":"temperature register at 0x48; no timing/OS/thermal dynamics","spec_toml":include_str!("../assets/sensor-specs/lm75.toml")},
+            {"id":"bma423_chip_id","name":"BMA423 chip identity","bus":"i2c","scope":"CHIP_ID at 0x18 for SDO low; no acceleration/FIFO/interrupts","spec_toml":include_str!("../assets/sensor-specs/bma423_chip_id.toml")},
+            {"id":"bme280","name":"BME280 environmental sensor","bus":"i2c","scope":"declarative environmental register subset","spec_toml":include_str!("../assets/sensor-specs/bme280.toml")},
+            {"id":"mpu6050","name":"MPU6050 motion sensor","bus":"i2c","scope":"declarative motion register subset","spec_toml":include_str!("../assets/sensor-specs/mpu6050.toml")},
+            {"id":"ads1115","name":"ADS1115 ADC","bus":"i2c","scope":"mux/PGA/config/conversion subset; conversion timing omitted","spec_toml":include_str!("../assets/sensor-specs/ads1115.toml")},
+            {"id":"ina219","name":"INA219 current monitor","bus":"i2c","scope":"declarative shunt/bus register subset","spec_toml":include_str!("../assets/sensor-specs/ina219.toml")},
+            {"id":"mcp4728","name":"MCP4728 quad DAC","bus":"i2c","scope":"declarative DAC register/output subset","spec_toml":include_str!("../assets/sensor-specs/mcp4728.toml")},
+            {"id":"icm42605","name":"ICM-42605 motion sensor","bus":"spi","scope":"declarative SPI register subset","spec_toml":include_str!("../assets/sensor-specs/icm42605.toml")}
         ]
     })
 }

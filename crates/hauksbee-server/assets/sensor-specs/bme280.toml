@@ -1,0 +1,242 @@
+# BME280 humidity / pressure / temperature sensor — declarative I2C sensor spec
+# -----------------------------------------------------------------------------
+# Part: Bosch BME280 (combined humidity + pressure + temperature).
+# Bus:  I2C. 7-bit address 0x76 (SDO tied to GND) or 0x77 (SDO tied to VDDIO).
+#       This spec uses 0x76; for a 0x77 board just change `i2c_address`.
+# Ref:  Bosch BME280 datasheet BST-BME280-DS002 (rev 1.6). Section numbers below.
+#
+# ── What this models ─────────────────────────────────────────────────────────
+# The BME280 answers register reads with:
+#   * a fixed chip-ID (0xD0 = 0x60) that firmware hard-gates on;
+#   * a block of factory calibration (trimming) coefficients at 0x88..0xA1 and
+#     0xE1..0xE7 that the firmware reads once at boot;
+#   * three RAW ADC data registers (press / temp / hum) at 0xF7..0xFE that the
+#     firmware reads and then runs the Bosch compensation on to recover physical
+#     pressure (Pa), temperature (°C) and humidity (%RH).
+#
+# ── Why the compensation is NOT a forward evalexpr value expression ───────────
+# The sensor-spec `expr` mechanism is FORWARD: it maps physical inputs → the
+# numeric value packed into the register bytes. For a linear part (LM75, MPU6050)
+# that is trivial (`raw = physical * scale`). For the BME280 it is not, for two
+# independent reasons:
+#
+#   1. NON-INVERTIBLE / COUPLED MATH. The datasheet compensation goes raw→physical.
+#      Driving the model from a physical set-point would require the INVERSE
+#      (physical→raw). Temperature inverts to a quadratic in adc_T; pressure and
+#      humidity both depend on `t_fine` (derived from adc_T), so they are coupled
+#      and cannot be written as independent per-register scalar expressions.
+#      evalexpr has no integer bit-ops and no equation solver, so the Bosch
+#      fixed-point routine (shifts, 64-bit intermediates) is not expressible.
+#
+#   2. 20-BIT PACKING. press/temp are 20-bit ADC counts spread over three bytes
+#      (MSB, LSB, XLSB[7:4]); the pre-existing encodings top out at 16 bits.
+#
+# The minimal, plan-anticipated addition (05-cosim-fidelity §6.1: "minor encoding
+# additions") is therefore a single new encoding, `u20_be_xlsb`, which packs a
+# 20-bit RAW ADC count into the datasheet's MSB/LSB/XLSB frame. The model exposes
+# RAW-ADC inputs (`adc_press`, `adc_temp`, `adc_hum`) — the natural register-map
+# quantities — and the raw→physical Bosch compensation is applied by the CONSUMER
+# (the firmware in a real co-sim; the fixture test for the coverage assertion).
+# The fixture uses the datasheet Appendix worked-example inputs so the decoded
+# physical output is authoritative (see tests in engine peripherals/register_map.rs
+# `declarative_bme280_*`).
+#
+# ── SPI variant ──────────────────────────────────────────────────────────────
+# The BME280 is also an SPI part with the SAME register map. To make an SPI spec:
+#   * set `bus = "spi"`, remove `i2c_address`;
+#   * use `[sensor.protocol] style = "spi_reg", rw_read_is_high = true,
+#     addr_mask = 0x7f`;
+#   * keep every register at its RAW datasheet address (0xD0, 0xF7, …). In SPI the
+#     command byte's bit 7 is the R/W flag (1 = read, 0 = write) and bits [6:0]
+#     are the address; the interpreter masks bit 7 off both the incoming command
+#     and the stored keys, so raw datasheet addresses resolve unchanged. See the
+#     sibling BMP280 SPI spec (bmp280.toml) for a full worked SPI example, and the
+#     `declarative_bme280_spi_chip_id` fixture for the address-byte convention.
+
+[sensor]
+name        = "BME280"
+bus         = "i2c"
+i2c_address = 0x76   # SDO=GND. Use 0x77 for SDO=VDDIO.
+
+# ── Physical / raw inputs ─────────────────────────────────────────────────────
+# The data registers are driven by RAW ADC counts (see header). Defaults are the
+# Bosch datasheet Appendix worked-example counts, which decode to 25.08 °C /
+# 100656 Pa (int32 routine) at the trimming values below.
+[[sensor.input]]
+name    = "adc_press"
+default = 415148.0   # datasheet worked example → 100656 Pa (int32 comp.)
+
+[[sensor.input]]
+name    = "adc_temp"
+default = 519888.0   # datasheet worked example → t_fine=128422 → 25.08 °C
+
+[[sensor.input]]
+name    = "adc_hum"
+default = 30000.0    # → 54.45 %RH at the humidity trimming below
+
+# ── Identity + control registers (datasheet §5.3, §5.4) ───────────────────────
+
+# CHIP_ID (0xD0). BME280 = 0x60 (datasheet §5.4.1, Table "id"). Firmware
+# hard-gates on this; a BMP280 would report 0x58 here instead.
+[[sensor.register]]
+addr  = 0xD0
+const = [0x60]
+
+# RESET (0xE0). Write-only soft-reset (firmware writes 0xB6); reads back 0x00.
+[[sensor.register]]
+addr  = 0xE0
+const = [0x00]
+
+# ctrl_hum (0xF2) — humidity oversampling; written before ctrl_meas (§5.4.3).
+[[sensor.register]]
+addr  = 0xF2
+const = [0x01]
+
+# status (0xF3) — bit0 im_update, bit3 measuring. 0x00 = idle, data ready.
+[[sensor.register]]
+addr  = 0xF3
+const = [0x00]
+
+# ctrl_meas (0xF4) — temp/press oversampling + mode (§5.4.5).
+[[sensor.register]]
+addr  = 0xF4
+const = [0x00]
+
+# config (0xF5) — standby + IIR filter (§5.4.6).
+[[sensor.register]]
+addr  = 0xF5
+const = [0x00]
+
+# ── Calibration block 1: 0x88..0xA1 (datasheet §4.2.2, Table 16) ──────────────
+# Temperature/pressure trimming are the Bosch datasheet Appendix example values.
+# Each byte is a separate const register so a real firmware BURST read of 26 bytes
+# from 0x88 auto-increments contiguously (0x88→0x89→…→0xA1) with no gaps.
+[[sensor.register]]
+addr  = 0x88   # dig_T1 lo (27504 = 0x6B70)
+const = [0x70]
+[[sensor.register]]
+addr  = 0x89   # dig_T1 hi
+const = [0x6B]
+[[sensor.register]]
+addr  = 0x8A   # dig_T2 lo (26435 = 0x6743)
+const = [0x43]
+[[sensor.register]]
+addr  = 0x8B   # dig_T2 hi
+const = [0x67]
+[[sensor.register]]
+addr  = 0x8C   # dig_T3 lo (-1000 = 0xFC18)
+const = [0x18]
+[[sensor.register]]
+addr  = 0x8D   # dig_T3 hi
+const = [0xFC]
+[[sensor.register]]
+addr  = 0x8E   # dig_P1 lo (36477 = 0x8E7D)
+const = [0x7D]
+[[sensor.register]]
+addr  = 0x8F   # dig_P1 hi
+const = [0x8E]
+[[sensor.register]]
+addr  = 0x90   # dig_P2 lo (-10685 = 0xD643, two's complement)
+const = [0x43]
+[[sensor.register]]
+addr  = 0x91   # dig_P2 hi
+const = [0xD6]
+[[sensor.register]]
+addr  = 0x92   # dig_P3 lo (3024 = 0x0BD0)
+const = [0xD0]
+[[sensor.register]]
+addr  = 0x93   # dig_P3 hi
+const = [0x0B]
+[[sensor.register]]
+addr  = 0x94   # dig_P4 lo (2855 = 0x0B27)
+const = [0x27]
+[[sensor.register]]
+addr  = 0x95   # dig_P4 hi
+const = [0x0B]
+[[sensor.register]]
+addr  = 0x96   # dig_P5 lo (140 = 0x008C)
+const = [0x8C]
+[[sensor.register]]
+addr  = 0x97   # dig_P5 hi
+const = [0x00]
+[[sensor.register]]
+addr  = 0x98   # dig_P6 lo (-7 = 0xFFF9)
+const = [0xF9]
+[[sensor.register]]
+addr  = 0x99   # dig_P6 hi
+const = [0xFF]
+[[sensor.register]]
+addr  = 0x9A   # dig_P7 lo (15500 = 0x3C8C)
+const = [0x8C]
+[[sensor.register]]
+addr  = 0x9B   # dig_P7 hi
+const = [0x3C]
+[[sensor.register]]
+addr  = 0x9C   # dig_P8 lo (-14600 = 0xC6F8, two's complement)
+const = [0xF8]
+[[sensor.register]]
+addr  = 0x9D   # dig_P8 hi
+const = [0xC6]
+[[sensor.register]]
+addr  = 0x9E   # dig_P9 lo (6000 = 0x1770)
+const = [0x70]
+[[sensor.register]]
+addr  = 0x9F   # dig_P9 hi
+const = [0x17]
+[[sensor.register]]
+addr  = 0xA0   # reserved (calib24) — declared so the 0x88 burst stays contiguous
+const = [0x00]
+[[sensor.register]]
+addr  = 0xA1   # dig_H1 (u8) = 75
+const = [0x4B]
+
+# ── Calibration block 2: 0xE1..0xE7 (datasheet §4.2.2, Table 16) ──────────────
+# Humidity trimming. dig_H4/H5 use the BME280 nibble packing:
+#   dig_H4 = (0xE4 << 4) | (0xE5 & 0x0F)     (signed 12-bit)
+#   dig_H5 = (0xE6 << 4) | (0xE5 >> 4)       (signed 12-bit)
+# Values here: dig_H1=75, dig_H2=362, dig_H3=0, dig_H4=317, dig_H5=0, dig_H6=30.
+[[sensor.register]]
+addr  = 0xE1   # dig_H2 lo (362 = 0x016A)
+const = [0x6A]
+[[sensor.register]]
+addr  = 0xE2   # dig_H2 hi
+const = [0x01]
+[[sensor.register]]
+addr  = 0xE3   # dig_H3 (u8) = 0
+const = [0x00]
+[[sensor.register]]
+addr  = 0xE4   # dig_H4[11:4] = 317>>4 = 0x13
+const = [0x13]
+[[sensor.register]]
+addr  = 0xE5   # high nibble = dig_H5[3:0] = 0; low nibble = dig_H4[3:0] = 0xD
+const = [0x0D]
+[[sensor.register]]
+addr  = 0xE6   # dig_H5[11:4] = 0
+const = [0x00]
+[[sensor.register]]
+addr  = 0xE7   # dig_H6 (i8) = 30 = 0x1E
+const = [0x1E]
+
+# ── Raw data registers: 0xF7..0xFE (datasheet §5.4.7..§5.4.9) ─────────────────
+# A firmware BURST read of 8 bytes from 0xF7 returns:
+#   press[3]  (0xF7..0xF9, 20-bit, u20_be_xlsb)
+#   temp[3]   (0xFA..0xFC, 20-bit, u20_be_xlsb)
+#   hum[2]    (0xFD..0xFE, 16-bit, u16_be)
+# Each multi-byte value is ONE register with a multi-byte encoding; the burst
+# auto-increments across the three (0xF7 → 0xFA → 0xFD) since the interior bytes
+# (0xF8/0xF9, 0xFB/0xFC, 0xFE) are covered by their register's read length.
+[[sensor.register]]
+addr     = 0xF7   # press_msb/lsb/xlsb — 20-bit raw ADC pressure count
+encoding = "u20_be_xlsb"
+expr     = "adc_press"
+[[sensor.register]]
+addr     = 0xFA   # temp_msb/lsb/xlsb — 20-bit raw ADC temperature count
+encoding = "u20_be_xlsb"
+expr     = "adc_temp"
+[[sensor.register]]
+addr     = 0xFD   # hum_msb/lsb — 16-bit raw ADC humidity count
+encoding = "u16_be"
+expr     = "adc_hum"
+
+[sensor.protocol]
+style = "i2c_pointer"

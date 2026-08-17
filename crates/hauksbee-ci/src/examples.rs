@@ -40,7 +40,10 @@ const EXAMPLES: &[Example] = &[Example {
         ),
         (
             "demo.hex",
-            include_bytes!("../../../testdata/firmware/demo/demo.hex"),
+            // Mirrored inside the crate for `cargo package` (the AUTHORITATIVE copy is
+            // repo-root testdata/firmware/demo/demo.hex, which a dozen tests load by
+            // path); tests/packaged_asset_sync.rs guards the mirror.
+            include_bytes!("../assets/firmware/demo.hex"),
         ),
         (
             "boards/tolerance_divider.kicad_pcb",

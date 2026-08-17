@@ -1,0 +1,190 @@
+# ICM-42605 IMU — declarative SPI sensor spec
+# -----------------------------------------------
+# Board: FPV-Drone-F411 (hunt-boards/fpv-drone-f411)
+# Component: U1 = ICM-42605 (6-axis IMU)
+# Bus: SPI2 — CS = PB12 (NSS2_Pin), MOSI/MISO/SCK on SPI2 pins
+# SPI framing: read bit = bit 7 = 1, write bit = bit 7 = 0; addr in bits [6:0]
+# Bank-select quirk: the firmware calls icm42605_bank_select(0) before every
+#   register access, which writes REG_BANK_SEL (0x76) with bank code 0x00.
+#   All registers here are Bank 0, which is the reset default — the bank-select
+#   transaction will silently write 0x00 to register 0x76 (no conflict since
+#   0x76 is the bank-select register itself; nothing breaks).
+#
+# Probe sequence extracted from firmware source:
+#   Code/Core/Src/main.c:203-216  — WHO_AM_I check (0x75 must return 0x42)
+#   Code/Core/Src/main.c:219      — icm42605_reset() writes REG_DEVICE_CONFIG=0x11 val=0x01
+#   Code/Core/Src/main.c:222      — icm42605_config_accel(): reads/writes PWR_MGMT0, ACCEL_CONFIG0, ACCEL_CONFIG1, GYRO_ACCEL_CONFIG0
+#   Code/Core/Src/main.c:223      — icm42605_config_gyro(): reads/writes PWR_MGMT0, GYRO_CONFIG0, GYRO_CONFIG1, GYRO_ACCEL_CONFIG0
+#   Code/Core/Src/main.c:229      — IMU_Calibrate(): 512 reads of ACCEL_DATA (0x1F, 6 bytes) + GYRO_DATA (0x25, 6 bytes)
+#
+# For the firmware to pass sensor-detect, ONLY the WHO_AM_I check at main.c:205
+# is a hard gate (returns 0x42 → print success, toggle LED, proceed).
+# The config writes succeed regardless of readback values (no verify loop).
+# The calibration reads will consume whatever data registers return; returning
+# all-zero counts (0x00 bytes) is fine and will yield bias ~ 0 except az which
+# drifts by -ACCEL_LSB_PER_G (irrelevant to the boot-coverage assertion).
+
+[sensor]
+name = "ICM-42605"
+bus  = "spi"
+
+# No i2c_address — SPI part; CS is handled by the engine's SPI bus attach.
+
+# Physical inputs the engine can drive for a live calibration sweep.
+# For boot-coverage purposes the defaults (0.0 gyro, 0.0 accel) are fine.
+[[sensor.input]]
+name    = "accel_x_g"
+default = 0.0
+
+[[sensor.input]]
+name    = "accel_y_g"
+default = 0.0
+
+[[sensor.input]]
+name    = "accel_z_g"
+default = 1.0   # Z+ up at rest gives ~+1g; calibration subtracts ACCEL_LSB_PER_G
+
+[[sensor.input]]
+name    = "gyro_x_dps"
+default = 0.0
+
+[[sensor.input]]
+name    = "gyro_y_dps"
+default = 0.0
+
+[[sensor.input]]
+name    = "gyro_z_dps"
+default = 0.0
+
+# ---- Register map (Bank 0) ----
+
+# WHO_AM_I (0x75) — THE identity gate.
+# main.c:205: `if (whoami == 0x42)` → success path, LED toggles, boot proceeds.
+# Must return exactly 0x42 (ICM-42605 product ID per datasheet Table 14-23).
+# Source: ICM-42605-HeaderFile:13 `#define REG_WHO_AM_I 0x75` +
+#         main.c:205 `if (whoami == 0x42)`.
+[[sensor.register]]
+addr  = 0x75
+const = [0x42]
+
+# DEVICE_CONFIG (0x11) — written during reset (val=0x01 to trigger soft reset).
+# Firmware only writes it; it never reads back to verify.  Return reset default 0x00.
+# Source: ICM-42605-HeaderFile:17 `#define REG_DEVICE_CONFIG 0x11`
+#         ICM-42605.c:105 `icm42605_write_reg(0, REG_DEVICE_CONFIG, DEVICE_CONFIG_RESET)`
+[[sensor.register]]
+addr  = 0x11
+const = [0x00]
+
+# PWR_MGMT0 (0x4E) — read-modify-write by config_accel and config_gyro.
+# Firmware reads current value, ORs in mode bits, writes back.
+# Return 0x00 (power-off default); the firmware ORs in its desired modes.
+# Source: ICM-42605.c:126 `icm42605_read_reg(0, REG_PWR_MGMT0, &v)`
+[[sensor.register]]
+addr  = 0x4E
+const = [0x00]
+
+# GYRO_CONFIG0 (0x4F) — written by config_gyro: FS+ODR. Not read back.
+# Return datasheet reset default 0x06.
+# Source: ICM-42605.c:159 `icm42605_write_reg(0, REG_GYRO_CONFIG0, v)`
+[[sensor.register]]
+addr  = 0x4F
+const = [0x06]
+
+# ACCEL_CONFIG0 (0x50) — written by config_accel: FS+ODR. Not read back.
+# Return datasheet reset default 0x06.
+# Source: ICM-42605.c:121 `icm42605_write_reg(0, REG_ACCEL_CONFIG0, v)`
+[[sensor.register]]
+addr  = 0x50
+const = [0x06]
+
+# GYRO_CONFIG1 (0x51) — read-modify-write for filter order.
+# Return 0x00; firmware ORs in filter bits.
+# Source: ICM-42605.c:173 `icm42605_read_reg(0, REG_GYRO_CONFIG1, &v)`
+[[sensor.register]]
+addr  = 0x51
+const = [0x00]
+
+# GYRO_ACCEL_CONFIG0 (0x52) — read-modify-write for LPF bandwidth.
+# Return 0x00; firmware OR/ANDs nibble values into it.
+# Source: ICM-42605.c:141 + 180 `icm42605_read_reg(0, REG_GYRO_ACCEL_CONFIG0, &v)`
+[[sensor.register]]
+addr  = 0x52
+const = [0x00]
+
+# ACCEL_CONFIG1 (0x53) — read-modify-write for accel filter order.
+# Return 0x00; firmware ORs in filter bits.
+# Source: ICM-42605.c:134 `icm42605_read_reg(0, REG_ACCEL_CONFIG1, &v)`
+[[sensor.register]]
+addr  = 0x53
+const = [0x00]
+
+# REG_BANK_SEL (0x76) — written before every register access by icm42605_bank_select().
+# The firmware always selects Bank 0 (writes 0x00) before touching any register.
+# Return 0x00 (current bank = 0 after reset); write is ignored by the model.
+# Source: ICM-42605-HeaderFile:16 `#define REG_REG_BANK_SEL 0x76`
+#         ICM-42605.c:31 `uint8_t addr = 0x76 & 0x7F` then transmit bank_code
+[[sensor.register]]
+addr  = 0x76
+const = [0x00]
+
+# ACCEL_DATA_X_H (0x1F) — burst-read start for 6 accel bytes (X_H,X_L,Y_H,Y_L,Z_H,Z_L).
+# ICM-42605.c:197 `icm42605_read_multi(0, REG_ACCEL_DATA_X_H, raw, 6)`.
+# Encoding: each axis is a signed 16-bit big-endian integer.
+# Return 0,0 for X; 0,0 for Y; +1g for Z (0x4000 = 16384 LSBs at ±2g full-scale).
+# The engine must stream 6 bytes from this start address with auto-increment
+# (0x1F→0x20→0x21→0x22→0x23→0x24). We declare each byte register individually.
+[[sensor.register]]
+addr  = 0x1F   # ACCEL_X_H (MSB)
+const = [0x00]
+
+[[sensor.register]]
+addr  = 0x20   # ACCEL_X_L (LSB)
+const = [0x00]
+
+[[sensor.register]]
+addr  = 0x21   # ACCEL_Y_H
+const = [0x00]
+
+[[sensor.register]]
+addr  = 0x22   # ACCEL_Y_L
+const = [0x00]
+
+[[sensor.register]]
+addr  = 0x23   # ACCEL_Z_H — 0x40 = high byte of 0x4000 (+1g at ±2g, 16384 LSB/g)
+const = [0x40]
+
+[[sensor.register]]
+addr  = 0x24   # ACCEL_Z_L
+const = [0x00]
+
+# GYRO_DATA_X_H (0x25) — burst-read start for 6 gyro bytes (X_H,X_L,Y_H,Y_L,Z_H,Z_L).
+# ICM-42605.c:211 `icm42605_read_multi(0, REG_GYRO_DATA_X_H, raw, 6)`.
+# All zero → 0 dps on all axes at rest (correct for static calibration).
+[[sensor.register]]
+addr  = 0x25   # GYRO_X_H
+const = [0x00]
+
+[[sensor.register]]
+addr  = 0x26   # GYRO_X_L
+const = [0x00]
+
+[[sensor.register]]
+addr  = 0x27   # GYRO_Y_H
+const = [0x00]
+
+[[sensor.register]]
+addr  = 0x28   # GYRO_Y_L
+const = [0x00]
+
+[[sensor.register]]
+addr  = 0x29   # GYRO_Z_H
+const = [0x00]
+
+[[sensor.register]]
+addr  = 0x2A   # GYRO_Z_L
+const = [0x00]
+
+[sensor.protocol]
+style           = "spi_reg"
+rw_read_is_high = true   # bit 7 = 1 → read; ICM-42605.c:67 `addr = reg | 0x80`
+addr_mask       = 0x7f   # bits [6:0] are the register address
