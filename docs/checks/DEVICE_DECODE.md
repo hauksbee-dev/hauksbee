@@ -23,8 +23,16 @@ config pins, its own band table, and its own consistency rules. So each supporte
 part is a hand-written decoder seeded from its datasheet. Adding coverage means
 adding a part, deliberately, one at a time. This is by design, not a stub.
 
-Today exactly **one** part is seeded: the Cypress / Infineon **CYPD3177**
-(EZ-PD BCR) USB-C PD sink controller.
+Two parts are seeded today: the Cypress / Infineon **CYPD3177** (EZ-PD BCR)
+USB-C PD sink controller, and the TI **BQ2407x** charger family's TMR
+safety-timer resistor. The BQ2407x decoder fires only when the TMR
+programming resistor lands *outside* the datasheet's 18-72 kOhm band
+(tMAXCHG = 10 x 48 s/kOhm x R): a floating pin (internal defaults) and a
+VSS tie (timers deliberately disabled) are documented modes and stay
+silent. The seed case is a published keyboard whose 4.7 k-for-47 k typo cut
+the fast-charge safety timer from ~6.3 h of design intent to an undefined
+sub-band value (~38 min taken at face value): every net connected, every
+part in spec, invisible to DRC and SPICE alike.
 
 ## Zero-false-positive discipline (binding)
 

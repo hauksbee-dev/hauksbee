@@ -29,8 +29,8 @@ pub use models::{
 };
 pub use source::{AcStim, PwlPoint, SourceKind};
 pub use spice::{
-    levenshtein, AcDirective, AcSweep, DcDirective, DcSweep, Directives, PrintRequest, SpiceError,
-    SpiceLoader, TranDirective,
+    levenshtein, parse_spice_number, AcDirective, AcSweep, DcDirective, DcSweep, Directives,
+    PrintRequest, SpiceError, SpiceLoader, TranDirective,
 };
 
 use serde::{Deserialize, Serialize};

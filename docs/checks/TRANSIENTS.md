@@ -343,7 +343,7 @@ hauksbee-ci: Olimex ESP32-EVB: WiFi burst on robust supply (calibration)
   [PASS] no stress faults raised
         no stress faults
 
-2/2 assertions passed in 5.24s - GREEN
+GREEN - 2/2 assertions passed in 5.24s
 ```
 
 The EVB's `VDD1A-2A` net carries no `[[supply]]` in this spec, so the runner says
@@ -450,7 +450,7 @@ hauksbee-ci: divider tolerance corners
         corner 1: VOUT: min=2.250V < required 2.4V <- FAILED HERE, max=2.250V (<= 2.6V) [settled 2.250V] [R1=11k(max), R2=9k(min)]; passed 7/10 corners + interior probes (failing: 1, 2, 5)
         why: VOUT settled 0.150 V below your floor (2.250 V vs min 2.4 V)
 
-1/2 assertions passed in 0.03s - RED
+RED - 1/2 assertions passed in 0.03s
 next: the "voltage" section of https://docs.hauksbee.dev/docs/ci/ci explains this check and its knobs
 ```
 

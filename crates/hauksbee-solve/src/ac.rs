@@ -75,12 +75,14 @@ impl AcSpec {
                 "expected <fstart>:<fstop>:<points>[:lin], got '{s}'"
             ));
         }
-        let fstart: f64 = parts[0]
-            .parse()
-            .map_err(|_| format!("bad fstart '{}'", parts[0]))?;
-        let fstop: f64 = parts[1]
-            .parse()
-            .map_err(|_| format!("bad fstop '{}'", parts[1]))?;
+        // Engineering suffixes are first-class: `1k:10meg:20` is how an
+        // engineer types a sweep, and SPICE has accepted the vocabulary for
+        // fifty years. Plain floats still parse (parse_spice_number handles
+        // both).
+        let fstart: f64 = hauksbee_ir::parse_spice_number(parts[0])
+            .ok_or_else(|| format!("bad fstart '{}' (try e.g. 1k, 10meg, 2.5e6)", parts[0]))?;
+        let fstop: f64 = hauksbee_ir::parse_spice_number(parts[1])
+            .ok_or_else(|| format!("bad fstop '{}' (try e.g. 1k, 10meg, 2.5e6)", parts[1]))?;
         let points: usize = parts[2]
             .parse()
             .map_err(|_| format!("bad points '{}'", parts[2]))?;
@@ -1253,5 +1255,22 @@ mod frequency_tests {
             "first point is fstart, not fstop: {}",
             f[0]
         );
+    }
+}
+
+#[cfg(test)]
+mod ac_spec_suffix_tests {
+    use super::AcSpec;
+
+    #[test]
+    fn engineering_suffixes_parse_like_spice() {
+        let spec = AcSpec::parse("1k:10meg:20").expect("suffixes are first-class");
+        assert_eq!(spec.fstart, 1e3);
+        assert_eq!(spec.fstop, 10e6);
+        assert_eq!(spec.points, 20);
+        // Plain floats still work, and garbage still fails loudly.
+        assert!(AcSpec::parse("100:1e6:10").is_ok());
+        let err = AcSpec::parse("banana:1e6:10").unwrap_err();
+        assert!(err.contains("bad fstart"), "{err}");
     }
 }

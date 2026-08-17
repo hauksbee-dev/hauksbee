@@ -1474,3 +1474,109 @@ fn custom_pad_arc_covering_inflation_keeps_an_exact_edge_touch_a_short() {
 "#;
     assert_short(&zoo_report(track), "A", "B");
 }
+
+// ── remove_unused_layers via semantics ──────────────────────────────────────
+// KiCad 7+ can strip a via's annular ring on layers it does not connect on
+// (`remove_unused_layers yes`), leaving only the drilled barrel there.
+// Modeling the removed ring at full pad size fabricated phantom clearance
+// findings, and phantom SHORTS, against inner-layer copper the real board
+// never touches: a keyboard with ~400 stitching vias produced 7 false
+// SERIOUS shorts and a carpet of identical 0.150 mm warnings. On a
+// ring-removed layer only the barrel (drill radius) owns spacing.
+
+/// A 4-layer wrapper: F.Cu / In1.Cu / In2.Cu / B.Cu.
+fn board4_ring(items: &str) -> String {
+    format!(
+        r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (layers
+    (0 "F.Cu" signal)
+    (1 "In1.Cu" signal)
+    (2 "In2.Cu" signal)
+    (31 "B.Cu" signal)
+  )
+  (net 0 "")
+  (net 1 "A")
+  (net 2 "B")
+  (net 3 "GND")
+{items}
+)
+"#
+    )
+}
+
+/// GND fill on `layer` whose left edge sits `edge_x` mm from the origin; the
+/// via under test sits at (5,5), so edge_x = 5.45 puts the fill 0.45 mm from
+/// the via center: drill radius (0.15) + a zone clearance of 0.30, exactly
+/// the geometry KiCad writes when the ring is absent.
+fn gnd_fill(layer: &str, edge_x: f64) -> String {
+    format!(
+        r#"
+  (zone (net 3) (net_name "GND") (layer "{layer}")
+    (polygon (pts (xy {edge_x} 0) (xy 10 0) (xy 10 10) (xy {edge_x} 10)))
+    (filled_polygon (layer "{layer}")
+      (pts (xy {edge_x} 0) (xy 10 0) (xy 10 10) (xy {edge_x} 10))
+    )
+  )
+"#
+    )
+}
+
+const UNUSED_RING_VIA: &str = r#"
+  (via (at 5 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu")
+       (remove_unused_layers yes) (keep_end_layers yes) (zone_layer_connections) (net 1))
+"#;
+
+#[test]
+fn ring_removed_inner_layer_via_is_silent_at_real_kicad_spacing() {
+    let items = format!("{UNUSED_RING_VIA}{}", gnd_fill("In1.Cu", 5.45));
+    let report = hauksbee_extract::ExtractedBoard::drc(&board4_ring(&items)).expect("drc runs");
+    assert_eq!(report.shorts().count(), 0, "no phantom short");
+    assert!(
+        !report
+            .clearance_violations()
+            .any(|v| v.layer == "In1.Cu"),
+        "the bare barrel (0.15 mm radius) clears the fill by 0.30 mm; a finding here \
+         would be the phantom-ring bug"
+    );
+}
+
+#[test]
+fn ring_removed_via_still_owns_its_end_layers() {
+    // The same fill distance on an END layer, where keep_end_layers retains
+    // the full 0.6 mm ring: 0.45 - 0.30 = 0.15 mm gap, genuinely below the
+    // 0.2 mm rule, must still fire.
+    let items = format!("{UNUSED_RING_VIA}{}", gnd_fill("B.Cu", 5.45));
+    let report = hauksbee_extract::ExtractedBoard::drc(&board4_ring(&items)).expect("drc runs");
+    assert!(
+        report.clearance_violations().any(|v| v.layer == "B.Cu"),
+        "the end-layer ring is real copper and its tight spacing is a real finding"
+    );
+}
+
+#[test]
+fn zone_layer_connections_keeps_the_inner_ring() {
+    let via = r#"
+  (via (at 5 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu")
+       (remove_unused_layers yes) (keep_end_layers yes)
+       (zone_layer_connections "In1.Cu") (net 1))
+"#;
+    let items = format!("{via}{}", gnd_fill("In1.Cu", 5.45));
+    let report = hauksbee_extract::ExtractedBoard::drc(&board4_ring(&items)).expect("drc runs");
+    assert!(
+        report.clearance_violations().any(|v| v.layer == "In1.Cu"),
+        "a zone-connected layer keeps its ring, so the tight fill is a real finding"
+    );
+}
+
+#[test]
+fn a_track_landing_on_the_via_keeps_that_layers_ring() {
+    let items = format!(
+        "{UNUSED_RING_VIA}\n  (segment (start 2 5) (end 5 5) (width 0.2) (layer \"In1.Cu\") (net 1))\n{}",
+        gnd_fill("In1.Cu", 5.45)
+    );
+    let report = hauksbee_extract::ExtractedBoard::drc(&board4_ring(&items)).expect("drc runs");
+    assert!(
+        report.clearance_violations().any(|v| v.layer == "In1.Cu"),
+        "a track landing on the via means the ring exists on that layer"
+    );
+}
