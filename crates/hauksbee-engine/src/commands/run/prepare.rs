@@ -263,17 +263,9 @@ pub(crate) fn prepare_run_inputs(
              add --ac <FSTART:FSTOP:POINTS>"
         );
     }
-    if cfg.ampacity && (cfg.json || cfg.plain) {
+    if cfg.ampacity && cfg.json {
         anyhow::bail!(
-            "--ampacity is a text-only report with no --json/--plain form yet; \
-             refusing rather than silently ignoring the output flag"
-        );
-    }
-    // --thermal has a --json form but no prose renderer yet; same refusal
-    // policy as --ampacity rather than silently ignoring --plain (M2).
-    if cfg.thermal && cfg.plain {
-        anyhow::bail!(
-            "--thermal has no --plain form yet (its table and --json only); \
+            "--ampacity has no --json form yet; \
              refusing rather than silently ignoring the output flag"
         );
     }

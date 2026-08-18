@@ -30,6 +30,33 @@ pub fn emit(
     strict: bool,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
+    emit_quiet(
+        board_path,
+        board,
+        raw,
+        input_kind,
+        lib,
+        reader_notes,
+        mode,
+        strict,
+        false,
+        inputs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_quiet(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    strict: bool,
+    quiet: bool,
+    inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
     // device_decode lives inside engine_lint (so --check/--json/TUI/frontdoor
     // get it too), so it must not be spliced in here as well: that
     // double-counts every decode finding.
@@ -107,7 +134,7 @@ pub fn emit(
                 "{}",
                 super::check::render_waivers_scoped(&waived, &waivers, &["lint"], true)
             );
-            print!("{}", evidence.render_plain());
+            print!("{}", super::render_evidence_appendix(&evidence, quiet));
         }
     }
     super::note_ungated_findings(strict, lint_fails(&report));
@@ -225,6 +252,33 @@ pub fn emit_resources(
     strict: bool,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
+    emit_resources_quiet(
+        board_path,
+        board,
+        raw,
+        input_kind,
+        lib,
+        reader_notes,
+        mode,
+        strict,
+        false,
+        inputs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_resources_quiet(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    strict: bool,
+    quiet: bool,
+    inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
     let mut report = crate::checks::resources_lint(board, lib);
     // Resource conflicts are lint-class findings and ride the "lint" check in a
     // waiver file, exactly as they do inside `--check` (where they arrive via
@@ -302,7 +356,7 @@ pub fn emit_resources(
         }
     }
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", evidence.render_plain());
+        print!("{}", super::render_evidence_appendix(&evidence, quiet));
         // No stale reporting here: --resources runs only part of the lint
         // family, so a lint waiver with no hit may simply belong to a check
         // this command never ran.

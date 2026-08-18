@@ -132,6 +132,11 @@ pub struct PlainReport {
     /// sites that hold a bind report set this; renderers with no bind context
     /// leave it empty and are unchanged.
     pub unmodelled_critical: Vec<String>,
+    /// A report-wide qualification that changes how the finding count may be
+    /// read. Copper findings on a newer-than-validated board format are kept
+    /// visible but demoted, so the headline must explain that demotion in the
+    /// same breath as the severity count.
+    pub unvalidated: Option<String>,
 }
 
 /// De-escape KiCad's label escapes so a plain sentence names the net the way
@@ -157,6 +162,7 @@ impl PlainReport {
             findings: Vec::new(),
             heads_up: Vec::new(),
             unmodelled_critical: Vec::new(),
+            unvalidated: None,
         }
     }
 
@@ -217,6 +223,18 @@ impl PlainReport {
     /// The one-line overall verdict.
     pub fn verdict(&self) -> String {
         let n = self.findings.len();
+        if let Some(reason) = &self.unvalidated {
+            let reason = reason.trim_end_matches(['.', ';']);
+            if n == 0 {
+                return format!(
+                    "No potential copper issues listed, but this result is UNVALIDATED: {reason}"
+                );
+            }
+            let issues = if n == 1 { "issue" } else { "issues" };
+            return format!(
+                "{n} potential copper {issues} found; UNVALIDATED: {reason}; none counted as serious BECAUSE unvalidated. Inspect the listed coordinates in KiCad's DRC."
+            );
+        }
         // The two noun phrases the verdict slots in. `verdict_noun` supplies both
         // verbatim; otherwise they are built from the heading-cased `subject`.
         let (healthy_noun, failure_noun) = match &self.verdict_noun {
@@ -420,6 +438,7 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
 /// in step with that.
 pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     let mut out = PlainReport::new("Copper spacing (DRC)");
+    out.unvalidated = st.version_warning.clone();
 
     // Nothing to check is not the same as nothing wrong.
     //
@@ -512,10 +531,14 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         // gives the location, so a reader who disagrees with the designer can
         // see exactly what to go and look at.
         if sh.severity != "serious" && sh.plain.contains("schematic declares the tie") {
+            let oracle = sh
+                .oracle_agreement()
+                .map(|agreement| format!(" KiCad agreement: {agreement}."))
+                .unwrap_or_default();
             out.push_at(
                 level,
                 format!(
-                    "\"{a}\" and \"{b}\" are joined in copper, {where_}, and your schematic says that is on purpose."
+                    "\"{a}\" and \"{b}\" are joined in copper, {where_}, and your schematic says that is on purpose.{oracle}"
                 ),
                 format!(
                     "The two are connected where they touch, so \"{a}\" and \"{b}\" are one node there. {}",
@@ -528,9 +551,15 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
             );
             continue;
         }
+        let oracle = sh
+            .oracle_agreement()
+            .map(|agreement| format!(" KiCad agreement: {agreement}."))
+            .unwrap_or_default();
         out.push_at(
             level,
-            format!("Two separate connections, \"{a}\" and \"{b}\", are touching, {where_}."),
+            format!(
+                "Two separate connections, \"{a}\" and \"{b}\", are touching, {where_}.{oracle}"
+            ),
             format!(
                 "These are meant to be electrically separate. Where they touch they become one connection (a short), so \"{a}\" and \"{b}\" will be forced to the same voltage. That usually means the board does the wrong thing, and if one is a power rail it can pull large current and overheat."
             ),
@@ -1244,7 +1273,17 @@ mod tests {
             zone_pad_overlaps_suppressed: Some(0),
         };
         let plain = plain_drc_structured(&crate::result::DrcStructured::from_report(&report));
+        let verdict = plain.verdict();
         let text = plain.render().to_lowercase();
+
+        assert!(
+            verdict.contains("UNVALIDATED") && verdict.contains("BECAUSE unvalidated"),
+            "the headline must qualify why no finding counted as serious: {verdict}"
+        );
+        assert!(
+            !verdict.contains("none serious (worth a look)"),
+            "an unvalidated copper report must not use the ordinary all-clear-shaped headline: {verdict}"
+        );
 
         assert!(text.contains("name-only nets"), "{text}");
         assert!(text.contains("keyhole antipads"), "{text}");

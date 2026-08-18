@@ -35,6 +35,37 @@ pub fn emit(
     strict: bool,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
+    emit_quiet(
+        board_path,
+        board,
+        text,
+        raw,
+        input_kind,
+        altium_present,
+        lib,
+        reader_notes,
+        mode,
+        strict,
+        false,
+        inputs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_quiet(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    altium_present: bool,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    strict: bool,
+    quiet: bool,
+    inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
     // Altium geometry is not yet threaded into the SI text checks, so pass None
     // there; the connectivity-based SI checks still run on `board`.
     let geo_text = if altium_present { None } else { Some(text) };
@@ -140,7 +171,7 @@ pub fn emit(
         }
     }
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", evidence.render_plain());
+        print!("{}", super::render_evidence_appendix(&evidence, quiet));
         print!(
             "{}",
             super::check::render_waivers_scoped(&waived, &waivers, &["si"], true)

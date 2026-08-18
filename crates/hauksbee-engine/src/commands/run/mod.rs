@@ -402,7 +402,7 @@ fn run_inner(
         schematic.as_deref(),
         any_report_flag,
     )?;
-    if static_surfaces::emit_selected(&cfg, surface, &run_inputs, &mut artifacts)? {
+    if static_surfaces::emit_selected(&cfg, quiet, surface, &run_inputs, &mut artifacts)? {
         return Ok(());
     }
     if simulation::launch_tui_if_selected(&cfg, &run_inputs, schematic.as_deref())? {
@@ -417,6 +417,7 @@ fn run_inner(
     )?;
     if simulation::run_selected_simulation_surface(
         &cfg,
+        quiet,
         surface,
         &run_inputs,
         &artifacts,

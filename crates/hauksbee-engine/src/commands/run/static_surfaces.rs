@@ -13,6 +13,7 @@ use super::{
 
 pub(crate) fn emit_selected(
     cfg: &RunConfig,
+    quiet: bool,
     surface: SelectedSurface,
     run_inputs: &RunInputs,
     artifacts: &mut RunArtifacts,
@@ -52,7 +53,7 @@ pub(crate) fn emit_selected(
     // report, so a person (or an AI) gets everything in a single command instead
     // of running one flag at a time. Honours --plain / --json / --strict.
     if surface == SelectedSurface::Check {
-        return crate::reports::check::emit_with_schematic(
+        return crate::reports::check::emit_with_schematic_quiet(
             &cfg.board,
             &board,
             &text,
@@ -64,6 +65,7 @@ pub(crate) fn emit_selected(
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
             cfg.verbose,
+            quiet,
             &inputs,
             schematic_ties.as_ref(),
         )
@@ -71,11 +73,12 @@ pub(crate) fn emit_selected(
     }
 
     if surface == SelectedSurface::Bind {
-        return crate::reports::bind::emit(
+        return crate::reports::bind::emit_quiet(
             &board,
             &lib,
             &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            quiet,
             &inputs,
         )
         .map(|()| true);
@@ -83,7 +86,7 @@ pub(crate) fn emit_selected(
 
     // --drc: run geometric short / clearance detection, print, exit.
     if surface == SelectedSurface::Drc {
-        return crate::reports::drc::emit_with_schematic(
+        return crate::reports::drc::emit_with_schematic_quiet(
             &cfg.board,
             &board,
             &text,
@@ -96,6 +99,7 @@ pub(crate) fn emit_selected(
             cfg.oracle,
             cfg.strict,
             cfg.verbose,
+            quiet,
             &inputs,
             schematic_ties.as_ref(),
         )
@@ -114,14 +118,18 @@ pub(crate) fn emit_selected(
             hauksbee_ir::evidence::RunDate::from_system_clock(),
         )?
         .with_input_artifact(&cfg.board, &raw, input_kind)?;
-        return crate::reports::ampacity::emit(&text, is_altium, &evidence).map(|()| true);
+        let net_names: Vec<String> = board.nets.iter().map(|net| net.name.clone()).collect();
+        return crate::reports::ampacity::emit_quiet(
+            &text, is_altium, &evidence, &net_names, cfg.plain, quiet,
+        )
+        .map(|()| true);
     }
 
     // --lint: run the connectivity lint-class checks, the boot strap-pin lint
     // (which needs the model db's per-part strap tables), and the MCU internal
     // resource-conflict check (a lint-class structural check too), print, exit.
     if surface == SelectedSurface::Lint {
-        return crate::reports::lint::emit(
+        return crate::reports::lint::emit_quiet(
             &cfg.board,
             &board,
             &raw,
@@ -130,6 +138,7 @@ pub(crate) fn emit_selected(
             &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
+            quiet,
             &inputs,
         )
         .map(|()| true);
@@ -137,7 +146,7 @@ pub(crate) fn emit_selected(
 
     // --resources: run only the MCU internal resource-conflict check, print, exit.
     if surface == SelectedSurface::Resources {
-        return crate::reports::lint::emit_resources(
+        return crate::reports::lint::emit_resources_quiet(
             &cfg.board,
             &board,
             &raw,
@@ -146,6 +155,7 @@ pub(crate) fn emit_selected(
             &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
+            quiet,
             &inputs,
         )
         .map(|()| true);
@@ -166,11 +176,12 @@ pub(crate) fn emit_selected(
         let blockers = crate::result::unmodelled_critical_refs(
             &crate::result::BindSummary::from_report(&bound.report),
         );
-        return crate::reports::usb_c::emit(
+        return crate::reports::usb_c::emit_quiet(
             &board,
             &evidence,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
+            quiet,
             &inputs,
             &blockers,
         )
@@ -181,7 +192,7 @@ pub(crate) fn emit_selected(
     // geometry-bearing checks (antenna keepout, USB length skew) need the raw
     // KiCad layout text, so it is passed through.
     if surface == SelectedSurface::Si {
-        return crate::reports::si::emit(
+        return crate::reports::si::emit_quiet(
             &cfg.board,
             &board,
             &text,
@@ -192,6 +203,7 @@ pub(crate) fn emit_selected(
             &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
+            quiet,
             &inputs,
         )
         .map(|()| true);
@@ -214,7 +226,7 @@ pub(crate) fn emit_selected(
             hauksbee_ir::evidence::RunDate::from_system_clock(),
         )?
         .with_input_artifact(&cfg.board, &raw, input_kind)?;
-        return crate::reports::ac::emit(
+        return crate::reports::ac::emit_quiet(
             &bound,
             &evidence,
             ac_arg,
@@ -222,6 +234,7 @@ pub(crate) fn emit_selected(
             cfg.ac_csv.as_deref(),
             cfg.ac_loop.as_deref(),
             cfg.json,
+            quiet,
             &inputs,
         )
         .map(|()| true);

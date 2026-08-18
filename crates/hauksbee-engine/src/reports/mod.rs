@@ -53,6 +53,22 @@ impl OutputMode {
     }
 }
 
+/// Human evidence appendix policy shared by report surfaces. Quiet mode keeps
+/// the verdict, findings, and coverage/open-part summaries emitted by each
+/// report, but replaces the potentially hundreds-of-lines per-item appendix
+/// with one recovery instruction.
+pub(crate) fn render_evidence_appendix(
+    evidence: &crate::evidence::BoardEvidence,
+    quiet: bool,
+) -> String {
+    let full = evidence.render_plain();
+    if full.is_empty() || !quiet {
+        full
+    } else {
+        "\nEvidence appendix hidden by --quiet; rerun without --quiet to show the per-item evidence appendix.\n".to_string()
+    }
+}
+
 /// The one prominent note printed by `--check`/`--drc` when a KiCad layout
 /// carries no routed copper at all (D2): the spacing check then had only pads
 /// to compare, and a clean result must not read as "the routing is clean" on

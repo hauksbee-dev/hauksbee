@@ -67,6 +67,43 @@ pub fn emit_with_schematic(
     inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
+    emit_with_schematic_quiet(
+        board_path,
+        board,
+        text,
+        raw,
+        input_kind,
+        altium_present,
+        lib,
+        reader_notes,
+        mode,
+        oracle,
+        strict,
+        verbose,
+        false,
+        inputs,
+        schematic_ties,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_with_schematic_quiet(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    altium_present: bool,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    oracle: bool,
+    strict: bool,
+    verbose: bool,
+    quiet: bool,
+    inputs: &[JsonInputEvidence],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> anyhow::Result<()> {
     let mut report = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
@@ -123,11 +160,19 @@ pub fn emit_with_schematic(
         )?,
         _ => evidence,
     };
-    let structured = DrcStructured::from_report_with_ties(
+    let mut structured = DrcStructured::from_report_with_ties(
         &report,
         qualification.as_ref(),
         text.contains("<eagle") && schematic_ties.is_none(),
     );
+    // Run the independent oracle before rendering so agreement on an exact net
+    // pair can sit on the finding line itself, where a reader is deciding
+    // whether a demoted KiCad-format finding is credible.
+    let oracle_result =
+        (oracle && mode != OutputMode::Json).then(|| oracle_cross_check(board_path, &report));
+    if let Some(result) = &oracle_result {
+        annotate_oracle_agreement(&mut structured, result);
+    }
     let mut maps = evidence.maps_for_drc_with_ties(&structured, qualification.as_ref())?;
     let coverage = evidence.check_coverage_map("drc", "DRC input coverage")?;
     let coverage_undermined =
@@ -176,11 +221,11 @@ pub fn emit_with_schematic(
             print!("{}", structured.render());
         }
     }
-    if oracle && mode != OutputMode::Json {
-        print!("{}", oracle_cross_check(board_path, &report));
+    if let Some(result) = &oracle_result {
+        print!("{}", result.summary);
     }
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", evidence.render_plain());
+        print!("{}", super::render_evidence_appendix(&evidence, quiet));
         print!(
             "{}",
             super::check::render_waivers_scoped(&waived, &waivers, &["drc"], true)
@@ -299,13 +344,85 @@ pub(crate) fn find_kicad_cli() -> Option<(String, String)> {
 /// Honest about the two tools' different scopes (KiCad's violation count includes
 /// clearance / annular-ring / etc.), and flags the one case that matters: hauksbee
 /// reporting a short the oracle does not (a likely hauksbee false positive).
-fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> String {
+#[derive(Default)]
+struct OracleCrossCheck {
+    summary: String,
+    version: Option<String>,
+    confirmed_pairs: std::collections::BTreeSet<(String, String)>,
+}
+
+fn net_pair(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
+}
+
+fn item_net(description: &str) -> Option<&str> {
+    let start = description.find('[')? + 1;
+    let end = description[start..].find(']')? + start;
+    Some(&description[start..end])
+}
+
+fn oracle_confirmed_pairs(v: &serde_json::Value) -> std::collections::BTreeSet<(String, String)> {
+    let mut pairs = std::collections::BTreeSet::new();
+    let Some(violations) = v.get("violations").and_then(|x| x.as_array()) else {
+        return pairs;
+    };
+    for violation in violations {
+        let ty = violation.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let touches = ty == "shorting_items"
+            || ((ty == "clearance" || ty == "hole_clearance")
+                && violation
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .and_then(actual_mm)
+                    .is_some_and(|actual| actual < 0.005));
+        if !touches {
+            continue;
+        }
+        let nets: Vec<&str> = violation
+            .get("items")
+            .and_then(|items| items.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("description").and_then(|d| d.as_str()))
+            .filter_map(item_net)
+            .collect();
+        if let [first, second, ..] = nets.as_slice() {
+            if first != second {
+                pairs.insert(net_pair(first, second));
+            }
+        }
+    }
+    pairs
+}
+
+fn annotate_oracle_agreement(structured: &mut DrcStructured, oracle: &OracleCrossCheck) {
+    let version = oracle.version.as_deref().unwrap_or("unknown version");
+    for short in &mut structured.shorts {
+        if oracle
+            .confirmed_pairs
+            .contains(&net_pair(&short.net_a, &short.net_b))
+        {
+            short.plain.push_str(&format!(
+                "; ORACLE AGREEMENT: KiCad oracle {version} independently reports this specific net pair touching"
+            ));
+        }
+    }
+}
+
+fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> OracleCrossCheck {
     let Some((cli, ver)) = find_kicad_cli() else {
-        return format!(
-            "\noracle: no kicad-cli found (PATH or /Applications). Install KiCad to \
+        return OracleCrossCheck {
+            summary: format!(
+                "\noracle: no kicad-cli found (PATH or /Applications). Install KiCad to \
              cross-check geometric DRC; see {}.\n",
-            hauksbee_ir::docs_url("docs/cosim/ORACLES.md")
-        );
+                hauksbee_ir::docs_url("docs/cosim/ORACLES.md")
+            ),
+            ..Default::default()
+        };
     };
     let tmp = std::env::temp_dir().join(format!(
         "hauksbee_oracle_drc_{}_{}.json",
@@ -322,7 +439,11 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Str
         .arg(board)
         .output();
     let Ok(out) = run else {
-        return format!("\noracle (kicad-cli {ver}): failed to launch.\n");
+        return OracleCrossCheck {
+            summary: format!("\noracle (kicad-cli {ver}): failed to launch.\n"),
+            version: Some(ver),
+            ..Default::default()
+        };
     };
     let Ok(text) = std::fs::read_to_string(&tmp) else {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -340,15 +461,19 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Str
             detail.push(stdout.trim().to_string());
         }
         let why = detail.join("; ");
-        return format!(
-            "\noracle (kicad-cli {ver}): could not load this board{}. A KiCad-10 (>= 10.0) \
+        return OracleCrossCheck {
+            summary: format!(
+                "\noracle (kicad-cli {ver}): could not load this board{}. A KiCad-10 (>= 10.0) \
              cli is required for v20260206 boards.\n",
-            if why.trim().is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", why.trim())
-            }
-        );
+                if why.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", why.trim())
+                }
+            ),
+            version: Some(ver),
+            ..Default::default()
+        };
     };
     let _ = std::fs::remove_file(&tmp);
     let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
@@ -395,9 +520,65 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Str
     } else {
         format!("agree: both find touching copper ({shorts} hauksbee / {confirmed} oracle; counts differ by decomposition)")
     };
-    format!(
-        "\noracle (kicad-cli {ver}): {confirmed} touching-copper violation(s), {nviol} total DRC \
+    OracleCrossCheck {
+        summary: format!(
+            "\noracle (kicad-cli {ver}): {confirmed} touching-copper violation(s), {nviol} total DRC \
          violation(s), {nunconn} unconnected.\n\
          hauksbee: {shorts} short(s), {clear} clearance. -> {verdict}.\n"
-    )
+        ),
+        version: Some(ver),
+        confirmed_pairs: oracle_confirmed_pairs(&v),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oracle_specific_pair_agreement_is_attached_to_finding_line() {
+        let json = serde_json::json!({
+            "violations": [{
+                "type": "clearance",
+                "description": "Clearance violation (actual 0.0010 mm)",
+                "items": [
+                    {"description": "Pad 1 [+3V3] of U1"},
+                    {"description": "Zone [GND] on F.Cu"}
+                ]
+            }]
+        });
+        let oracle = OracleCrossCheck {
+            summary: String::new(),
+            version: Some("10.0.5".into()),
+            confirmed_pairs: oracle_confirmed_pairs(&json),
+        };
+        let mut structured = DrcStructured {
+            clearance_rule_mm: 0.2,
+            primitive_count: 2,
+            shorts: vec![crate::result::DrcShort {
+                net_a: "GND".into(),
+                net_b: "+3V3".into(),
+                layer: "F.Cu".into(),
+                gap_mm: 0.001,
+                loc_mm: [1.0, 2.0],
+                severity: "note".into(),
+                plain: "GND shorts +3V3".into(),
+                fix: "inspect".into(),
+            }],
+            violations: Vec::new(),
+            at_limit: Vec::new(),
+            version_warning: Some("board format 20260206 is UNVALIDATED".into()),
+            suppression_note: None,
+        };
+        annotate_oracle_agreement(&mut structured, &oracle);
+        let finding = crate::plain::plain_drc_structured(&structured)
+            .findings
+            .remove(0);
+        assert!(
+            finding.what.contains("KiCad oracle 10.0.5")
+                && finding.what.contains("specific net pair"),
+            "oracle agreement must be on the finding line: {}",
+            finding.what
+        );
+    }
 }

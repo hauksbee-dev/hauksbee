@@ -266,17 +266,62 @@ fn tui_with_a_report_flag_warns() {
     );
 }
 
-// ── M2: --thermal --plain refuses instead of silently ignoring ───────────────
+// ── M2: every analysis surface accepts --plain ────────────────────
 
 #[test]
-fn thermal_plain_refuses_loudly() {
+fn ampacity_and_thermal_accept_plain() {
     let b = blinky_board();
-    let out = run(&["run", b.to_str().unwrap(), "--thermal", "--plain"]);
-    assert_eq!(out.status.code(), Some(1));
+    let ampacity = run(&["run", b.to_str().unwrap(), "--ampacity", "--plain"]);
+    assert_eq!(ampacity.status.code(), Some(0), "{}", stderr(&ampacity));
+    assert!(stdout(&ampacity).contains("Plain-language ampacity"));
+
+    let thermal = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--thermal",
+        "--plain",
+        "--seconds",
+        "0.05",
+    ]);
+    assert_ne!(
+        thermal.status.code(),
+        Some(1),
+        "--plain must not be rejected as a flag error: {}",
+        stderr(&thermal)
+    );
     assert!(
-        stderr(&out).contains("--thermal has no --plain form"),
+        stdout(&thermal).contains("Plain-language thermal"),
         "{}",
-        stderr(&out)
+        stdout(&thermal)
+    );
+}
+
+#[test]
+fn quiet_keeps_summary_but_suppresses_per_item_evidence_appendix() {
+    let b = board("tests/fixtures/plain_check_open_active_ic.kicad_pcb");
+    let normal = run(&["run", b.to_str().unwrap(), "--check", "--plain"]);
+    let quiet = run(&["--quiet", "run", b.to_str().unwrap(), "--check", "--plain"]);
+    assert!(
+        stdout(&normal).contains("== Evidence =="),
+        "{}",
+        stdout(&normal)
+    );
+    let text = stdout(&quiet);
+    assert!(
+        text.contains("VERDICT:"),
+        "verdict remains visible:\n{text}"
+    );
+    assert!(
+        text.contains("active IC(s) are unresolved/open"),
+        "open-part summary remains visible:\n{text}"
+    );
+    assert!(
+        !text.contains("== Evidence =="),
+        "appendix must be hidden:\n{text}"
+    );
+    assert!(
+        text.contains("rerun without --quiet to show the per-item evidence appendix"),
+        "the recovery instruction remains:\n{text}"
     );
 }
 

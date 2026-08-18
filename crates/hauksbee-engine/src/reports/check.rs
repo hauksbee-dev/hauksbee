@@ -64,6 +64,41 @@ pub fn emit_with_schematic(
     inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
+    emit_with_schematic_quiet(
+        board_path,
+        board,
+        text,
+        raw,
+        input_kind,
+        altium_present,
+        lib,
+        reader_notes,
+        mode,
+        strict,
+        verbose,
+        false,
+        inputs,
+        schematic_ties,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_with_schematic_quiet(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+    altium_present: bool,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    strict: bool,
+    verbose: bool,
+    quiet: bool,
+    inputs: &[JsonInputEvidence],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
     let evidence = crate::evidence::BoardEvidence::from_bound(
@@ -142,6 +177,7 @@ pub fn emit_with_schematic(
     let unrouted = !altium_present && super::unrouted_kicad_layout(text);
     // Computed before the match: the JSON arm consumes `drc_structured`.
     let (serious, worth_a_look) = verdict_counts(&drc_structured, &lint, &si, &usbc);
+    let copper_unvalidated = drc_structured.version_warning.clone();
     // The verdict blockers: unmodelled current-carrying / active parts. The
     // lint/SI sections and the closing verdict must read INCONCLUSIVE over
     // them, never a clean bill; the copper (DRC) section reads the layout and
@@ -266,7 +302,7 @@ pub fn emit_with_schematic(
         actual_findings.iter().any(|f| f.message == a)
     });
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", evidence.render_plain());
+        print!("{}", super::render_evidence_appendix(&evidence, quiet));
         print!("{}", render_waivers(&waived, &waivers));
         // One verdict line to end on (U4), matching the web/TUI verdict shape:
         // the last thing `--check` prints answers "is my board ok" without
@@ -274,7 +310,13 @@ pub fn emit_with_schematic(
         // consumers read the structured findings).
         println!(
             "\n{}",
-            verdict_line(serious, worth_a_look, &blockers, coverage_undermined)
+            verdict_line(
+                serious,
+                worth_a_look,
+                &blockers,
+                coverage_undermined,
+                copper_unvalidated.as_deref(),
+            )
         );
     }
     super::note_ungated_findings(strict, would_gate);
@@ -346,6 +388,7 @@ fn verdict_line(
     worth_a_look: usize,
     blockers: &[String],
     coverage_undermined: bool,
+    copper_unvalidated: Option<&str>,
 ) -> String {
     // The shared sentence, minus its leading tag where the line carries its
     // own, so the vocabulary stays single-sourced without stuttering
@@ -356,6 +399,17 @@ fn verdict_line(
     });
     const COVERAGE: &str = "an input-coverage claim is undermined, so a clean result here \
                             is not a clean bill (see the evidence section)";
+    if let Some(reason) = copper_unvalidated {
+        return if serious == 0 {
+            format!(
+                "VERDICT: copper UNVALIDATED: {worth_a_look} potential issue(s); none of the copper findings counted as serious BECAUSE unvalidated. Reason: {reason}"
+            )
+        } else {
+            format!(
+                "VERDICT: failing: {serious} serious issue(s) outside the demoted copper findings; copper remains UNVALIDATED with {worth_a_look} potential issue(s). Reason: {reason}"
+            )
+        };
+    }
     if serious == 0 {
         if let Some(sentence) = sentence {
             return format!(

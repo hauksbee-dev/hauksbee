@@ -878,21 +878,11 @@ fn power_like_net(name: &str) -> bool {
         .trim()
         .to_ascii_uppercase();
     n.starts_with('+')
+        || battery_family_net(&n)
+        || (n.starts_with("V_") && n.len() > 2)
         || matches!(
             n.as_str(),
-            "GND"
-                | "GNDA"
-                | "GNDD"
-                | "PGND"
-                | "VBUS"
-                | "VBAT"
-                | "VBATT"
-                | "BATT"
-                | "VIN"
-                | "VOUT"
-                | "VSYS"
-                | "VCC"
-                | "VDD"
+            "GND" | "GNDA" | "GNDD" | "PGND" | "VBUS" | "BATT" | "VOUT" | "VCC" | "VDD"
         )
         || n.contains("BATT")
         || n.contains("VBUS")
@@ -902,6 +892,20 @@ fn power_like_net(name: &str) -> bool {
         || n.contains("POWER")
         || n.contains("PWR")
 }
+
+/// Battery/input-system rail names that are common across CAD conventions.
+/// This is deliberately name-only and therefore deliberately excludes
+/// application jargon such as `PYRO*_FIRE`: recognizing an actuation net as
+/// high-current requires connector/FET topology, which this geometry-only
+/// capacity pass does not have.
+fn battery_family_net(normalized: &str) -> bool {
+    normalized.starts_with("VBAT")
+        || normalized.starts_with("VSYS")
+        || normalized.starts_with("VIN")
+}
+
+const POWER_NET_RECOGNIZERS: &str = "+rail, GND/PGND, VBAT*, VSYS*, VIN*, V_<name>, \
+VCC/VDD/VMOT/VBUS, and names containing BATT/POWER/PWR";
 
 /// The copper basis of a capacity row in table-width form: `0.5 oz int`,
 /// `1 oz ext (assumed)`.
@@ -1049,6 +1053,43 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
         ));
     }
     out.push_str(&rule("\u{2514}", "\u{2534}", "\u{2518}"));
+    out
+}
+
+/// Render the capacity report with board-net context for the empty-result case.
+/// A battery-family name on the board but no report row is actionable evidence
+/// that recognition or routed-copper extraction did not reach it, so disclose
+/// both the candidate names and every recognizer tried.
+pub fn render_trace_capacity_report_with_context(
+    rows: &[TraceCapacityRow],
+    board_net_names: &[String],
+) -> String {
+    let mut out = render_trace_capacity_report(rows);
+    if rows.is_empty() {
+        let mut battery_candidates: Vec<&str> = board_net_names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| {
+                let normalized = name
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(name)
+                    .trim()
+                    .to_ascii_uppercase();
+                battery_family_net(&normalized)
+            })
+            .collect();
+        battery_candidates.sort_unstable();
+        battery_candidates.dedup();
+        if !battery_candidates.is_empty() {
+            use std::fmt::Write as _;
+            let _ = writeln!(
+                out,
+                "battery-family net name(s) exist but yielded no routed capacity row: {}. recognizers tried: {POWER_NET_RECOGNIZERS}.",
+                battery_candidates.join(", ")
+            );
+        }
+    }
     out
 }
 
@@ -1677,6 +1718,49 @@ mod tests {
         assert!(rendered.contains("capacity only"));
         assert!(rendered.contains("supply a current"));
         assert!(!rendered.contains("SDA"));
+    }
+
+    #[test]
+    fn capacity_report_recognizes_battery_and_named_voltage_rails() {
+        let body = r#"
+          (net 1 "VBAT_SENSED")
+          (net 2 "VBATT")
+          (net 3 "VSYS")
+          (net 4 "VIN_RAW")
+          (net 5 "V_MCU_2S")
+          (net 6 "PYRO1_FIRE")
+          (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
+          (segment (start 0 1) (end 10 1) (width 0.5) (layer "F.Cu") (net 2))
+          (segment (start 0 2) (end 10 2) (width 0.5) (layer "F.Cu") (net 3))
+          (segment (start 0 3) (end 10 3) (width 0.5) (layer "F.Cu") (net 4))
+          (segment (start 0 4) (end 10 4) (width 0.5) (layer "F.Cu") (net 5))
+          (segment (start 0 5) (end 10 5) (width 0.5) (layer "F.Cu") (net 6))
+        "#;
+        let copper = pcb(body);
+        let report = trace_capacity_report(&copper, &TraceAudit::default());
+        let names: Vec<&str> = report.iter().map(|row| row.net.as_str()).collect();
+        assert_eq!(
+            names,
+            ["VBAT_SENSED", "VBATT", "VSYS", "VIN_RAW", "V_MCU_2S"]
+        );
+        assert!(
+            !names.contains(&"PYRO1_FIRE"),
+            "actuation jargon must not become a name-only power inference"
+        );
+    }
+
+    #[test]
+    fn empty_capacity_report_explains_recognizers_when_battery_net_exists() {
+        let rows = Vec::new();
+        let rendered = render_trace_capacity_report_with_context(&rows, &["VBAT_AUX".to_string()]);
+        assert!(
+            rendered.contains("VBAT_AUX"),
+            "must name the candidate: {rendered}"
+        );
+        assert!(
+            rendered.contains("recognizers tried") && rendered.contains("V_<name>"),
+            "must disclose the recognition policy: {rendered}"
+        );
     }
 
     #[test]
