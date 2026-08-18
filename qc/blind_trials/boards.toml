@@ -1,0 +1,31 @@
+# Blind first-use trial registry.
+#
+# Each board is pinned twice: pre_fix is the bytes a fresh agent sees, and fix
+# is the later upstream revision whose diff establishes the planted defect.
+
+[[board]]
+id = "tinkerrocket"
+upstream = "https://github.com/Tinkerbug-Robotics/TinkerRocket.git"
+pre_fix = "358d45c6befdb60282692037df05a055f4a8c567"
+fix = "edef97e7cfe0f62e66d90c6e89ba15fb602df408"
+board = "hardware/rocket-computer/rocket-computer.kicad_pcb"
+approx_footprints = 239
+defect = "eFuse ILIM resistor is sized above the battery connector's current rating."
+
+[[board]]
+id = "doorbell"
+upstream = "https://github.com/gunnarbeutner/doorbell.git"
+pre_fix = "3de1a11e1ba60dfe73441d89ccdee3f938ec70c1"
+fix = "4082ec47336ac41eda47faba49472a025e63229c"
+board = "kicad/doorbell.kicad_pcb"
+approx_footprints = 103
+defect = "Status LED is a hardwired power LED; the fix rewires it to MCU IO3 and adds a 1k pull-down for a defined active-low state."
+
+[[board]]
+id = "teacup-neo"
+upstream = "https://github.com/thingino/teacup-neo.git"
+pre_fix = "9be2f71118dca1b142c93fe3acb3c56e0612c0df"
+fix = "816a0dc35e2e3b23ad3ac827c4e3ca7b4ed2b2aa"
+board = "hw/teacup-carrier.kicad_pcb"
+approx_footprints = 128
+defect = "Audio connector and camera FPC pinout are miswired: power/ground are swapped and MIPI lane order and differential polarity are reversed."
