@@ -1,7 +1,11 @@
 //! The server's lightweight demo engine.
 //!
-//! The transport-independent [`Engine`] boundary lives in
-//! `hauksbee-frontdoor-api` and is re-exported here for compatibility.
+//! The transport-independent [`Engine`] boundary itself lives in
+//! `hauksbee-frontdoor-api` (the leaf crate both this server and the compute
+//! engine depend on, so neither has to depend on the other) and is
+//! re-exported here so `hauksbee_server::engine::Engine` keeps resolving for
+//! existing callers. What remains locally is the demo implementation: an
+//! emulated AVR proving the server/MCU/frontend stack without a real board.
 
 use crate::protocol::{BoardInfo, SimFrame, SolverControls};
 pub use hauksbee_frontdoor_api::engine::Engine;
