@@ -27,7 +27,11 @@ fn hyphenated_mouse_bite_footprint_is_ignored() {
 #[test]
 fn underscore_and_space_mouse_bite_spellings_still_match() {
     let lib = ModelLibrary::builtin();
-    for fp in ["Panel:mouse_bite_5mm", "house:Mouse Bite v2", "tabs:MouseBite"] {
+    for fp in [
+        "Panel:mouse_bite_5mm",
+        "house:Mouse Bite v2",
+        "tabs:MouseBite",
+    ] {
         let resolved = lib.resolve(&ComponentQuery {
             footprint: Some(fp.into()),
             ..Default::default()
@@ -70,7 +74,10 @@ fn schematic_fuse_lib_id_still_wins_its_original_rule() {
         ..Default::default()
     });
     let model = resolved.model.expect("Device:Fuse still resolves");
-    assert_eq!(model.passive_class, Some(hauksbee_models::schema::PassiveClass::Fuse));
+    assert_eq!(
+        model.passive_class,
+        Some(hauksbee_models::schema::PassiveClass::Fuse)
+    );
 }
 
 #[test]
@@ -101,5 +108,8 @@ fn antenna_prefixed_real_part_numbers_are_not_captured_by_the_abstention() {
     let lib = ModelLibrary::builtin();
     assert!(lib.unmodelled().note_for("Antenna_Chip", "").is_some());
     assert!(lib.unmodelled().note_for("antenna chip", "").is_some());
-    assert!(lib.unmodelled().note_for("AntennaTuner_XYZ99", "").is_none());
+    assert!(lib
+        .unmodelled()
+        .note_for("AntennaTuner_XYZ99", "")
+        .is_none());
 }

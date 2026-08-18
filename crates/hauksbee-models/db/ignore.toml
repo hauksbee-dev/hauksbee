@@ -286,8 +286,53 @@ value_re = '''(?ix) ^(
 # stops, which is a different statement and the one a report should make. What
 # comes through the connector is a scenario's business, not the board's.
 #
-# NOT MODELLED, for all of these: contact resistance, current rating enforcement,
-# mating-cycle life, and anything on the far side of the connector.
+# NOT MODELLED for the generic connector identities below: contact resistance,
+# current rating, mating-cycle life, and anything on the far side. The two exact,
+# footprint-bound JST cards immediately below are the deliberate exception for
+# current rating only; they still model no contact physics or external load.
+
+# ── JST VH / PH battery connectors ───────────────────────────────────────────
+#
+# These two footprint-bound cards deliberately carry the continuous contact
+# rating: the TPS25982 ILIM decoder can use it only when this exact connector is
+# electrically on the eFuse IN/OUT conduction path. A merely placed or
+# unconnected footprint is not a witness.
+#
+# Sources (official JST family data sheets, Specifications, page 1):
+#   VH CONNECTOR, 3.96 mm pitch, eVH.pdf (2026): 10 A AC/DC when using AWG #16
+#   with the standard type header. B2P-VH is the standard top-entry header.
+#   PH CONNECTOR, 2.0 mm pitch, ePH.pdf (2026): 2 A AC/DC with AWG #24.
+[[models]]
+id = "jst_vh_b2p"
+kind = "connector"
+description = "JST VH B2P-VH 2-position 3.96 mm wire-to-board connector"
+
+[models.match]
+value_re = "(?i)^JST[_ -]?B2P-VH$"
+footprint_re = "(?i)(^|:)JST_VH_B2P-VH_1x02_P3\\.96mm_Vertical$"
+
+[models.pins]
+"1" = "p1"
+"2" = "p2"
+
+[models.ratings]
+max_current_a = 10.0 # JST VH data sheet p.1; AWG #16, standard type header
+
+[[models]]
+id = "jst_ph_b2b_sm4_tb"
+kind = "connector"
+description = "JST PH B2B-PH-SM4-TB 2-position 2.0 mm SMT wire-to-board connector"
+
+[models.match]
+value_re = "(?i)^JST[_ -]?B2B-PH-SM4-TB$"
+footprint_re = "(?i)(^|:)JST_B2B-PH-SM4-TB$"
+
+[models.pins]
+"1" = "p1"
+"2" = "p2"
+
+[models.ratings]
+max_current_a = 2.0 # JST PH data sheet p.1; AWG #24
 
 # ── Degson / Ningbo DG306 screw terminal blocks ──────────────────────────────
 #
