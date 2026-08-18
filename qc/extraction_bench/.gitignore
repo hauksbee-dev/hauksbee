@@ -1,2 +1,4 @@
+# Vendor PDFs are inputs, not redistributable repository content.
 datasheets/
+# LLM drafts and logs are retained local evidence, not source.
 runs/

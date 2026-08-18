@@ -1,5 +1,7 @@
 schema_version = 1
 
+# Numeric values use the SI units expected by Hauksbee model-card fields.
+
 [[cases]]
 part = "BQ24075"
 url = "https://www.ti.com/lit/ds/symlink/bq24075.pdf"
