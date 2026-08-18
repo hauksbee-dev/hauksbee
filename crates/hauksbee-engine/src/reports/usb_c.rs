@@ -72,6 +72,11 @@ pub(crate) fn emit_quiet(
     // --strict) even when bind blockers also exist; the INCONCLUSIVE sentence
     // still prints beside it.
     let serious = report.as_ref().is_some_and(|report| report.is_serious());
+    let cc_nets = crate::checks::usb_c::receptacle_cc_net_names(board)
+        .map(|nets| nets.into_iter().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let human_maps = evidence.maps_for_surface_nets("USB-C CC input coverage", &cc_nets)?;
+    let human_evidence = evidence.clone().with_maps(human_maps);
     match &report {
         None => {
             match mode {
@@ -138,7 +143,10 @@ pub(crate) fn emit_quiet(
         },
     }
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", super::render_evidence_appendix(evidence, quiet));
+        print!(
+            "{}",
+            super::render_evidence_appendix(&human_evidence, quiet, false)
+        );
     }
     super::note_ungated_findings(strict, serious);
     if strict && serious {

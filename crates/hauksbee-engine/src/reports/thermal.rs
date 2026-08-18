@@ -139,7 +139,7 @@ pub(crate) fn emit_quiet(
         }
         print!(
             "{}",
-            super::render_evidence_appendix(&report_evidence, quiet)
+            super::render_evidence_appendix(&report_evidence, quiet, false)
         );
     }
     if !validity.valid {

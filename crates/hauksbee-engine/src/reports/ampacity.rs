@@ -10,7 +10,7 @@ pub fn emit(
     altium_present: bool,
     evidence: &crate::evidence::BoardEvidence,
 ) -> anyhow::Result<()> {
-    emit_quiet(text, altium_present, evidence, &[], false, false)
+    emit_quiet(text, altium_present, evidence, &[], false, false, false)
 }
 
 pub(crate) fn emit_quiet(
@@ -20,6 +20,7 @@ pub(crate) fn emit_quiet(
     board_net_names: &[String],
     plain: bool,
     quiet: bool,
+    verbose: bool,
 ) -> anyhow::Result<()> {
     let rows = if altium_present {
         Vec::new()
@@ -44,6 +45,12 @@ pub(crate) fn emit_quiet(
         "{}",
         hauksbee_extract::render_trace_capacity_report_with_context(&rows, board_net_names)
     );
-    print!("{}", super::render_evidence_appendix(evidence, quiet));
+    let touched_nets: Vec<String> = rows.iter().map(|row| row.net.clone()).collect();
+    let maps = evidence.maps_for_surface_nets("Ampacity input coverage", &touched_nets)?;
+    let scoped_evidence = evidence.clone().with_maps(maps);
+    print!(
+        "{}",
+        super::render_evidence_appendix(&scoped_evidence, quiet, verbose)
+    );
     Ok(())
 }

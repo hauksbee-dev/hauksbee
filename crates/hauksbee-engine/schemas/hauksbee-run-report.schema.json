@@ -1103,7 +1103,7 @@
           "type": "string"
         },
         "severity": {
-          "description": "\"serious\" for a short, \"note\" only when the board format could not be\nvalidated or board-local physical authority qualifies this location. A\ncompanion Eagle schematic adds context but cannot change severity.",
+          "description": "\"serious\" for a validated-format short or an unvalidated-format short\nindependently confirmed by KiCad's own DRC. \"note\" remains for a\ntool-only unvalidated-format claim or where board-local physical\nauthority qualifies this location. A companion Eagle schematic adds\ncontext but cannot change severity.",
           "type": "string"
         }
       },
@@ -1152,7 +1152,7 @@
           ]
         },
         "version_warning": {
-          "description": "Set when the board's format is newer than hauksbee's validated copper\nextraction (KiCad 10+), making the shorts above unreliable. Surfaced by\nevery renderer; CI gates ignore the shorts when it is set.",
+          "description": "Set when the board's format is newer than hauksbee's validated copper\nextraction (KiCad 10+), making tool-only shorts above unreliable.\nSurfaced by every renderer; CI gates ignore those tool-only shorts, but\nan exact net-pair match from KiCad's own DRC restores a short's serious\nseverity and gate status.",
           "type": [
             "string",
             "null"

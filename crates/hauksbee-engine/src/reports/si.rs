@@ -105,11 +105,9 @@ pub(crate) fn emit_quiet(
     let coverage_undermined = run_level
         .iter()
         .any(|m| m.status() == hauksbee_ir::evidence::EvidenceStatus::Undermined);
-    let evidence = if run_level.is_empty() {
-        evidence
-    } else {
-        evidence.with_maps(run_level.clone())
-    };
+    let mut surface_maps = evidence.maps_for_findings(&si_findings_json(&report))?;
+    surface_maps.extend(run_level.clone());
+    let evidence = evidence.with_maps(surface_maps);
     // The verdict blockers: a clean SI result over an unbound power FET / main
     // IC is a vacuous pass, so every surface says INCONCLUSIVE (count, named
     // parts, unlocking input) instead of a clean bill. Without --strict the exit
@@ -171,7 +169,10 @@ pub(crate) fn emit_quiet(
         }
     }
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", super::render_evidence_appendix(&evidence, quiet));
+        print!(
+            "{}",
+            super::render_evidence_appendix(&evidence, quiet, false)
+        );
         print!(
             "{}",
             super::check::render_waivers_scoped(&waived, &waivers, &["si"], true)
