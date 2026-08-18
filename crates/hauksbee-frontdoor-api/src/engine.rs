@@ -1,4 +1,12 @@
 //! The compute-engine boundary consumed by a front door.
+//!
+//! [`Engine`] is the one trait a live web session drives: start a run, step
+//! it, read frames, adjust solver controls. It lives here, in a leaf crate
+//! with no server or solver inside, so the dependency arrow points the right
+//! way: `hauksbee-engine` implements this trait without linking the web
+//! server, and `hauksbee-server` serves any implementor without linking the
+//! solver. Before the split the engine library depended on the server to
+//! reach this trait, which put the transport underneath the physics.
 
 use crate::protocol::{
     BoardInfo, LivePeripheralSpec, LiveRegisterMapSpec, PowerSupplyConfig, SimFrame, SolverControls,
