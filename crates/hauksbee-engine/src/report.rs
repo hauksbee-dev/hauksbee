@@ -280,6 +280,18 @@ impl BindReport {
 
     /// Render a Unicode box-drawing table of every row.
     pub fn render_table(&self) -> String {
+        self.render_table_with_bulk_passives(true)
+    }
+
+    /// Render the bind table for a person asking what still needs attention.
+    /// Generic R/C/L fallbacks are sound enough to account for in the summary,
+    /// but printing hundreds of them ahead of the active devices hides the
+    /// answer. [`Self::render_table`] remains the full, compatibility form.
+    pub fn render_table_compact(&self) -> String {
+        self.render_table_with_bulk_passives(false)
+    }
+
+    fn render_table_with_bulk_passives(&self, include_bulk_passives: bool) -> String {
         let mut refs = "Ref".to_string();
         let mut vals = "Value".to_string();
         let mut models = "Model".to_string();
@@ -295,8 +307,21 @@ impl BindReport {
 
         // Deterministic, human-scannable order: natural sort on the reference
         // (R2 before R10), whatever order the board file listed the parts in.
-        let mut sorted_rows: Vec<&BindRow> = self.rows.iter().collect();
-        sorted_rows.sort_by_key(|r| natural_ref_key(&r.reference));
+        let mut sorted_rows: Vec<&BindRow> = self
+            .rows
+            .iter()
+            .filter(|row| include_bulk_passives || bulk_fallback_passive_kind(row).is_none())
+            .collect();
+        if include_bulk_passives {
+            sorted_rows.sort_by_key(|r| natural_ref_key(&r.reference));
+        } else {
+            sorted_rows.sort_by_key(|row| {
+                (
+                    !matches!(&row.outcome, BindOutcome::Unresolved { .. }),
+                    natural_ref_key(&row.reference),
+                )
+            });
+        }
         let cells: Vec<(String, String, String, String, String)> = sorted_rows
             .iter()
             .map(|r| {
@@ -366,6 +391,46 @@ impl BindReport {
             "─".repeat(w_out),
         ));
 
+        if !include_bulk_passives {
+            let mut capacitors = 0usize;
+            let mut resistors = 0usize;
+            let mut inductors = 0usize;
+            for row in &self.rows {
+                match bulk_fallback_passive_kind(row) {
+                    Some("capacitor") => capacitors += 1,
+                    Some("resistor") => resistors += 1,
+                    Some("inductor") => inductors += 1,
+                    Some(_) | None => {}
+                }
+            }
+            let total = capacitors + resistors + inductors;
+            if total > 0 {
+                let mut kinds = Vec::new();
+                if capacitors > 0 {
+                    kinds.push(format!(
+                        "{capacitors} capacitor{}",
+                        if capacitors == 1 { "" } else { "s" }
+                    ));
+                }
+                if resistors > 0 {
+                    kinds.push(format!(
+                        "{resistors} resistor{}",
+                        if resistors == 1 { "" } else { "s" }
+                    ));
+                }
+                if inductors > 0 {
+                    kinds.push(format!(
+                        "{inductors} inductor{}",
+                        if inductors == 1 { "" } else { "s" }
+                    ));
+                }
+                out.push_str(&format!(
+                    "{total} passives bound by footprint/value fallback: {}. Use --verbose to show every bind row.\n",
+                    kinds.join(", ")
+                ));
+            }
+        }
+
         // Summary line.
         let guess_count = self.guess_warnings().count();
         let plural = |n: usize, one: &str, many: &str| {
@@ -404,6 +469,25 @@ impl BindReport {
             );
         }
         out
+    }
+}
+
+/// The only rows the compact table hides. Model id and source tier must both
+/// agree: an explicitly supplied capacitor model is non-trivial and remains
+/// visible, as does every active/current-program device even when guessed.
+fn bulk_fallback_passive_kind(row: &BindRow) -> Option<&'static str> {
+    if row
+        .source
+        .as_ref()
+        .is_none_or(|source| source.tier() != ModelSourceTier::EstimatedFallback)
+    {
+        return None;
+    }
+    match row.model_id.as_deref() {
+        Some("c_fallback") => Some("capacitor"),
+        Some("r_fallback") => Some("resistor"),
+        Some("l_fallback") => Some("inductor"),
+        _ => None,
     }
 }
 
@@ -508,6 +592,45 @@ mod resolved_count_tests {
         };
         report.push(res);
         assert!(report.estimated_fallback_warnings().is_empty());
+    }
+
+    #[test]
+    fn compact_bind_table_rolls_up_only_bulk_fallback_passives() {
+        let mut report = BindReport::default();
+        let mut cap = sourced_row("C1", "c_fallback", ModelSourceTier::EstimatedFallback);
+        cap.outcome = BindOutcome::Analog {
+            device: "capacitor".into(),
+        };
+        report.push(cap);
+        let mut res = sourced_row("R1", "r_fallback", ModelSourceTier::EstimatedFallback);
+        res.outcome = BindOutcome::Analog {
+            device: "resistor".into(),
+        };
+        report.push(res);
+        report.push(row(
+            "U1",
+            Confidence::Unresolved,
+            BindOutcome::Unresolved {
+                reason: "no model".into(),
+            },
+        ));
+
+        let compact = report.render_table_compact();
+        assert!(
+            compact.contains("U1") && compact.contains("UNRESOLVED"),
+            "{compact}"
+        );
+        assert!(
+            !compact.contains("│ C1 ") && !compact.contains("│ R1 "),
+            "{compact}"
+        );
+        assert!(
+            compact
+                .contains("2 passives bound by footprint/value fallback: 1 capacitor, 1 resistor"),
+            "{compact}"
+        );
+        let full = report.render_table();
+        assert!(full.contains("│ C1 ") && full.contains("│ R1 "), "{full}");
     }
 
     #[test]

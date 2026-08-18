@@ -1,6 +1,6 @@
 //! The `--drc` report: geometric copper-short and clearance detection over the
 //! extracted board, rendered in the requested output mode. It also carries the
-//! `kicad-cli` oracle cross-check (DRC-only) and, under `--strict`, exits non-zero
+//! shared `kicad-cli` oracle cross-check and, under `--strict`, exits non-zero
 //! on a true short. Pure CLI glue over the extractor's DRC and the binder.
 
 use std::path::Path;
@@ -168,11 +168,14 @@ pub(crate) fn emit_with_schematic_quiet(
     // Run the independent oracle before rendering so agreement on an exact net
     // pair can sit on the finding line itself, where a reader is deciding
     // whether a demoted KiCad-format finding is credible.
-    let oracle_result =
-        (oracle && mode != OutputMode::Json).then(|| oracle_cross_check(board_path, &report));
-    if let Some(result) = &oracle_result {
-        annotate_oracle_agreement(&mut structured, result);
-    }
+    let oracle_summary = (oracle && mode != OutputMode::Json).then(|| {
+        oracle_cross_check_and_annotate(
+            board_path,
+            &report,
+            &mut structured,
+            qualification.as_ref(),
+        )
+    });
     let mut maps = evidence.maps_for_drc_with_ties(&structured, qualification.as_ref())?;
     let coverage = evidence.check_coverage_map("drc", "DRC input coverage")?;
     let coverage_undermined =
@@ -221,28 +224,29 @@ pub(crate) fn emit_with_schematic_quiet(
             print!("{}", structured.render());
         }
     }
-    if let Some(result) = &oracle_result {
-        print!("{}", result.summary);
+    if let Some(summary) = &oracle_summary {
+        print!("{summary}");
     }
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", super::render_evidence_appendix(&evidence, quiet));
+        print!(
+            "{}",
+            super::render_evidence_appendix(&evidence, quiet, verbose)
+        );
         print!(
             "{}",
             super::check::render_waivers_scoped(&waived, &waivers, &["drc"], true)
         );
     }
-    // Strict: any true short fails the gate (clearance-only does not). An
-    // unvalidated board format (KiCad 10+) yields possibly-phantom shorts, so it
-    // does not gate (the printed caveat tells the user to cross-check). Asked of
-    // the machine findings, so this exit code and the `--junit`/`--sarif` files
-    // count the same shorts.
-    let would_gate = super::check::drc_gate_fails(&report, qualification.as_ref());
+    // Strict: any confirmed short fails the gate (clearance-only does not). An
+    // unmatched unvalidated-format short remains a non-gating note; an exact
+    // KiCad-oracle net-pair match restores serious severity and gating.
+    let would_gate = structured
+        .shorts
+        .iter()
+        .any(|short| short.severity == "serious");
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
-        super::strict_gate_exit(
-            mode,
-            &super::drc_gate_items_with_ties(&report, qualification.as_ref()),
-        );
+        super::strict_gate_exit(mode, &super::drc_structured_gate_items(&structured));
     }
     // Copper is model-free: only an undermined DRC coverage claim (the input
     // could not honestly be inspected) or an undermined shorts map exits 3;
@@ -399,18 +403,47 @@ fn oracle_confirmed_pairs(v: &serde_json::Value) -> std::collections::BTreeSet<(
     pairs
 }
 
-fn annotate_oracle_agreement(structured: &mut DrcStructured, oracle: &OracleCrossCheck) {
+fn annotate_oracle_agreement(
+    structured: &mut DrcStructured,
+    oracle: &OracleCrossCheck,
+    authorized_ties: &[bool],
+) {
     let version = oracle.version.as_deref().unwrap_or("unknown version");
-    for short in &mut structured.shorts {
+    for (index, short) in structured.shorts.iter_mut().enumerate() {
         if oracle
             .confirmed_pairs
             .contains(&net_pair(&short.net_a, &short.net_b))
         {
-            short.plain.push_str(&format!(
-                "; ORACLE AGREEMENT: KiCad oracle {version} independently reports this specific net pair touching"
-            ));
+            short.attach_oracle_agreement(version);
+            // KiCad 10+ format uncertainty is the only demotion an independent
+            // pair match settles. A board-local, coordinate-authorized net tie
+            // remains a note: the oracle confirms contact, not that it is a
+            // defect. Validated-format shorts are already serious.
+            if structured.version_warning.is_some()
+                && !authorized_ties.get(index).copied().unwrap_or(false)
+            {
+                short.severity = "serious".to_string();
+            }
         }
     }
+}
+
+/// Run KiCad's DRC oracle and attach pair-specific agreement to the existing
+/// structured findings. This is shared by `--drc` and the combined `--check`
+/// surface so `--oracle` cannot mean two different things.
+pub(crate) fn oracle_cross_check_and_annotate(
+    board: &Path,
+    report: &hauksbee_extract::DrcReport,
+    structured: &mut DrcStructured,
+    qualification: Option<&hauksbee_extract::DrcTieQualification>,
+) -> String {
+    let result = oracle_cross_check(board, report);
+    let authorized_ties: Vec<bool> = report
+        .shorts()
+        .map(|finding| qualification.is_some_and(|ties| ties.tie_for(finding).is_some()))
+        .collect();
+    annotate_oracle_agreement(structured, &result, &authorized_ties);
+    result.summary
 }
 
 fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> OracleCrossCheck {
@@ -536,7 +569,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn oracle_specific_pair_agreement_is_attached_to_finding_line() {
+    fn oracle_confirmed_unvalidated_short_is_promoted_but_tool_only_short_is_not() {
         let json = serde_json::json!({
             "violations": [{
                 "type": "clearance",
@@ -552,33 +585,61 @@ mod tests {
             version: Some("10.0.5".into()),
             confirmed_pairs: oracle_confirmed_pairs(&json),
         };
-        let mut structured = DrcStructured {
-            clearance_rule_mm: 0.2,
-            primitive_count: 2,
-            shorts: vec![crate::result::DrcShort {
-                net_a: "GND".into(),
-                net_b: "+3V3".into(),
-                layer: "F.Cu".into(),
-                gap_mm: 0.001,
-                loc_mm: [1.0, 2.0],
-                severity: "note".into(),
-                plain: "GND shorts +3V3".into(),
-                fix: "inspect".into(),
-            }],
-            violations: Vec::new(),
-            at_limit: Vec::new(),
+        let report = hauksbee_extract::DrcReport {
+            clearance_mm: 0.2,
+            primitive_count: 4,
             version_warning: Some("board format 20260206 is UNVALIDATED".into()),
-            suppression_note: None,
+            zone_pad_overlaps_suppressed: Some(0),
+            findings: vec![
+                short("GND", "+3V3", 1.0, 2.0),
+                short("GND", "PYRO4_FIRE", 3.0, 4.0),
+            ],
         };
-        annotate_oracle_agreement(&mut structured, &oracle);
-        let finding = crate::plain::plain_drc_structured(&structured)
-            .findings
-            .remove(0);
+        let mut structured = DrcStructured::from_report(&report);
+        annotate_oracle_agreement(&mut structured, &oracle, &[false, false]);
+
+        assert_eq!(structured.shorts[0].severity, "serious");
+        assert_eq!(structured.shorts[1].severity, "note");
+        let plain = crate::plain::plain_drc_structured(&structured);
+        let confirmed = &plain.findings[0];
+        let tool_only = &plain.findings[1];
         assert!(
-            finding.what.contains("KiCad oracle 10.0.5")
-                && finding.what.contains("specific net pair"),
+            confirmed.what.contains("KiCad") && confirmed.what.contains("specific net pair"),
             "oracle agreement must be on the finding line: {}",
-            finding.what
+            confirmed.what
         );
+        assert_eq!(confirmed.level, crate::plain::PlainLevel::Serious);
+        assert_eq!(tool_only.level, crate::plain::PlainLevel::Note);
+        assert!(
+            tool_only.why.contains("TOOL-ONLY"),
+            "the unmatched short must identify its evidence boundary: {}",
+            tool_only.why
+        );
+    }
+
+    fn short(net_a: &str, net_b: &str, x: f64, y: f64) -> hauksbee_extract::DrcFinding {
+        use hauksbee_extract::{DrcFinding, Item, ItemKind, ViolationKind};
+        DrcFinding {
+            kind: ViolationKind::Short,
+            net_a: 1,
+            net_b: 2,
+            net_a_name: net_a.into(),
+            net_b_name: net_b.into(),
+            layer: "F.Cu".into(),
+            x,
+            y,
+            gap_mm: 0.0,
+            required_clearance_mm: 0.2,
+            item_a: Item {
+                kind: ItemKind::Track,
+                net: 1,
+                owner: String::new(),
+            },
+            item_b: Item {
+                kind: ItemKind::Track,
+                net: 2,
+                owner: String::new(),
+            },
+        }
     }
 }

@@ -65,6 +65,7 @@ pub(crate) fn emit_selected(
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
             cfg.verbose,
+            cfg.oracle,
             quiet,
             &inputs,
             schematic_ties.as_ref(),
@@ -79,6 +80,7 @@ pub(crate) fn emit_selected(
             &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             quiet,
+            cfg.verbose,
             &inputs,
         )
         .map(|()| true);
@@ -120,7 +122,13 @@ pub(crate) fn emit_selected(
         .with_input_artifact(&cfg.board, &raw, input_kind)?;
         let net_names: Vec<String> = board.nets.iter().map(|net| net.name.clone()).collect();
         return crate::reports::ampacity::emit_quiet(
-            &text, is_altium, &evidence, &net_names, cfg.plain, quiet,
+            &text,
+            is_altium,
+            &evidence,
+            &net_names,
+            cfg.plain,
+            quiet,
+            cfg.verbose,
         )
         .map(|()| true);
     }

@@ -60,12 +60,17 @@ impl OutputMode {
 pub(crate) fn render_evidence_appendix(
     evidence: &crate::evidence::BoardEvidence,
     quiet: bool,
+    verbose: bool,
 ) -> String {
-    let full = evidence.render_plain();
-    if full.is_empty() || !quiet {
-        full
+    let rendered = if verbose {
+        evidence.render_plain()
     } else {
-        "\nEvidence appendix hidden by --quiet; rerun without --quiet to show the per-item evidence appendix.\n".to_string()
+        evidence.render_plain_compact()
+    };
+    if rendered.is_empty() || !quiet {
+        rendered
+    } else {
+        "\nEvidence appendix hidden by --quiet; rerun without --quiet to show the compact evidence appendix.\n".to_string()
     }
 }
 
@@ -166,6 +171,17 @@ pub fn drc_gate_items_with_ties(
         .shorts()
         .filter(|finding| qualification.is_none_or(|ties| ties.tie_for(finding).is_none()))
         .map(|f| format!("drc-short {}/{}", f.net_a_name, f.net_b_name))
+        .collect()
+}
+
+/// One label per short whose final structured severity is serious. Unlike the
+/// raw-report helper, this sees pair-specific KiCad-oracle promotion on an
+/// otherwise unvalidated board format.
+pub fn drc_structured_gate_items(drc: &crate::result::DrcStructured) -> Vec<String> {
+    drc.shorts
+        .iter()
+        .filter(|short| short.severity == "serious")
+        .map(|short| format!("drc-short {}/{}", short.net_a, short.net_b))
         .collect()
 }
 

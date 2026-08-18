@@ -37,8 +37,8 @@ pub struct RunConfig {
     pub thermal: bool,
     pub ambient: f64,
     pub plain: bool,
-    /// `--plain` DRC: print every clearance finding in full instead of
-    /// condensing repeated near-identical ones past the first few.
+    /// Full human detail: every clearance finding, bind row, and evidence item
+    /// on the report surfaces that support an expanded rendering.
     pub verbose: bool,
     pub json: bool,
     pub strict: bool,

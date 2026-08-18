@@ -1073,6 +1073,21 @@ impl BoardEvidence {
         Ok(maps)
     }
 
+    /// Build one surface-level map over exactly the nets a specialist analysis
+    /// inspected. An empty result set returns no map: it must not pull every
+    /// board component into (for example) an empty ampacity report merely
+    /// because those components exist elsewhere on the board.
+    pub fn maps_for_surface_nets(
+        &self,
+        assertion: impl Into<String>,
+        nets: &[String],
+    ) -> Result<Vec<EvidenceMap>, EvidenceError> {
+        if nets.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![self.map_for_nets(assertion.into(), nets.to_vec())?])
+    }
+
     /// One causal assertion per real DRC result. Geometry maps deliberately
     /// traverse no component models: an open op-amp cannot invalidate the fact
     /// that two pieces of copper touch.
@@ -1516,6 +1531,178 @@ impl BoardEvidence {
         out
     }
 
+    /// Compact human appendix. JSON and [`Self::render_plain`] deliberately
+    /// retain their full per-item records; this projection groups only the
+    /// prose a person reads and restricts it to assumptions/models cited by the
+    /// maps the current surface selected.
+    pub fn render_plain_compact(&self) -> String {
+        if self.assumptions.is_empty() && self.maps.is_empty() {
+            return String::new();
+        }
+
+        let mut out = String::from("\n== Evidence ==\n");
+        let clean = self
+            .maps
+            .iter()
+            .filter(|map| map.status() == EvidenceStatus::Clean)
+            .count();
+        let qualified = self
+            .maps
+            .iter()
+            .filter(|map| map.status() == EvidenceStatus::Qualified)
+            .count();
+        let undermined = self
+            .maps
+            .iter()
+            .filter(|map| map.status() == EvidenceStatus::Undermined)
+            .count();
+        if self.maps.is_empty() {
+            out.push_str(
+                "Evidence coverage: no surface-specific result rows; unrelated board-part provenance omitted.\n",
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "Evidence coverage: {} surface assertion(s): {clean} clean, {qualified} qualified, {undermined} undermined.",
+                self.maps.len()
+            );
+        }
+
+        let cited: BTreeSet<String> = self
+            .maps
+            .iter()
+            .flat_map(|map| map.assumptions())
+            .map(ToString::to_string)
+            .collect();
+        let mut assumption_groups: BTreeMap<(String, String, String, String, String), Vec<String>> =
+            BTreeMap::new();
+        for assumption in self.assumptions.iter().filter(|assumption| {
+            cited.contains(&assumption.id().to_string())
+                && self.compact_assumption_is_surface_relevant(assumption)
+        }) {
+            let refs = self.assumption_part_refs(assumption);
+            let key = (
+                assumption.kind().slug().to_string(),
+                normalize_part_statement(assumption.statement(), &refs),
+                normalize_part_statement(assumption.because(), &refs),
+                normalize_part_statement(assumption.consequence(), &refs),
+                normalize_part_statement(assumption.replacement(), &refs),
+            );
+            assumption_groups.entry(key).or_default().extend(refs);
+        }
+        for ((kind, statement, because, consequence, replacement), mut refs) in assumption_groups {
+            refs.sort_by_key(|reference| natural_evidence_ref_key(reference));
+            let _ = write!(
+                out,
+                "[{kind}] {statement} Why: {because} Effect: {consequence} Fix: {replacement}"
+            );
+            if !refs.is_empty() {
+                let count = refs.len();
+                let _ = write!(
+                    out,
+                    " Affected refs: {} ({count} part{}).",
+                    refs.join(", "),
+                    if count == 1 { "" } else { "s" }
+                );
+            }
+            out.push('\n');
+        }
+
+        // Per-net maps repeat the same passive/model provenance. Deduplicate by
+        // exact provenance content and exact causal subject, then report the
+        // number of listed parts from that same collection (never a second
+        // count that can drift).
+        let mut model_groups: BTreeMap<
+            (String, String, String, String, String, String),
+            BTreeMap<String, String>,
+        > = BTreeMap::new();
+        for model in self.maps.iter().flat_map(|map| map.models()) {
+            let source = model.source();
+            let key = (
+                model.model_id().to_string(),
+                source.tier().to_string(),
+                format!("{:?}", source.layer()),
+                source.origin().to_string(),
+                source.validation().to_string(),
+                model_accuracy(source),
+            );
+            model_groups
+                .entry(key)
+                .or_default()
+                .entry(model.subject().to_string())
+                .or_insert_with(|| model.cited_reference());
+        }
+        for ((model, tier, layer, origin, validation, accuracy), subjects) in model_groups {
+            let mut refs: Vec<String> = subjects.into_values().collect();
+            refs.sort_by_key(|reference| natural_evidence_ref_key(reference));
+            let count = refs.len();
+            let _ = writeln!(
+                out,
+                "model {model}: source={tier} layer={layer} origin={origin} validation={validation} {accuracy}; refs: {} ({count} part{}).",
+                refs.join(", "),
+                if count == 1 { "" } else { "s" }
+            );
+        }
+        out.push_str(
+            "Full per-item evidence is unchanged: use --verbose where supported, or the surface's --json output.\n",
+        );
+        out
+    }
+
+    fn assumption_part_refs(&self, assumption: &Assumption) -> Vec<String> {
+        let subjects: Vec<&EntityRef> = match assumption.scope() {
+            Scope::Subjects(subjects) => subjects.as_slice().iter().collect(),
+            Scope::Parameter(parameter) => vec![parameter.subject()],
+            Scope::Board | Scope::Nets(_) | Scope::Check { .. } => Vec::new(),
+        };
+        let mut refs: Vec<String> = subjects
+            .into_iter()
+            .filter(|subject| subject.kind() == EntityKind::Part)
+            .map(|subject| {
+                self.display_ref_by_subject
+                    .get(subject.id())
+                    .cloned()
+                    .unwrap_or_else(|| subject.id().to_string())
+            })
+            .collect();
+        // Early component-specific reduced-fidelity records used board scope
+        // but retained their causal subject in the stable id. Recover that
+        // display identity for human grouping only; the JSON record and its
+        // scope remain byte-for-byte untouched.
+        if refs.is_empty() {
+            let id = assumption.id().to_string();
+            let subject = id
+                .split_once(':')
+                .map(|(_, subject)| subject)
+                .and_then(|subject| subject.strip_prefix("model/").or(Some(subject)));
+            if let Some(reference) =
+                subject.and_then(|subject| self.display_ref_by_subject.get(subject))
+            {
+                refs.push(reference.clone());
+            }
+        }
+        refs
+    }
+
+    fn compact_assumption_is_surface_relevant(&self, assumption: &Assumption) -> bool {
+        let refs = self.assumption_part_refs(assumption);
+        if refs.is_empty() || !matches!(assumption.scope(), Scope::Board) {
+            return true;
+        }
+        self.maps.iter().any(|map| {
+            map.assumptions().iter().any(|id| id == assumption.id())
+                && map.models().iter().any(|model| {
+                    refs.iter().any(|reference| {
+                        model.reference() == reference
+                            || self
+                                .display_ref_by_subject
+                                .get(model.subject())
+                                .is_some_and(|display| display == reference)
+                    })
+                })
+        })
+    }
+
     /// Add the canonical evidence fields to a legacy structured report without
     /// inventing a second JSON vocabulary. New reports should prefer
     /// `JsonReport::with_evidence`; this bridge keeps small specialist reports
@@ -1535,6 +1722,75 @@ impl BoardEvidence {
                 .expect("IR evidence maps have an infallible JSON representation"),
         );
         value
+    }
+}
+
+fn normalize_part_statement(text: &str, refs: &[String]) -> String {
+    if refs.is_empty() {
+        return text.to_string();
+    }
+    let mut refs_by_length = refs.to_vec();
+    refs_by_length.sort_by_key(|reference| std::cmp::Reverse(reference.len()));
+    refs_by_length.dedup();
+    let mut normalized = text.to_string();
+    for reference in refs_by_length {
+        normalized = normalized.replace(&reference, "{part}");
+    }
+    // Component assumption constructors commonly lead with "REF (VALUE)".
+    // VALUE is also per-item identity, so remove that parenthetical before
+    // grouping; later parentheticals remain meaningful statement content.
+    if let Some(rest) = normalized.strip_prefix("{part} (") {
+        if let Some((_, tail)) = rest.split_once(") ") {
+            normalized = format!("{{part}} {tail}");
+        }
+    }
+    if normalized.starts_with("{part}") {
+        normalized = normalized.replacen("{part}", "Each affected part", 1);
+    }
+    normalized.replace("{part}", "each affected part")
+}
+
+fn natural_evidence_ref_key(reference: &str) -> (String, u64, String) {
+    let split = reference
+        .find(|character: char| character.is_ascii_digit())
+        .unwrap_or(reference.len());
+    let (prefix, digits) = reference.split_at(split);
+    (
+        prefix.to_ascii_uppercase(),
+        digits
+            .chars()
+            .take_while(|character| character.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or(u64::MAX),
+        reference.to_string(),
+    )
+}
+
+fn model_accuracy(source: &ModelSource) -> String {
+    if source
+        .uncertainty()
+        .iter()
+        .any(|value| matches!(value, ModelUncertainty::Unknown { .. }))
+    {
+        "uncertainty unknown".to_string()
+    } else {
+        source
+            .uncertainty()
+            .iter()
+            .filter_map(|value| match value {
+                ModelUncertainty::Interval {
+                    low,
+                    high,
+                    unit,
+                    kind,
+                    basis,
+                    ..
+                } => Some(format!("interval [{low}, {high}] {unit} {kind} ({basis})")),
+                ModelUncertainty::Unknown { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -1911,6 +2167,114 @@ mod partial_model_tests {
             "the REF (VALUE) prefix belongs to the bind report line, not the \
              assumption's own sentence: {}",
             x1.because()
+        );
+    }
+}
+
+#[cfg(test)]
+mod compact_appendix_tests {
+    use super::*;
+    use crate::report::BindRow;
+    use hauksbee_extract::{Component, Net, Pin};
+
+    fn component(reference: &str, value: &str, net: i64) -> Component {
+        Component {
+            reference: reference.to_string(),
+            value: value.to_string(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: "F.Cu".to_string(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: vec![Pin {
+                number: "1".to_string(),
+                net: Some(net),
+                function: String::new(),
+                kind: String::new(),
+                position: None,
+            }],
+        }
+    }
+
+    fn fixture() -> BoardEvidence {
+        let board = ExtractedBoard {
+            name: "compact-appendix".to_string(),
+            nets: vec![
+                Net {
+                    id: 1,
+                    name: "A".to_string(),
+                },
+                Net {
+                    id: 2,
+                    name: "B".to_string(),
+                },
+            ],
+            components: vec![component("U1", "PART-A", 1), component("U2", "PART-B", 2)],
+        };
+        let mut report = BindReport::default();
+        for (reference, value) in [("U1", "PART-A"), ("U2", "PART-B")] {
+            report.push(BindRow {
+                reference: reference.to_string(),
+                value: value.to_string(),
+                model_id: None,
+                confidence: Confidence::Unresolved,
+                source: None,
+                outcome: BindOutcome::Unresolved {
+                    reason: "No model".to_string(),
+                },
+                warning: None,
+                guesses: Vec::new(),
+            });
+        }
+        BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
+            .expect("fixture evidence")
+    }
+
+    #[test]
+    fn appendix_dedup_is_one_block_per_statement_with_exact_ref_count() {
+        let rendered = fixture().render_plain_compact();
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|line| line.starts_with("[open-part]"))
+                .count(),
+            1,
+            "equivalent open-part statements must collapse once:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Affected refs: U1, U2 (2 parts)."),
+            "the displayed count must be derived from the displayed refs:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn compact_human_render_does_not_change_json_bytes() {
+        let evidence = fixture();
+        let json = || {
+            serde_json::to_string(&evidence.enrich_json(serde_json::json!({"ok": true})))
+                .expect("JSON render")
+        };
+        let before = json();
+        let _ = evidence.render_plain_compact();
+        let after = json();
+        assert_eq!(before.as_bytes(), after.as_bytes());
+    }
+
+    #[test]
+    fn surface_scoped_appendix_excludes_unrelated_part_provenance() {
+        let evidence = fixture();
+        let maps = evidence
+            .maps_for_surface_nets("surface A", &["A".to_string()])
+            .expect("surface map");
+        let rendered = evidence.clone().with_maps(maps).render_plain_compact();
+        assert!(
+            rendered.contains("U1"),
+            "on-path part is retained: {rendered}"
+        );
+        assert!(
+            !rendered.contains("U2") && !rendered.contains("PART-B"),
+            "unrelated part provenance must be absent: {rendered}"
         );
     }
 }

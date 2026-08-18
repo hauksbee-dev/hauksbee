@@ -1,0 +1,162 @@
+schema_version = 1
+
+[[cases]]
+part = "BQ24075"
+url = "https://www.ti.com/lit/ds/symlink/bq24075.pdf"
+kind_arg = "charger"
+expected_kind = "vreg"
+
+# TI BQ2407x Rev. N, Section 8.5 Electrical Characteristics, POWER PATH,
+# VO(REG), BQ24075/BQ24079 row (datasheet page 12): 5.4/5.5/5.6 V.
+[[cases.facts]]
+name = "out_regulation_min_v"
+value = 5.4
+tolerance = 0.005
+unit = "V"
+
+[[cases.facts]]
+name = "out_regulation_typ_v"
+value = 5.5
+tolerance = 0.005
+unit = "V"
+
+[[cases.facts]]
+name = "out_regulation_max_v"
+value = 5.6
+tolerance = 0.005
+unit = "V"
+
+# TI BQ2407x Rev. N, Section 8.5 Electrical Characteristics, BATTERY CHARGER,
+# VBAT(REG), BQ24072/73/74/75 row (datasheet page 13): 4.16/4.20/4.23 V.
+[[cases.facts]]
+name = "battery_regulation_min_v"
+value = 4.16
+tolerance = 0.005
+unit = "V"
+
+# Requiring the 4.20 V setpoint under `behavioral` also proves that the
+# charger-family extraction emitted the requested behavioral block.
+[[cases.facts]]
+name = "battery_regulation_typ_v_in_behavioral_block"
+value = 4.20
+tolerance = 0.005
+unit = "V"
+path_contains = "behavioral"
+
+[[cases.facts]]
+name = "battery_regulation_max_v"
+value = 4.23
+tolerance = 0.005
+unit = "V"
+
+[[cases]]
+part = "TXB0101"
+url = "https://www.ti.com/lit/ds/symlink/txb0101.pdf"
+expected_kind = "digital"
+
+# TI TXB0101 Rev. F, Sections 1 and 3 (datasheet page 1): the A-port supply is
+# 1.2 V to 3.6 V and the B-port supply is 1.65 V to 5.5 V, with VCCA <= VCCB.
+[[cases.facts]]
+name = "vcca_min_v"
+value = 1.2
+tolerance = 0.005
+unit = "V"
+
+[[cases.facts]]
+name = "vcca_max_v"
+value = 3.6
+tolerance = 0.005
+unit = "V"
+
+[[cases.facts]]
+name = "vccb_min_v"
+value = 1.65
+tolerance = 0.005
+unit = "V"
+
+[[cases.facts]]
+name = "vccb_max_v"
+value = 5.5
+tolerance = 0.005
+unit = "V"
+
+# TI TXB0101 Rev. F, Section 5.20 Switching Characteristics (datasheet page
+# 12): at VCCA = 3.3 V +/- 0.3 V and VCCB = 5 V +/- 0.5 V, A-to-B tpd max is
+# 4 ns. Hauksbee timing parameters use SI seconds.
+[[cases.facts]]
+name = "tpd_a_to_b_max_s"
+value = 4.0e-9
+tolerance = 5.0e-11
+unit = "s"
+
+[[cases]]
+part = "TPS25982"
+url = "https://www.ti.com/lit/ds/symlink/tps25982.pdf"
+expected_kind = "analog_switch"
+
+# TI TPS25982 Rev. D, Section 7.3.3.2, Equation 4 (datasheet page 23):
+# RILIM(ohm) = 1460 / (ILIM(A) - 0.11). A correct card may retain this
+# relationship, or it may retain the complete 100-ohm current-limit row below.
+[[cases.facts]]
+name = "ilim_equation_numerator"
+assertion = "ilim_relationship_or_100ohm_figures"
+alternative = "equation"
+value = 1460.0
+tolerance = 0.5
+unit = "A*ohm"
+
+[[cases.facts]]
+name = "ilim_equation_offset_a"
+assertion = "ilim_relationship_or_100ohm_figures"
+alternative = "equation"
+value = 0.11
+tolerance = 0.0005
+unit = "A"
+
+# TI TPS25982 Rev. D, Section 6.5 Electrical Characteristics, ILIM row
+# (datasheet page 9): RILIM = 100 ohm over -40 C to 125 C gives
+# 12.85/14.71/15.99 A min/typ/max.
+[[cases.facts]]
+name = "ilim_100ohm_min_a"
+assertion = "ilim_relationship_or_100ohm_figures"
+alternative = "100ohm_table"
+value = 12.85
+tolerance = 0.005
+unit = "A"
+
+[[cases.facts]]
+name = "ilim_100ohm_typ_a"
+assertion = "ilim_relationship_or_100ohm_figures"
+alternative = "100ohm_table"
+value = 14.71
+tolerance = 0.005
+unit = "A"
+
+[[cases.facts]]
+name = "ilim_100ohm_max_a"
+assertion = "ilim_relationship_or_100ohm_figures"
+alternative = "100ohm_table"
+value = 15.99
+tolerance = 0.005
+unit = "A"
+
+[[cases]]
+part = "TPS62152"
+url = "https://www.ti.com/lit/ds/symlink/tps62152.pdf"
+expected_kind = "vreg"
+
+# TI TPS6215x Rev. E, Section 5 Device Comparison Table (datasheet page 3):
+# TPS62152 has a fixed 3.3 V output.
+[[cases.facts]]
+name = "output_setpoint_v"
+value = 3.3
+tolerance = 0.005
+unit = "V"
+
+# TI TPS6215x Rev. E, Sections 1 and 3 (datasheet page 1): up to 1 A output
+# current, described as up to 1 A continuous output current.
+[[cases.facts]]
+name = "continuous_output_current_a"
+value = 1.0
+tolerance = 0.005
+unit = "A"

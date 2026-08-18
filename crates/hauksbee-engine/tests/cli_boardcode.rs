@@ -121,8 +121,9 @@ fn main {
         "run <zip of a .board export> --check must exit 0:\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
-        stdout.contains("R1") || stderr.contains("R1"),
-        "the compiled board's R1 reaches the check report:\nstdout: {stdout}\nstderr: {stderr}"
+        stdout.contains("1 passives bound by footprint/value fallback")
+            && stdout.contains("1 resistor"),
+        "the compiled board's R1 reaches the compact bind rollup without restoring the bulk row:\nstdout: {stdout}\nstderr: {stderr}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

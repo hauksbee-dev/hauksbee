@@ -681,7 +681,7 @@ fn emit_evidence(cfg: &RunConfig, quiet: bool, evidence: &EvidenceArtifacts) {
     if !cfg.json {
         print!(
             "{}",
-            crate::reports::render_evidence_appendix(&evidence.run_evidence, quiet)
+            crate::reports::render_evidence_appendix(&evidence.run_evidence, quiet, false)
         );
     }
 }

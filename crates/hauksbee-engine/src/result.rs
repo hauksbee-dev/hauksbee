@@ -1125,9 +1125,11 @@ pub struct DrcShort {
     pub layer: String,
     pub gap_mm: f64,
     pub loc_mm: [f64; 2],
-    /// "serious" for a short, "note" only when the board format could not be
-    /// validated or board-local physical authority qualifies this location. A
-    /// companion Eagle schematic adds context but cannot change severity.
+    /// "serious" for a validated-format short or an unvalidated-format short
+    /// independently confirmed by KiCad's own DRC. "note" remains for a
+    /// tool-only unvalidated-format claim or where board-local physical
+    /// authority qualifies this location. A companion Eagle schematic adds
+    /// context but cannot change severity.
     pub severity: String,
     /// Human one-line description, mirroring `JsonFinding.plain` so every
     /// `--json` finding category reads uniformly (SI/lint already carry it).
@@ -1137,12 +1139,26 @@ pub struct DrcShort {
 }
 
 const ORACLE_AGREEMENT_MARKER: &str = "ORACLE AGREEMENT: ";
+const TOOL_ONLY_FORMAT_MARKER: &str = "; TOOL-ONLY: ";
 
 impl DrcShort {
     pub(crate) fn oracle_agreement(&self) -> Option<&str> {
         self.plain
             .split_once(ORACLE_AGREEMENT_MARKER)
             .map(|(_, agreement)| agreement)
+    }
+
+    /// Replace the unvalidated-format, tool-only qualification with the exact
+    /// independent evidence that settled it. The caller owns pair matching;
+    /// this method only keeps the finding's evidence sentence single-sourced.
+    pub(crate) fn attach_oracle_agreement(&mut self, version: &str) {
+        if let Some((claim, _)) = self.plain.split_once(TOOL_ONLY_FORMAT_MARKER) {
+            self.plain = claim.to_string();
+        }
+        self.plain.push_str(&format!(
+            "; {ORACLE_AGREEMENT_MARKER}confirmed by KiCad's own DRC ({version}) for this \
+             specific net pair; the coordinates shown are Hauksbee's reported contact location"
+        ));
     }
 }
 
@@ -1236,8 +1252,10 @@ pub struct DrcStructured {
     /// Grouped findings that sit exactly AT the rule (no margin, not below).
     pub at_limit: Vec<DrcGroup>,
     /// Set when the board's format is newer than hauksbee's validated copper
-    /// extraction (KiCad 10+), making the shorts above unreliable. Surfaced by
-    /// every renderer; CI gates ignore the shorts when it is set.
+    /// extraction (KiCad 10+), making tool-only shorts above unreliable.
+    /// Surfaced by every renderer; CI gates ignore those tool-only shorts, but
+    /// an exact net-pair match from KiCad's own DRC restores a short's serious
+    /// severity and gate status.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_warning: Option<String>,
     /// Set when the run suppressed zone-versus-pad overlaps as antipad carves.
@@ -1291,21 +1309,14 @@ impl DrcStructured {
                 // here rather than per-report, because board-local authority qualifies
                 // only the contacts it covers and every other short on the same
                 // board stays serious.
-                ViolationKind::Short => shorts.push(DrcShort {
-                    net_a: f.net_a_name.clone(),
-                    net_b: f.net_b_name.clone(),
-                    layer: f.layer.clone(),
-                    gap_mm: f.gap_mm,
-                    loc_mm: [f.x, f.y],
-                    severity: if phantom || authorized_tie.is_some() {
-                        "note".to_string()
-                    } else {
-                        "serious".to_string()
-                    },
-                    // The geometry sentence is identical either way: the nets DO
-                    // share copper, and a declared tie does not make that less
-                    // true. Only the clause after it changes.
-                    plain: match declared_tie {
+                ViolationKind::Short => {
+                    // The geometry sentence is identical at every confidence:
+                    // the nets share copper. A newer-than-validated format adds
+                    // an explicit tool-only evidence boundary here, at the same
+                    // demotion site that changes the severity. Pair-specific
+                    // oracle agreement later replaces this sentence and restores
+                    // the real severity; an unmatched finding keeps both.
+                    let mut plain = match declared_tie {
                         Some(tie) => format!(
                             "{} and {} are joined in copper on {} at ({:.2}, {:.2}) mm \
                              (gap {:.3} mm). The schematic names this net pair ({}; {}), but \
@@ -1323,8 +1334,26 @@ impl DrcStructured {
                             "{} shorts {} on {} at ({:.2}, {:.2}) mm (gap {:.3} mm)",
                             f.net_a_name, f.net_b_name, f.layer, f.x, f.y, f.gap_mm
                         ),
-                    },
-                    fix: match (declared_tie, missing_eagle_schematic) {
+                    };
+                    if phantom {
+                        plain.push_str(
+                            "; TOOL-ONLY: Hauksbee reports this contact from an unvalidated \
+                             board format; no matching KiCad-oracle confirmation is attached",
+                        );
+                    }
+                    shorts.push(DrcShort {
+                        net_a: f.net_a_name.clone(),
+                        net_b: f.net_b_name.clone(),
+                        layer: f.layer.clone(),
+                        gap_mm: f.gap_mm,
+                        loc_mm: [f.x, f.y],
+                        severity: if phantom || authorized_tie.is_some() {
+                            "note".to_string()
+                        } else {
+                            "serious".to_string()
+                        },
+                        plain,
+                        fix: match (declared_tie, missing_eagle_schematic) {
                         (Some(_), _) => "verify this exact join against board-local layout intent \
                              (for example a named net-tie footprint or reviewed coordinate), or \
                              separate the nets. The Eagle schematic names only the net pair and \
@@ -1341,8 +1370,9 @@ impl DrcStructured {
                         (None, false) => "separate the two nets' copper: widen the gap or reroute \
                              so the trace/pad spacing clears the clearance rule"
                             .to_string(),
-                    },
-                }),
+                        },
+                    });
+                }
                 ViolationKind::Clearance => {
                     // A finding is "below" the rule when its gap is under it;
                     // "at limit" when gap == rule. The 1e-4 mm (100 nm) tolerance
@@ -1450,9 +1480,9 @@ impl DrcStructured {
         if !self.shorts.is_empty() {
             let _ = writeln!(s, "\nSHORTS ({}):", self.shorts.len());
             for sh in &self.shorts {
-                // Honor the (possibly downgraded) severity from the structured
-                // form: on an unvalidated KiCad-10 board the shorts read "NOTE",
-                // not "SERIOUS", consistent with --plain / --json / the TUI.
+                // Honor the final per-short severity from the structured form:
+                // an unmatched unvalidated-format short reads "NOTE", while an
+                // exact KiCad-oracle pair match is restored to "SERIOUS".
                 let tag = if sh.severity == "serious" {
                     "SERIOUS"
                 } else {

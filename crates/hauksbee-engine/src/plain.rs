@@ -225,14 +225,25 @@ impl PlainReport {
         let n = self.findings.len();
         if let Some(reason) = &self.unvalidated {
             let reason = reason.trim_end_matches(['.', ';']);
+            let serious = self.serious_count();
             if n == 0 {
                 return format!(
                     "No potential copper issues listed, but this result is UNVALIDATED: {reason}"
                 );
             }
             let issues = if n == 1 { "issue" } else { "issues" };
+            if serious > 0 {
+                let remaining = n.saturating_sub(serious);
+                return format!(
+                    "{n} potential copper {issues} found; {serious} oracle-confirmed short(s) \
+                     count as serious. The board format remains UNVALIDATED ({reason}); the \
+                     other {remaining} finding(s) keep their qualified severity."
+                );
+            }
             return format!(
-                "{n} potential copper {issues} found; UNVALIDATED: {reason}; none counted as serious BECAUSE unvalidated. Inspect the listed coordinates in KiCad's DRC."
+                "{n} potential copper {issues} found; UNVALIDATED: {reason}; none counted as \
+                 serious BECAUSE unvalidated. Each unmatched short is tool-only until KiCad's \
+                 own DRC confirms that specific net pair."
             );
         }
         // The two noun phrases the verdict slots in. `verdict_noun` supplies both
@@ -320,6 +331,173 @@ impl PlainReport {
             }
         }
         s
+    }
+}
+
+/// The compact decision surface at the front of a combined `--check --plain`
+/// report. It classifies findings that already exist; it never runs a check or
+/// derives a new electrical claim.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct OrderTriage {
+    do_not_order: Vec<String>,
+    inspect_before_ordering: Vec<String>,
+    checked_and_ok: Vec<String>,
+    unmodelled_parts: usize,
+}
+
+impl OrderTriage {
+    fn write_bucket(out: &mut String, heading: &str, entries: &[String]) {
+        let _ = writeln!(out, "{heading}:");
+        if entries.is_empty() {
+            let _ = writeln!(out, "  - Empty.");
+        } else {
+            for entry in entries {
+                let _ = writeln!(out, "  - {entry}");
+            }
+        }
+    }
+
+    pub(crate) fn render(&self) -> String {
+        let mut out = String::new();
+        let _ = writeln!(out, "== ORDER / DON'T-ORDER TRIAGE ==");
+        Self::write_bucket(&mut out, "DO NOT ORDER", &self.do_not_order);
+        Self::write_bucket(
+            &mut out,
+            "INSPECT BEFORE ORDERING",
+            &self.inspect_before_ordering,
+        );
+        Self::write_bucket(&mut out, "CHECKED AND OK", &self.checked_and_ok);
+        let noun = if self.unmodelled_parts == 1 {
+            "part lacks"
+        } else {
+            "parts lack"
+        };
+        let _ = writeln!(
+            out,
+            "NOT COVERED: {} {noun} an executable simulation model; model-dependent \
+             firmware/analog/AC/thermal claims involving those parts are not covered. Copper \
+             geometry and datasheet decode rules do not require a simulation model.",
+            self.unmodelled_parts,
+        );
+        let _ = writeln!(
+            out,
+            "DETAIL: Full findings and evidence follow; add --verbose to expand every clearance finding.\n"
+        );
+        out
+    }
+}
+
+/// Build the order triage from the already-computed combined-check reports.
+///
+/// Classification policy is intentionally narrow:
+/// - every existing Serious finding is a do-not-order item;
+/// - `DeviceDecode` is also do-not-order because that check already asserts a
+///   definite wrong datasheet-selected mode/limit (including ratings budgets);
+/// - copper shorts and below-rule clearance findings with coordinates go to
+///   inspect when their evidence is not serious;
+/// - explicit abstentions (`UncheckedMcu`, USB-C `Info`, or a nominal USB-C
+///   result undermined by a model gap on its own CC nets) go to inspect;
+/// - only an unqualified USB-C `Ok` is emitted as a positive result.
+pub(crate) fn order_triage(
+    drc: &crate::result::DrcStructured,
+    lint: &NetLintReport,
+    si: &SiReport,
+    usbc: Option<&crate::checks::usb_c::UsbcReport>,
+    usbc_reliable: bool,
+    unmodelled_parts: usize,
+) -> OrderTriage {
+    let mut triage = OrderTriage {
+        unmodelled_parts,
+        ..OrderTriage::default()
+    };
+
+    let drc_plain = plain_drc_structured(drc);
+    let mut serious_shorts = Vec::new();
+    let mut tool_only_shorts = Vec::new();
+    for (short, finding) in drc.shorts.iter().zip(&drc_plain.findings) {
+        if finding.level == PlainLevel::Serious {
+            serious_shorts.push(finding.what.clone());
+        } else {
+            let evidence = if short.oracle_agreement().is_some() {
+                String::new()
+            } else {
+                " Tool-only: no matching KiCad-oracle confirmation is attached.".to_string()
+            };
+            tool_only_shorts.push(format!("{}{evidence}", finding.what));
+        }
+    }
+    push_triage_class(
+        &mut triage.do_not_order,
+        serious_shorts,
+        "oracle-confirmed copper shorts",
+    );
+    push_triage_class(
+        &mut triage.inspect_before_ordering,
+        tool_only_shorts,
+        "tool-only potential copper shorts with coordinates",
+    );
+    // The structured/plain order is shorts, below-rule violations, then
+    // at-limit observations. Only actual below-rule groups belong on the order
+    // screen; no-margin observations remain in the detail below.
+    let clearance_findings: Vec<String> = drc_plain
+        .findings
+        .iter()
+        .skip(drc.shorts.len())
+        .take(drc.violations.len())
+        .map(|finding| finding.what.clone())
+        .collect();
+    push_triage_class(
+        &mut triage.inspect_before_ordering,
+        clearance_findings,
+        "below-rule clearance groups with coordinates",
+    );
+
+    let lint_plain = plain_netlint(lint);
+    for (raw, finding) in lint.findings.iter().zip(&lint_plain.findings) {
+        if finding.level == PlainLevel::Serious
+            || (raw.check == LintCheck::DeviceDecode && raw.severity != Severity::Low)
+        {
+            triage.do_not_order.push(finding.what.clone());
+        } else if raw.check == LintCheck::UncheckedMcu {
+            triage.inspect_before_ordering.push(finding.what.clone());
+        }
+    }
+
+    let si_plain = plain_si(si);
+    for finding in &si_plain.findings {
+        if finding.level == PlainLevel::Serious {
+            triage.do_not_order.push(finding.what.clone());
+        }
+    }
+
+    if let Some(report) = usbc {
+        use crate::checks::usb_c::UsbcLevel;
+        let item = format!("USB-C CC: {}", report.headline);
+        match report.level {
+            UsbcLevel::Serious => triage.do_not_order.push(item),
+            UsbcLevel::Info => triage.inspect_before_ordering.push(item),
+            UsbcLevel::Ok if usbc_reliable => triage.checked_and_ok.push(item),
+            UsbcLevel::Ok => triage.inspect_before_ordering.push(format!(
+                "{item} Nominal result only: an unresolved part on the CC nets prevents relying on it."
+            )),
+        }
+    }
+
+    triage
+}
+
+/// Keep the leading surface genuinely screen-sized without dropping a risk
+/// class. Three or fewer existing findings remain verbatim; a larger class is
+/// one counted line with its first existing finding as an example and an
+/// explicit pointer to the complete coordinate detail below.
+fn push_triage_class(target: &mut Vec<String>, entries: Vec<String>, class: &str) {
+    match entries.as_slice() {
+        [] => {}
+        [one, _, _, _, ..] => target.push(format!(
+            "{} {class}. Example: {one} Full list follows below.",
+            entries.len(),
+        )),
+        _ => target.extend(entries),
     }
 }
 
@@ -468,9 +646,10 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     }
 
     // KiCad 10 name-only nets and keyhole antipads are handled, but exact native
-    // DRC finding parity remains unvalidated. Those results carry a downgraded
-    // severity (set once in DrcStructured::from_report). Surface the caveat as a
-    // never-dropped heads-up so the verdict is "worth a look", not "N serious".
+    // DRC finding parity remains unvalidated. Tool-only results carry a
+    // downgraded severity (set once in DrcStructured::from_report); an exact
+    // oracle pair match can later restore one result to serious. Surface the
+    // caveat as a never-dropped heads-up so unmatched claims stay qualified.
     // A suppressed finding class must be visible on the human report too: a
     // reader who is never told the rule was applied cannot audit it.
     if let Some(n) = &st.suppression_note {
@@ -489,14 +668,15 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
 
     if let Some(w) = &st.version_warning {
         out.push_note(HeadsUp::glossed(
-            format!("These KiCad 10 copper findings are downgraded pending exact native-DRC parity: {w}"),
+            format!("Tool-only KiCad 10 copper findings remain downgraded pending exact native-DRC parity: {w}"),
             "Hauksbee handles KiCad 10's name-only nets and keyhole antipads. The remaining \
              limitation is narrower: its complete finding set can still differ from KiCad's \
              own DRC, and project clearance rules may live in the sibling .kicad_pro rather \
              than the board text checked here.",
-            "Cross-check any short in KiCad 10's own DRC (Inspect -> Design Rules Checker). \
-             Until exact parity is validated, Hauksbee reports these findings as notes and \
-             keeps them out of strict CI gating.",
+            "Cross-check any short in KiCad 10's own DRC (Inspect -> Design Rules Checker), or \
+             run with --oracle. Tool-only findings remain notes and stay out of strict CI \
+             gating; an exact net-pair agreement from KiCad's own DRC is independently \
+             confirmed, restored to serious, and allowed to gate.",
         ));
     }
 
@@ -555,13 +735,22 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
             .oracle_agreement()
             .map(|agreement| format!(" KiCad agreement: {agreement}."))
             .unwrap_or_default();
+        let tool_only = if sh.severity != "serious"
+            && sh.oracle_agreement().is_none()
+            && st.version_warning.is_some()
+        {
+            " TOOL-ONLY: this net-pair claim comes from Hauksbee's unvalidated-format \
+             geometry alone; no matching KiCad-oracle line confirms it."
+        } else {
+            ""
+        };
         out.push_at(
             level,
             format!(
                 "Two separate connections, \"{a}\" and \"{b}\", are touching, {where_}.{oracle}"
             ),
             format!(
-                "These are meant to be electrically separate. Where they touch they become one connection (a short), so \"{a}\" and \"{b}\" will be forced to the same voltage. That usually means the board does the wrong thing, and if one is a power rail it can pull large current and overheat."
+                "These are meant to be electrically separate. Where they touch they become one connection (a short), so \"{a}\" and \"{b}\" will be forced to the same voltage. That usually means the board does the wrong thing, and if one is a power rail it can pull large current and overheat.{tool_only}"
             ),
             sh.fix.clone(),
             sh.loc_mm,
@@ -864,8 +1053,14 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             ),
             LintCheck::DeviceDecode => (
                 format!("A configuration pin on {parts} (net \"{net}\") decodes to the wrong setting. {}", f.message),
-                "Some chips read a resistor-divider voltage on a config pin and decode it against a datasheet table to pick a mode (here, the USB-C voltage a PD sink requests). If the chosen resistors land the pin in the wrong band, the chip silently selects the wrong mode: every resistor is in spec and every wire connects, so a normal value/short check cannot see it.".to_string(),
-                "Re-pick the divider resistors so the pin voltage lands in the intended datasheet band, using the single pull-up / single pull-down the datasheet specifies per setting (not a permanent pull-down with an extra switched leg). Check the part's decode table and any min/max override note.".to_string(),
+                // Deliberately generic: this template covers EVERY decoder in the
+                // device_decode family (a PD sink's requested voltage, a charger's
+                // safety-timer length, an eFuse's current limit). An earlier version
+                // narrated the PD case specifically, so an eFuse ILIM finding was
+                // explained as a USB-C voltage table: the right math wearing the
+                // wrong story, which reads as a bug even when the numbers are right.
+                "Some chips read a resistor on a configuration pin and decode its value against a table in the datasheet to set a mode or a limit: which voltage a USB-PD sink requests, how long a charger's safety timer runs, how much current an eFuse passes. If the fitted resistor lands in the wrong band, the chip silently takes the wrong setting: every part is in spec and every wire connects, so a normal value or short check cannot see it. This finding applies the datasheet's own decode rule to the fitted value, which is why it works even when the part has no simulation model and the report lists it as unresolved.".to_string(),
+                "Change the resistor so the decoded value matches the intent; the finding above names the fitted value, what it decodes to, and the value that would decode correctly. Then re-check against the part's own decode table and any min/max override note.".to_string(),
             ),
             LintCheck::BackPower => (
                 format!("A pin on {parts} (net \"{net}\") sits in a higher voltage domain than the chip's own supply. {}", f.message),
@@ -1651,6 +1846,37 @@ mod tests {
         assert!(plain.findings[0].why.to_lowercase().contains("failure"));
     }
 
+    /// The device-decode plain-language template covers every decoder in that
+    /// family, so it must not narrate one part's story. A blind first-use test
+    /// read an eFuse current-limit finding explained as a USB-C PD voltage
+    /// table and filed the whole finding as copy-paste noise, which is the
+    /// worst outcome for a check whose numbers were right.
+    #[test]
+    fn device_decode_plain_text_is_not_usb_c_specific() {
+        let mut report = NetLintReport::default();
+        report.findings.push(LintFinding {
+            check: LintCheck::DeviceDecode,
+            severity: Severity::Medium,
+            message: "U19 eFuse connector budget: R48 = 100 ohm decodes to 12.85 A minimum".into(),
+            refs: vec!["U19".to_string()],
+            nets: vec!["ILIM".to_string()],
+        });
+        let why = plain_netlint(&report).findings[0].why.to_lowercase();
+        assert!(
+            !why.contains("here, the usb-c voltage"),
+            "the template must not assert this finding IS the PD case: {why}"
+        );
+        assert!(
+            why.contains("efuse") && why.contains("timer"),
+            "it should name the decoder family's range, not one member: {why}"
+        );
+        assert!(
+            why.contains("no simulation model"),
+            "the template must answer the blind tester's doubt about deciding \
+             on an unresolved part: {why}"
+        );
+    }
+
     #[test]
     fn findings_render_serious_first() {
         let mut report = NetLintReport::default();
@@ -1676,5 +1902,129 @@ mod tests {
             serious_pos < note_pos,
             "serious finding should render first"
         );
+    }
+
+    fn structured_short(net_b: &str, severity: &str, x: f64) -> crate::result::DrcShort {
+        crate::result::DrcShort {
+            net_a: "GND".into(),
+            net_b: net_b.into(),
+            layer: "F.Cu".into(),
+            gap_mm: 0.0,
+            loc_mm: [x, 2.0],
+            severity: severity.into(),
+            plain: if severity == "serious" {
+                format!("GND shorts {net_b}")
+            } else {
+                format!(
+                    "GND shorts {net_b}; TOOL-ONLY: Hauksbee reports this contact from an \
+                     unvalidated board format; no matching KiCad-oracle confirmation is attached"
+                )
+            },
+            fix: "separate the copper".into(),
+        }
+    }
+
+    #[test]
+    fn oracle_confirmed_short_renders_before_clearance_warning() {
+        let mut short = structured_short("+3V3", "serious", 1.0);
+        short.attach_oracle_agreement("10.0.5");
+        let clearance = crate::result::DrcGroup {
+            net_a: "SDA".into(),
+            net_b: "SCL".into(),
+            layer: "F.Cu".into(),
+            count: 1,
+            below_count: 1,
+            at_limit: false,
+            min_gap_mm: 0.1,
+            min_gap_loc_mm: [3.0, 4.0],
+            rule_mm: 0.2,
+            between: "track ↔ track".into(),
+            plain: "SDA vs SCL below rule".into(),
+            fix: "increase spacing".into(),
+        };
+        let report = crate::result::DrcStructured {
+            clearance_rule_mm: 0.2,
+            primitive_count: 4,
+            shorts: vec![short],
+            violations: vec![clearance],
+            at_limit: Vec::new(),
+            version_warning: Some("KiCad 10 format is unvalidated".into()),
+            suppression_note: None,
+        };
+
+        let rendered = plain_drc_structured(&report).render();
+        let short_pos = rendered.find("[SERIOUS]").expect("short severity");
+        let clearance_pos = rendered.find("[WARNING]").expect("clearance severity");
+        assert!(
+            short_pos < clearance_pos,
+            "a confirmed short must outrank a clearance warning:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn order_triage_buckets_confirmed_short_ratings_unconfirmed_short_and_clean_usb() {
+        let mut confirmed = structured_short("+3V3", "serious", 1.0);
+        confirmed.attach_oracle_agreement("10.0.5");
+        let drc = crate::result::DrcStructured {
+            clearance_rule_mm: 0.2,
+            primitive_count: 6,
+            shorts: vec![confirmed, structured_short("PYRO4_FIRE", "note", 3.0)],
+            violations: Vec::new(),
+            at_limit: Vec::new(),
+            version_warning: Some("KiCad 10 format is unvalidated".into()),
+            suppression_note: None,
+        };
+        let mut lint = NetLintReport::default();
+        lint.findings.push(LintFinding {
+            check: LintCheck::DeviceDecode,
+            severity: Severity::Medium,
+            message: "U19 eFuse connector budget: R48 sets 15 A through a 2 A connector".into(),
+            refs: vec!["U19".into(), "R48".into()],
+            nets: vec!["ILIM".into()],
+        });
+        let usb = crate::checks::usb_c::UsbcReport {
+            receptacles: Vec::new(),
+            shared_net: false,
+            cc1_rd_ohms: Some(5_100.0),
+            cc2_rd_ohms: Some(5_100.0),
+            attach: crate::checks::usb_c::Attach::SinkAttached,
+            powers_vbus: true,
+            has_discrete_rd: true,
+            level: crate::checks::usb_c::UsbcLevel::Ok,
+            headline: "both CC pins have their own 5.1 kΩ Rd; a compliant source applies VBUS"
+                .into(),
+        };
+
+        let triage = order_triage(&drc, &lint, &SiReport::default(), Some(&usb), true, 7);
+        assert_eq!(triage.do_not_order.len(), 2, "{triage:#?}");
+        assert!(
+            triage
+                .do_not_order
+                .iter()
+                .any(|item| item.contains("+3V3") && item.contains("KiCad")),
+            "{triage:#?}"
+        );
+        assert!(
+            triage
+                .do_not_order
+                .iter()
+                .any(|item| item.contains("eFuse connector budget")),
+            "{triage:#?}"
+        );
+        assert_eq!(triage.inspect_before_ordering.len(), 1, "{triage:#?}");
+        assert!(
+            triage.inspect_before_ordering[0].contains("PYRO4_FIRE")
+                && triage.inspect_before_ordering[0].contains("Tool-only"),
+            "{triage:#?}"
+        );
+        assert_eq!(triage.checked_and_ok.len(), 1, "{triage:#?}");
+        assert!(triage.checked_and_ok[0].contains("USB-C CC"));
+        let rendered = triage.render();
+        assert!(rendered.starts_with("== ORDER / DON'T-ORDER TRIAGE =="));
+        assert!(rendered.contains("NOT COVERED: 7 parts lack"));
+        assert!(rendered.contains("DETAIL: Full findings and evidence follow"));
+
+        let empty = OrderTriage::default().render();
+        assert_eq!(empty.matches("  - Empty.").count(), 3, "{empty}");
     }
 }
