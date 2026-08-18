@@ -1480,7 +1480,6 @@ fn node_indices_for(kind: char) -> &'static [usize] {
 /// Expand one `Xxxx ... NAME [k=v ...]` instantiation into `out`, recursing for
 /// nested `X` calls. `chain` is the stack of subckt names currently being
 /// expanded, for the self-instantiation cycle check.
-#[allow(clippy::too_many_arguments)]
 fn expand_instance(
     lineno: usize,
     raw: &str,
@@ -2015,7 +2014,6 @@ fn read_source(
 }
 
 /// Handle a `.include <file>` card.
-#[allow(clippy::too_many_arguments)]
 fn include_file(
     args: &[String],
     site: usize,
@@ -2074,7 +2072,6 @@ fn include_file(
 }
 
 /// Handle a `.lib <file> <section>` call, or refuse the ambiguous one-arg form.
-#[allow(clippy::too_many_arguments)]
 fn lib_call(
     args: &[String],
     site: usize,
@@ -2144,7 +2141,6 @@ fn lib_call(
 
 /// Read `path`, guarding cycles/depth, then dispatch to whole-file or
 /// section-only splicing.
-#[allow(clippy::too_many_arguments)]
 fn splice_file(
     path: &Path,
     display_arg: &str,
@@ -2229,7 +2225,6 @@ fn splice_file(
 /// Splice ONLY the named `.lib <section> ... .endl` block from a library file.
 /// Nested `.include`/`.lib <file> <section>` calls inside the section expand;
 /// nested `.lib <section>` DEFINITIONS are refused (unsupported).
-#[allow(clippy::too_many_arguments)]
 fn read_section(
     text: &str,
     this_dir: &Path,
