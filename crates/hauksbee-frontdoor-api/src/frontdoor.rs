@@ -1,4 +1,12 @@
-//! Callback and data contracts supplied by an embedding application to a front door.
+//! Callback and data contracts supplied by an embedding application to a
+//! front door.
+//!
+//! Each alias and struct here is one capability the web UI can offer: analyze
+//! an uploaded board, launch a live session, run a schematic check, extract a
+//! model from a datasheet. The front door holds them as trait objects and
+//! never learns which crate provided them; the engine implements them and
+//! never learns it is being served over a websocket. Keeping only the
+//! signatures here is what lets both sides compile without each other.
 
 use std::sync::Arc;
 
