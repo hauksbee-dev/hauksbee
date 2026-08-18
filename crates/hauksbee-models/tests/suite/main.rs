@@ -14,6 +14,7 @@ mod api_backend;
 mod bjt_regex_polarity;
 mod codex_behavioral_fixture;
 mod codex_prompt_delivery;
+mod connector_rating_resolve;
 mod corpus_batch_resolve;
 mod corpus_coverage_ratchet;
 mod declared_coverage;

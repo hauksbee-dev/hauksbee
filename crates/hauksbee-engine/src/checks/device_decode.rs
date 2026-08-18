@@ -18,10 +18,12 @@
 //! "decode any config pin" engine, because each part has its own pins, its own
 //! band table, and its own consistency rules (e.g. the CYPD3177's VBUS_MIN >
 //! VBUS_MAX override). Each supported part is a hand-written decoder seeded from
-//! its datasheet. Two parts are seeded today: the Cypress / Infineon
+//! its datasheet. Three parts are seeded today: the Cypress / Infineon
 //! **CYPD3177** (EZ-PD BCR) USB-C PD sink controller, and the TI **BQ2407x**
 //! charger family's TMR safety-timer resistor (an out-of-band value found as
-//! a real 4.7k-for-47k typo on a published keyboard). Adding a part means
+//! a real 4.7k-for-47k typo on a published keyboard), and the TI **TPS25982**
+//! eFuse family's ILIM resistor plus a connected, rated connector witness.
+//! Adding a part means
 //! adding a decoder; this is by design, not a stub.
 //!
 //! ## Zero-false-positive discipline (binding)
@@ -34,6 +36,10 @@
 //! If the divider cannot be resolved to concrete resistor values, the check stays
 //! SILENT. A check that cannot resolve the divider does not fire. (See
 //! `docs/checks/DEVICE_DECODE.md` and `docs/about/LIMITATIONS.md`.)
+//! TPS25982's revised evidence contract makes one narrow distinction: a floating
+//! ILIM pin is still silent, while an assembled but unreadable ILIM resistor gets
+//! a non-gating Low "unjudgeable" note. Neither state can produce a protective
+//! connector-budget warning.
 //!
 //! ## CYPD3177 seed (the fault this check reproduces)
 //!
@@ -74,7 +80,8 @@ use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
 use hauksbee_models::value::parse_value;
-use hauksbee_models::ModelLibrary;
+use hauksbee_models::{ComponentKind, ModelLibrary};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Reference rail for the CYPD3177 config dividers (VDDD = 3.3 V).
 const VDDD: f64 = 3.3;
@@ -389,9 +396,10 @@ fn leg_resistor_to_ground(board: &ExtractedBoard, node: i64) -> Option<(String, 
 }
 
 /// Run the device-decode check class over a board. Seeded parts: the
-/// CYPD3177 USB-C PD sink, and the TI BQ2407x charger family's TMR safety
-/// timer; each identified part is decoded independently.
-pub fn device_decode_lint(board: &ExtractedBoard, _lib: &ModelLibrary) -> NetLintReport {
+/// CYPD3177 USB-C PD sink, the TI BQ2407x charger family's TMR safety timer,
+/// and the TI TPS25982 eFuse family's ILIM current limit; each identified part
+/// is decoded independently.
+pub fn device_decode_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     for comp in &board.components {
         if is_cypd3177(comp) {
@@ -400,8 +408,426 @@ pub fn device_decode_lint(board: &ExtractedBoard, _lib: &ModelLibrary) -> NetLin
         if is_bq2407x(comp) {
             check_bq2407x_tmr(board, comp, &mut report);
         }
+        if is_tps25982(comp) {
+            check_tps25982_ilim(board, comp, lib, &mut report);
+        }
     }
     report
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TPS25982 (TI TPS259822/3/4/7, L current-limiter and O circuit-breaker
+// variants), ILIM pin.
+//
+// Source: Texas Instruments TPS25982 datasheet, SLVSEI3D (Rev. D, May 2026):
+//   - Device Comparison Table: the eight TPS259822/3/4/7 L/O variants covered
+//     by this one table. TPS25980/81/85 and other adjacent families are NOT
+//     included: their separate datasheets are not evidence for this decoder.
+//   - Section 7.3.3.3, Equation 8 (active-current-limiter variants), with the
+//     same law in Section 7.3.3.2, Equation 4 (circuit-breaker variants):
+//         RILIM(ohm) = 1460 / (ILIM(A) - 0.11)
+//   - Section 6.5 Electrical Characteristics, RILIM=100 ohm and TJ=-40..125 C:
+//         ILIM = 12.85 / 14.71 / 15.99 A (min / typ / max).
+//     For another legal RILIM we evaluate Equation 8 for typical, then retain
+//     that full-temperature row's min/typ and max/typ tolerance ratios. This is
+//     an explicit table-bound estimate, not measured board current.
+//   - Section 6.3 Recommended Operating Conditions: RILIM=82..1650 ohm.
+//
+// Every legal, parseable RILIM gets a Low (non-gating) decode note so a
+// detector-pair can retain the setting even when no rated series witness is
+// connected. A protective Medium finding needs a bound max_current_a on an
+// actually connected connector reachable from IN or OUT (directly or through
+// a low-ohmic series shunt), and fires only when the decoded MINIMUM exceeds
+// the rating by more than the declared 10% tolerance grace.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TPS25982_RILIM_MIN_OHMS: f64 = 82.0;
+const TPS25982_RILIM_MAX_OHMS: f64 = 1650.0;
+const TPS25982_EQ8_NUMERATOR_A_OHM: f64 = 1460.0;
+const TPS25982_EQ8_OFFSET_A: f64 = 0.11;
+const TPS25982_TABLE_100R_MIN_A: f64 = 12.85;
+const TPS25982_TABLE_100R_TYP_A: f64 = 14.71;
+const TPS25982_TABLE_100R_MAX_A: f64 = 15.99;
+const TPS25982_BUDGET_GRACE: f64 = 1.10;
+/// Cross only deliberate low-ohmic series links while looking for a connector
+/// boundary. This admits the real board's 2 mOhm current-sense shunt, but not a
+/// pull-down/load resistor that merely happens to share the rail.
+const TPS25982_SERIES_LINK_MAX_OHMS: f64 = 1.0;
+const TPS25982_SERIES_WALK_MAX_DEPTH: usize = 4;
+
+#[derive(Debug, Clone, Copy)]
+struct IlimBand {
+    min_a: f64,
+    typ_a: f64,
+    max_a: f64,
+}
+
+fn tps25982_ilim_band(ohms: f64) -> IlimBand {
+    let typ_a = TPS25982_EQ8_NUMERATOR_A_OHM / ohms + TPS25982_EQ8_OFFSET_A;
+    IlimBand {
+        min_a: typ_a * (TPS25982_TABLE_100R_MIN_A / TPS25982_TABLE_100R_TYP_A),
+        typ_a,
+        max_a: typ_a * (TPS25982_TABLE_100R_MAX_A / TPS25982_TABLE_100R_TYP_A),
+    }
+}
+
+/// Minimum RILIM that makes the table-scaled minimum no greater than `limit_a`.
+fn tps25982_required_rilim_ohms(limit_a: f64) -> Option<f64> {
+    let min_ratio = TPS25982_TABLE_100R_MIN_A / TPS25982_TABLE_100R_TYP_A;
+    let denominator = limit_a / min_ratio - TPS25982_EQ8_OFFSET_A;
+    (denominator > 0.0).then_some(TPS25982_EQ8_NUMERATOR_A_OHM / denominator)
+}
+
+/// Match the exact TPS25982 family table: root token, or its 2/3/4/7 L/O
+/// orderable variants. In particular TPS25980/81/85 and a made-up TPS259820 do
+/// not borrow this family decoder.
+fn is_tps25982_token(value: &str) -> bool {
+    let uppercase = value.to_ascii_uppercase();
+    uppercase.match_indices("TPS25982").any(|(start, _)| {
+        // Require a real token boundary on the left. This still admits a
+        // library-qualified value such as `Power_Management:TPS259824LNRGET`,
+        // but rejects an unrelated identifier merely containing the substring.
+        if start > 0
+            && uppercase[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric())
+        {
+            return false;
+        }
+        let token: String = uppercase[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        let rest = &token["TPS25982".len()..];
+        if rest.is_empty() {
+            return true;
+        }
+        let mut chars = rest.chars();
+        let variant = chars.next().expect("non-empty variant suffix");
+        if !matches!(variant, '2' | '3' | '4' | '7') {
+            return false;
+        }
+        match chars.next() {
+            None => true, // family + voltage variant, with package omitted
+            Some(response) => matches!(response, 'L' | 'O'),
+        }
+    })
+}
+
+fn is_tps25982(c: &Component) -> bool {
+    if is_tps25982_token(&c.value) || is_tps25982_token(&c.lib_id) {
+        return true;
+    }
+    c.properties.iter().any(|(key, value)| {
+        let key = key.to_ascii_lowercase().replace([' ', '-'], "_");
+        (key.contains("mpn")
+            || key.contains("manufacturer_part")
+            || key == "part_number"
+            || key == "mfr_part")
+            && is_tps25982_token(value)
+    })
+}
+
+fn is_plain_resistor(c: &Component) -> bool {
+    if !AssemblyState::of(c).is_present() {
+        return false;
+    }
+    let r = c.reference.to_ascii_uppercase();
+    let lib = c.lib_id.to_ascii_lowercase();
+    let is_r_ref = r.starts_with('R')
+        && !r.starts_with("RV")
+        && !r.starts_with("RT")
+        && !r.starts_with("RN")
+        && !r.starts_with("RP")
+        && !r.starts_with("RM");
+    let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
+    is_r_ref && connected == 2 && !lib.contains("ferrite") && !lib.contains("inductor")
+}
+
+enum ProgramResistor {
+    Floating,
+    Parsed { reference: String, ohms: f64 },
+    Unparseable { reference: String, value: String },
+}
+
+/// Resolve all assembled resistor legs directly from `node` to ground. Multiple
+/// parseable legs are a real parallel network and are combined; any unreadable
+/// leg makes the whole setting explicitly unjudgeable instead of selecting the
+/// first convenient resistor.
+fn program_resistor_to_ground(board: &ExtractedBoard, node: i64) -> ProgramResistor {
+    let mut parsed: Vec<(String, f64)> = Vec::new();
+    let mut unreadable: Vec<(String, String)> = Vec::new();
+    for (component, _) in board.net_members(node) {
+        if !is_plain_resistor(component) {
+            continue;
+        }
+        let reaches_ground = component.pins.iter().any(|pin| {
+            pin.net
+                .filter(|net| *net != node)
+                .and_then(|net| board.net(net))
+                .is_some_and(|net| is_ground_name(&net.name))
+        });
+        if !reaches_ground {
+            continue;
+        }
+        match parse_value(&component.value)
+            .map(|parsed| parsed.si)
+            .filter(|ohms| ohms.is_finite() && *ohms >= 0.0)
+        {
+            Some(ohms) => parsed.push((component.reference.clone(), ohms)),
+            None => unreadable.push((component.reference.clone(), component.value.clone())),
+        }
+    }
+    if !unreadable.is_empty() {
+        unreadable.sort();
+        return ProgramResistor::Unparseable {
+            reference: unreadable
+                .iter()
+                .map(|(reference, _)| reference.as_str())
+                .collect::<Vec<_>>()
+                .join("||"),
+            value: unreadable
+                .iter()
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>()
+                .join("||"),
+        };
+    }
+    if parsed.is_empty() {
+        return ProgramResistor::Floating;
+    }
+    parsed.sort_by(|a, b| a.0.cmp(&b.0));
+    let conductance: f64 = parsed
+        .iter()
+        .map(|(_, ohms)| {
+            if *ohms == 0.0 {
+                f64::INFINITY
+            } else {
+                1.0 / ohms
+            }
+        })
+        .sum();
+    let ohms = if conductance.is_infinite() {
+        0.0
+    } else {
+        1.0 / conductance
+    };
+    ProgramResistor::Parsed {
+        reference: parsed
+            .iter()
+            .map(|(reference, _)| reference.as_str())
+            .collect::<Vec<_>>()
+            .join("||"),
+        ohms,
+    }
+}
+
+/// Unique net IDs carried by pin functions `IN`, `IN_1`, ... or `OUT`,
+/// `OUT_17`, ... . A role split across multiple pads is normal on this eFuse;
+/// a pin without a real net contributes nothing.
+fn tps25982_power_nets(component: &Component, role: &str) -> BTreeSet<i64> {
+    component
+        .pins
+        .iter()
+        .filter(|pin| {
+            let function = pin.function.to_ascii_uppercase();
+            function == role || function.starts_with(&format!("{role}_"))
+        })
+        .filter_map(|pin| pin.net)
+        .collect()
+}
+
+fn low_ohmic_far_net(component: &Component, from: i64) -> Option<i64> {
+    if !is_plain_resistor(component) {
+        return None;
+    }
+    let ohms = parse_value(&component.value)?.si;
+    if !ohms.is_finite() || !(0.0..=TPS25982_SERIES_LINK_MAX_OHMS).contains(&ohms) {
+        return None;
+    }
+    let nets: BTreeSet<_> = component.pins.iter().filter_map(|pin| pin.net).collect();
+    if nets.len() != 2 || !nets.contains(&from) {
+        return None;
+    }
+    nets.into_iter().find(|net| *net != from)
+}
+
+#[derive(Debug, Clone)]
+struct RatedConnector {
+    reference: String,
+    model_id: String,
+    rating_a: f64,
+    path_net: String,
+}
+
+/// Find rated connector boundaries on the actual IN/OUT conduction path. The
+/// walk is deliberately narrow: same-net copper plus a bounded number of
+/// <=1-ohm assembled resistor links. It cannot cross the eFuse itself, a DNP /
+/// identity-refused component, a pull-down, or an unconnected connector pad.
+fn tps25982_rated_connectors(
+    board: &ExtractedBoard,
+    efuse: &Component,
+    lib: &ModelLibrary,
+) -> Vec<RatedConnector> {
+    let starts: BTreeSet<_> = tps25982_power_nets(efuse, "IN")
+        .into_iter()
+        .chain(tps25982_power_nets(efuse, "OUT"))
+        .collect();
+    let mut queue: VecDeque<_> = starts.into_iter().map(|net| (net, 0usize)).collect();
+    let mut seen_nets = BTreeSet::new();
+    let mut witnesses = BTreeMap::<String, RatedConnector>::new();
+
+    while let Some((net_id, depth)) = queue.pop_front() {
+        if !seen_nets.insert(net_id) {
+            continue;
+        }
+        let Some(net) = board.net(net_id) else {
+            continue;
+        };
+        if is_ground_name(&net.name) || is_unconnected_net(&net.name) {
+            continue;
+        }
+        for (component, _) in board.net_members(net_id) {
+            if component.reference == efuse.reference {
+                continue; // never jump internally from IN to OUT
+            }
+            let AssemblyState::Present(part) = AssemblyState::of(component) else {
+                continue;
+            };
+            if let Some(model) = crate::binder::resolve(lib, part).model {
+                if model.kind == ComponentKind::Connector {
+                    if let Some(rating_a) = model.ratings.max_current_a.filter(|a| *a > 0.0) {
+                        witnesses
+                            .entry(component.reference.clone())
+                            .or_insert_with(|| RatedConnector {
+                                reference: component.reference.clone(),
+                                model_id: model.id.clone(),
+                                rating_a,
+                                path_net: net.name.clone(),
+                            });
+                    }
+                }
+            }
+            if depth < TPS25982_SERIES_WALK_MAX_DEPTH {
+                if let Some(far_net) = low_ohmic_far_net(component, net_id) {
+                    queue.push_back((far_net, depth + 1));
+                }
+            }
+        }
+    }
+    witnesses.into_values().collect()
+}
+
+fn check_tps25982_ilim(
+    board: &ExtractedBoard,
+    efuse: &Component,
+    lib: &ModelLibrary,
+    report: &mut NetLintReport,
+) {
+    let Some((ilim_net_id, ilim_net_name)) = pin_net_for_role(board, efuse, "ILIM") else {
+        return; // no resolvable ILIM pin: silent
+    };
+    let (r_ref, ohms) = match program_resistor_to_ground(board, ilim_net_id) {
+        ProgramResistor::Floating => return, // explicit user rule: absent/floating stays silent
+        ProgramResistor::Unparseable { reference, value } => {
+            report.findings.push(LintFinding {
+                check: LintCheck::DeviceDecode,
+                severity: Severity::Low,
+                message: format!(
+                    "{} eFuse current limit is unjudgeable: ILIM resistor {reference} value \
+                     '{value}' is not parseable, so no current-limit band or connector-budget \
+                     verdict is claimed",
+                    efuse.reference
+                ),
+                refs: vec![efuse.reference.clone(), reference],
+                nets: vec![ilim_net_name.to_string()],
+            });
+            return;
+        }
+        ProgramResistor::Parsed { reference, ohms } => (reference, ohms),
+    };
+
+    if !(TPS25982_RILIM_MIN_OHMS..=TPS25982_RILIM_MAX_OHMS).contains(&ohms) {
+        report.findings.push(LintFinding {
+            check: LintCheck::DeviceDecode,
+            severity: Severity::Medium,
+            message: format!(
+                "{} eFuse current limit: ILIM resistor {r_ref} = {} ohm is outside the \
+                 TPS25982 datasheet's 82-1650 ohm programming range, so Equation 8 \
+                 does not support a current-limit or connector-budget verdict; fit an \
+                 in-range value selected from RILIM = 1460 / (ILIM - 0.11)",
+                efuse.reference,
+                format_ohms(ohms)
+            ),
+            refs: vec![efuse.reference.clone(), r_ref],
+            nets: vec![ilim_net_name.to_string()],
+        });
+        return;
+    }
+
+    let band = tps25982_ilim_band(ohms);
+    report.findings.push(LintFinding {
+        check: LintCheck::DeviceDecode,
+        severity: Severity::Low,
+        message: format!(
+            "{} eFuse current-limit decode (informational): ILIM resistor {r_ref} = {} ohm \
+             decodes to {:.2}/{:.2}/{:.2} A min/typ/max across the TPS25982 \
+             datasheet tolerance band (Section 7.3.3.3 Equation 8 scaled by the \
+             Section 6.5 full-temperature 100-ohm row); this note alone makes no \
+             connector-budget verdict",
+            efuse.reference,
+            format_ohms(ohms),
+            band.min_a,
+            band.typ_a,
+            band.max_a,
+        ),
+        refs: vec![efuse.reference.clone(), r_ref.clone()],
+        nets: vec![ilim_net_name.to_string()],
+    });
+
+    for witness in tps25982_rated_connectors(board, efuse, lib) {
+        let grace_a = witness.rating_a * TPS25982_BUDGET_GRACE;
+        if band.min_a <= grace_a {
+            continue;
+        }
+        let grace_r = tps25982_required_rilim_ohms(grace_a).map(f64::ceil);
+        let strict_r = tps25982_required_rilim_ohms(witness.rating_a).map(f64::ceil);
+        let fix = match (grace_r, strict_r) {
+            (Some(grace_r), Some(strict_r)) => format!(
+                "Increase {r_ref} to at least {grace_r:.0} ohm to meet the 10% grace \
+                 threshold (or {strict_r:.0} ohm to bring the decoded minimum to the \
+                 rating itself)"
+            ),
+            _ => format!(
+                "Select a larger legal {r_ref} from Equation 8, or use a connector with \
+                 a sufficient continuous-current rating"
+            ),
+        };
+        report.findings.push(LintFinding {
+            check: LintCheck::DeviceDecode,
+            severity: Severity::Medium,
+            message: format!(
+                "{} eFuse connector budget: {r_ref} = {} ohm decodes to \
+                 {:.2}/{:.2}/{:.2} A min/typ/max, while connected {} ({}) is rated \
+                 {:.2} A on the {} conduction path; the minimum {:.2} A exceeds the \
+                 rating plus the explicit 10% grace ({:.2} A). {fix}",
+                efuse.reference,
+                format_ohms(ohms),
+                band.min_a,
+                band.typ_a,
+                band.max_a,
+                witness.reference,
+                witness.model_id,
+                witness.rating_a,
+                witness.path_net,
+                band.min_a,
+                grace_a,
+            ),
+            refs: vec![efuse.reference.clone(), r_ref.clone(), witness.reference],
+            nets: vec![ilim_net_name.to_string(), witness.path_net],
+        });
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1076,5 +1502,193 @@ mod bq2407x_tests {
         // (crude: detach R31 pad 1; the pin net keeps only the charger)
         let report = lint(&floating);
         assert_eq!(report.of_check(LintCheck::DeviceDecode).count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod tps25982_tests {
+    use super::*;
+    use hauksbee_extract::ExtractedBoard;
+
+    fn tps_board(
+        part_value: &str,
+        rilim_value: Option<&str>,
+        connector_net: Option<&str>,
+    ) -> String {
+        let resistor = rilim_value
+            .map(|value| {
+                format!(
+                    r#"  (module Resistor_SMD:R_0402_1005Metric (layer F.Cu)
+    (fp_text reference R48 (at 0 0) (layer F.SilkS))
+    (fp_text value {value} (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 4 "Net-(U19-ILIM)"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+"#
+                )
+            })
+            .unwrap_or_default();
+        let connector = connector_net
+            .map(|net| {
+                let (net_id, name) = if net == "EFUSE_OUT" {
+                    (3, "EFUSE_OUT")
+                } else {
+                    (5, "unconnected-(J8-Pin_1-Pad1)")
+                };
+                format!(
+                    r#"  (module Connector_JST:JST_VH_B2P-VH_1x02_P3.96mm_Vertical (layer F.Cu)
+    (fp_text reference J8 (at 0 0) (layer F.SilkS))
+    (fp_text value JST_B2P-VH (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole rect (at 0 0) (net {net_id} "{name}"))
+    (pad 2 thru_hole circle (at 3.96 0) (net 1 "GND"))
+  )
+"#
+                )
+            })
+            .unwrap_or_default();
+        format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "EFUSE_IN")
+  (net 3 "EFUSE_OUT")
+  (net 4 "Net-(U19-ILIM)")
+  (net 5 "unconnected-(J8-Pin_1-Pad1)")
+  (module Package_DFN_QFN:QFN24 (layer F.Cu)
+    (fp_text reference U19 (at 0 0) (layer F.SilkS))
+    (fp_text value {part_value} (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 2 "EFUSE_IN") (pinfunction "IN_1"))
+    (pad 8 smd rect (at 0 1) (net 4 "Net-(U19-ILIM)") (pinfunction "ILIM_8"))
+    (pad 17 smd rect (at 0 2) (net 3 "EFUSE_OUT") (pinfunction "OUT_17"))
+    (pad 26 smd rect (at 0 3) (net 1 "GND") (pinfunction "GND_26"))
+  )
+{resistor}{connector})
+"#
+        )
+    }
+
+    fn lint(board_text: &str) -> NetLintReport {
+        let board = ExtractedBoard::from_kicad_pcb(board_text).expect("board parses");
+        device_decode_lint(&board, &ModelLibrary::builtin())
+    }
+
+    fn connector_budget_warnings(report: &NetLintReport) -> Vec<&LintFinding> {
+        report
+            .of_check(LintCheck::DeviceDecode)
+            .filter(|finding| {
+                finding.severity == Severity::Medium && finding.message.contains("connector budget")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn connected_10a_connector_100r_fires_with_band_rating_grace_and_fix_math() {
+        let report = lint(&tps_board(
+            "TPS259824LNRGET",
+            Some("100"),
+            Some("EFUSE_OUT"),
+        ));
+        let warnings = connector_budget_warnings(&report);
+        assert_eq!(warnings.len(), 1, "{:#?}", report.findings);
+        let message = &warnings[0].message;
+        assert!(message.contains("12.85/14.71/15.99 A"), "{message}");
+        assert!(
+            message.contains("10.00 A") && message.contains("11.00 A"),
+            "{message}"
+        );
+        assert!(message.contains("10% grace"), "{message}");
+        assert!(
+            message.contains("at least 117 ohm") && message.contains("129 ohm"),
+            "{message}"
+        );
+        assert_eq!(warnings[0].refs, ["U19", "R48", "J8"]);
+    }
+
+    #[test]
+    fn connected_10a_connector_127r_is_silent_under_the_ten_percent_grace() {
+        let report = lint(&tps_board(
+            "TPS259824LNRGET",
+            Some("127"),
+            Some("EFUSE_OUT"),
+        ));
+        assert!(
+            connector_budget_warnings(&report).is_empty(),
+            "{:#?}",
+            report.findings
+        );
+        let notes: Vec<_> = report
+            .of_check(LintCheck::DeviceDecode)
+            .filter(|finding| finding.severity == Severity::Low)
+            .collect();
+        assert_eq!(notes.len(), 1, "{:#?}", report.findings);
+        assert!(notes[0].message.contains("10.14/11.61/12.62 A"));
+    }
+
+    #[test]
+    fn no_connected_rating_witness_keeps_only_the_informational_decode() {
+        for connector_net in [None, Some("unconnected")] {
+            let report = lint(&tps_board("TPS259824LNRGET", Some("100"), connector_net));
+            assert!(
+                connector_budget_warnings(&report).is_empty(),
+                "{:#?}",
+                report.findings
+            );
+            let rows: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+            assert_eq!(rows.len(), 1, "{:#?}", report.findings);
+            assert_eq!(rows[0].severity, Severity::Low);
+            assert!(rows[0].message.contains("informational"));
+        }
+    }
+
+    #[test]
+    fn floating_ilim_is_silent_and_unparseable_ilim_is_explicitly_unjudgeable() {
+        let floating = lint(&tps_board("TPS259824LNRGET", None, Some("EFUSE_OUT")));
+        assert_eq!(floating.of_check(LintCheck::DeviceDecode).count(), 0);
+
+        let unreadable = lint(&tps_board(
+            "TPS259824LNRGET",
+            Some("RC0402FR-07100RL"),
+            Some("EFUSE_OUT"),
+        ));
+        let rows: Vec<_> = unreadable.of_check(LintCheck::DeviceDecode).collect();
+        assert_eq!(rows.len(), 1, "{:#?}", unreadable.findings);
+        assert_eq!(rows[0].severity, Severity::Low);
+        assert!(rows[0].message.contains("unjudgeable"));
+        assert!(rows[0].message.contains("not parseable"));
+    }
+
+    #[test]
+    fn illegal_rilim_value_fires_without_claiming_a_budget_decode() {
+        let report = lint(&tps_board("TPS259824LNRGET", Some("50"), None));
+        let rows: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+        assert_eq!(rows.len(), 1, "{:#?}", report.findings);
+        assert_eq!(rows[0].severity, Severity::Medium);
+        assert!(rows[0].message.contains("82-1650 ohm"));
+        assert!(rows[0].message.contains("does not support"));
+    }
+
+    #[test]
+    fn family_match_includes_only_the_datasheet_comparison_table() {
+        for value in [
+            "TPS25982",
+            "TPS259822LNRGE",
+            "TPS259823ONRGET",
+            "TPS259824LNRGET",
+            "TPS259827ONRGE",
+        ] {
+            assert!(is_tps25982_token(value), "{value} must match");
+        }
+        for value in [
+            "TPS25980",
+            "TPS25981",
+            "TPS25985",
+            "TPS259820LNRGE",
+            "TPS259825LNRGE",
+            "TPS259824XNRGE",
+            "NOTTPS259824LNRGET",
+            "TPS25982FAMILY",
+        ] {
+            assert!(!is_tps25982_token(value), "{value} must not match");
+        }
     }
 }
