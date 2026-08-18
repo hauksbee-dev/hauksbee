@@ -1006,6 +1006,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "between": {
+          "description": "What pair of copper objects the tightest gap is between (\"via \\u{2194}\nzone\", \"track \\u{2194} pad\"), so a reader knows what to look AT before\npanning to the coordinates. Diagnosability is the point: a via-related\nfinding sends the reader to the via's layer settings, not to rerouting.",
+          "type": "string"
+        },
         "count": {
           "format": "uint",
           "minimum": 0,
@@ -1059,6 +1063,7 @@
         "min_gap_mm",
         "min_gap_loc_mm",
         "rule_mm",
+        "between",
         "plain",
         "fix"
       ],
