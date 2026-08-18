@@ -26,6 +26,23 @@ pub fn emit(
     strict: bool,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
+    emit_quiet(
+        engine, evidence, ambient, seconds, json, false, strict, false, inputs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_quiet(
+    engine: &mut HauksbeeEngine,
+    evidence: &crate::evidence::BoardEvidence,
+    ambient: f64,
+    seconds: f64,
+    json: bool,
+    plain: bool,
+    strict: bool,
+    quiet: bool,
+    inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
     engine.scheduler_mut().set_ambient_c(ambient);
     let summary = BindSummary::from_report(engine.report());
     let board_name = engine.report().board_name.clone();
@@ -104,7 +121,15 @@ pub fn emit(
         });
         println!("{}", jr.to_json());
     } else {
-        render_thermal_text(&rows, ambient, &validity);
+        if plain {
+            println!(
+                "Plain-language thermal: temperatures below cover modeled dissipating devices only; any unmodeled power parts make the overall verdict invalid."
+            );
+        }
+        print!(
+            "{}",
+            render_thermal_text(&rows, ambient, &validity, &coverage)
+        );
         // Partial-coverage caveat (text path): the table is real but some active
         // power IC on the live circuit is open/unresolved, so the result
         // understates the true thermal load. Naming the parts keeps this from
@@ -112,7 +137,10 @@ pub fn emit(
         if coverage.partial {
             emit_thermal_coverage_caveat(&coverage, &coverage_refs);
         }
-        print!("{}", report_evidence.render_plain());
+        print!(
+            "{}",
+            super::render_evidence_appendix(&report_evidence, quiet)
+        );
     }
     if !validity.valid {
         if !json {
@@ -239,25 +267,47 @@ fn emit_thermal_coverage_caveat(coverage: &CheckCoverage, open_refs: &[String]) 
 /// Render the thermal result as text. When the result is invalid (empty table
 /// because the dissipating devices are unresolved/open), print a loud WARNING
 /// naming the reason rather than a near-empty table that reads as "runs cool".
-fn render_thermal_text(rows: &[(String, f64, bool)], ambient_c: f64, validity: &Validity) {
+fn render_thermal_text(
+    rows: &[(String, f64, bool)],
+    ambient_c: f64,
+    validity: &Validity,
+    coverage: &CheckCoverage,
+) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
     if !validity.valid {
         let reason = validity
             .reason
             .as_deref()
             .unwrap_or("no resolved dissipating devices");
-        eprintln!("WARNING: thermal result not valid: {reason}");
-        eprintln!(
+        let _ = writeln!(out, "WARNING: thermal result not valid: {reason}");
+        let _ = writeln!(
+            out,
             "  (a thermal table covering no dissipating devices is NOT a 'runs cool' pass. \
              Bind the power ICs with --models-dir, then re-run.)"
         );
-        return;
+        return out;
     }
-    println!("\nsteady-state junction temperature (Tj = {ambient_c:.0} C + P * theta_JA):");
+    if coverage.partial {
+        let _ = writeln!(
+            out,
+            "INVALID: {} dissipating-class power part(s) were NOT modeled; the table below covers only {} MODELED dissipating device(s).",
+            coverage.open_active_on_live_circuit, rows.len()
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\nsteady-state junction temperature (Tj = {ambient_c:.0} C + P * theta_JA):"
+    );
     if rows.is_empty() {
-        println!("  no dissipating device reached a measurable temperature (board carries no static load).");
-        return;
+        let _ = writeln!(
+            out,
+            "  no dissipating device reached a measurable temperature (board carries no static load)."
+        );
+        return out;
     }
-    println!(
+    let _ = writeln!(
+        out,
         "┌────────────────────┬───────────┬──────────┐\n\
          │ Component          │  Tj (C)   │  status  │\n\
          ├────────────────────┼───────────┼──────────┤"
@@ -270,19 +320,34 @@ fn render_thermal_text(rows: &[(String, f64, bool)], ambient_c: f64, validity: &
         } else {
             "ok".to_string()
         };
-        println!(
+        let _ = writeln!(
+            out,
             "│ {:<18} │ {:>7.1}   │ {:<8} │",
             truncate(reference, 18),
             tj,
             status
         );
     }
-    println!("└────────────────────┴───────────┴──────────┘");
+    let _ = writeln!(out, "└────────────────────┴───────────┴──────────┘");
     if n_over > 0 {
-        println!("\n{n_over} device(s) over their junction-temperature limit.");
+        let _ = writeln!(
+            out,
+            "\n{n_over} MODELED device(s) over their junction-temperature limit."
+        );
+    } else if coverage.partial {
+        let _ = writeln!(
+            out,
+            "\nall {} MODELED dissipating devices are within their junction-temperature limit; {} power part(s) unmodeled, verdict INVALID.",
+            rows.len(), coverage.open_active_on_live_circuit
+        );
     } else {
-        println!("\nall dissipating devices within their junction-temperature limit.");
+        let _ = writeln!(
+            out,
+            "\nall {} modeled dissipating devices are within their junction-temperature limit.",
+            rows.len()
+        );
     }
+    out
 }
 
 /// Truncate to at most `max` chars (byte-for-byte the binary's helper).
@@ -324,6 +389,42 @@ mod tests {
         assert!(
             msg.contains("1 of 3 active power IC(s)") && msg.contains("dissipate nothing"),
             "must state the open count honestly: {msg}"
+        );
+    }
+
+    #[test]
+    fn partial_thermal_table_names_unmodelled_power_parts_inline() {
+        let coverage = CheckCoverage {
+            resolved_fraction: 0.5,
+            dissipating_count: 2,
+            total_active_count: 3,
+            open_active_on_live_circuit: 2,
+            partial: true,
+        };
+        let validity = Validity::valid();
+        let text = render_thermal_text(
+            &[
+                ("R1".to_string(), 25.1, false),
+                ("R2".to_string(), 25.0, false),
+            ],
+            25.0,
+            &validity,
+            &coverage,
+        );
+        assert!(
+            text.starts_with("INVALID: 2 dissipating-class power part(s) were NOT modeled"),
+            "coverage invalidity must lead the table:\n{text}"
+        );
+        assert!(
+            text.contains(
+                "all 2 MODELED dissipating devices are within their junction-temperature limit; \
+                 2 power part(s) unmodeled, verdict INVALID"
+            ),
+            "the closing line must condition the clean rows on modeled-only coverage:\n{text}"
+        );
+        assert!(
+            !text.contains("all dissipating devices within"),
+            "the old unqualified pass must be gone:\n{text}"
         );
     }
 }

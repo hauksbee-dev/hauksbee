@@ -40,6 +40,19 @@ pub fn emit(
     inputs: &[JsonInputEvidence],
     blockers: &[String],
 ) -> anyhow::Result<()> {
+    emit_quiet(board, evidence, mode, strict, false, inputs, blockers)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_quiet(
+    board: &ExtractedBoard,
+    evidence: &crate::evidence::BoardEvidence,
+    mode: OutputMode,
+    strict: bool,
+    quiet: bool,
+    inputs: &[JsonInputEvidence],
+    blockers: &[String],
+) -> anyhow::Result<()> {
     let report = crate::usb_c_report(board);
     // The INCONCLUSIVE refusal on every arm below: a CC verdict rests on part
     // identity (which resistor is a real Rd), so unbound verdict-critical
@@ -125,7 +138,7 @@ pub fn emit(
         },
     }
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", evidence.render_plain());
+        print!("{}", super::render_evidence_appendix(evidence, quiet));
     }
     super::note_ungated_findings(strict, serious);
     if strict && serious {
