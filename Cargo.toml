@@ -9,6 +9,7 @@ members = [
     "crates/hauksbee-frontdoor-api",
     "crates/hauksbee-server",
     "crates/hauksbee-engine",
+    "crates/hauksbee-tarski",
     "crates/hauksbee-ci",
     "crates/hauksbee-testkit",
     "crates/hauksbee-mcp",
