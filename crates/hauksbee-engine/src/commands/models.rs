@@ -719,6 +719,18 @@ pub fn resolve_checked(
     json: bool,
     requirement: ModelRequirement,
 ) -> anyhow::Result<()> {
+    resolve_checked_with_all(board_path, models_dir, json, false, requirement)
+}
+
+/// Variant used by the CLI's `--all` human-output switch. JSON intentionally
+/// ignores the switch and always preserves every per-component record.
+pub fn resolve_checked_with_all(
+    board_path: &Path,
+    models_dir: Option<&Path>,
+    json: bool,
+    all: bool,
+    requirement: ModelRequirement,
+) -> anyhow::Result<()> {
     // The shared board-input normalizer. A private mini board-code compile +
     // schematic dispatch here would leave `models resolve` accepting a
     // different format set than `run` (no Altium, no gerber, no zipped
@@ -738,7 +750,14 @@ pub fn resolve_checked(
         }
         println!("{value}");
     } else {
-        print!("{}", resolve_report(&lib, &board));
+        print!(
+            "{}",
+            if all {
+                resolve_report_all(&lib, &board)
+            } else {
+                resolve_report(&lib, &board)
+            }
+        );
         for refusal in &refusals {
             eprintln!(
                 "REFUSED {} ({}): {}",
@@ -1010,19 +1029,34 @@ pub fn box_table(headers: &[&str], rows: &[Vec<String>]) -> String {
 
 /// The `models resolve` table, separated from I/O so tests can assert on it.
 pub fn resolve_report(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) -> String {
+    resolve_report_with_all(lib, board, false)
+}
+
+/// Full historical human table, selected explicitly by `models resolve --all`.
+pub fn resolve_report_all(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) -> String {
+    resolve_report_with_all(lib, board, true)
+}
+
+fn resolve_report_with_all(
+    lib: &ModelLibrary,
+    board: &hauksbee_extract::ExtractedBoard,
+    all: bool,
+) -> String {
     let mut out = String::from(
         "layer priority: builtin(0) < pack(10) < user-dir(20) < user-config-dir(25) < \
          models-dir(30) < spice(40); specificity breaks ties within a layer\n",
     );
-    let rows: Vec<Vec<String>> = resolve_rows(lib, board)
-        .into_iter()
+    let resolved = resolve_rows(lib, board);
+    let rows: Vec<Vec<String>> = resolved
+        .iter()
+        .filter(|row| all || bulk_fallback_passive_kind(row).is_none())
         .map(|r| {
             vec![
-                r.reference,
-                r.value,
-                r.model,
-                r.layer,
-                r.origin,
+                r.reference.clone(),
+                r.value.clone(),
+                r.model.clone(),
+                r.layer.clone(),
+                r.origin.clone(),
                 r.source.tier().to_string(),
                 r.source.validation().to_string(),
                 uncertainty_label(&r.source),
@@ -1042,7 +1076,58 @@ pub fn resolve_report(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoa
         ],
         &rows,
     ));
+    if !all {
+        let mut capacitors = 0usize;
+        let mut resistors = 0usize;
+        let mut inductors = 0usize;
+        for row in &resolved {
+            match bulk_fallback_passive_kind(row) {
+                Some("capacitor") => capacitors += 1,
+                Some("resistor") => resistors += 1,
+                Some("inductor") => inductors += 1,
+                Some(_) | None => {}
+            }
+        }
+        let total = capacitors + resistors + inductors;
+        if total > 0 {
+            let mut kinds = Vec::new();
+            if capacitors > 0 {
+                kinds.push(format!(
+                    "{capacitors} capacitor{}",
+                    if capacitors == 1 { "" } else { "s" }
+                ));
+            }
+            if resistors > 0 {
+                kinds.push(format!(
+                    "{resistors} resistor{}",
+                    if resistors == 1 { "" } else { "s" }
+                ));
+            }
+            if inductors > 0 {
+                kinds.push(format!(
+                    "{inductors} inductor{}",
+                    if inductors == 1 { "" } else { "s" }
+                ));
+            }
+            out.push_str(&format!(
+                "{total} passives bound by footprint/value fallback: {}. Use --all to show every component row.\n",
+                kinds.join(", ")
+            ));
+        }
+    }
     out
+}
+
+fn bulk_fallback_passive_kind(row: &ResolveRow) -> Option<&'static str> {
+    if row.source.tier() != ModelSourceTier::EstimatedFallback {
+        return None;
+    }
+    match row.model.as_str() {
+        "c_fallback" => Some("capacitor"),
+        "r_fallback" => Some("resistor"),
+        "l_fallback" => Some("inductor"),
+        _ => None,
+    }
 }
 
 /// The `models resolve --json` object: the same rows as the text table, plus a
@@ -2677,8 +2762,8 @@ fn shell_quote(text: &str) -> String {
 mod tests {
     use super::box_table;
     use super::{
-        draft_model_upgrade, escape_regex, prepare_approval, sanitise_id,
-        scaffold_property_match_rules, toml_quote,
+        draft_model_upgrade, escape_regex, prepare_approval, resolve_report, resolve_report_all,
+        sanitise_id, scaffold_property_match_rules, toml_quote,
     };
 
     #[test]
@@ -2781,6 +2866,51 @@ mod tests {
         // Natural reference order: R2 before R10, groups by prefix.
         assert!(natural_ref_key("R2") < natural_ref_key("R10"));
         assert!(natural_ref_key("C1") < natural_ref_key("R1"));
+    }
+
+    #[test]
+    fn models_resolve_default_hides_bulk_passives_and_all_restores_them() {
+        let component = |reference: &str, value: &str, lib_id: &str, footprint: &str| {
+            hauksbee_extract::Component {
+                reference: reference.to_string(),
+                value: value.to_string(),
+                lib_id: lib_id.to_string(),
+                footprint: footprint.to_string(),
+                position: None,
+                layer: "F.Cu".to_string(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: Vec::new(),
+            }
+        };
+        let board = hauksbee_extract::ExtractedBoard {
+            name: "resolve-volume".to_string(),
+            nets: Vec::new(),
+            components: vec![
+                component("C1", "100 nF", "", ""),
+                component("R1", "10 k", "", ""),
+                component("U1", "MYSTERY", "", "Package_QFN:QFN-16"),
+            ],
+        };
+        let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
+        let compact = resolve_report(&lib, &board);
+        let all = resolve_report_all(&lib, &board);
+
+        assert!(
+            compact.contains("UNRESOLVED") && compact.contains("U1"),
+            "{compact}"
+        );
+        assert!(
+            !compact.contains("│ C1 ") && !compact.contains("│ R1 "),
+            "{compact}"
+        );
+        assert!(
+            compact
+                .contains("2 passives bound by footprint/value fallback: 1 capacitor, 1 resistor"),
+            "{compact}"
+        );
+        assert!(all.contains("│ C1 ") && all.contains("│ R1 "), "{all}");
+        assert!(!all.contains("Use --all"), "{all}");
     }
 
     /// Lint a descriptor source the way `models lint` does, from the parse

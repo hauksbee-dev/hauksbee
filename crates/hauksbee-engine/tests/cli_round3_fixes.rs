@@ -320,7 +320,7 @@ fn quiet_keeps_summary_but_suppresses_per_item_evidence_appendix() {
         "appendix must be hidden:\n{text}"
     );
     assert!(
-        text.contains("rerun without --quiet to show the per-item evidence appendix"),
+        text.contains("rerun without --quiet to show the compact evidence appendix"),
         "the recovery instruction remains:\n{text}"
     );
 }

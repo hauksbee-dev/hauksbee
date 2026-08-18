@@ -94,7 +94,10 @@ pub(crate) fn emit_quiet(
             }
             eprintln!("  run --list-nets to see every net name, then re-run.");
             eprintln!("{}", refusal.render_text());
-            print!("{}", super::render_evidence_appendix(evidence, quiet));
+            print!(
+                "{}",
+                super::render_evidence_appendix(evidence, quiet, false)
+            );
         }
         crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
@@ -184,7 +187,10 @@ pub(crate) fn emit_quiet(
                  run `--list-nets` to see every net name, then re-run.)"
             );
             eprintln!("{}", refusal.render_text());
-            print!("{}", super::render_evidence_appendix(evidence, quiet));
+            print!(
+                "{}",
+                super::render_evidence_appendix(evidence, quiet, false)
+            );
         }
         crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
@@ -224,7 +230,10 @@ pub(crate) fn emit_quiet(
                 crate::result::AC_FLOOR_DB
             );
             eprintln!("{}", refusal.render_text());
-            print!("{}", super::render_evidence_appendix(evidence, quiet));
+            print!(
+                "{}",
+                super::render_evidence_appendix(evidence, quiet, false)
+            );
         }
         crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
@@ -270,7 +279,10 @@ pub(crate) fn emit_quiet(
                      ICs with --models-dir, then re-run.)"
                 );
                 eprintln!("{}", refusal.render_text());
-                print!("{}", super::render_evidence_appendix(evidence, quiet));
+                print!(
+                    "{}",
+                    super::render_evidence_appendix(evidence, quiet, false)
+                );
             }
             crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
         }
@@ -463,7 +475,7 @@ pub(crate) fn emit_quiet(
 
     print!(
         "{}",
-        super::render_evidence_appendix(&report_evidence, quiet)
+        super::render_evidence_appendix(&report_evidence, quiet, false)
     );
 
     Ok(())

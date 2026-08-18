@@ -568,7 +568,7 @@ fn exchange_fixture() -> PathBuf {
 }
 
 #[test]
-fn ipc2581_reader_coverage_reaches_cli_json_and_plain_end_to_end() {
+fn ipc2581_reader_coverage_stays_full_in_json_and_scoped_in_plain() {
     let fixture = exchange_fixture();
     for mode in ["--json", "--plain"] {
         let output = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
@@ -581,12 +581,21 @@ fn ipc2581_reader_coverage_reaches_cli_json_and_plain_end_to_end() {
             String::from_utf8_lossy(&output.stderr)
         );
         let text = String::from_utf8_lossy(&output.stdout);
-        assert!(text.contains("not-checked:drc"), "{mode}: {text}");
-        assert!(text.contains("The drc check did not run"), "{mode}: {text}");
-        assert!(
-            text.contains("Binding completeness for net"),
-            "{mode}: {text}"
-        );
+        if mode == "--json" {
+            assert!(text.contains("not-checked:drc"), "{mode}: {text}");
+            assert!(text.contains("The drc check did not run"), "{mode}: {text}");
+            assert!(
+                text.contains("Binding completeness for net"),
+                "{mode}: {text}"
+            );
+        } else {
+            assert!(
+                !text.contains("The drc check did not run"),
+                "bind-only human output must omit unrelated DRC provenance: {text}"
+            );
+            assert!(text.contains("Evidence coverage:"), "{mode}: {text}");
+            assert!(text.contains("surface's --json output"), "{mode}: {text}");
+        }
     }
 }
 
@@ -618,11 +627,33 @@ fn specialist_report_surfaces_reuse_the_reader_assumption() {
             String::from_utf8_lossy(&output.stderr)
         );
         let text = String::from_utf8_lossy(&output.stdout);
-        assert!(text.contains("not-checked:drc"), "{args:?}: {text}");
-        assert!(
-            text.contains("The drc check did not run"),
-            "{args:?}: {text}"
-        );
+        if args.contains(&"--json") {
+            assert!(text.contains("not-checked:drc"), "{args:?}: {text}");
+            assert!(
+                text.contains("The drc check did not run"),
+                "{args:?}: {text}"
+            );
+        } else if args.contains(&"--drc") {
+            assert!(
+                text.contains("[not-checked] The drc check did not run"),
+                "{args:?}: {text}"
+            );
+        } else if args.contains(&"--si") {
+            assert!(
+                text.contains("[not-checked] The si check did not run"),
+                "{args:?}: {text}"
+            );
+            assert!(
+                !text.contains("The drc check did not run"),
+                "{args:?}: {text}"
+            );
+        } else {
+            assert!(
+                !text.contains("The drc check did not run"),
+                "unrelated DRC provenance leaked onto {args:?}: {text}"
+            );
+            assert!(text.contains("Evidence coverage:"), "{args:?}: {text}");
+        }
     }
 }
 

@@ -77,6 +77,7 @@ pub fn emit_with_schematic(
         strict,
         verbose,
         false,
+        false,
         inputs,
         schematic_ties,
     )
@@ -95,6 +96,7 @@ pub(crate) fn emit_with_schematic_quiet(
     mode: OutputMode,
     strict: bool,
     verbose: bool,
+    oracle: bool,
     quiet: bool,
     inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
@@ -148,11 +150,19 @@ pub(crate) fn emit_with_schematic_quiet(
     let mut waivers = load_waivers(board_path);
     let mut lint = lint;
     let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
-    let drc_structured = DrcStructured::from_report_with_ties(
+    let mut drc_structured = DrcStructured::from_report_with_ties(
         &drc,
         qualification.as_ref(),
         text.contains("<eagle") && schematic_ties.is_none(),
     );
+    let oracle_summary = (oracle && mode != OutputMode::Json).then(|| {
+        super::drc::oracle_cross_check_and_annotate(
+            board_path,
+            &drc,
+            &mut drc_structured,
+            qualification.as_ref(),
+        )
+    });
     let mut actual_findings = lint_findings_json(&lint);
     actual_findings.extend(si_findings_json(&si));
     actual_findings.extend(usbc.as_ref().and_then(usbc_finding_json));
@@ -188,10 +198,14 @@ pub(crate) fn emit_with_schematic_quiet(
     // machine document can state the same outcome the exit code will. It is
     // wider than the `serious` severity on purpose (medium lint findings, any
     // SI finding), which is why the verdict has to be told about it. An
-    // unvalidated board format (KiCad 10+) yields possibly-phantom shorts and
-    // does not gate; the caveat is printed instead.
+    // An unvalidated board format (KiCad 10+) yields possibly-phantom shorts
+    // that do not gate unless KiCad's own DRC confirms the exact net pair; the
+    // unmatched caveat is printed instead.
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-    let drc_gates = drc_gate_fails(&drc, qualification.as_ref());
+    let drc_gates = drc_structured
+        .shorts
+        .iter()
+        .any(|short| short.severity == "serious");
     let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     match mode {
         OutputMode::Json => {
@@ -200,7 +214,7 @@ pub(crate) fn emit_with_schematic_quiet(
                 .with_surface_gate(would_gate)
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
-            jr.drc = Some(drc_structured);
+            jr.drc = Some(drc_structured.clone());
             if unrouted {
                 jr.notes.push(crate::result::JsonNote {
                     kind: crate::result::JsonNoteKind::Coverage,
@@ -220,6 +234,19 @@ pub(crate) fn emit_with_schematic_quiet(
             println!("{}", jr.to_json());
         }
         OutputMode::Plain => {
+            let usbc_reliable = super::usb_c::scoped_blockers(board, &blockers).is_empty();
+            print!(
+                "{}",
+                crate::plain::order_triage(
+                    &drc_structured,
+                    &lint,
+                    &si,
+                    usbc.as_ref(),
+                    usbc_reliable,
+                    summary.unresolved,
+                )
+                .render()
+            );
             // Bind-role honesty (Marco): the plain persona surface must not hide
             // that active ICs are unmodelled, otherwise `--check --plain` reads
             // "healthy" while firmware/analog/AC/thermal on their nets are
@@ -244,6 +271,9 @@ pub(crate) fn emit_with_schematic_quiet(
                 println!("{}", super::UNROUTED_COPPER_NOTE);
             }
             print!("{}", crate::render_drc_condensed(&drc_structured, verbose));
+            if let Some(summary) = &oracle_summary {
+                print!("{summary}");
+            }
             println!("\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==");
             let mut lint_plain = crate::plain_netlint(&lint);
             lint_plain.unmodelled_critical = blockers.clone();
@@ -269,13 +299,25 @@ pub(crate) fn emit_with_schematic_quiet(
             );
         }
         OutputMode::Text => {
-            print!("{}", bound.report.render_table());
+            let mut display_report = bound.report.clone();
+            super::bind::mark_decode_only_rows(&mut display_report, &lint);
+            print!(
+                "{}",
+                if verbose {
+                    display_report.render_table()
+                } else {
+                    display_report.render_table_compact()
+                }
+            );
             print!("{}", summary.render_banner());
             println!("\n== Copper spacing (DRC) ==");
             if unrouted {
                 println!("{}", super::UNROUTED_COPPER_NOTE);
             }
             print!("{}", drc_structured.render());
+            if let Some(summary) = &oracle_summary {
+                print!("{summary}");
+            }
             println!("\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==");
             // Verdict first in each model-dependent section: the extract body's
             // "no findings." must sit under the refusal, not above it.
@@ -302,7 +344,10 @@ pub(crate) fn emit_with_schematic_quiet(
         actual_findings.iter().any(|f| f.message == a)
     });
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", super::render_evidence_appendix(&evidence, quiet));
+        print!(
+            "{}",
+            super::render_evidence_appendix(&evidence, quiet, verbose)
+        );
         print!("{}", render_waivers(&waived, &waivers));
         // One verdict line to end on (U4), matching the web/TUI verdict shape:
         // the last thing `--check` prints answers "is my board ok" without
@@ -321,10 +366,7 @@ pub(crate) fn emit_with_schematic_quiet(
     }
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
-        super::strict_gate_exit(
-            mode,
-            &gate_items(drc_gates, &drc, qualification.as_ref(), &lint, &si, &usbc),
-        );
+        super::strict_gate_exit(mode, &gate_items(&drc_structured, &lint, &si, &usbc));
     }
     // Exit 3 on the SAME rule the JSON verdict uses (run-level undermined
     // evidence or unbound verdict-critical parts), not on any undermined map:
@@ -402,11 +444,14 @@ fn verdict_line(
     if let Some(reason) = copper_unvalidated {
         return if serious == 0 {
             format!(
-                "VERDICT: copper UNVALIDATED: {worth_a_look} potential issue(s); none of the copper findings counted as serious BECAUSE unvalidated. Reason: {reason}"
+                "VERDICT: copper UNVALIDATED: {worth_a_look} potential issue(s); unmatched \
+                 copper findings remain tool-only and none counted as serious. Reason: {reason}"
             )
         } else {
             format!(
-                "VERDICT: failing: {serious} serious issue(s) outside the demoted copper findings; copper remains UNVALIDATED with {worth_a_look} potential issue(s). Reason: {reason}"
+                "VERDICT: failing: {serious} serious issue(s); pair-specific oracle-confirmed \
+                 shorts count as serious, while unmatched copper findings remain UNVALIDATED \
+                 among {worth_a_look} worth-a-look issue(s). Reason: {reason}"
             )
         };
     }
@@ -434,18 +479,12 @@ fn verdict_line(
 /// Every gating subject across the aggregate suite, in report order
 /// (DRC shorts, lint, SI, USB-C), for the `--strict` failure line.
 fn gate_items(
-    drc_gates: bool,
-    drc: &hauksbee_extract::DrcReport,
-    qualification: Option<&hauksbee_extract::DrcTieQualification>,
+    drc: &DrcStructured,
     lint: &hauksbee_extract::NetLintReport,
     si: &hauksbee_extract::SiReport,
     usbc: &Option<crate::checks::usb_c::UsbcReport>,
 ) -> Vec<String> {
-    let mut items = if drc_gates {
-        super::drc_gate_items_with_ties(drc, qualification)
-    } else {
-        Vec::new()
-    };
+    let mut items = super::drc_structured_gate_items(drc);
     items.extend(super::lint_gate_items(lint));
     items.extend(super::si_gate_items(si));
     if let Some(u) = usbc {
@@ -966,7 +1005,7 @@ pub fn emit_combined_json_with_schematic(
         .with_surface_gate(would_gate)
         .with_inputs(inputs)
         .with_evidence(&evidence);
-    jr.drc = Some(drc_structured);
+    jr.drc = Some(drc_structured.clone());
     jr.findings = Some(findings);
     if !blockers.is_empty() {
         jr.notes.push(crate::result::JsonNote {
@@ -985,7 +1024,7 @@ pub fn emit_combined_json_with_schematic(
     if strict && would_gate {
         super::strict_gate_exit(
             OutputMode::Json,
-            &gate_items(drc_gates, &drc, qualification.as_ref(), &lint, &si, &usbc),
+            &gate_items(&drc_structured, &lint, &si, &usbc),
         );
     }
     let strict_invalid = crate::result::run_level_undermined(evidence.maps(), |a| {

@@ -531,6 +531,10 @@ struct ModelsResolveArgs {
     /// uncertainty intervals. Unknown accuracy is never converted to a guess.
     #[arg(long)]
     require_model_intervals: bool,
+    /// Show every component row, including bulk resistor/capacitor/inductor
+    /// footprint/value fallbacks that the default table rolls up by type.
+    #[arg(long)]
+    all: bool,
     /// Emit the resolution as one JSON object ({"components":[{"ref","value",
     /// "model","layer","origin"}]}) instead of the text table. A component the
     /// binder could not resolve carries model "UNRESOLVED".
@@ -768,7 +772,8 @@ struct RunArgs {
     #[arg(long, help_heading = "Co-simulation")]
     headless: bool,
 
-    /// Print the bind report table (every component -> device model) and exit.
+    /// Print the bind report table and exit. Bulk passive fallbacks are rolled
+    /// up by default; add --verbose to show every component row.
     #[arg(long, group = "report_mode", help_heading = "Reports")]
     report: bool,
 
@@ -821,9 +826,9 @@ struct RunArgs {
     #[arg(long, visible_alias = "explain", help_heading = "Start here")]
     plain: bool,
 
-    /// With --plain --drc (or --check): print every clearance finding in full.
-    /// By default, repeated near-identical clearance warnings condense to one
-    /// aggregated line per rule and layer after the first few.
+    /// Print full-detail human output: every clearance finding under --plain
+    /// --drc/--check, every bind row under --report/--check text, and the full
+    /// per-item evidence appendix. Defaults condense those repeated records.
     #[arg(long, help_heading = "Reports")]
     verbose: bool,
 
@@ -895,7 +900,7 @@ struct RunArgs {
     /// oracle) and print whether they agree, so a copper finding is self-confirming
     /// without running a second tool by hand. Uses a `kicad-cli` found on PATH or
     /// in a standard install location (newest version preferred); KiCad is NOT
-    /// bundled. No-op unless paired with `--drc`.
+    /// bundled. No-op unless paired with `--drc` or `--check`.
     #[arg(
         long,
         help_heading = "Advanced / analyses",
@@ -1551,16 +1556,19 @@ fn main() -> anyhow::Result<()> {
             ModelsCommand::Add(args) => hauksbee_engine::commands::models::add(&args.source),
             ModelsCommand::Remove(args) => hauksbee_engine::commands::models::remove(&args.name),
             ModelsCommand::List(args) => hauksbee_engine::commands::models::list(args.builtin),
-            ModelsCommand::Resolve(args) => hauksbee_engine::commands::models::resolve_checked(
-                &args.board,
-                args.models_dir.as_deref(),
-                args.json,
-                hauksbee_engine::commands::models::ModelRequirement {
-                    minimum_tier: args.min_model_tier,
-                    minimum_validation: args.min_model_validation,
-                    require_intervals: args.require_model_intervals,
-                },
-            ),
+            ModelsCommand::Resolve(args) => {
+                hauksbee_engine::commands::models::resolve_checked_with_all(
+                    &args.board,
+                    args.models_dir.as_deref(),
+                    args.json,
+                    args.all,
+                    hauksbee_engine::commands::models::ModelRequirement {
+                        minimum_tier: args.min_model_tier,
+                        minimum_validation: args.min_model_validation,
+                        require_intervals: args.require_model_intervals,
+                    },
+                )
+            }
             ModelsCommand::New(args) => hauksbee_engine::commands::models::new_with_kind(
                 &args.reference,
                 &args.board,

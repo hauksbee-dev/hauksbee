@@ -102,6 +102,8 @@ pub(crate) fn emit_quiet(
     // unchanged; under it these blockers exit 3, matching the verdict field.
     let blockers =
         crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
+    let human_maps = evidence.maps_for_findings(&lint_findings_json(&report))?;
+    let human_evidence = evidence.clone().with_maps(human_maps);
     match mode {
         OutputMode::Json => {
             println!(
@@ -134,7 +136,10 @@ pub(crate) fn emit_quiet(
                 "{}",
                 super::check::render_waivers_scoped(&waived, &waivers, &["lint"], true)
             );
-            print!("{}", super::render_evidence_appendix(&evidence, quiet));
+            print!(
+                "{}",
+                super::render_evidence_appendix(&human_evidence, quiet, false)
+            );
         }
     }
     super::note_ungated_findings(strict, lint_fails(&report));
@@ -306,6 +311,8 @@ pub(crate) fn emit_resources_quiet(
     // verdict is just as vacuous over an unmodelled critical part.
     let blockers =
         crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
+    let human_maps = evidence.maps_for_findings(&lint_findings_json(&report))?;
+    let human_evidence = evidence.clone().with_maps(human_maps);
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
@@ -356,7 +363,10 @@ pub(crate) fn emit_resources_quiet(
         }
     }
     if !matches!(mode, OutputMode::Json) {
-        print!("{}", super::render_evidence_appendix(&evidence, quiet));
+        print!(
+            "{}",
+            super::render_evidence_appendix(&human_evidence, quiet, false)
+        );
         // No stale reporting here: --resources runs only part of the lint
         // family, so a lint waiver with no hit may simply belong to a check
         // this command never ran.
