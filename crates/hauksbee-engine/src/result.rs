@@ -1136,6 +1136,16 @@ pub struct DrcShort {
     pub fix: String,
 }
 
+const ORACLE_AGREEMENT_MARKER: &str = "ORACLE AGREEMENT: ";
+
+impl DrcShort {
+    pub(crate) fn oracle_agreement(&self) -> Option<&str> {
+        self.plain
+            .split_once(ORACLE_AGREEMENT_MARKER)
+            .map(|(_, agreement)| agreement)
+    }
+}
+
 /// A group of clearance findings that share (net_a, net_b, layer, root cause),
 /// collapsed to one line with a count. `at_limit` separates `gap == rule` (no
 /// margin, but not below) from genuine sub-clearance violations.
@@ -1454,8 +1464,16 @@ impl DrcStructured {
                 // calling it a defect. The declaration is appended to it.
                 let _ = writeln!(
                     s,
-                    "  [{tag}] {} touches {} on {} (gap {:.4} mm) at x={:.1}, y={:.1}",
-                    sh.net_a, sh.net_b, sh.layer, sh.gap_mm, sh.loc_mm[0], sh.loc_mm[1]
+                    "  [{tag}] {} touches {} on {} (gap {:.4} mm) at x={:.1}, y={:.1}{}",
+                    sh.net_a,
+                    sh.net_b,
+                    sh.layer,
+                    sh.gap_mm,
+                    sh.loc_mm[0],
+                    sh.loc_mm[1],
+                    sh.oracle_agreement()
+                        .map(|agreement| format!("; {agreement}"))
+                        .unwrap_or_default()
                 );
             }
         }

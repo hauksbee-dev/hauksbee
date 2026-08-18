@@ -20,6 +20,23 @@ pub fn emit(
     json: bool,
     inputs: &[crate::result::JsonInputEvidence],
 ) -> anyhow::Result<()> {
+    emit_quiet(
+        bound, evidence, ac_arg, ac_nodes, csv, ac_loop, json, false, inputs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_quiet(
+    bound: &crate::BoundBoard,
+    evidence: &crate::evidence::BoardEvidence,
+    ac_arg: &str,
+    ac_nodes: &[String],
+    csv: Option<&Path>,
+    ac_loop: Option<&str>,
+    json: bool,
+    quiet: bool,
+    inputs: &[crate::result::JsonInputEvidence],
+) -> anyhow::Result<()> {
     use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions};
 
     let spec = AcSpec::parse(ac_arg).map_err(|e| anyhow::anyhow!("--ac: {e}"))?;
@@ -77,7 +94,7 @@ pub fn emit(
             }
             eprintln!("  run --list-nets to see every net name, then re-run.");
             eprintln!("{}", refusal.render_text());
-            print!("{}", evidence.render_plain());
+            print!("{}", super::render_evidence_appendix(evidence, quiet));
         }
         crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
@@ -167,7 +184,7 @@ pub fn emit(
                  run `--list-nets` to see every net name, then re-run.)"
             );
             eprintln!("{}", refusal.render_text());
-            print!("{}", evidence.render_plain());
+            print!("{}", super::render_evidence_appendix(evidence, quiet));
         }
         crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
@@ -207,7 +224,7 @@ pub fn emit(
                 crate::result::AC_FLOOR_DB
             );
             eprintln!("{}", refusal.render_text());
-            print!("{}", evidence.render_plain());
+            print!("{}", super::render_evidence_appendix(evidence, quiet));
         }
         crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
     }
@@ -253,7 +270,7 @@ pub fn emit(
                      ICs with --models-dir, then re-run.)"
                 );
                 eprintln!("{}", refusal.render_text());
-                print!("{}", evidence.render_plain());
+                print!("{}", super::render_evidence_appendix(evidence, quiet));
             }
             crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
         }
@@ -444,7 +461,10 @@ pub fn emit(
         }
     }
 
-    print!("{}", report_evidence.render_plain());
+    print!(
+        "{}",
+        super::render_evidence_appendix(&report_evidence, quiet)
+    );
 
     Ok(())
 }

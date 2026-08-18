@@ -210,6 +210,7 @@ pub(crate) fn build_live_simulation(
 
 pub(crate) fn run_selected_simulation_surface(
     cfg: &RunConfig,
+    quiet: bool,
     surface: SelectedSurface,
     run_inputs: &RunInputs,
     artifacts: &super::prepare::RunArtifacts,
@@ -223,13 +224,15 @@ pub(crate) fn run_selected_simulation_surface(
     // unless --no-strict-thermal opts out (--strict-thermal is accepted as a
     // quiet no-op so existing CI invocations keep working).
     if surface == SelectedSurface::Thermal {
-        crate::reports::thermal::emit(
+        crate::reports::thermal::emit_quiet(
             &mut sim.engine,
             &sim.board_evidence,
             cfg.ambient,
             cfg.seconds,
             cfg.json,
+            cfg.plain,
             !cfg.no_strict_thermal,
+            quiet,
             &run_inputs.inputs,
         )?;
         return Ok(true);
@@ -260,7 +263,7 @@ pub(crate) fn run_selected_simulation_surface(
         return Ok(true);
     }
     if surface == SelectedSurface::Headless {
-        super::cosim::run_headless(cfg, run_inputs, artifacts, sim)?;
+        super::cosim::run_headless(cfg, quiet, run_inputs, artifacts, sim)?;
         return Ok(true);
     }
     Ok(false)

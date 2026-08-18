@@ -296,7 +296,6 @@ fn artifact_flags_without_their_analysis_are_errors() {
         &["--ac-csv", "/tmp/x.csv"],
         &["--ac-node", "OUT"],
         &["--ampacity", "--json"],
-        &["--ampacity", "--plain"],
     ];
     for extra in cases {
         let mut args = vec!["run", b.to_str().unwrap()];

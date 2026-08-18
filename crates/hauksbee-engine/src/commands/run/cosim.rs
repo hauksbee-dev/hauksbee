@@ -42,6 +42,7 @@ pub(super) struct EvidenceArtifacts {
 
 pub(crate) fn run_headless(
     cfg: &RunConfig,
+    quiet: bool,
     run_inputs: &RunInputs,
     artifacts: &RunArtifacts,
     sim: &mut SimulationContext,
@@ -49,7 +50,7 @@ pub(crate) fn run_headless(
     let observations = execute_and_collect_observations(cfg, run_inputs, sim)?;
     let evidence = assemble_evidence_and_ci_artifacts(cfg, artifacts, sim, &observations)?;
     emit_report(cfg, run_inputs, sim, &observations, &evidence);
-    emit_evidence(cfg, &evidence);
+    emit_evidence(cfg, quiet, &evidence);
     super::cosim_gates::enforce_gates(cfg, sim, &observations, &evidence);
     Ok(())
 }
@@ -676,8 +677,11 @@ fn emit_report(
     }
 }
 
-fn emit_evidence(cfg: &RunConfig, evidence: &EvidenceArtifacts) {
+fn emit_evidence(cfg: &RunConfig, quiet: bool, evidence: &EvidenceArtifacts) {
     if !cfg.json {
-        print!("{}", evidence.run_evidence.render_plain());
+        print!(
+            "{}",
+            crate::reports::render_evidence_appendix(&evidence.run_evidence, quiet)
+        );
     }
 }

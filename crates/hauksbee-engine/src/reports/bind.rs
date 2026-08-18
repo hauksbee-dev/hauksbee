@@ -19,6 +19,17 @@ pub fn emit(
     mode: OutputMode,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
+    emit_quiet(board, lib, reader_notes, mode, false, inputs)
+}
+
+pub(crate) fn emit_quiet(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    quiet: bool,
+    inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
     let evidence = crate::evidence::BoardEvidence::from_bound(
@@ -85,7 +96,7 @@ pub fn emit(
                     println!("Bottom line: no active ICs to model; this is a passive board.");
                 }
             }
-            print!("{}", evidence.render_plain());
+            print!("{}", super::render_evidence_appendix(&evidence, quiet));
         }
     }
     Ok(())
