@@ -96,6 +96,7 @@ pub struct LiveHub {
 }
 
 impl LiveHub {
+    // LiveHub::new returns Arc<LiveHub>, so implementing Default would be the wrong trait.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Arc<LiveHub> {
         Arc::new(LiveHub {
@@ -369,7 +370,6 @@ impl Server {
 
     /// Serve the unified app router (WebSocket sim included). Used by
     /// `hauksbee run --serve`, where a board is preloaded.
-    #[allow(clippy::too_many_arguments)]
     pub async fn serve_app(
         &self,
         addr: &str,
@@ -399,7 +399,6 @@ impl Server {
     /// [`bind_frontdoor`], so the caller can print the *actually bound* URL
     /// before the server takes over the thread (the requested port may have
     /// been busy and replaced by a fallback).
-    #[allow(clippy::too_many_arguments)]
     pub async fn serve_app_on(
         &self,
         listener: tokio::net::TcpListener,
@@ -426,7 +425,6 @@ impl Server {
 
     /// Schematic-aware counterpart to [`Self::serve_app_on`]. Kept separate so
     /// existing embedders retain their public callback signatures.
-    #[allow(clippy::too_many_arguments)]
     pub async fn serve_app_on_with_schematic(
         &self,
         listener: tokio::net::TcpListener,
@@ -461,7 +459,6 @@ impl Server {
 /// user launches an uploaded board. `launch` mounts the `/api/live/*` routes
 /// that fill (or replace) the hub's session server-side; a deployment without
 /// the callback keeps the CLI-hint fallback in the frontend.
-#[allow(clippy::too_many_arguments)]
 fn unified_router(
     hub: Option<Arc<LiveHub>>,
     static_dir: Option<&Path>,
@@ -653,7 +650,6 @@ pub async fn serve_frontdoor_on(
 /// Schematic-aware standalone front door. Existing callers keep using
 /// [`serve_frontdoor_on`]; the shipped engine uses this path so an uploaded
 /// Eagle `.sch` reaches both report analysis and live launch.
-#[allow(clippy::too_many_arguments)]
 pub async fn serve_frontdoor_on_with_schematic(
     listener: tokio::net::TcpListener,
     static_dir: Option<&Path>,

@@ -2311,7 +2311,6 @@ impl<'a> Plotter<'a> {
     /// Single-quadrant (G74) centre selection: try the four ±I,±J offsets and
     /// return the one whose start/end radii agree best while keeping the arc
     /// sweep within 90 degrees. `None` if no candidate has a positive radius.
-    #[allow(clippy::too_many_arguments)]
     fn single_quadrant_center(
         &self,
         sx: f64,
@@ -2376,7 +2375,6 @@ impl<'a> Plotter<'a> {
     /// arc lands on byte-identical points to the same arc drawn as a track.
     /// `None` when the radius degenerates (centre on the start point): the
     /// "arc" is then just its chord.
-    #[allow(clippy::too_many_arguments)]
     fn arc_params(
         &self,
         sx: f64,
@@ -2422,7 +2420,6 @@ impl<'a> Plotter<'a> {
     /// start through the endpoint (the start itself is NOT included, so the
     /// samples chain onto a path that already holds it). A degenerate radius
     /// yields just the endpoint; the chord.
-    #[allow(clippy::too_many_arguments)]
     fn arc_samples(
         &self,
         sx: f64,

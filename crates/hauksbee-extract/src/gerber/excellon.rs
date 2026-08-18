@@ -780,7 +780,6 @@ fn parse_tool_select(line: &str) -> Option<u32> {
 /// lines are how Altium's Excellon exporter compresses a column/row of holes,
 /// so without this almost every hole on such a file is dropped. Returns the
 /// resolved absolute (x, y) and updates the modal state.
-#[allow(clippy::too_many_arguments)]
 fn parse_xy_modal(
     line: &str,
     metric: bool,
