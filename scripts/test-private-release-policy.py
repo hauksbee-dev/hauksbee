@@ -336,6 +336,15 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             for line in board_block.splitlines()
             if line.strip().endswith(".rs") and "/tests/" in line
         ]
+        # The historical engine paths remain in BOARD_EXCLUDE so filter-repo
+        # removes them from older commits. At the current tip, resolve the six
+        # extracted suites from the private crate that now owns them.
+        absent_paths = [
+            path
+            if path.exists()
+            else ROOT / "crates" / "hauksbee-tarski" / "tests" / path.name
+            for path in absent_paths
+        ]
 
         disclosure = (ROOT / "docs/about/PRIVATE_SUITE.md").read_text()
         rows = {
