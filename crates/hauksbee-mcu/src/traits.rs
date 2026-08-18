@@ -240,7 +240,6 @@ pub trait Mcu {
     /// The default is a no-op for backends that cannot drive an input pin
     /// synchronously from within their run loop (Renode / QEMU push state once
     /// per chunk).
-    #[allow(clippy::type_complexity)]
     fn on_input_responder(
         &mut self,
         _responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>,
@@ -286,7 +285,6 @@ pub trait Mcu {
     /// externally observable final state. The default preserves source and
     /// single-edge behavior for existing backends, but does not make them
     /// atomic; see [`Mcu::input_responder_batches_atomic`].
-    #[allow(clippy::type_complexity)]
     fn on_input_responder_batch(
         &mut self,
         mut responder: Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>,
@@ -300,7 +298,6 @@ pub trait Mcu {
     /// is the new direction and `port_high` is the current output latch. A
     /// backend advertising [`Mcu::input_responder_tracks_direction`] must call
     /// this synchronously from the same hardware-register write.
-    #[allow(clippy::type_complexity)]
     fn on_input_responder_direction(
         &mut self,
         _responder: Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>,

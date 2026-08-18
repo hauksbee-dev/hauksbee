@@ -791,7 +791,6 @@ impl Assumption {
 
     /// Raw constructor, private on purpose: every public constructor below goes
     /// through it, so there is exactly one place a sentence set is assembled.
-    #[allow(clippy::too_many_arguments)]
     fn build(
         kind: AssumptionKind,
         source: AssumptionSource,
