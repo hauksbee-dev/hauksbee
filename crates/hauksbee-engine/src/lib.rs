@@ -50,8 +50,6 @@ pub mod scheduler;
 pub mod schematic_ties;
 pub mod shorts;
 pub mod stress;
-pub mod tarski_decomp;
-pub mod tarski_prep;
 pub mod thermal;
 pub mod tui;
 pub mod waiver;
