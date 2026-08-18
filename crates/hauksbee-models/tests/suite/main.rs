@@ -11,6 +11,7 @@
 
 mod analog_active_resolve;
 mod api_backend;
+mod bat54_family;
 mod bjt_regex_polarity;
 mod codex_behavioral_fixture;
 mod codex_prompt_delivery;
