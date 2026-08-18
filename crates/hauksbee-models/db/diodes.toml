@@ -299,11 +299,15 @@ kind = "diode"
 description = "BAT54 Schottky barrier diode, 30 V, 200 mA, SOT23"
 
 [models.match]
-# The plain single diode only. BAT54A, BAT54C and BAT54S are two diodes in one
-# SOT23 with three different internal connections, so they need their own pin
-# maps and must not silently bind here. BAT43 and the BAT4x parts are separate
-# devices with their own forward curves.
-value_re = "(?i)^BAT54(/DG)?$"
+# This regex engine has no look-around support, so the value pattern excludes
+# dual-die variants by enumerating legal first continuations after BAT54:
+# `-`, `/`, `,`, `W`, `J`, `H`, `L`, `T`, and `X`. A, C, and S are absent from
+# that class, so BAT54A/C/S and their suffixes fail; BAT54WS still matches
+# because W is the first continuation and S is consumed by the tail. The
+# footprint condition selects this 3-pin body card: the value string alone
+# cannot decide pad count across BAT54 package variants.
+value_re = "(?i)^(?:S|SB|NSV|T)?BAT54(?:[-/,WJHLTX][A-Z0-9,/-]*)?$"
+footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
 
 [models.params]
 # Source: Nexperia BAT54 datasheet, 1 July 2022, Table 7 "Characteristics".
@@ -338,6 +342,63 @@ max_power_w = 0.25              # Ptot at Tamb <= 25 C, Table 5
 max_voltage_v = 30.0            # VR, Table 5
 max_junction_temp_c = 150.0     # Tj, Table 5
 theta_ja_c_per_w = 500.0        # Rth(j-a) in free air, Table 6
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The same BAT54 die in a TWO-PIN body (SOD-523/SOD-323/SOD-123/SOD-323F). This
+# is a separate card rather than a wider match on the one above because the pad
+# map differs and the model's pad map wins over db/pin_rules.toml: a 2-pin part
+# bound to the SOT23 map would read pad 1 as the anode, leave the real anode as
+# `nc`, and let the 2-pin diode rule fill `cathode` from pad 1 as well, shorting
+# the diode across one net. Per-diode DC characteristics are the same worst-case
+# ladder as the SOT23 part (onsemi BAT54XV2T1G / BAT54T1G ELECTRICAL
+# CHARACTERISTICS agree with Nexperia's Table 7 to datasheet rounding); the
+# thermal limits are onsemi's own and are lower, so they are carried here rather
+# than inherited.
+#
+# Source: onsemi BAT54XV2T1G datasheet (bat54xv2t1-d.pdf), ORDERING INFORMATION,
+# MAXIMUM RATINGS and pinning (pin 1 cathode, pin 2 anode); VF ladder from the
+# same family's BAT54T1G ELECTRICAL CHARACTERISTICS table.
+[[models]]
+id = "bat54_2pin"
+kind = "diode"
+description = "BAT54 Schottky barrier diode, 30 V, 200 mA, 2-pin SOD body"
+
+[models.match]
+# This regex engine has no look-around support, so the value pattern excludes
+# dual-die variants by enumerating legal first continuations after BAT54:
+# `-`, `/`, `,`, `W`, `J`, `H`, `L`, `T`, and `X`. A, C, and S are absent from
+# that class, so BAT54A/C/S and their suffixes fail; BAT54WS still matches
+# because W is the first continuation and S is consumed by the tail. The
+# footprint condition selects this 2-pin SOD body card, keeping its pad map
+# separate from the 3-pin BAT54 card above.
+value_re = "(?i)^(?:S|SB|NSV|T)?BAT54(?:[-/,WJHLTX][A-Z0-9,/-]*)?$"
+footprint_re = "(?ix) SOD-?123 | SOD-?323 | SOD-?523 | SOD-?882 | D_SOD | ^Diode_SMD:D_SOD"
+
+[models.params]
+is  = 4.834e-9
+n   = 1.0
+rs  = 3.6
+cjo = 1.0e-11
+vj  = 0.4
+m   = 0.4
+tt  = 1.0e-11
+bv  = 30.0
+
+[models.pins]
+# 2-pin body: pad 1 is the cathode, pad 2 the anode (onsemi pinning, and the
+# KiCad Device:D convention the 2-pin rule in pin_rules.toml already encodes).
+"1" = "cathode"
+"2" = "anode"
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.2
+max_surge_current_a = 0.6
+max_power_w = 0.2               # onsemi PD, 2-pin SOD-523
+max_voltage_v = 30.0
+max_junction_temp_c = 125.0     # onsemi Tj max, lower than Nexperia's 150 C
+theta_ja_c_per_w = 635.0        # onsemi RthJA, FR-4 minimum pad
 
 # ─────────────────────────────────────────────────────────────────────────────
 # USBLC6-2P6: STMicroelectronics very-low-capacitance ESD protection array.
