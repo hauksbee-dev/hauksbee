@@ -144,17 +144,8 @@ def test_module_lines(text: str) -> set[int]:
     return inside
 
 
-# Known, deliberate exceptions: file -> reason. The flagship prep module is
-# scheduled for extraction into its own unpublished crate; until then its two
-# includes are the documented remainder of this audit finding.
-WAIVED = {
-    "crates/hauksbee-engine/src/tarski_prep.rs": "flagship extraction arc (unpublished crate) owns these",
-}
-
-
 def main() -> int:
     failures = []
-    waived_hits = []
     for crate_rel in CRATES:
         crate_root = (REPO / crate_rel).resolve()
         if not crate_root.is_dir():
@@ -173,9 +164,6 @@ def main() -> int:
                     exists = target.is_file()
                     if inside and exists:
                         continue
-                    if str(rel_rs) in WAIVED:
-                        waived_hits.append(f"{rel_rs}:{lineno} (waived: {WAIVED[str(rel_rs)]})")
-                        continue
                     if not inside:
                         failures.append(
                             f"{rel_rs}:{lineno}: include escapes the crate directory: "
@@ -185,8 +173,6 @@ def main() -> int:
                         failures.append(
                             f"{rel_rs}:{lineno}: include target does not exist: \"{m.group(1)}\""
                         )
-    for w in waived_hits:
-        print(f"waived: {w}")
     if failures:
         print(f"\n{len(failures)} package-breaking include(s):", file=sys.stderr)
         for f in failures:
