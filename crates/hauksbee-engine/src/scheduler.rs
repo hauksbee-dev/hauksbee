@@ -3950,7 +3950,7 @@ impl Scheduler {
             // difference between a diagnosable refusal and a chunk count (E29).
             // A fallback rung's own failure message is discarded by the ladder:
             // the primary's is the one that describes the board.
-            Err(msg) => Err((msg, final_x)),
+            Err(msg) => Err((msg.to_string(), final_x)),
         }
     }
 
@@ -5772,7 +5772,6 @@ impl Scheduler {
     /// count. Empty when no chain is clocked by the MCU (the once-per-chunk
     /// path handles it). Exposed for diagnostics and co-sim tests of the chain
     /// wiring (FIX 1).
-    #[allow(clippy::type_complexity)]
     pub fn hc595_chain_pins(
         &self,
     ) -> Vec<(
@@ -5792,7 +5791,6 @@ impl Scheduler {
     /// Per edge-driven 74HC165 read chain, the MCU GPIO `(port,bit)` bound to
     /// its PL, CLK, and MISO input, plus chip count. Empty when no MCU-clocked
     /// 165 chain was identified. For diagnostics and read-chain co-sim tests.
-    #[allow(clippy::type_complexity)]
     pub fn hc165_chain_pins(&self) -> Vec<((char, u8), (char, u8), (char, u8), usize)> {
         self.hc165_chains
             .iter()

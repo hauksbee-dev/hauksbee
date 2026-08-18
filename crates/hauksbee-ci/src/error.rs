@@ -15,6 +15,13 @@ pub enum SpecError {
         message: String,
     },
     Invalid(String),
+    /// The solver deliberately refused or failed an analysis. Keep the typed
+    /// source so the CLI can distinguish honesty refusals from malformed specs
+    /// without parsing the message.
+    Solver {
+        context: &'static str,
+        source: hauksbee_solve::SolveError,
+    },
     /// One or more referenced nets do not exist on the board. Each entry is
     /// (net, context, near-matches).
     UnknownNets(Vec<(String, &'static str, Vec<String>)>),
@@ -32,6 +39,9 @@ impl fmt::Display for SpecError {
                 write!(f, "could not parse spec {file}: {message}")
             }
             SpecError::Invalid(m) => write!(f, "invalid spec: {m}"),
+            SpecError::Solver { context, source } => {
+                write!(f, "invalid spec: {context}: {source}")
+            }
             SpecError::UnknownNets(items) => {
                 writeln!(f, "spec references net(s) not found on the board:")?;
                 for (net, ctx, suggestions) in items {
@@ -57,7 +67,51 @@ impl fmt::Display for SpecError {
     }
 }
 
-impl std::error::Error for SpecError {}
+impl std::error::Error for SpecError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Solver { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+impl SpecError {
+    /// CLI exit code for this pre-verdict error. A typed solver refusal means
+    /// the requested analysis is invalid (3); other setup/spec errors remain 2.
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Solver {
+                source: hauksbee_solve::SolveError::Refused { .. },
+                ..
+            } => hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS,
+            Self::Many(errors) => errors.iter().map(Self::exit_code).max().unwrap_or(2),
+            _ => 2,
+        }
+    }
+}
+
+#[cfg(test)]
+mod solver_exit_code_tests {
+    use super::*;
+
+    #[test]
+    fn solver_refusal_exit_code_uses_variant_not_message() {
+        let refusal = SpecError::Solver {
+            context: "AC analysis",
+            source: hauksbee_solve::SolveError::Refused {
+                message: "soundness could not be established".into(),
+            },
+        };
+        let misleading_text = SpecError::Invalid("user text says refused".into());
+
+        assert_eq!(
+            refusal.exit_code(),
+            hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS
+        );
+        assert_eq!(misleading_text.exit_code(), 2);
+    }
+}
 
 /// Return up to `limit` known names closest to `target`, ranked by edit
 /// distance, preferring substring/case-insensitive matches. Only returns names

@@ -27,7 +27,8 @@ use hauksbee_ir::{
 use hauksbee_solve::decompose::ConductionGraph;
 use hauksbee_solve::{
     dc_operating_point, run_tran, AcAnalysis, AcSpec, AssemblyMode, Integration, LinearIsland,
-    Partition, Partitioning, Probe, SolverOptions, StepControl, Sweep, Transient, Workspace,
+    Partition, Partitioning, Probe, SolveError, SolverOptions, StepControl, Sweep, Transient,
+    Workspace,
 };
 
 /// Driver leg: `V1 -> R -> ctrl` with a capacitor to ground; the island whose
@@ -454,7 +455,7 @@ fn dc_fault_names_the_device() {
     let mut ws = Workspace::new(&c);
     let err = dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap_err();
     assert!(
-        err.contains("behavioral source `B1`"),
+        matches!(&err, SolveError::Behavioral { device, .. } if device == "B1"),
         "the refusal must name the device: {err}"
     );
 }
@@ -473,7 +474,7 @@ fn dc_division_by_zero_names_the_device() {
     let mut ws = Workspace::new(&c);
     let err = dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap_err();
     assert!(
-        err.contains("behavioral source `Bdiv`"),
+        matches!(&err, SolveError::Behavioral { device, .. } if device == "Bdiv"),
         "the refusal must name the device: {err}"
     );
 }
@@ -501,7 +502,7 @@ fn transient_fault_names_the_device_and_refuses() {
     let probes = vec![Probe::parse("v(out)").unwrap()];
     let err = run_tran(&c, &opts, td.tstop, &probes).unwrap_err();
     assert!(
-        err.contains("behavioral source `B1`"),
+        matches!(&err, SolveError::Behavioral { device, .. } if device == "B1"),
         "transient refusal must name the device: {err}"
     );
 }

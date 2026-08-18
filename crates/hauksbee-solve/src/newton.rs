@@ -9,6 +9,7 @@
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/newton.md
 
+use crate::error::{SolveError, SolvePhase, SolveResult};
 use crate::options::{SolverOptions, Strategy};
 use crate::plan::StampPlan;
 use crate::sparse::{SparseMatrix, Symbolic};
@@ -120,6 +121,10 @@ pub struct Workspace {
     /// a non-convergence caused by `ln(-2)` names the device instead of
     /// reading as generic Newton failure. Never set on a converged solve.
     behavioral_fault: Option<String>,
+    /// Whether the most recent Newton attempt failed because its matrix could
+    /// not be factored. Cleared at each attempt so public errors can classify
+    /// singular structure without parsing the failure message.
+    last_singular: bool,
     /// `(worst undamped node-block step in volts, that unknown's index)` from
     /// the LAST Newton iteration of the most recent attempt. Recorded every
     /// iteration so that when an attempt gives up, the driver can name the
@@ -455,6 +460,7 @@ impl Workspace {
             tran_event: false,
             tran_line_search: false,
             behavioral_fault: None,
+            last_singular: false,
             stall_site: None,
             bypass: None,
             bypass_hold: false,
@@ -481,6 +487,10 @@ impl Workspace {
         self.behavioral_fault.as_deref()
     }
 
+    pub(crate) fn last_solve_was_singular(&self) -> bool {
+        self.last_singular
+    }
+
     /// The blame clause for the most recent FAILED solve: the unknown that
     /// refused to settle, the devices on it, and any near-zero-ohm links that
     /// are the obvious matrix suspects. `None` when nothing can honestly be
@@ -498,9 +508,6 @@ impl Workspace {
 /// stay in lockstep with the detector.
 const STALL_WINDOW: usize = 12;
 
-/// Run Newton iterations to convergence (or `max_newton`) for one assembled
-/// operating point. Mutates `ws.x` in place toward the solution.
-#[allow(clippy::too_many_arguments)]
 /// The latched relay states to stamp a RESIDUAL against: `Some` only when the
 /// hysteretic switch model is in force and a latch has been established, so a
 /// smooth-switch or switch-free circuit keeps the classic self-deciding stamp.
@@ -515,6 +522,9 @@ fn hyst_latch<'a>(
     }
 }
 
+/// Run Newton iterations to convergence (or `max_newton`) for one assembled
+/// operating point. Mutates `ws.x` in place toward the solution.
+///
 /// Newton solve with the HYSTERETIC analog-switch outer loop wrapped around it.
 ///
 /// A [`SwitchModel::Hysteretic`] `VSwitch` is a latching relay, so its state is
@@ -540,7 +550,6 @@ fn hyst_latch<'a>(
 /// Costs nothing on a circuit with no `VSwitch`, on [`SwitchModel::Smooth`], or
 /// when an outer path already owns `ws.switch_freeze`: those all fall straight
 /// through to [`newton_solve_core`] and stay bit-identical.
-#[allow(clippy::too_many_arguments)]
 pub fn newton_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -762,7 +771,6 @@ pub fn newton_solve(
     last
 }
 
-#[allow(clippy::too_many_arguments)]
 fn newton_solve_core(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -777,6 +785,7 @@ fn newton_solve_core(
     src_scale: f64,
 ) -> NewtonResult {
     let mut iters = 0;
+    ws.last_singular = false;
     let dbg_newton = std::env::var("HAUKSBEE_NEWTON_DBG").is_ok();
     let dbg_staged = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
     // GLOBAL damped-Newton line-search (Armijo backtracking on the full residual
@@ -997,6 +1006,7 @@ fn newton_solve_core(
             let already = branch_reg > 0.0
                 && iters > 1
                 && node_block_converged(&ws.lin_point, &ws.prev_iterate, &ws.layout, opts);
+            ws.last_singular = !already;
             if dbg_staged {
                 eprintln!(
                     "[newton] refactor singular at iter {iters} (already_converged={already})"
@@ -1525,7 +1535,6 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) -> u64 {
 /// backtracked trial point. Clobbers `ws.matrix` and `ws.rhs` (scratch that the
 /// next Newton iteration re-stamps anyway). A non-finite entry returns +inf so a
 /// poisoned trial point is never accepted.
-#[allow(clippy::too_many_arguments)]
 fn residual_inf_norm_at(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1545,7 +1554,6 @@ fn residual_inf_norm_at(
     .0
 }
 
-#[allow(clippy::too_many_arguments)]
 fn residual_argmax_at(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1776,7 +1784,7 @@ pub fn dc_operating_point(
     ws: &mut Workspace,
     circuit: &Circuit,
     opts: &SolverOptions,
-) -> Result<(), String> {
+) -> SolveResult<()> {
     dc_operating_point_seeded(ws, circuit, opts, None)
 }
 
@@ -1794,7 +1802,7 @@ pub fn dc_operating_point_no_ic(
     ws: &mut Workspace,
     circuit: &Circuit,
     opts: &SolverOptions,
-) -> Result<(), String> {
+) -> SolveResult<()> {
     dc_solve(ws, circuit, opts, false, None)
 }
 
@@ -1810,7 +1818,7 @@ pub fn dc_operating_point_seeded(
     circuit: &Circuit,
     opts: &SolverOptions,
     seed: Option<&[f64]>,
-) -> Result<(), String> {
+) -> SolveResult<()> {
     let use_ic = circuit.iter().any(|(_, d)| {
         matches!(
             d,
@@ -1890,7 +1898,7 @@ fn dc_solve(
     opts: &SolverOptions,
     use_ic: bool,
     seed: Option<&[f64]>,
-) -> Result<(), String> {
+) -> SolveResult<()> {
     ws.used_staged_dc = false;
     let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
@@ -1943,19 +1951,38 @@ fn dc_solve(
         return Ok(());
     }
     if !opts.dc_homotopy {
-        let fault = ws
-            .behavioral_fault
+        let fault = ws.behavioral_fault.clone();
+        let fault_suffix = fault
             .as_ref()
-            .map(|f| format!("; {f}"))
+            .map(|fault| format!("; {fault}"))
             .unwrap_or_default();
-        let blame = ws
-            .stall_blame(circuit)
-            .map(|b| format!(" [{b}]"))
+        let blame = ws.stall_blame(circuit);
+        let blame_suffix = blame
+            .as_ref()
+            .map(|blame| format!(" [{blame}]"))
             .unwrap_or_default();
-        return Err(format!(
-            "DC Newton did not converge in {} iters{fault}{blame}",
+        let message = format!(
+            "DC Newton did not converge in {} iters{fault_suffix}{blame_suffix}",
             r.iters
-        ));
+        );
+        return Err(if let Some(fault) = fault {
+            SolveError::behavioral(
+                message,
+                crate::error::behavioral_device(&fault),
+                SolvePhase::Dc,
+            )
+        } else if ws.last_solve_was_singular() {
+            singular_error(message, circuit, ws)
+        } else {
+            SolveError::NonConvergence {
+                message,
+                phase: SolvePhase::Dc,
+                time: None,
+                dt: None,
+                iterations: Some(r.iters),
+                blame,
+            }
+        });
     }
 
     // Attempt 2: gmin stepping, start with a large shunt and ramp it down.
@@ -2263,19 +2290,48 @@ fn dc_solve(
     // If the LAST attempt died on a behavioral-expression fault, say so by
     // device name: "ln of a negative node voltage" is actionable, "homotopy
     // failed" is not.
-    let fault = ws
-        .behavioral_fault
+    let fault = ws.behavioral_fault.clone();
+    let fault_suffix = fault
         .as_ref()
-        .map(|f| format!("; {f}"))
+        .map(|fault| format!("; {fault}"))
         .unwrap_or_default();
-    let blame = ws
-        .stall_blame(circuit)
-        .map(|b| format!(" [{b}]"))
+    let blame = ws.stall_blame(circuit);
+    let blame_suffix = blame
+        .as_ref()
+        .map(|blame| format!(" [{blame}]"))
         .unwrap_or_default();
-    Err(format!(
+    let message = format!(
         "DC homotopy failed (source scale {last_scale:.3}, {last_iters} iters; \
-         staged-DC relaxation did not recover){fault}{blame}"
-    ))
+         staged-DC relaxation did not recover){fault_suffix}{blame_suffix}"
+    );
+    Err(if let Some(fault) = fault {
+        SolveError::behavioral(
+            message,
+            crate::error::behavioral_device(&fault),
+            SolvePhase::Dc,
+        )
+    } else if ws.last_solve_was_singular() {
+        singular_error(message, circuit, ws)
+    } else {
+        SolveError::NonConvergence {
+            message,
+            phase: SolvePhase::Dc,
+            time: None,
+            dt: None,
+            iterations: Some(last_iters),
+            blame,
+        }
+    })
+}
+
+fn singular_error(message: String, circuit: &Circuit, ws: &Workspace) -> SolveError {
+    SolveError::Singular {
+        message,
+        unknown: ws.stall_site.map(|(_, unknown)| unknown),
+        net: crate::blame::source_conflicts(circuit)
+            .first()
+            .map(|conflict| conflict.net.clone()),
+    }
 }
 
 /// Evaluate every comparator's output decision (`high` = output at the high
@@ -2473,7 +2529,6 @@ fn eval_switch_states(
 /// returned vector is then a TRUE root of the full nonlinear circuit: every
 /// diode equation holds and every comparator output is consistent with its own
 /// inputs. Returns `None` if it cannot reach a consistent converged state.
-#[allow(clippy::too_many_arguments)]
 fn staged_event_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -2613,7 +2668,6 @@ fn staged_event_solve(
 /// allowed to change state per Gauss-Seidel pass, chosen by largest control
 /// over/under-drive, so the discrete state walks toward consistency instead of
 /// thrashing. Comparators (few, and the spike driver) are not throttled.
-#[allow(clippy::too_many_arguments)]
 pub fn newton_solve_event(
     ws: &mut Workspace,
     circuit: &Circuit,

@@ -571,7 +571,6 @@ impl AppState {
     /// Build the model from the structured-honest result. The caller passes the
     /// SAME values the `--json` paths produce, so the TUI can never disagree
     /// with the machine surface.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         board_name: String,
         report: &BindReport,

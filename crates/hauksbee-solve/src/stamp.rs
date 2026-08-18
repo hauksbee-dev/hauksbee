@@ -877,7 +877,6 @@ pub(crate) fn behavioral_eval_partials(
 /// On an expression fault the device stamps NOTHING and notes a device-named
 /// fault for the drivers (see [`BEHAVIORAL_FAULT`]), never a NaN into the
 /// matrix.
-#[allow(clippy::too_many_arguments)]
 fn stamp_behavioral<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -977,7 +976,6 @@ fn source_value(ctx: &StampCtx, kind: &SourceKind) -> f64 {
 
 // --- reactive companion models ----------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
 fn stamp_capacitor<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -1021,7 +1019,6 @@ fn stamp_capacitor<S: StampSink>(
     stamp_current(sink, ctx.layout, a, b, -ieq);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn stamp_inductor<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -1148,7 +1145,6 @@ fn stamp_vsource<S: StampSink>(
 /// zero (nothing time-varying, nothing to src_scale: the gain is a device
 /// property, not an independent source value). The same stamp serves DC and
 /// transient; the constraint has no memory.
-#[allow(clippy::too_many_arguments)]
 fn stamp_vcvs<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -1473,7 +1469,6 @@ pub(crate) fn bjt_charges_at(
 /// and the AC stamp share with `stamp_bjt`: internal unknowns when the
 /// `series_resistance` toggle is on AND the layout allocated them, the
 /// external nodes otherwise.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn bjt_junction_voltages(
     layout: &Layout,
     x: &[f64],
@@ -2219,7 +2214,6 @@ fn stamp_bjt<S: StampSink>(
     inject(sink, ci, sign * ieq_bc);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn stamp_mosfet<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -2464,7 +2458,6 @@ fn stamp_mosfet<S: StampSink>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// The `VSwitch` conductance ramp, shared verbatim by the transient/DC stamp and
 /// by the AC small-signal stamp.
 ///
@@ -2789,7 +2782,6 @@ pub(crate) fn opamp_transient_output(
     Some((v_out, dscale))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn stamp_opamp<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -2884,7 +2876,6 @@ fn stamp_opamp<S: StampSink>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn stamp_comparator<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,

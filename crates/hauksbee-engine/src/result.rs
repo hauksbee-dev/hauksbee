@@ -1254,7 +1254,6 @@ impl DrcStructured {
         // means gap is within a hair of the rule.
         use std::collections::BTreeMap;
         // key -> (count, below_count, min_gap, rule, min_gap_loc)
-        #[allow(clippy::type_complexity)]
         let mut groups: BTreeMap<
             (String, String, String),
             (
@@ -2082,7 +2081,6 @@ impl JsonReport {
     /// Returns the verdict tuple and the waived findings, which the caller
     /// reports. Waived is not hidden: a board carrying overruled findings has
     /// to look like one, or the file rots into a list nobody reads.
-    #[allow(clippy::type_complexity)]
     pub fn verdict_with_waivers(
         &self,
         waivers: &mut crate::waiver::WaiverSet,
