@@ -1120,7 +1120,6 @@ fn run_tool(tool: &str, args: &[&str], doing: &str) -> anyhow::Result<()> {
 /// unless the caller has said yes, either interactively or with `--yes` for a
 /// script. Running the extraction and mentioning the fact afterwards would be
 /// the wrong order: the user cannot unsend it.
-#[allow(clippy::too_many_arguments)]
 pub fn extract(
     pdf: &std::path::Path,
     part: &str,

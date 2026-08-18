@@ -51,7 +51,9 @@ fn load_extracted(file: &str) -> Option<ModelEntry> {
 /// lands on the DC bias for a resistive circuit.
 fn dc_try(circuit: &Circuit) -> Result<hauksbee_solve::Waveforms, String> {
     let opts = SolverOptions::fixed(1e-9);
-    Transient::new(opts).run(circuit, 1e-9)
+    Transient::new(opts)
+        .run(circuit, 1e-9)
+        .map_err(|error| error.to_string())
 }
 
 /// Solve a circuit's DC operating point, panicking on non-convergence. Used by

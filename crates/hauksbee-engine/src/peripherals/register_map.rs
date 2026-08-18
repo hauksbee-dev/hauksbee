@@ -1521,7 +1521,6 @@ addr_mask = 0x7f
     }
 
     /// Returns pressure in Pa (int32 routine).
-    #[allow(clippy::too_many_arguments)]
     fn bme280_compensate_p(
         adc_p: i32,
         t_fine: i32,
@@ -1560,7 +1559,6 @@ addr_mask = 0x7f
     }
 
     /// Returns humidity in Q22.10 %RH (divide by 1024 for %RH).
-    #[allow(clippy::too_many_arguments)]
     fn bme280_compensate_h(
         adc_h: i32,
         t_fine: i32,

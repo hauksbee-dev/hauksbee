@@ -39,6 +39,7 @@
 use num_complex::Complex64;
 
 use crate::cmatrix::ComplexSystem;
+use crate::error::{SolveError, SolvePhase, SolveResult};
 use crate::newton::{dc_operating_point_no_ic, Workspace};
 use crate::options::SolverOptions;
 use crate::system::Layout;
@@ -68,35 +69,47 @@ pub struct AcSpec {
 impl AcSpec {
     /// Parse a `<fstart>:<fstop>:<points>` triple (the CLI surface). An optional
     /// trailing `:lin` selects linear spacing; default is per-decade.
-    pub fn parse(s: &str) -> Result<AcSpec, String> {
+    pub fn parse(s: &str) -> SolveResult<AcSpec> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() < 3 || parts.len() > 4 {
-            return Err(format!(
+            return Err(SolveError::invalid(format!(
                 "expected <fstart>:<fstop>:<points>[:lin], got '{s}'"
-            ));
+            )));
         }
         // Engineering suffixes are first-class: `1k:10meg:20` is how an
         // engineer types a sweep, and SPICE has accepted the vocabulary for
         // fifty years. Plain floats still parse (parse_spice_number handles
         // both).
-        let fstart: f64 = hauksbee_ir::parse_spice_number(parts[0])
-            .ok_or_else(|| format!("bad fstart '{}' (try e.g. 1k, 10meg, 2.5e6)", parts[0]))?;
-        let fstop: f64 = hauksbee_ir::parse_spice_number(parts[1])
-            .ok_or_else(|| format!("bad fstop '{}' (try e.g. 1k, 10meg, 2.5e6)", parts[1]))?;
+        let fstart: f64 = hauksbee_ir::parse_spice_number(parts[0]).ok_or_else(|| {
+            SolveError::invalid(format!(
+                "bad fstart '{}' (try e.g. 1k, 10meg, 2.5e6)",
+                parts[0]
+            ))
+        })?;
+        let fstop: f64 = hauksbee_ir::parse_spice_number(parts[1]).ok_or_else(|| {
+            SolveError::invalid(format!(
+                "bad fstop '{}' (try e.g. 1k, 10meg, 2.5e6)",
+                parts[1]
+            ))
+        })?;
         let points: usize = parts[2]
             .parse()
-            .map_err(|_| format!("bad points '{}'", parts[2]))?;
+            .map_err(|_| SolveError::invalid(format!("bad points '{}'", parts[2])))?;
         let sweep = match parts.get(3).copied() {
             None | Some("dec") => Sweep::Decade,
             Some("oct") => Sweep::Octave,
             Some("lin") => Sweep::Linear,
-            Some(other) => return Err(format!("unknown sweep mode '{other}' (dec|oct|lin)")),
+            Some(other) => {
+                return Err(SolveError::invalid(format!(
+                    "unknown sweep mode '{other}' (dec|oct|lin)"
+                )))
+            }
         };
         if fstart <= 0.0 || fstop <= fstart {
-            return Err("need 0 < fstart < fstop".into());
+            return Err(SolveError::invalid("need 0 < fstart < fstop"));
         }
         if points == 0 {
-            return Err("points must be >= 1".into());
+            return Err(SolveError::invalid("points must be >= 1"));
         }
         Ok(AcSpec {
             fstart,
@@ -214,7 +227,7 @@ impl AcAnalysis {
     /// is present, only that source is driven and other independent sources are
     /// AC-grounded. Otherwise every independent voltage / current source is
     /// driven with unit AC amplitude for backwards compatibility.
-    pub fn run(&self, circuit: &Circuit, spec: &AcSpec) -> Result<AcResponse, String> {
+    pub fn run(&self, circuit: &Circuit, spec: &AcSpec) -> SolveResult<AcResponse> {
         // 1. DC operating point (reusing the real solver verbatim). AC linearizes
         // around the ordinary DC bias and must IGNORE initial conditions, a cap
         // pinned to its `ic` (shorted) would collapse a nonlinear stage's bias and
@@ -260,7 +273,7 @@ impl AcAnalysis {
         w: f64,
         siblings: &std::collections::HashMap<DeviceId, DeviceId>,
         latch: Option<&std::collections::HashMap<DeviceId, bool>>,
-    ) -> Result<Vec<Complex64>, String> {
+    ) -> SolveResult<Vec<Complex64>> {
         let mut sys = ComplexSystem::new(layout.size);
         let dedicated_ac_source = has_dedicated_ac_source(circuit);
         // If the deck's sources carry explicit `AC <mag> [phase]` stimulus (the
@@ -303,13 +316,18 @@ impl AcAnalysis {
         // be impossible, the OP solve just evaluated it cleanly, but a
         // refusal here beats a silently incomplete complex system).
         if let Some(fault) = crate::stamp::take_behavioral_fault() {
-            return Err(format!("AC linearization refused: {fault}"));
+            let device = crate::error::behavioral_device(&fault);
+            return Err(SolveError::behavioral(
+                format!("AC linearization refused: {fault}"),
+                device,
+                SolvePhase::Ac,
+            ));
         }
         sys.solve().ok_or_else(|| {
-            format!(
+            SolveError::singular(format!(
                 "AC system singular at w={w:.4} rad/s (f={:.4} Hz)",
                 w / std::f64::consts::TAU
-            )
+            ))
         })
     }
 }
@@ -354,7 +372,6 @@ impl OperatingPoint {
 }
 
 /// Stamp one device's small-signal model into the complex system at `w`.
-#[allow(clippy::too_many_arguments)]
 fn stamp_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
@@ -809,7 +826,6 @@ fn resistor_value(ohms: f64, tc1: Option<f64>, opts: &SolverOptions) -> f64 {
 /// plus diffusion capacitance at the bias) when the model stores charge, an
 /// AC answer without them would silently miss the poles the transient model
 /// has. Default models add exactly 0.0j on the external nodes: bit-identical.
-#[allow(clippy::too_many_arguments)]
 fn stamp_bjt_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
@@ -932,7 +948,6 @@ fn stamp_bjt_ac(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn stamp_mosfet_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
@@ -1091,7 +1106,6 @@ fn stamp_mosfet_ac(
 /// Behavioral op-amp small-signal: within the rails, `out = gain*(vp - vn)`
 /// through a strong output stage, exactly the transient tangent. Saturated
 /// (rail-pinned) at the OP -> the gain path is open and the output is held.
-#[allow(clippy::too_many_arguments)]
 fn stamp_opamp_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
@@ -1271,6 +1285,6 @@ mod ac_spec_suffix_tests {
         // Plain floats still work, and garbage still fails loudly.
         assert!(AcSpec::parse("100:1e6:10").is_ok());
         let err = AcSpec::parse("banana:1e6:10").unwrap_err();
-        assert!(err.contains("bad fstart"), "{err}");
+        assert!(err.to_string().contains("bad fstart"), "{err}");
     }
 }

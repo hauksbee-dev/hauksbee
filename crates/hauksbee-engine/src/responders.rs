@@ -369,7 +369,6 @@ impl ParallelMemoryWrite {
 }
 
 impl ParallelMemoryResponder {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         id: String,
         port: ParallelMemoryPort,

@@ -340,6 +340,17 @@ fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
                 fix,
             });
         }
+        SpecError::Solver { context, source } => diags.push(Diagnostic {
+            line: None,
+            col: None,
+            code: if matches!(source, hauksbee_solve::SolveError::Refused { .. }) {
+                "solver-refused"
+            } else {
+                "solver-failed"
+            },
+            message: format!("{context}: {source}"),
+            fix: None,
+        }),
     }
 }
 

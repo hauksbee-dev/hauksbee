@@ -22,7 +22,9 @@ use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::decompose::rails::TearMotive;
 use hauksbee_solve::decompose::verify::Decomposition;
 use hauksbee_solve::orchestrate::run_staged;
-use hauksbee_solve::{DcInit, Integration, SolverOptions, StepControl, Transient};
+use hauksbee_solve::{
+    DcInit, Integration, SolveError, SolvePhase, SolverOptions, StepControl, Transient,
+};
 
 /// Inverting comparator relaxation astable: the comparator output `osc` swings
 /// 0..5 V, senses the capacitor node `vc` on its inverting input against a
@@ -118,7 +120,16 @@ fn astable_fails_dc_but_runs_power_on() {
     let default_run = Transient::new(SolverOptions::default()).run(&c, tstop);
     let err = default_run.expect_err("an astable has no DC operating point to solve");
     assert!(
-        err.to_lowercase().contains("dc") || err.to_lowercase().contains("homotopy"),
+        matches!(
+            err,
+            SolveError::NonConvergence {
+                phase: SolvePhase::Dc,
+                ..
+            } | SolveError::Behavioral {
+                phase: SolvePhase::Dc,
+                ..
+            }
+        ),
         "expected a DC-init failure, got: {err}"
     );
 

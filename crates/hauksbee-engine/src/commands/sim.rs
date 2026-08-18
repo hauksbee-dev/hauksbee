@@ -341,7 +341,7 @@ pub fn run(
                 Err(msg) => {
                     let refusal = Refusal::new(
                         "AC analysis",
-                        msg,
+                        msg.to_string(),
                         vec!["the deck parsed and the circuit was assembled"],
                         "Add `AC 1` to the driving source, then rerun the same --ac command",
                     );

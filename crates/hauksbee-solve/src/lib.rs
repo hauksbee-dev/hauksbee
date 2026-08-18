@@ -51,6 +51,7 @@ mod census;
 mod cmatrix;
 pub mod decompose;
 mod diagnostics;
+mod error;
 mod linear;
 mod loop_stability;
 mod newton;
@@ -70,6 +71,7 @@ pub use ac::{has_dedicated_ac_source, AcAnalysis, AcPoint, AcResponse, AcSpec, S
 pub use blame::{blame_clause, stiff_links, StiffLink};
 pub use cmatrix::ComplexSystem;
 pub use diagnostics::{peek_strategy_activations, take_strategy_activations};
+pub use error::{SolveError, SolvePhase, SolveResult};
 pub use linear::LinearIsland;
 pub use loop_stability::{margins_from_bode, phase_margin, LoopStability, StabilityMargins};
 pub use newton::{dc_operating_point, dc_operating_point_seeded, Workspace};

@@ -39,6 +39,7 @@
 //!   there.
 
 use crate::ac::AcResponse;
+use crate::{SolveError, SolveResult};
 use hauksbee_ir::Circuit;
 
 /// Computed stability margins of a loop response.
@@ -77,11 +78,13 @@ impl<'a> LoopStability<'a> {
         resp: &'a AcResponse,
         circuit: &Circuit,
         output_node: &str,
-    ) -> Result<Self, String> {
+    ) -> SolveResult<Self> {
         let mut bode = Vec::with_capacity(resp.points.len());
         for p in &resp.points {
             let v = p.node(circuit, output_node).ok_or_else(|| {
-                format!("node '{output_node}' not found in AC response (cannot measure loop gain)")
+                SolveError::invalid(format!(
+                    "node '{output_node}' not found in AC response (cannot measure loop gain)"
+                ))
             })?;
             // Loop gain T = -V_out: magnitude same, phase + 180 deg.
             let t = -v;
@@ -89,9 +92,9 @@ impl<'a> LoopStability<'a> {
             bode.push((p.freq, 20.0 * mag.max(1e-300).log10(), t.arg().to_degrees()));
         }
         if bode.is_empty() {
-            return Err(format!(
+            return Err(SolveError::invalid(format!(
                 "node '{output_node}' not found in AC response (cannot measure loop gain)"
-            ));
+            )));
         }
         Ok(LoopStability {
             bode,
