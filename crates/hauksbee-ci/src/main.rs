@@ -395,8 +395,9 @@ fn main() -> ExitCode {
                         .replace('\n', "%0A");
                     println!("::error title=hauksbee-ci spec error::{msg}");
                 }
-                verdicts.push((spec.display().to_string(), 2));
-                worst = worst.max(2);
+                let code = e.exit_code() as u8;
+                verdicts.push((spec.display().to_string(), code));
+                worst = worst.max(code);
             }
         }
     }

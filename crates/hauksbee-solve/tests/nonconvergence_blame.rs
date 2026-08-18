@@ -46,17 +46,18 @@ fn a_singular_topology_refuses_and_names_the_node() {
     let mut ws = Workspace::new(&c);
     let err = dc_operating_point(&mut ws, &c, &opts)
         .expect_err("two ideal sources on one net is unsolvable and must be refused");
+    let message = err.to_string();
 
     assert!(
-        err.contains("RES"),
+        message.contains("RES"),
         "the refusal must name the contested net, got: {err}"
     );
     assert!(
-        err.contains("Vsupply_RES") && err.contains("Vdrive_RES"),
+        message.contains("Vsupply_RES") && message.contains("Vdrive_RES"),
         "the refusal must name both sources, got: {err}"
     );
     assert!(
-        err.contains("3.300") && err.contains("20.000"),
+        message.contains("3.300") && message.contains("20.000"),
         "the refusal must name both requested voltages, got: {err}"
     );
 }

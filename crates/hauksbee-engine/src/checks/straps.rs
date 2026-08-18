@@ -125,7 +125,6 @@ pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
 
 /// Inspect the members of one strap net and emit a finding if it cannot hold the
 /// required level at reset.
-#[allow(clippy::too_many_arguments)]
 fn examine_strap(
     board: &ExtractedBoard,
     mcu: &Component,

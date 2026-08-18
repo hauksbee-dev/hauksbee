@@ -66,6 +66,7 @@ use crate::options::{Partitioning, SolverOptions, StepControl};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
 use crate::transient::{Transient, Waveforms};
+use crate::{SolveError, SolveResult};
 
 /// What KIND of boundary an outcome describes: the structured discriminator
 /// callers (certificate construction above all) must branch on. The prose
@@ -193,7 +194,7 @@ pub fn execute_stiff_group(
     opts: &SolverOptions,
     tstop: f64,
     refusal_report: &mut Vec<StiffOutcome>,
-) -> Result<Option<StiffExecution>, String> {
+) -> SolveResult<Option<StiffExecution>> {
     execute_stiff_group_held(
         sub,
         candidates,
@@ -219,7 +220,7 @@ pub fn execute_stiff_group_held(
     opts: &SolverOptions,
     tstop: f64,
     refusal_report: &mut Vec<StiffOutcome>,
-) -> Result<Option<StiffExecution>, String> {
+) -> SolveResult<Option<StiffExecution>> {
     execute_stiff_group_held_capped(
         sub,
         candidates,
@@ -235,7 +236,6 @@ pub fn execute_stiff_group_held(
 /// generator-inclusive capture pre-pass. The convenience wrappers pass the
 /// default; a caller (or a gate) that needs to size or disable the growth calls
 /// this directly.
-#[allow(clippy::too_many_arguments)]
 pub fn execute_stiff_group_held_capped(
     sub: &Circuit,
     candidates: &[NodeId],
@@ -244,10 +244,14 @@ pub fn execute_stiff_group_held_capped(
     opts: &SolverOptions,
     tstop: f64,
     refusal_report: &mut Vec<StiffOutcome>,
-) -> Result<Option<StiffExecution>, String> {
+) -> SolveResult<Option<StiffExecution>> {
     let dt = match opts.step {
         StepControl::Fixed { dt } => dt,
-        _ => return Err("stiff execution requires fixed step control".into()),
+        _ => {
+            return Err(SolveError::refused(
+                "stiff execution requires fixed step control",
+            ))
+        }
     };
     if candidates.is_empty() {
         return Ok(None);
@@ -948,13 +952,19 @@ pub fn execute_composed_group(
     opts: &SolverOptions,
     tstop: f64,
     refusal_report: &mut Vec<StiffOutcome>,
-) -> Result<Option<StiffExecution>, String> {
+) -> SolveResult<Option<StiffExecution>> {
     let dt = match opts.step {
         StepControl::Fixed { dt } => dt,
-        _ => return Err("composed execution requires fixed step control".into()),
+        _ => {
+            return Err(SolveError::refused(
+                "composed execution requires fixed step control",
+            ))
+        }
     };
     if rails.is_empty() {
-        return Err("composed execution needs at least one rail tear".into());
+        return Err(SolveError::refused(
+            "composed execution needs at least one rail tear",
+        ));
     }
     let debug = std::env::var("HAUKSBEE_COMPOSED_DEBUG").is_ok();
 
@@ -1403,7 +1413,7 @@ fn solve_composed(
     grid: &[f64],
     opts: &SolverOptions,
     tstop: f64,
-) -> Result<Option<Waveforms>, String> {
+) -> SolveResult<Option<Waveforms>> {
     // Clone so node AND device ids are preserved: the rails' shunt DeviceIds and
     // feed NodeIds (chosen by the caller in `sub`'s space) stay valid, and the
     // VSTIFF pins add no new nodes (the signal nodes already exist).
@@ -1804,7 +1814,7 @@ fn solve_capture(
     grown: bool,
     opts: &SolverOptions,
     tstop: f64,
-) -> Result<CaptureRun, String> {
+) -> SolveResult<CaptureRun> {
     let (mut cap, g2l) = capture_circuit(
         sub,
         frag,
@@ -1822,7 +1832,9 @@ fn solve_capture(
                 let other = candidates
                     .iter()
                     .find(|o| sub.node_name(**o) == net)
-                    .ok_or_else(|| format!("stiff pin lost its candidate: {net}"))?;
+                    .ok_or_else(|| {
+                        SolveError::internal(format!("stiff pin lost its candidate: {net}"))
+                    })?;
                 *kind = match trains {
                     Some((r0, grid)) => SourceKind::Pwl(
                         grid.iter()
@@ -1840,7 +1852,9 @@ fn solve_capture(
                     .iter()
                     .find(|(k, _)| sub.node_name(NodeId(**k)) == net)
                     .map(|(_, v)| v)
-                    .ok_or_else(|| format!("held rail pin lost its node: {net}"))?;
+                    .ok_or_else(|| {
+                        SolveError::internal(format!("held rail pin lost its node: {net}"))
+                    })?;
                 *kind = match trains {
                     Some((_, grid)) => SourceKind::Pwl(
                         grid.iter()
@@ -1880,7 +1894,7 @@ fn solve_capture(
     });
 
     let n_nodes = cap.node_count();
-    let run_collect = |circuit: &Circuit, ropts: &SolverOptions| -> Result<Waveforms, String> {
+    let run_collect = |circuit: &Circuit, ropts: &SolverOptions| -> SolveResult<Waveforms> {
         let mut wf = Waveforms {
             time: Vec::new(),
             node_voltages: vec![Vec::new(); n_nodes],
@@ -2004,7 +2018,7 @@ fn solve_capture(
         // capture that dies past the ladder is a legitimate refusal signal (a
         // cut through an active loop, say) that must NOT be papered over: the
         // adaptive march never runs for it.
-        Err(e) if e.contains("DC") || e.contains("dc") || e.contains("homotopy") => {
+        Err(e) if e.is_dc_failure() => {
             if dbg {
                 eprintln!(
                     "  fixed at {} DC-died after {:.2}s: {e}",
@@ -2030,7 +2044,8 @@ fn solve_capture(
                     t_ladder.elapsed().as_secs_f64()
                 );
             }
-            Err(format!("stiff capture at {} failed: {e}", sub.node_name(c)))
+            let message = format!("stiff capture at {} failed: {e}", sub.node_name(c));
+            Err(e.with_message(message))
         }
         Err(e) => {
             if dbg {
@@ -2040,7 +2055,8 @@ fn solve_capture(
                     t_fixed.elapsed().as_secs_f64()
                 );
             }
-            Err(format!("stiff capture at {} failed: {e}", sub.node_name(c)))
+            let message = format!("stiff capture at {} failed: {e}", sub.node_name(c));
+            Err(e.with_message(message))
         }
     }
 }

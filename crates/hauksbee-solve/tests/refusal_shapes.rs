@@ -10,9 +10,9 @@
 //! standing tripwire.
 
 use hauksbee_ir::SpiceLoader;
-use hauksbee_solve::{run_op, Probe, SolverOptions};
+use hauksbee_solve::{run_op, Probe, SolveResult, SolverOptions};
 
-fn op_volts(deck: &str, node: &str) -> Result<f64, String> {
+fn op_volts(deck: &str, node: &str) -> SolveResult<f64> {
     let (c, _) = SpiceLoader::load_with_directives(deck).expect("deck parses");
     let out = run_op(
         &c,

@@ -312,7 +312,6 @@ pub(crate) fn timed<T>(phase: Phase, f: impl FnOnce() -> T) -> T {
 /// factor_calls, backsolve_ns, ls_ns, ls_calls, ls_alpha, ls_armijo_ok,
 /// ls_fallback). Marches run their Newton solves on their own thread, so
 /// draining at march start and end brackets exactly one march.
-#[allow(clippy::type_complexity)]
 fn take_phases() -> (u64, u64, u64, u64, u64, u64, [u64; 8], u64, u64, [u64; 4]) {
     (
         STAMP_NS.with(|c| c.replace(0)),
@@ -331,7 +330,6 @@ fn take_phases() -> (u64, u64, u64, u64, u64, u64, [u64; 8], u64, u64, [u64; 4])
 /// Drain the lever-3 iteration-attribution accumulators: (exit reasons,
 /// iters-per-call histogram, step contraction ratios, node-conv-gated iters,
 /// osc iters, osc nodes, predictor shadow histogram).
-#[allow(clippy::type_complexity)]
 fn take_newton_attrib() -> ([u64; 7], [u64; 14], [u64; 7], u64, u64, u64, [u64; 7]) {
     (
         NEWTON_EXIT.with(|c| c.replace([0; 7])),

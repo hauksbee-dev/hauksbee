@@ -818,7 +818,6 @@ fn pivot_index(orig_row: usize, pivot_pos: &[usize]) -> Option<usize> {
 /// Depth-first reachability over the L structure for Gilbert-Peierls. Pushes
 /// every original row reachable from `start` (through already-pivoted columns)
 /// onto `reach` in reverse topological order.
-#[allow(clippy::too_many_arguments)]
 fn dfs_reach(
     start: usize,
     pivot_pos: &[usize],

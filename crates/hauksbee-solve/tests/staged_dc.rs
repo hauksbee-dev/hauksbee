@@ -377,7 +377,7 @@ fn run_op_rejects_staged_dc_relaxed_surrogate() {
     let err = run_op(&c, &opts, &probes)
         .expect_err("run_op must not report a relaxed surrogate as a converged .op");
     assert!(
-        err.contains("did not converge"),
+        err.to_string().contains("did not converge"),
         "error should say non-convergence, got: {err}"
     );
 }

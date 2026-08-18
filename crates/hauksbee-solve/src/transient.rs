@@ -10,6 +10,7 @@
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/transient.md
 
+use crate::error::{SolveError, SolvePhase, SolveResult};
 use crate::newton::{dc_operating_point_seeded, newton_solve, newton_solve_event, Workspace};
 use crate::options::{DcInit, Integration, SolverOptions, StepControl, Strategy};
 use crate::stamp::IntegCoeffs;
@@ -73,7 +74,7 @@ impl Transient {
     }
 
     /// Run to `tstop`, collecting every accepted step into [`Waveforms`].
-    pub fn run(&self, circuit: &Circuit, tstop: f64) -> Result<Waveforms, String> {
+    pub fn run(&self, circuit: &Circuit, tstop: f64) -> SolveResult<Waveforms> {
         self.run_with_diagnostics(circuit, tstop)
             .map(|(waveforms, _)| waveforms)
     }
@@ -83,7 +84,7 @@ impl Transient {
         &self,
         circuit: &Circuit,
         tstop: f64,
-    ) -> Result<(Waveforms, TransientDiagnostics), String> {
+    ) -> SolveResult<(Waveforms, TransientDiagnostics)> {
         let n_nodes = circuit.node_count();
         let mut wf = Waveforms {
             time: Vec::new(),
@@ -132,7 +133,7 @@ impl Transient {
         circuit: &Circuit,
         tstop: f64,
         sink: F,
-    ) -> Result<(), String> {
+    ) -> SolveResult<()> {
         self.run_streaming_with_diagnostics(circuit, tstop, sink)
             .map(|_| ())
     }
@@ -142,7 +143,7 @@ impl Transient {
         circuit: &Circuit,
         tstop: f64,
         sink: F,
-    ) -> Result<TransientDiagnostics, String> {
+    ) -> SolveResult<TransientDiagnostics> {
         self.run_streaming_seeded_with_diagnostics(circuit, tstop, None, sink)
     }
 
@@ -157,7 +158,7 @@ impl Transient {
         tstop: f64,
         dc_seed: Option<&[f64]>,
         sink: F,
-    ) -> Result<(), String> {
+    ) -> SolveResult<()> {
         self.run_streaming_seeded_with_diagnostics(circuit, tstop, dc_seed, sink)
             .map(|_| ())
     }
@@ -168,7 +169,7 @@ impl Transient {
         tstop: f64,
         dc_seed: Option<&[f64]>,
         mut sink: F,
-    ) -> Result<TransientDiagnostics, String> {
+    ) -> SolveResult<TransientDiagnostics> {
         let opts = &self.opts;
 
         // Partitioned fast path: only taken when Auto and the topology/step make
@@ -447,7 +448,14 @@ impl Transient {
         while t < tstop - 1e-18 {
             steps_taken += 1;
             if steps_taken > max_steps {
-                return Err(format!("exceeded step budget at t={t}"));
+                return Err(SolveError::NonConvergence {
+                    message: format!("exceeded step budget at t={t}"),
+                    phase: SolvePhase::Transient,
+                    time: Some(t),
+                    dt: None,
+                    iterations: usize::try_from(steps_taken).ok(),
+                    blame: None,
+                });
             }
             // Floor against LTE-rejection thrash FIRST, then clamp to the time
             // remaining to tstop. Order matters: clamping to (tstop - t) first
@@ -618,22 +626,46 @@ impl Transient {
                     // A behavioral-expression fault on the final attempt names
                     // the device: refuse loudly with the cause, never emit a
                     // truncated waveform (exit-3 discipline at the CLI).
-                    let fault = ws
-                        .behavioral_fault()
-                        .map(|f| format!("; {f}"))
+                    let fault = ws.behavioral_fault().map(str::to_string);
+                    let fault_suffix = fault
+                        .as_ref()
+                        .map(|fault| format!("; {fault}"))
                         .unwrap_or_default();
                     // Name the smallest identifiable thing: the unknown that
                     // refused to settle, the devices on it, and any
                     // near-zero-ohm link poisoning the matrix (E29). A bare
                     // "Newton failed" leaves the user bisecting a 259-part
                     // board by model class.
-                    let blame = ws
-                        .stall_blame(circuit)
-                        .map(|b| format!(" [{b}]"))
+                    let blame = ws.stall_blame(circuit);
+                    let blame_suffix = blame
+                        .as_ref()
+                        .map(|blame| format!(" [{blame}]"))
                         .unwrap_or_default();
-                    return Err(format!(
-                        "Newton failed at t={t} even at dt_min={dt_min}{fault}{blame}"
-                    ));
+                    let message = format!(
+                        "Newton failed at t={t} even at dt_min={dt_min}{fault_suffix}{blame_suffix}"
+                    );
+                    return Err(if let Some(fault) = fault {
+                        SolveError::behavioral(
+                            message,
+                            crate::error::behavioral_device(&fault),
+                            SolvePhase::Transient,
+                        )
+                    } else if ws.last_solve_was_singular() {
+                        SolveError::Singular {
+                            message,
+                            unknown: None,
+                            net: None,
+                        }
+                    } else {
+                        SolveError::NonConvergence {
+                            message,
+                            phase: SolvePhase::Transient,
+                            time: Some(t),
+                            dt: Some(dt_min),
+                            iterations: None,
+                            blame,
+                        }
+                    });
                 }
                 dt = (h * 0.25).max(dt_min);
                 continue;

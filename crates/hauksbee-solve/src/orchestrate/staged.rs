@@ -86,6 +86,7 @@ use crate::orchestrate::capture::{
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
 use crate::transient::{Transient, Waveforms};
+use crate::{SolveError, SolveResult};
 
 /// What a staged run produced.
 #[derive(Debug)]
@@ -176,12 +177,12 @@ pub fn run_staged(
     decomp: &Decomposition,
     opts: &SolverOptions,
     tstop: f64,
-) -> Result<StagedResult, String> {
+) -> SolveResult<StagedResult> {
     if !decomp.certificate.sound() {
-        return Err(format!(
+        return Err(SolveError::refused(format!(
             "staged execution refused: the decomposition is unsound\n{}",
             decomp.certificate.summary(circuit)
-        ));
+        )));
     }
     // Exogenous boundaries are certified BY DECLARATION: the certificate
     // trusts that the run-time environment drives them. This executor has no
@@ -195,21 +196,20 @@ pub fn run_staged(
             .iter()
             .map(|n| circuit.node_name(*n))
             .collect();
-        return Err(format!(
+        return Err(SolveError::refused(format!(
             "staged execution refused: exogenous boundaries [{}] are certified as \
              environment-driven, and this executor cannot drive them yet; run co-simulated \
              or monolithic",
             names.join(", ")
-        ));
+        )));
     }
     let dt = match opts.step {
         StepControl::Fixed { dt } => dt,
         _ => {
-            return Err(
+            return Err(SolveError::refused(
                 "staged execution requires fixed step control: the capture grid is the step \
-                 grid, and an adaptive run has no grid whose error the certificate could state"
-                    .into(),
-            )
+                 grid, and an adaptive run has no grid whose error the certificate could state",
+            ))
         }
     };
 
@@ -303,11 +303,11 @@ pub fn run_staged(
                     continue;
                 }
                 let (times, vals) = captured.get(&t.node.0).ok_or_else(|| {
-                    format!(
+                    SolveError::internal(format!(
                         "stage ordering broke: tear node {} needed by group {} was never captured",
                         circuit.node_name(t.node),
                         g
-                    )
+                    ))
                 })?;
                 let points = times
                     .iter()
@@ -493,11 +493,12 @@ pub fn run_staged(
                     } else {
                         format!(" [stiff relaxation refused first: {stiff_refusal_note}]")
                     };
-                    format!(
+                    let message = format!(
                         "staged group {g} failed ({} devices; sample: {}){stiff_note}: {e}",
                         sub.devices.len(),
                         sample.join(", ")
-                    )
+                    );
+                    e.with_message(message)
                 })?,
             };
             let fired = crate::diagnostics::take_strategy_activations();
@@ -521,10 +522,10 @@ pub fn run_staged(
             for t in &decomp.dag.free_tears {
                 if t.upstream == g && !captured.contains_key(&t.node.0) {
                     let ln = g2l.get(&t.node.0).copied().ok_or_else(|| {
-                        format!(
+                        SolveError::internal(format!(
                             "group {g} owns tear node {} but its sub-circuit never mapped it",
                             circuit.node_name(t.node)
-                        )
+                        ))
                     })?;
                     captured.insert(
                         t.node.0,
@@ -625,7 +626,7 @@ fn solve_group(
     imposed: Vec<RailTear>,
     opts: &SolverOptions,
     tstop: f64,
-) -> Result<(Waveforms, bool, bool), String> {
+) -> SolveResult<(Waveforms, bool, bool)> {
     if !imposed.is_empty() {
         let part = Partition::analyze_imposing_tears(sub, imposed);
         if let Some(mut engine) = PartitionedTransient::try_build_from_partition(sub, opts, part) {
@@ -680,10 +681,7 @@ fn solve_group(
         // DC-unreachable in ramped_groups (review finding). The DC paths
         // announce themselves in their messages; a typed error is the
         // eventual fix, the substring is the current idiom.
-        Err(e)
-            if opts.dc_init == DcInit::Solve
-                && (e.contains("DC") || e.contains("dc") || e.contains("homotopy")) =>
-        {
+        Err(e) if opts.dc_init == DcInit::Solve && e.is_dc_failure() => {
             let dt = match opts.step {
                 StepControl::Fixed { dt } => dt,
                 // A non-fixed run reached here only if run_staged's own guard
@@ -701,7 +699,7 @@ fn solve_group(
             // continuation stalls, take a bolder step. Windows are clamped
             // to a tenth of the record (a mid-ramp waveform must never be
             // the bulk of a "successful" solve) and floored at 2 steps.
-            let mut errors = format!("{e}");
+            let mut errors = e.to_string();
             for scale in [200.0, 20.0, 2.0] {
                 let ramp_window = (scale * dt).min(tstop / 10.0);
                 if ramp_window < 2.0 * dt {
@@ -719,7 +717,7 @@ fn solve_group(
                     }
                 }
             }
-            Err(errors)
+            Err(e.with_message(errors))
         }
         Err(e) => Err(e),
     }
@@ -1232,13 +1230,13 @@ mod tests {
         });
         let d = Decomposition::analyze(&c, TearMotive::Profit);
         let err = run_staged(&c, &d, &fixed_opts(1e-7), 1e-6).unwrap_err();
-        assert!(err.contains("unsound"), "{err}");
+        assert!(err.to_string().contains("unsound"), "{err}");
 
         let (c2, _) = feedforward_board();
         let d2 = Decomposition::analyze(&c2, TearMotive::Profit);
         let adaptive = SolverOptions::default(); // adaptive step control
         let err2 = run_staged(&c2, &d2, &adaptive, 1e-6).unwrap_err();
-        assert!(err2.contains("fixed step"), "{err2}");
+        assert!(err2.to_string().contains("fixed step"), "{err2}");
     }
 
     /// The Tarski shape end to end, in miniature: a shunt-fed PNP mirror

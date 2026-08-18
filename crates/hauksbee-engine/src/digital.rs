@@ -159,7 +159,6 @@ pub fn pin_edges_by_pin(edges: &[PinEdge]) -> HashMap<(char, u8), Vec<(u64, bool
 /// Returns the number of micro-ticks executed (distinct cycle groups that
 /// touched a watched pin) so a caller can assert N edges produced N ordered
 /// micro-ticks rather than one collapsed level.
-#[allow(clippy::too_many_arguments)]
 pub fn replay_components_on_edges(
     components: &mut [DigitalComponent],
     which: &[usize],

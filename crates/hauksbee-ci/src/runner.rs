@@ -956,7 +956,10 @@ fn compute_ac(
     };
     let resp = AcAnalysis::new(SolverOptions::default())
         .run(&bound.circuit, &ac_spec)
-        .map_err(|e| SpecError::Invalid(format!("AC analysis: {e}")))?;
+        .map_err(|source| SpecError::Solver {
+            context: "AC analysis",
+            source,
+        })?;
 
     // Collect the Bode and loop margins for every net an AC assertion names.
     let mut out = AcOutcome::default();

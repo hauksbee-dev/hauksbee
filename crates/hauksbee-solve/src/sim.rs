@@ -14,7 +14,10 @@
 //! Everything here is a wrapper over code that already exists. It adds no
 //! physics; it only routes.
 
-use crate::{dc_operating_point, AcAnalysis, AcSpec, SolverOptions, Sweep, Transient, Workspace};
+use crate::{
+    dc_operating_point, AcAnalysis, AcSpec, SolveError, SolvePhase, SolveResult, SolverOptions,
+    Sweep, Transient, Workspace,
+};
 use hauksbee_ir::evidence::{
     ErrorBudget, IntegrationMethod, IntegrationTolerance, Residual, TimeWindow, WindowMethod,
 };
@@ -58,15 +61,17 @@ impl Probe {
 
     /// Parse one probe token. Accepts `V(a)`, `V(a,b)`, `I(name)` (any case for
     /// the `V`/`I` head), or a bare node name (treated as `V(name)`).
-    pub fn parse(s: &str) -> Result<Probe, String> {
+    pub fn parse(s: &str) -> SolveResult<Probe> {
         let t = s.trim();
         if t.is_empty() {
-            return Err("empty probe".to_string());
+            return Err(SolveError::invalid("empty probe"));
         }
         // Split a `HEAD(args)` call, keeping the original-case args.
         if let Some(open) = t.find('(') {
             if !t.ends_with(')') {
-                return Err(format!("probe `{t}`: missing closing `)`"));
+                return Err(SolveError::invalid(format!(
+                    "probe `{t}`: missing closing `)`"
+                )));
             }
             let head = t[..open].trim().to_ascii_lowercase();
             let inner = t[open + 1..t.len() - 1].trim();
@@ -78,21 +83,23 @@ impl Probe {
                         [a, b] if !a.is_empty() && !b.is_empty() => {
                             Ok(Probe::NodeDiff((*a).to_string(), (*b).to_string()))
                         }
-                        _ => Err(format!(
+                        _ => Err(SolveError::invalid(format!(
                             "probe `{t}`: V() takes one node `V(a)` or two `V(a,b)`"
-                        )),
+                        ))),
                     }
                 }
                 "i" => {
                     if inner.is_empty() || inner.contains(',') {
-                        Err(format!("probe `{t}`: I() takes one element name `I(V1)`"))
+                        Err(SolveError::invalid(format!(
+                            "probe `{t}`: I() takes one element name `I(V1)`"
+                        )))
                     } else {
                         Ok(Probe::BranchCurrent(inner.to_string()))
                     }
                 }
-                other => Err(format!(
+                other => Err(SolveError::invalid(format!(
                     "probe `{t}`: unknown output function `{other}` (use V(...) or I(...))"
-                )),
+                ))),
             }
         } else {
             // Bare node name.
@@ -133,10 +140,10 @@ fn integration_method(method: crate::Integration) -> IntegrationMethod {
     }
 }
 
-pub(crate) fn error_budget(opts: &SolverOptions) -> Result<ErrorBudget, String> {
+pub(crate) fn error_budget(opts: &SolverOptions) -> SolveResult<ErrorBudget> {
     IntegrationTolerance::new(opts.reltol, opts.vntol, opts.abstol, opts.chgtol)
         .map(ErrorBudget::new)
-        .map_err(|error| format!("invalid solver error budget: {error}"))
+        .map_err(|error| SolveError::invalid(format!("invalid solver error budget: {error}")))
 }
 
 fn residual_label(circuit: &Circuit, ws: &Workspace, unknown: usize) -> String {
@@ -163,7 +170,7 @@ pub fn default_probes(circuit: &Circuit) -> Vec<Probe> {
 
 /// Resolve a node name to its [`NodeId`], case-insensitively, honoring the `0`
 /// and `gnd` ground aliases. Errors (never silently substitutes) if absent.
-fn resolve_node(circuit: &Circuit, name: &str) -> Result<NodeId, String> {
+fn resolve_node(circuit: &Circuit, name: &str) -> SolveResult<NodeId> {
     if name == "0" || name.eq_ignore_ascii_case("gnd") || name.eq_ignore_ascii_case("ground") {
         return Ok(NodeId::GROUND);
     }
@@ -173,18 +180,22 @@ fn resolve_node(circuit: &Circuit, name: &str) -> Result<NodeId, String> {
             return Ok(nid);
         }
     }
-    Err(format!("no node named `{name}` in the deck"))
+    Err(SolveError::invalid(format!(
+        "no node named `{name}` in the deck"
+    )))
 }
 
 /// Resolve an element name to the device index that owns a branch-current
 /// unknown, or an error naming why it does not.
-fn resolve_branch_device(circuit: &Circuit, name: &str) -> Result<hauksbee_ir::DeviceId, String> {
+fn resolve_branch_device(circuit: &Circuit, name: &str) -> SolveResult<hauksbee_ir::DeviceId> {
     for (id, dev) in circuit.iter() {
         if dev.name().eq_ignore_ascii_case(name) {
             return Ok(id);
         }
     }
-    Err(format!("no element named `{name}` in the deck"))
+    Err(SolveError::invalid(format!(
+        "no element named `{name}` in the deck"
+    )))
 }
 
 /// The effective options for a deck run: a `.temp` card in the netlist sets
@@ -209,11 +220,7 @@ fn opts_with_deck_temp(circuit: &Circuit, opts: &SolverOptions) -> SolverOptions
 
 /// Run the DC operating point and read the requested probes off the solved
 /// unknown vector. `Err` on non-convergence or an unresolvable probe.
-pub fn run_op(
-    circuit: &Circuit,
-    opts: &SolverOptions,
-    probes: &[Probe],
-) -> Result<SimOutput, String> {
+pub fn run_op(circuit: &Circuit, opts: &SolverOptions, probes: &[Probe]) -> SolveResult<SimOutput> {
     let opts = &opts_with_deck_temp(circuit, opts);
     let mut ws = Workspace::new(circuit);
     dc_operating_point(&mut ws, circuit, opts)?;
@@ -241,13 +248,20 @@ pub fn run_op(
         } else {
             ""
         };
-        return Err(format!(
-            ".op did not converge: KCL residual {worst:.3e} A at unknown #{node} \
-             exceeds {OP_KCL_TOL:.0e} A{via}"
-        ));
+        return Err(SolveError::NonConvergence {
+            message: format!(
+                ".op did not converge: KCL residual {worst:.3e} A at unknown #{node} \
+                 exceeds {OP_KCL_TOL:.0e} A{via}"
+            ),
+            phase: SolvePhase::Dc,
+            time: None,
+            dt: None,
+            iterations: None,
+            blame: None,
+        });
     }
 
-    let node_v = |name: &str| -> Result<f64, String> {
+    let node_v = |name: &str| -> SolveResult<f64> {
         let id = resolve_node(circuit, name)?;
         Ok(match ws.layout.node(id) {
             None => 0.0, // ground
@@ -265,9 +279,9 @@ pub fn run_op(
             Probe::BranchCurrent(d) => {
                 let id = resolve_branch_device(circuit, d)?;
                 let bi = ws.layout.branch(id).ok_or_else(|| {
-                    format!(
+                    SolveError::invalid(format!(
                         "element `{d}` carries no branch current (only V-sources and inductors do)"
-                    )
+                    ))
                 })?;
                 ws.x[bi]
             }
@@ -278,8 +292,9 @@ pub fn run_op(
     let mut budget = error_budget(opts)?;
     if max_abs.is_finite() {
         budget = budget.with_residual(
-            Residual::new(max_abs, residual_label(circuit, &ws, at))
-                .map_err(|error| format!("invalid operating-point residual: {error}"))?,
+            Residual::new(max_abs, residual_label(circuit, &ws, at)).map_err(|error| {
+                SolveError::internal(format!("invalid operating-point residual: {error}"))
+            })?,
         );
     }
     Ok(SimOutput {
@@ -297,12 +312,12 @@ pub fn run_tran(
     opts: &SolverOptions,
     tstop: f64,
     probes: &[Probe],
-) -> Result<SimOutput, String> {
+) -> SolveResult<SimOutput> {
     let effective = opts_with_deck_temp(circuit, opts);
     let (wf, diagnostics) = Transient::new(effective).run_with_diagnostics(circuit, tstop)?;
     let n = wf.time.len();
 
-    let node_series = |name: &str| -> Result<Vec<f64>, String> {
+    let node_series = |name: &str| -> SolveResult<Vec<f64>> {
         let id = resolve_node(circuit, name)?;
         if id.is_ground() {
             return Ok(vec![0.0; n]);
@@ -310,7 +325,7 @@ pub fn run_tran(
         wf.node_voltages
             .get(id.0 as usize)
             .cloned()
-            .ok_or_else(|| format!("node `{name}` has no waveform"))
+            .ok_or_else(|| SolveError::internal(format!("node `{name}` has no waveform")))
     };
 
     let mut columns = Vec::with_capacity(probes.len());
@@ -330,9 +345,9 @@ pub fn run_tran(
                 .find(|(name, _)| name.eq_ignore_ascii_case(d))
                 .map(|(_, v)| v.clone())
                 .ok_or_else(|| {
-                    format!(
+                    SolveError::invalid(format!(
                         "element `{d}` carries no branch current (only V-sources and inductors do)"
-                    )
+                    ))
                 })?,
         };
         series.push(s);
@@ -344,11 +359,14 @@ pub fn run_tran(
     }
     let mut budget = error_budget(&effective)?.with_method(
         WindowMethod::new(
-            TimeWindow::new(0.0, tstop)
-                .map_err(|error| format!("invalid transient result window: {error}"))?,
+            TimeWindow::new(0.0, tstop).map_err(|error| {
+                SolveError::internal(format!("invalid transient result window: {error}"))
+            })?,
             integration_method(opts.integration),
         )
-        .map_err(|error| format!("invalid transient method record: {error}"))?,
+        .map_err(|error| {
+            SolveError::internal(format!("invalid transient method record: {error}"))
+        })?,
     );
     if let Some((max_abs, at)) = diagnostics
         .final_residual
@@ -356,8 +374,9 @@ pub fn run_tran(
     {
         let layout = crate::Layout::new(circuit);
         budget = budget.with_residual(
-            Residual::new(max_abs, residual_label_from_layout(circuit, &layout, at))
-                .map_err(|error| format!("invalid transient residual: {error}"))?,
+            Residual::new(max_abs, residual_label_from_layout(circuit, &layout, at)).map_err(
+                |error| SolveError::internal(format!("invalid transient residual: {error}")),
+            )?,
         );
     }
     Ok(SimOutput {
@@ -406,7 +425,7 @@ pub fn run_dc(
     opts: &SolverOptions,
     dc: &DcDirective,
     probes: &[Probe],
-) -> Result<SimOutput, String> {
+) -> SolveResult<SimOutput> {
     let inner_vals = dc_sweep_values(dc.inner.start, dc.inner.stop, dc.inner.step);
     let outer_vals = match &dc.outer {
         Some(o) => dc_sweep_values(o.start, o.stop, o.step),
@@ -478,24 +497,23 @@ pub fn run_ac(
     opts: &SolverOptions,
     ac: &AcDirective,
     probes: &[Probe],
-) -> Result<SimOutput, String> {
+) -> SolveResult<SimOutput> {
     if circuit.ac_stimulus.is_empty() {
-        return Err(
+        return Err(SolveError::refused(
             "`.ac` analysis has no AC stimulus: no source carries an `AC <mag> [phase]` \
              spec, so the small-signal drive is identically zero and the response would be \
              a meaningless all-zeros table. Add `AC 1` to the driving source (e.g. \
-             `VIN in 0 AC 1`)."
-                .to_string(),
-        );
+             `VIN in 0 AC 1`).",
+        ));
     }
 
     // AC responds at nodes; a branch-current phasor is not captured here.
     for p in probes {
         if let Probe::BranchCurrent(d) = p {
-            return Err(format!(
+            return Err(SolveError::refused(format!(
                 "AC output `I({d})` is not supported: the AC analysis reports node-voltage \
                  phasors, not branch currents. Probe a node voltage (e.g. `V(out)`)."
-            ));
+            )));
         }
     }
 
@@ -654,7 +672,7 @@ mod tests {
             &probes,
         )
         .unwrap_err();
-        assert!(err.contains("no AC stimulus"), "{err}");
+        assert!(err.to_string().contains("no AC stimulus"), "{err}");
     }
 
     #[test]

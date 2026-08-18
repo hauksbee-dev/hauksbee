@@ -60,6 +60,7 @@
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use rayon::prelude::*;
 
+use crate::error::{SolveError, SolvePhase, SolveResult};
 use crate::linear::LinearIsland;
 use crate::newton::{dc_operating_point, newton_solve, Workspace};
 use crate::options::{Integration, ParallelPolicy, SolverOptions, StepControl};
@@ -545,10 +546,10 @@ impl PartitionedTransient {
         circuit: &Circuit,
         tstop: f64,
         mut sink: F,
-    ) -> Result<(), String> {
+    ) -> SolveResult<()> {
         let dt = match self.opts.step {
             StepControl::Fixed { dt } => dt,
-            _ => return Err("partitioned path requires fixed step".into()),
+            _ => return Err(SolveError::refused("partitioned path requires fixed step")),
         };
 
         // Seed all islands from a DC operating point, then exchange.
@@ -632,12 +633,7 @@ impl PartitionedTransient {
     /// behaviour on a non-converging balance (proceed, let the step-level
     /// machinery judge) is what the `rail_tear` gate certifies. The strategy
     /// ladder's Decompose rung is where non-convergence escalates instead.
-    fn step_with_rail_balance(
-        &mut self,
-        circuit: &Circuit,
-        h: f64,
-        tnext: f64,
-    ) -> Result<(), String> {
+    fn step_with_rail_balance(&mut self, circuit: &Circuit, h: f64, tnext: f64) -> SolveResult<()> {
         // One sweep advances trial state from accepted history at the current
         // rail estimates (linear islands + every nonlinear block solved once).
         self.sweep(circuit, h, tnext, true)?;
@@ -707,7 +703,7 @@ impl PartitionedTransient {
     /// per-island Newton failure, which is the channel the staged orchestrator
     /// already escalates by re-solving the group fused on the monolithic
     /// engine (`orchestrate::staged::solve_group`).
-    fn relax_step(&mut self, circuit: &Circuit, h: f64, tnext: f64) -> Result<(), String> {
+    fn relax_step(&mut self, circuit: &Circuit, h: f64, tnext: f64) -> SolveResult<()> {
         // The time step itself: island states advance from accepted history.
         // Its delta measures the physical step change, not coupling error, so
         // it never participates in the convergence decision.
@@ -726,13 +722,13 @@ impl PartitionedTransient {
                 return Ok(());
             }
         }
-        Err(format!(
+        Err(SolveError::refused(format!(
             "inter-island coupling failed to relax within {COUPLING_SWEEP_CAP} sweeps at \
              t={tnext:.6e}: weighted boundary change {:.3e} (tolerance 1.0) still moving at \
              node {}; the cut is stronger than the partitioner believed; refusing the \
              partitioned step",
             last.0, last.1
-        ))
+        )))
     }
 
     /// Test-only accessor for the S1 allocation-hygiene gate (plan §4.4): run
@@ -745,7 +741,7 @@ impl PartitionedTransient {
         h: f64,
         tnext: f64,
         first: bool,
-    ) -> Result<(), String> {
+    ) -> SolveResult<()> {
         // Through `in_pool` like every real caller, so a parallel-policy audit
         // could never leak onto the global rayon pool.
         self.in_pool(|me| me.sweep(circuit, h, tnext, first).map(|_| ()))
@@ -783,7 +779,7 @@ impl PartitionedTransient {
         h: f64,
         tnext: f64,
         first: bool,
-    ) -> Result<(f64, u32), String> {
+    ) -> SolveResult<(f64, u32)> {
         // ---- Phase a: compute owned outputs into per-island scratch. ----
         // Sequential and pooled arms run the SAME per-island code on the same
         // frozen inputs; the pool only changes which core runs which island,
@@ -793,7 +789,7 @@ impl PartitionedTransient {
         // execution order and thread count.
         let vbuf: &[f64] = &self.vbuf;
         let opts = &self.opts;
-        let first_err: Option<String> = if self.par {
+        let first_err: Option<SolveError> = if self.par {
             // Inside the engine's own pool (every caller reaches `sweep`
             // through `in_pool`), so the ambient `par_iter`s below execute on
             // it, never on the global rayon pool.
@@ -842,7 +838,7 @@ impl PartitionedTransient {
                 {
                     linear_phase_a(li, circuit, vbuf, tnext, first, state, prev, buf, vfree);
                 }
-                let mut first_err: Option<String> = None;
+                let mut first_err: Option<SolveError> = None;
                 for nl in self.nonlinear.iter_mut() {
                     if let Err(e) = nl.phase_a(vbuf, h, tnext, first, opts) {
                         if first_err.is_none() {
@@ -912,7 +908,7 @@ impl PartitionedTransient {
     /// byte-for-byte the legacy behaviour: the fallback only engages when the
     /// global DC errors, so the `rail_tear` bit-gate (whose fixtures have a
     /// converging DC) is untouched.
-    fn seed(&mut self, circuit: &Circuit) -> Result<(), String> {
+    fn seed(&mut self, circuit: &Circuit) -> SolveResult<()> {
         // Use the monolithic DC solve to get a globally-consistent operating
         // point, then distribute it to island states and the exchange buffer.
         let mut ws = Workspace::new(circuit);
@@ -970,7 +966,7 @@ impl PartitionedTransient {
     /// window carries the rail's approach to balance rather than a settled
     /// operating point. That first-window transient is honest data, bounded, and
     /// vanishes once the balance converges (typically within the first step).
-    fn seed_decomposed(&mut self, circuit: &Circuit) -> Result<(), String> {
+    fn seed_decomposed(&mut self, circuit: &Circuit) -> SolveResult<()> {
         // 1. Boundary estimates into the exchange buffer.
         for v in self.vbuf.iter_mut() {
             *v = 0.0;
@@ -1109,7 +1105,7 @@ struct PartitionedRailLoads<'a> {
 }
 
 impl RailLoads for PartitionedRailLoads<'_> {
-    fn resolve(&mut self, i: usize, v_rail: f64) -> Result<(), String> {
+    fn resolve(&mut self, i: usize, v_rail: f64) -> SolveResult<()> {
         let rail = self.tears[i].rail;
         self.vbuf[rail.0 as usize] = v_rail;
         // Phase (a): every block touching the rail re-solves against the
@@ -1120,7 +1116,7 @@ impl RailLoads for PartitionedRailLoads<'_> {
         // split is bit-neutral for the same reason it is safe in parallel.
         let vbuf: &[f64] = self.vbuf;
         let (h, tnext, opts) = (self.h, self.tnext, self.opts);
-        let err: Option<(usize, String)> = if self.par {
+        let err: Option<(usize, SolveError)> = if self.par {
             self.nonlinear
                 .par_iter_mut()
                 .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
@@ -1206,7 +1202,6 @@ impl RailLoads for PartitionedRailLoads<'_> {
 /// scratch. That is the whole safety argument for running every island's
 /// phase (a) concurrently, and it is enforced by the signature: nothing here
 /// can reach another island's data.
-#[allow(clippy::too_many_arguments)]
 fn linear_phase_a(
     li: &LinearIsland,
     circuit: &Circuit,
@@ -1504,7 +1499,7 @@ impl NonlinearIsland {
         global_ws: &Workspace,
         _circuit: &Circuit,
         opts: &SolverOptions,
-    ) -> Result<(), String> {
+    ) -> SolveResult<()> {
         // Set boundary sources to the global DC node voltages, then solve the
         // sub-circuit's own DC point so its internal nodes are consistent.
         for (gn, sid) in &self.boundary {
@@ -1565,13 +1560,7 @@ impl NonlinearIsland {
     }
 
     /// Solve the sub-circuit for the trial state at `tnext`.
-    fn step(
-        &mut self,
-        h: f64,
-        tnext: f64,
-        first: bool,
-        opts: &SolverOptions,
-    ) -> Result<(), String> {
+    fn step(&mut self, h: f64, tnext: f64, first: bool, opts: &SolverOptions) -> SolveResult<()> {
         if first {
             self.ws.x.copy_from_slice(&self.x_accepted);
         }
@@ -1601,11 +1590,33 @@ impl NonlinearIsland {
         );
         if !r.converged {
             let names: Vec<&str> = self.sub.devices.iter().map(|d| d.name()).take(8).collect();
-            return Err(format!(
+            let message = format!(
                 "nonlinear island Newton failed at h={h} (island of {}: {})",
                 self.sub.devices.len(),
                 names.join(", ")
-            ));
+            );
+            return Err(if let Some(fault) = self.ws.behavioral_fault() {
+                SolveError::behavioral(
+                    message,
+                    crate::error::behavioral_device(fault),
+                    SolvePhase::Partitioned,
+                )
+            } else if self.ws.last_solve_was_singular() {
+                SolveError::Singular {
+                    message,
+                    unknown: None,
+                    net: None,
+                }
+            } else {
+                SolveError::NonConvergence {
+                    message,
+                    phase: SolvePhase::Partitioned,
+                    time: Some(tnext),
+                    dt: Some(h),
+                    iterations: None,
+                    blame: None,
+                }
+            });
         }
         Ok(())
     }
@@ -1645,7 +1656,7 @@ impl NonlinearIsland {
         tnext: f64,
         first: bool,
         opts: &SolverOptions,
-    ) -> Result<(), String> {
+    ) -> SolveResult<()> {
         self.refresh_boundary(vbuf);
         self.step(h, tnext, first, opts)
     }
@@ -2110,7 +2121,7 @@ mod tests {
             .run_streaming(&c, 10e-6, |_| {})
             .expect_err("an odd-inversion ring can never satisfy the coupling tolerance");
         assert!(
-            err.contains("failed to relax"),
+            err.to_string().contains("failed to relax"),
             "the guard must refuse, not mislabel: {err}"
         );
     }

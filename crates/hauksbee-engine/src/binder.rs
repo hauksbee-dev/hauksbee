@@ -1908,7 +1908,6 @@ fn unresolved_outcome(
 
 /// Bind a single resolved component. Mutates the circuit and the digital/mcu
 /// collections; returns its outcome and any warning.
-#[allow(clippy::too_many_arguments)]
 fn bind_component(
     comp: &Component,
     model: &ModelEntry,
@@ -4466,7 +4465,6 @@ fn bind_nor_latches(
     bound > 0
 }
 
-#[allow(clippy::too_many_arguments)]
 fn bind_mcu(
     comp: &Component,
     model: &ModelEntry,

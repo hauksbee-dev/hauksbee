@@ -53,6 +53,7 @@
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
+use crate::{SolveError, SolveResult};
 use hauksbee_ir::NodeId;
 
 /// What the balance loop needs from the blocks loading the rails. The trait
@@ -62,7 +63,7 @@ pub trait RailLoads {
     /// Set rail `i`'s trial voltage to `v_rail` and re-solve every block
     /// loading it (in place, no history advance). Blocks not loading rail
     /// `i` must not be re-solved (the loop's cost model depends on it).
-    fn resolve(&mut self, i: usize, v_rail: f64) -> Result<(), String>;
+    fn resolve(&mut self, i: usize, v_rail: f64) -> SolveResult<()>;
     /// Rail `i`'s current trial voltage.
     fn rail_voltage(&self, i: usize) -> f64;
     /// The feed-node voltage seen by rail `i`'s shunt at the current trial
@@ -161,7 +162,7 @@ pub fn settle_rails<L: RailLoads>(
     vntol: f64,
     abstol: f64,
     policy: &BalancePolicy,
-) -> Result<BalanceReport, String> {
+) -> SolveResult<BalanceReport> {
     let v_target = (vntol * policy.v_target_frac).max(1e-12);
     let mut residuals = vec![0.0f64; channels.len()];
     let mut passes = 0usize;
@@ -198,7 +199,7 @@ pub fn settle_rails<L: RailLoads>(
 /// turns that non-convergence into the same `Err(String)` channel a per-island
 /// Newton failure travels, which the staged orchestrator escalates by
 /// re-solving the group fused on the monolithic engine.
-pub fn ensure_balanced(report: &BalanceReport) -> Result<(), String> {
+pub fn ensure_balanced(report: &BalanceReport) -> SolveResult<()> {
     if report.converged {
         return Ok(());
     }
@@ -206,11 +207,11 @@ pub fn ensure_balanced(report: &BalanceReport) -> Result<(), String> {
         .final_residuals
         .iter()
         .fold(0.0f64, |m, r| m.max(r.abs()));
-    Err(format!(
+    Err(SolveError::refused(format!(
         "rail balance did not converge after {} passes (worst KCL residual \
          {worst:.3e} A); refusing to stream an unbalanced rail",
         report.outer_passes
-    ))
+    )))
 }
 
 /// One scalar-Newton update on rail `i`. Returns the residual current found
@@ -223,7 +224,7 @@ fn balance_one<L: RailLoads>(
     gmin: f64,
     abstol: f64,
     policy: &BalancePolicy,
-) -> Result<f64, String> {
+) -> SolveResult<f64> {
     // The surplus gmin current the per-block shunts over-drew (module doc).
     // Cascade note: the gmin count is unaffected by children. A child's own
     // blocks stamp their gmin on the CHILD's rail copy (counted by the child's
@@ -307,7 +308,7 @@ mod tests {
     }
 
     impl RailLoads for LinearLoads {
-        fn resolve(&mut self, i: usize, v_rail: f64) -> Result<(), String> {
+        fn resolve(&mut self, i: usize, v_rail: f64) -> SolveResult<()> {
             self.v[i] = v_rail;
             self.resolves += 1;
             Ok(())
@@ -481,7 +482,7 @@ mod tests {
     }
 
     impl RailLoads for CascadeLoads {
-        fn resolve(&mut self, i: usize, v_rail: f64) -> Result<(), String> {
+        fn resolve(&mut self, i: usize, v_rail: f64) -> SolveResult<()> {
             self.v[i] = v_rail;
             Ok(())
         }
@@ -600,7 +601,7 @@ mod tests {
     /// non-convergence instead of erroring or spinning forever.
     struct FlatLoads;
     impl RailLoads for FlatLoads {
-        fn resolve(&mut self, _i: usize, _v: f64) -> Result<(), String> {
+        fn resolve(&mut self, _i: usize, _v: f64) -> SolveResult<()> {
             Ok(())
         }
         fn rail_voltage(&self, _i: usize) -> f64 {
@@ -652,7 +653,7 @@ mod tests {
         let err = ensure_balanced(&rep)
             .expect_err("a non-converged balance must be refused, not accepted");
         assert!(
-            err.contains("rail balance did not converge"),
+            err.to_string().contains("rail balance did not converge"),
             "unexpected refusal message: {err}"
         );
     }

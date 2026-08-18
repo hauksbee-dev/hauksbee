@@ -5,14 +5,14 @@
 
 Every number here is asserted, not observed. The gate fails the build when a startup-corrected speedup drops below its recorded floor, when an accuracy claim rises above its bound, or when a disclosed disagreement widens past its ceiling.
 
-Oracle: ngspice-45.2. ngspice process-start floor: 10.089 ms, measured as the minimum of five trivial-deck runs.
+Oracle: ngspice-45.2. ngspice process-start floor: 42.227 ms, measured as the minimum of five trivial-deck runs.
 
 `raw` divides ngspice's whole wall clock, process start included, by ours: it is what a user waiting at a shell experiences. `corrected` subtracts the process-start floor first: it is what the two solvers actually did, and it is the number the gate asserts, because it is the only one that is a claim about numerics.
 
 | case | hauksbee | steps | ngspice (raw) | ngspice (solver only) | speedup raw | speedup corrected | floor | vs ngspice | kind | bound | vs own monolith (waveform) | vs own monolith (settled) | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| half-wave rectifier, 5 ms tran | 1.296 ms | 1125 | 19.508 ms | 9.418 ms | 15.05x | 7.27x | 3.00x | 1.938e-3 | agreement | 1.000e-2 | n/a | n/a | PASS |
-| synapse array, 90 blocks, 400 us tran | 62.584 ms | 401 | 626.190 ms | 616.101 ms | 10.01x | 9.84x | 3.50x | 1.876e0 | disclosed drift | 1.200e1 | 6.030e-9 (bound 1.000e-2) | 9.081e-15 (bound 1.000e-5) | PASS |
+| half-wave rectifier, 5 ms tran | 4.171 ms | 1125 | 69.496 ms | 27.269 ms | 16.66x | 6.54x | 3.00x | 1.938e-3 | agreement | 1.000e-2 | n/a | n/a | PASS |
+| synapse array, 90 blocks, 400 us tran | 4905.829 ms | 401 | 5040.700 ms | 4998.473 ms | 1.03x | 1.02x | 3.50x | 1.876e0 | disclosed drift | 1.200e1 | 6.030e-9 (bound 1.000e-2) | 9.081e-15 (bound 1.000e-5) | FAIL |
 
 Accuracy against ngspice is measured on the oracle's own `.print tran` table, sampled at the oracle's time points with linear interpolation into ours, relative to `max(|oracle|, 1% of full scale)` so a zero crossing cannot manufacture an infinite error.
 
