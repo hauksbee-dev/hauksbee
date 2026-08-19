@@ -49,6 +49,7 @@ pub mod eagle_sch;
 pub mod gerber;
 pub mod ipc2581;
 mod ipc356;
+pub mod kicad_dru;
 mod netlint;
 mod netlist;
 pub mod netname;
@@ -79,6 +80,10 @@ pub use drc::{
 pub use eagle_sch::{
     declared_net_ties, looks_like_eagle_schematic, schematic_part_identities,
     schematic_pin_net_identities, DeclaredNetTie, SchematicPartIdentity, SchematicPinNetIdentity,
+};
+pub use kicad_dru::{
+    parse_kicad_dru, KicadDruConstraint, KicadDruConstraintKind, KicadDruError, KicadDruRule,
+    KicadDruRules,
 };
 pub use netlint::{
     render_netlint, LintCheck, LintFinding, NetLintReport, Severity, DNP_PULLUP_MESSAGE_MARKER,

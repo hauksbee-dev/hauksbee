@@ -13,10 +13,7 @@ use crate::result::{
     JsonInputEvidence, JsonReport,
 };
 
-use super::{
-    kicad_pro_clearance_rule_provenance, kicad_pro_clearance_rules, lint_fails, si_fails,
-    OutputMode,
-};
+use super::{lint_fails, si_fails, KicadClearanceInput, OutputMode};
 
 /// Run the full static suite and print it in `mode`, then (under `strict`) exit
 /// non-zero if any real finding gates.
@@ -113,12 +110,23 @@ pub(crate) fn emit_with_schematic_quiet(
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
     .with_input_artifact(board_path, raw, input_kind)?;
-    let project_rules = (!altium_present).then(|| kicad_pro_clearance_rules(board_path, board));
-    let project_rules_read = project_rules.as_ref().is_some_and(Option::is_some);
+    let clearance_input = (!altium_present)
+        .then(|| KicadClearanceInput::load(board_path, board))
+        .transpose()?;
+    let evidence = evidence.with_custom_rules_coverage(
+        clearance_input
+            .as_ref()
+            .and_then(KicadClearanceInput::custom_coverage),
+    )?;
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
-        ExtractedBoard::drc_with_clearance_rules(text, project_rules.flatten())?
+        ExtractedBoard::drc_with_clearance_rules(
+            text,
+            clearance_input
+                .as_ref()
+                .and_then(|input| input.rules.clone()),
+        )?
     };
 
     // The companion schematic's declarations, applied before anything reads the
@@ -155,7 +163,10 @@ pub(crate) fn emit_with_schematic_quiet(
     let provenance = if altium_present {
         crate::result::ClearanceRuleProvenance::tool_default(drc.clearance_mm)
     } else {
-        kicad_pro_clearance_rule_provenance(board_path, text, project_rules_read, drc.clearance_mm)
+        clearance_input
+            .as_ref()
+            .expect("non-Altium check loaded KiCad clearance inputs")
+            .provenance(board_path, text, drc.clearance_mm)
     };
     let mut drc_structured = DrcStructured::from_report_with_ties(
         &drc,
@@ -540,12 +551,17 @@ pub fn gather_findings_with_schematic(
     lib: &ModelLibrary,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
+    let clearance_input = (!altium_present)
+        .then(|| KicadClearanceInput::load(board_path, board))
+        .transpose()?;
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
         ExtractedBoard::drc_with_clearance_rules(
             text,
-            kicad_pro_clearance_rules(board_path, board),
+            clearance_input
+                .as_ref()
+                .and_then(|input| input.rules.clone()),
         )?
     };
 
@@ -951,12 +967,23 @@ pub fn emit_combined_json_with_schematic(
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
     .with_input_artifact(board_path, raw, input_kind)?;
-    let project_rules = (!altium_present).then(|| kicad_pro_clearance_rules(board_path, board));
-    let project_rules_read = project_rules.as_ref().is_some_and(Option::is_some);
+    let clearance_input = (!altium_present)
+        .then(|| KicadClearanceInput::load(board_path, board))
+        .transpose()?;
+    let evidence = evidence.with_custom_rules_coverage(
+        clearance_input
+            .as_ref()
+            .and_then(KicadClearanceInput::custom_coverage),
+    )?;
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
-        ExtractedBoard::drc_with_clearance_rules(text, project_rules.flatten())?
+        ExtractedBoard::drc_with_clearance_rules(
+            text,
+            clearance_input
+                .as_ref()
+                .and_then(|input| input.rules.clone()),
+        )?
     };
     // The companion schematic's declarations, applied before anything reads the
     // findings. Reclassifies, never deletes: a covered contact keeps its layer,
@@ -988,7 +1015,10 @@ pub fn emit_combined_json_with_schematic(
     let provenance = if altium_present {
         crate::result::ClearanceRuleProvenance::tool_default(drc.clearance_mm)
     } else {
-        kicad_pro_clearance_rule_provenance(board_path, text, project_rules_read, drc.clearance_mm)
+        clearance_input
+            .as_ref()
+            .expect("non-Altium JSON check loaded KiCad clearance inputs")
+            .provenance(board_path, text, drc.clearance_mm)
     };
     let drc_structured = DrcStructured::from_report_with_ties(
         &drc,

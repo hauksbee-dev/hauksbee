@@ -29,6 +29,7 @@
 
 use serde::ser::SerializeStruct;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 use hauksbee_extract::{DrcReport, ViolationKind};
 use hauksbee_ir::evidence::Assumption;
@@ -1132,6 +1133,211 @@ pub enum ClearanceRuleSource {
     ToolDefault,
     /// A non-KiCad layout format carried its own clearance value.
     BoardFile,
+    /// A sibling KiCad custom-rules file supplied the report-wide value.
+    CustomRulesFile,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+pub struct CustomRuleScopeOmission {
+    pub name: String,
+    pub line_number: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
+    pub constraint_types: Vec<String>,
+    /// Constraint types whose bounds contain a bare, unitless value. KiCad
+    /// 10.0.5 ignores the whole rule, so this is disclosure, not a fidelity
+    /// qualification on otherwise matching findings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bare_value_constraint_types: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+pub struct CustomRulesCoverage {
+    pub file_name: String,
+    /// KiCad 10.0.5 silently deactivates every custom rule in a file when any
+    /// constraint bound omits its unit.
+    pub file_inactive_due_to_bare_values: bool,
+    pub unevaluated_rules: Vec<CustomRuleScopeOmission>,
+    pub not_covered_rules: Vec<CustomRuleScopeOmission>,
+    pub unsupported_constraint_counts: BTreeMap<String, usize>,
+}
+
+impl CustomRulesCoverage {
+    pub fn from_parsed(file_name: String, parsed: &hauksbee_extract::KicadDruRules) -> Self {
+        let describe = |rule: &hauksbee_extract::KicadDruRule| CustomRuleScopeOmission {
+            name: rule.name.clone(),
+            line_number: rule.line_number,
+            condition: rule.condition.clone(),
+            layer: rule.layer.clone(),
+            constraint_types: rule
+                .constraints
+                .iter()
+                .map(|constraint| constraint.kind.as_str().to_string())
+                .collect(),
+            bare_value_constraint_types: rule
+                .bare_value_constraint_types()
+                .iter()
+                .map(|kind| kind.as_str().to_string())
+                .collect(),
+        };
+        let unevaluated_rules = parsed.unevaluated_rules().map(describe).collect();
+        let not_covered_rules = parsed
+            .rules
+            .iter()
+            .filter(|rule| {
+                rule.constraints.iter().any(|constraint| {
+                    constraint.kind != hauksbee_extract::KicadDruConstraintKind::Clearance
+                })
+            })
+            .map(describe)
+            .collect();
+        Self {
+            file_name,
+            file_inactive_due_to_bare_values: parsed.has_bare_values(),
+            unevaluated_rules,
+            not_covered_rules,
+            unsupported_constraint_counts: parsed.unsupported_constraint_counts.clone(),
+        }
+    }
+
+    pub fn qualifies_clearance_findings(&self) -> bool {
+        !self.file_inactive_due_to_bare_values
+            && self.unevaluated_rules.iter().any(|rule| {
+                rule.bare_value_constraint_types.is_empty()
+                    && rule.constraint_types.iter().any(|kind| kind == "clearance")
+            })
+    }
+
+    pub fn unevaluated_notice(&self) -> Option<String> {
+        if self.unevaluated_rules.is_empty() {
+            return None;
+        }
+        use std::fmt::Write as _;
+        let bare_rules = self
+            .unevaluated_rules
+            .iter()
+            .filter(|rule| !rule.bare_value_constraint_types.is_empty())
+            .collect::<Vec<_>>();
+        let scoped_rules = self
+            .unevaluated_rules
+            .iter()
+            .filter(|rule| rule.bare_value_constraint_types.is_empty())
+            .collect::<Vec<_>>();
+        let mut notice = String::new();
+
+        if !bare_rules.is_empty() {
+            let count = bare_rules.len();
+            if self.file_inactive_due_to_bare_values {
+                let _ = writeln!(
+                    notice,
+                    "CUSTOM RULES FILE INACTIVE: KiCad 10.0.5 also ignores the entire {} file because it contains {count} bare-value rule{}; Hauksbee did not apply any rule from this file:",
+                    self.file_name,
+                    if count == 1 { "" } else { "s" },
+                );
+            } else {
+                let _ = writeln!(
+                    notice,
+                    "CUSTOM RULES NOT EVALUATED: {count} bare-value rule{} in {} {} not applied:",
+                    if count == 1 { "" } else { "s" },
+                    self.file_name,
+                    if count == 1 { "was" } else { "were" },
+                );
+            }
+            for rule in bare_rules {
+                let types = rule.bare_value_constraint_types.join(", ");
+                let _ = writeln!(
+                    notice,
+                    "  {:?} (line {}, {types}): KiCad 10.0.5 also ignores this bare-value rule; it needs an explicit unit (for example, mm).",
+                    rule.name, rule.line_number,
+                );
+            }
+        }
+
+        if !scoped_rules.is_empty() && !self.file_inactive_due_to_bare_values {
+            let conditional = scoped_rules
+                .iter()
+                .all(|rule| rule.condition.is_some() && rule.layer.is_none());
+            let count = scoped_rules.len();
+            if conditional {
+                let _ = writeln!(
+                    notice,
+                    "CUSTOM RULES NOT EVALUATED: {count} rule{} in {} {} conditional and hauksbee cannot evaluate {} condition{}:",
+                    if count == 1 { "" } else { "s" },
+                    self.file_name,
+                    if count == 1 { "is" } else { "are" },
+                    if count == 1 { "its" } else { "their" },
+                    if count == 1 { "" } else { "s" },
+                );
+            } else {
+                let _ = writeln!(
+                    notice,
+                    "CUSTOM RULES NOT EVALUATED: {count} scoped rule{} in {} cannot be applied report-wide:",
+                    if count == 1 { "" } else { "s" },
+                    self.file_name,
+                );
+            }
+            for rule in scoped_rules {
+                let scope = match (&rule.condition, &rule.layer) {
+                    (Some(condition), Some(layer)) => format!(" when {condition} on {layer}"),
+                    (Some(condition), None) => format!(" when {condition}"),
+                    (None, Some(layer)) => format!(" on {layer}"),
+                    (None, None) => String::new(),
+                };
+                let _ = writeln!(notice, "  {:?}{scope}", rule.name);
+            }
+        }
+
+        if self.qualifies_clearance_findings() {
+            notice.push_str(
+                "Copper-clearance findings may therefore be judged against the wrong limit.",
+            );
+        } else if !self.not_covered_rules.is_empty()
+            || !self.unsupported_constraint_counts.is_empty()
+        {
+            notice.push_str(
+                "These rules govern checks hauksbee does not report, so they do not qualify reported findings; they are listed in NOT COVERED.",
+            );
+        }
+        Some(notice)
+    }
+
+    pub fn not_covered_summary(&self) -> Option<String> {
+        if self.not_covered_rules.is_empty() && self.unsupported_constraint_counts.is_empty() {
+            return None;
+        }
+        let rules = self
+            .not_covered_rules
+            .iter()
+            .map(|rule| {
+                format!(
+                    "{:?} ({})",
+                    rule.name,
+                    rule.constraint_types
+                        .iter()
+                        .filter(|kind| kind.as_str() != "clearance")
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let unsupported = self
+            .unsupported_constraint_counts
+            .iter()
+            .map(|(kind, count)| format!("{kind}={count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "Custom rules not covered in {}: {}{}{} Hauksbee has no hole-clearance, board-edge-clearance, or other listed custom-constraint checks; these rules are parsed and disclosed but do not qualify reported copper-clearance findings.",
+            self.file_name,
+            rules,
+            if rules.is_empty() || unsupported.is_empty() { "" } else { "; " },
+            unsupported,
+        ))
+    }
 }
 
 /// Machine-readable provenance for a reported clearance value.
@@ -1145,6 +1351,12 @@ pub struct ClearanceRuleProvenance {
     /// be read. In both cases `source` is `defaulted`: invented evidence does not
     /// become project evidence merely because a file existed.
     pub project_file_found: bool,
+    /// The netclass value replaced by a report-wide custom rule, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overridden_project_value_mm: Option<f64>,
+    /// Parsed custom-rule coverage, including scopes Hauksbee did not evaluate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_rules: Option<CustomRulesCoverage>,
 }
 
 impl Default for ClearanceRuleProvenance {
@@ -1159,6 +1371,8 @@ impl ClearanceRuleProvenance {
             source: ClearanceRuleSource::ProjectFileFound,
             value_mm,
             project_file_found: true,
+            overridden_project_value_mm: None,
+            custom_rules: None,
         }
     }
 
@@ -1167,6 +1381,8 @@ impl ClearanceRuleProvenance {
             source: ClearanceRuleSource::Defaulted,
             value_mm,
             project_file_found,
+            overridden_project_value_mm: None,
+            custom_rules: None,
         }
     }
 
@@ -1175,6 +1391,8 @@ impl ClearanceRuleProvenance {
             source: ClearanceRuleSource::BoardFile,
             value_mm,
             project_file_found: false,
+            overridden_project_value_mm: None,
+            custom_rules: None,
         }
     }
 
@@ -1183,7 +1401,28 @@ impl ClearanceRuleProvenance {
             source: ClearanceRuleSource::ToolDefault,
             value_mm,
             project_file_found: false,
+            overridden_project_value_mm: None,
+            custom_rules: None,
         }
+    }
+
+    pub fn custom_rules_file(
+        value_mm: f64,
+        overridden_project_value_mm: Option<f64>,
+        coverage: CustomRulesCoverage,
+    ) -> Self {
+        Self {
+            source: ClearanceRuleSource::CustomRulesFile,
+            value_mm,
+            project_file_found: overridden_project_value_mm.is_some(),
+            overridden_project_value_mm,
+            custom_rules: Some(coverage),
+        }
+    }
+
+    pub fn with_custom_rules(mut self, coverage: CustomRulesCoverage) -> Self {
+        self.custom_rules = Some(coverage);
+        self
     }
 
     pub fn is_defaulted(&self) -> bool {
@@ -1215,6 +1454,13 @@ impl ClearanceRuleProvenance {
             ClearanceRuleSource::BoardFile => {
                 format!("the board-file {value_mm:.3} mm clearance rule")
             }
+            ClearanceRuleSource::CustomRulesFile => format!(
+                "the {value_mm:.3} mm custom rule from {}",
+                self.custom_rules
+                    .as_ref()
+                    .map(|coverage| coverage.file_name.as_str())
+                    .unwrap_or("the sibling .kicad_dru")
+            ),
         }
     }
 
@@ -1238,7 +1484,36 @@ impl ClearanceRuleProvenance {
                 "CLEARANCE RULE SOURCE: clearance carried by the board file (report-wide value {:.3} mm).",
                 self.value_mm
             ),
+            ClearanceRuleSource::CustomRulesFile => {
+                let file = self
+                    .custom_rules
+                    .as_ref()
+                    .map(|coverage| coverage.file_name.as_str())
+                    .unwrap_or("sibling .kicad_dru");
+                match self.overridden_project_value_mm {
+                    Some(project) => format!(
+                        "CLEARANCE RULE SOURCE: custom rules file {file} (report-wide value {:.3} mm), which overrides the .kicad_pro netclass value of {project:.3} mm.",
+                        self.value_mm
+                    ),
+                    None => format!(
+                        "CLEARANCE RULE SOURCE: custom rules file {file} (report-wide value {:.3} mm).",
+                        self.value_mm
+                    ),
+                }
+            }
         }
+    }
+
+    pub fn custom_rules_notice(&self) -> Option<String> {
+        self.custom_rules
+            .as_ref()
+            .and_then(CustomRulesCoverage::unevaluated_notice)
+    }
+
+    pub fn custom_rules_not_covered(&self) -> Option<String> {
+        self.custom_rules
+            .as_ref()
+            .and_then(CustomRulesCoverage::not_covered_summary)
     }
 
     /// Prominent source + unlocking-input sentence for a CLI report.
@@ -1679,6 +1954,9 @@ impl DrcStructured {
             );
         }
         let _ = writeln!(s, "{}", provenance.cli_notice());
+        if let Some(notice) = provenance.custom_rules_notice() {
+            let _ = writeln!(s, "{notice}");
+        }
         if let Some(note) = self.default_rule_flood_note(provenance) {
             let _ = writeln!(s, "{note}");
         }
@@ -2593,6 +2871,50 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
 mod tests {
     use super::*;
     use hauksbee_extract::{DrcFinding, Item, ItemKind};
+
+    #[test]
+    fn doorbell_custom_rule_provenance_names_override_and_coverage_gap() {
+        let parsed = hauksbee_extract::parse_kicad_dru(include_str!(
+            "../../../qc/blind_trials/work/doorbell/kicad/doorbell.kicad_dru"
+        ))
+        .unwrap();
+        let coverage = CustomRulesCoverage::from_parsed("doorbell.kicad_dru".into(), &parsed);
+        let provenance = ClearanceRuleProvenance::custom_rules_file(0.127, Some(0.2), coverage);
+        assert_eq!(
+            provenance.source_notice(),
+            "CLEARANCE RULE SOURCE: custom rules file doorbell.kicad_dru (report-wide value 0.127 mm), which overrides the .kicad_pro netclass value of 0.200 mm."
+        );
+        let notice = provenance.custom_rules_notice().unwrap();
+        assert!(notice.contains("CUSTOM RULES NOT EVALUATED: 1 rule"));
+        assert!(notice.contains("PTH hole-to-copper clearance"));
+        assert!(notice.contains("do not qualify reported findings"));
+        let not_covered = provenance.custom_rules_not_covered().unwrap();
+        assert!(not_covered.contains("via/NPTH hole-to-copper clearance"));
+        assert!(not_covered.contains("board-edge copper clearance"));
+    }
+
+    #[test]
+    fn bare_value_rule_uses_custom_rule_disclosure_without_qualifying_findings() {
+        let parsed = hauksbee_extract::parse_kicad_dru(include_str!(
+            "../../hauksbee-extract/tests/fixtures/kicad_dru_bare_scope.kicad_dru"
+        ))
+        .unwrap();
+        let coverage = CustomRulesCoverage::from_parsed("scope.kicad_dru".into(), &parsed);
+        assert!(coverage.file_inactive_due_to_bare_values);
+        assert_eq!(coverage.unevaluated_rules.len(), 1);
+        let bare = &coverage.unevaluated_rules[0];
+        assert_eq!(bare.name, "bare rule");
+        assert_eq!(bare.line_number, 3);
+        assert_eq!(bare.bare_value_constraint_types, ["clearance"]);
+        assert!(!coverage.qualifies_clearance_findings());
+
+        let notice = coverage.unevaluated_notice().unwrap();
+        assert!(notice.contains("CUSTOM RULES FILE INACTIVE"));
+        assert!(notice.contains("ignores the entire scope.kicad_dru file"));
+        assert!(notice.contains("\"bare rule\" (line 3, clearance)"));
+        assert!(notice.contains("KiCad 10.0.5 also ignores this bare-value rule"));
+        assert!(notice.contains("needs an explicit unit"));
+    }
 
     /// No routing marker may reach the JSON surface.
     ///
