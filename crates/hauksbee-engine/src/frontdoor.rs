@@ -23,7 +23,8 @@ use hauksbee_models::ModelLibrary;
 use crate::binder::bind_board;
 use crate::engine::HauksbeeEngine;
 use crate::plain::{
-    plain_drc_structured, plain_netlint, plain_si, HeadsUp, PlainFinding, PlainLevel, PlainReport,
+    plain_drc_structured_with_rule_source, plain_netlint, plain_si, HeadsUp, PlainFinding,
+    PlainLevel, PlainReport,
 };
 use crate::result::{BindSummary, JsonNote, JsonNoteKind, Refusal};
 
@@ -502,6 +503,13 @@ pub struct WebReport {
     pub file_name: String,
     pub num_components: usize,
     pub num_nets: usize,
+    /// The rule source used by the copper section. A browser must not infer that
+    /// a fallback value came from the uploaded design.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance_rule_source: Option<crate::result::ClearanceRuleProvenance>,
+    /// The same structured order-decision buckets emitted by CLI report JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triage: Option<crate::plain::OrderTriage>,
     /// The single overall headline across all sections.
     pub headline: String,
     /// Whether the STATIC analysis left an undermined run-level claim (input
@@ -859,6 +867,8 @@ fn unreadable_with_import_failure(
         file_name: file_name.to_string(),
         num_components: 0,
         num_nets: 0,
+        clearance_rule_source: None,
+        triage: None,
         headline: "Could not read the file.".to_string(),
         run_level_undermined: false,
         serious: 0,
@@ -985,6 +995,22 @@ fn analyze_normalized_with_ties(
     // Render from the grouped structure (single source of truth shared with the
     // CLI text/plain/json surfaces): duplicates collapsed, and gap==rule labelled
     // "at minimum clearance (no margin)" rather than the wrong "below the rule".
+    let clearance_rule_source = if is_gerber {
+        None
+    } else if is_binary {
+        Some(crate::result::ClearanceRuleProvenance::tool_default(
+            drc.clearance_mm,
+        ))
+    } else if text_view.is_some_and(|text| !text.contains("(kicad_pcb")) {
+        Some(crate::result::ClearanceRuleProvenance::board_file(
+            drc.clearance_mm,
+        ))
+    } else {
+        Some(crate::result::ClearanceRuleProvenance::defaulted(
+            drc.clearance_mm,
+            false,
+        ))
+    };
     let drc_structured = crate::result::DrcStructured::from_report_with_ties(
         &drc,
         qualification.as_ref(),
@@ -992,8 +1018,18 @@ fn analyze_normalized_with_ties(
             .as_deref()
             .is_some_and(|text| text.contains("<eagle"))
             && schematic_ties.is_none(),
+    )
+    .with_clearance_rule_provenance(
+        clearance_rule_source
+            .clone()
+            .unwrap_or_else(|| crate::result::ClearanceRuleProvenance::defaulted(0.0, false)),
     );
-    let drc_plain = plain_drc_structured(&drc_structured);
+    let gerber_default_source =
+        crate::result::ClearanceRuleProvenance::defaulted(drc_structured.clearance_rule_mm, false);
+    let drc_rule_source = clearance_rule_source
+        .as_ref()
+        .unwrap_or(&gerber_default_source);
+    let drc_plain = plain_drc_structured_with_rule_source(&drc_structured, drc_rule_source);
 
     // Bind FIRST (also consumed below for the report panel and evidence): the
     // lint/SI section verdicts need the unmodelled-critical part list so the
@@ -1035,7 +1071,18 @@ fn analyze_normalized_with_ties(
                 heads_up: Vec::new(),
             }
         } else {
-            WebSection::from_plain("Copper spacing (DRC)", &drc_plain)
+            let provenance = clearance_rule_source
+                .as_ref()
+                .expect("non-gerber DRC has clearance provenance");
+            let mut section =
+                WebSection::from_plain(drc_structured.section_title(provenance), &drc_plain);
+            let mut lead = provenance.web_notice();
+            if let Some(note) = drc_structured.default_rule_flood_note(provenance) {
+                lead.push(' ');
+                lead.push_str(&note);
+            }
+            section.verdict = format!("{lead} {}", section.verdict);
+            section
         },
         WebSection::from_plain("Connectivity & wiring", &lint_plain),
         WebSection::from_plain("Signal integrity", &si_plain),
@@ -1047,12 +1094,26 @@ fn analyze_normalized_with_ties(
     // read "Looks healthy". Fold it in so all four personas agree: a Serious
     // verdict becomes a serious WebFinding (raising serious/total), an Info
     // verdict becomes a heads-up (suppressing a false "Looks healthy").
-    if let Some(section) = crate::usb_c_report(board)
-        .as_ref()
-        .and_then(usbc_web_section)
-    {
+    let usbc = crate::usb_c_report(board);
+    if let Some(section) = usbc.as_ref().and_then(usbc_web_section) {
         sections.push(section);
     }
+
+    let usbc_reliable = crate::reports::usb_c::scoped_blockers(board, &verdict_blockers).is_empty();
+    let triage = (!is_gerber).then(|| {
+        crate::plain::order_triage_with_rule_source(
+            &drc_structured,
+            clearance_rule_source
+                .as_ref()
+                .expect("non-gerber DRC has clearance provenance"),
+            &lint,
+            &si,
+            usbc.as_ref(),
+            usbc_reliable,
+            bind_summary.unresolved,
+            false,
+        )
+    });
 
     let serious: usize = sections
         .iter()
@@ -1105,11 +1166,7 @@ fn analyze_normalized_with_ties(
     };
     let mut actual_findings = crate::result::lint_findings_json(&lint);
     actual_findings.extend(crate::result::si_findings_json(&si));
-    actual_findings.extend(
-        crate::usb_c_report(board)
-            .as_ref()
-            .and_then(crate::result::usbc_finding_json),
-    );
+    actual_findings.extend(usbc.as_ref().and_then(crate::result::usbc_finding_json));
     let mut actual_maps =
         match evidence.maps_for_drc_with_ties(&drc_structured, qualification.as_ref()) {
             Ok(maps) => maps,
@@ -1263,6 +1320,8 @@ fn analyze_normalized_with_ties(
         file_name: file_name.to_string(),
         num_components: board.components.len(),
         num_nets: bound.net_names.len(),
+        clearance_rule_source,
+        triage,
         headline,
         run_level_undermined,
         serious,
@@ -3337,7 +3396,32 @@ fn main {
         object.remove("import_diagnostics");
         object.remove("import_failure");
         object.remove("model_coverage");
+        object.remove("clearance_rule_source");
+        object.remove("triage");
         let golden_value: serde_json::Value = serde_json::from_str(golden).unwrap();
+        // This task deliberately changes the existing DRC title/verdict so a
+        // single-file upload cannot present fallback rules as the design's.
+        // Normalize only those two required wording changes; every unrelated
+        // pre-existing field remains under the byte-shape golden.
+        let golden_drc = golden_value["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|section| section["title"] == "Copper spacing (DRC)")
+            .unwrap();
+        let drc = object
+            .get_mut("sections")
+            .and_then(serde_json::Value::as_array_mut)
+            .unwrap()
+            .iter_mut()
+            .find(|section| {
+                section["title"]
+                    .as_str()
+                    .is_some_and(|title| title.starts_with("Copper spacing"))
+            })
+            .unwrap();
+        drc["title"] = golden_drc["title"].clone();
+        drc["verdict"] = golden_drc["verdict"].clone();
         assert_eq!(
             value, golden_value,
             "adding evidence must leave every pre-existing web-report field unchanged"
@@ -3462,6 +3546,38 @@ fn main {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["ok"], true);
         assert!(v["sections"].as_array().unwrap().len() >= 3);
+    }
+
+    #[test]
+    fn frontdoor_json_carries_defaulted_clearance_source_and_qualified_text() {
+        let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value["clearance_rule_source"]["source"], "defaulted",
+            "the single-file web path cannot silently imply project rules: {json}"
+        );
+        assert!(value["clearance_rule_source"]["value_mm"].is_number());
+        let drc = value["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|section| {
+                section["title"]
+                    .as_str()
+                    .is_some_and(|title| title.starts_with("Copper spacing"))
+            })
+            .unwrap();
+        assert!(drc["title"].as_str().unwrap().contains("not your rules"));
+        let verdict = drc["verdict"].as_str().unwrap();
+        assert!(verdict.contains("not your rules"), "{verdict}");
+        assert!(verdict.contains("Upload the matching .kicad_pro alongside"));
+        assert!(value["triage"]["do_not_order"].is_array());
+        assert!(value["triage"]["inspect"].is_array());
+        assert!(value["triage"]["checked_ok"].is_array());
+        assert!(value["triage"]["not_covered"]
+            .as_str()
+            .unwrap()
+            .contains("DEFAULT rules, not your rules"));
     }
 
     // A minimal binary Altium .PcbDoc (OLE2 container, two resistors sharing a
