@@ -2,6 +2,68 @@
 # params: voh, vol, vih, vil, tpd_s (propagation delay in seconds),
 #         supply_pin, gnd_pin, plus any function-specific params.
 
+# ── TXB0101: 1-bit auto-direction level translator ─────────────────────────
+# Source: Texas Instruments TXB0101 datasheet SCES639F, Rev. F, 41-page PDF.
+# Section 4 Pin Configuration and Functions assigns VCCA to pin 1 (A-port
+# supply) and VCCB to pin 6 (B-port supply). Section 5.3 Recommended Operating
+# Conditions supplies both voltage ranges and note (2)'s VCCA <= VCCB order.
+[[models]]
+id = "txb0101_identity"
+kind = "digital"
+description = "TI TXB0101 1-bit bidirectional level translator (identity, pin map, and operating envelopes only)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/txb0101.pdf"
+title = "Texas Instruments TXB0101 datasheet, SCES639F, Rev. F"
+locator = "Section 4 Pin Configuration and Functions; Section 5.3 Recommended Operating Conditions"
+sha256 = "a8f7bb9673ecd22e7bb8adb7600d15414718248632d97430c5a61ec970695fc1"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "level_translation_behavior"
+reason = "direction sensing, edge acceleration, drive strength, timing, loading, and partial-power-down behavior are not modeled"
+
+[models.match]
+# Exact family value plus the exact KiCad DCK symbol spelling used by mito.
+value_re = "(?i)^TXB0101(?:DCK)?$"
+
+[models.params]
+identity_only = true
+warning = "TXB0101 is a level translator; only identity, the six-pin map, and sourced operating envelopes are modeled, not translation behavior or timing"
+unlocked_by = "a validated bidirectional TXB0101 translation model covering direction sensing, loading, timing, OE, and partial-power-down behavior"
+
+[models.pins]
+"1" = "vcca"  # Section 4: A-port supply voltage
+"2" = "gnd"
+"3" = "a"
+"4" = "b"
+"5" = "oe"
+"6" = "vccb"  # Section 4: B-port supply voltage
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 1.2
+max_v = 3.6
+basis = "TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, VCCA supply-voltage row"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 1.65
+max_v = 5.5
+basis = "TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, VCCB supply-voltage row"
+
+[[models.envelope]]
+kind = "rail_order"
+lower = "vcca"
+upper = "vccb"
+basis = "TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, note (2): VCCA must be less than or equal to VCCB"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 [[models]]
 id = "74hc595"
 kind = "shift_register"

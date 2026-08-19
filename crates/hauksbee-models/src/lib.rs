@@ -71,8 +71,9 @@ pub use pack::{Pack, PackError, PackManifest, PackRecord, PackStore, Provenance}
 pub use pin_rules::{InferredRole, PinRule, PinRuleTable};
 pub use profile::{LoadProfile, Segment};
 pub use schema::{
-    ComponentKind, ModelCoverage, ModelEntry, ModelSourceReference, Params, PeripheralPower,
-    PeripheralSpec, StrapInternalPull, StrapLevel, StrapPin,
+    ComponentKind, EnvelopeSeverity, ModelCoverage, ModelEntry, ModelSourceReference,
+    OperatingEnvelope, Params, PeripheralPower, PeripheralSpec, StrapInternalPull, StrapLevel,
+    StrapPin,
 };
 pub use sensor_spec::{
     Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError,
@@ -866,6 +867,7 @@ impl ModelLibrary {
             r#match: MatchRules::default(),
             params,
             pins,
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
