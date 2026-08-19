@@ -1147,8 +1147,8 @@ pub struct CustomRuleScopeOmission {
     pub layer: Option<String>,
     pub constraint_types: Vec<String>,
     /// Constraint types whose bounds contain a bare, unitless value. KiCad
-    /// 10.0.5 ignores the whole rule, so this is disclosure, not a fidelity
-    /// qualification on otherwise matching findings.
+    /// 10.0.5 deactivates the whole rules file, so this is disclosure, not a
+    /// fidelity qualification on otherwise matching findings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bare_value_constraint_types: Vec<String>,
 }
@@ -1228,15 +1228,26 @@ impl CustomRulesCoverage {
         let mut notice = String::new();
 
         if !bare_rules.is_empty() {
-            let count = bare_rules.len();
             if self.file_inactive_due_to_bare_values {
+                let rule_count = self.unevaluated_rules.len();
+                let first = bare_rules[0];
                 let _ = writeln!(
                     notice,
-                    "CUSTOM RULES FILE INACTIVE: KiCad 10.0.5 also ignores the entire {} file because it contains {count} bare-value rule{}; Hauksbee did not apply any rule from this file:",
+                    "CUSTOM RULES DISABLED: {} is not in force. Rule {:?} on line {} has a value with no unit, and KiCad discards the ENTIRE rules file when any value lacks one, so all {rule_count} rules in it are inactive and this board is being checked against netclass defaults instead. Add the unit to restore the rest.",
                     self.file_name,
-                    if count == 1 { "" } else { "s" },
+                    first.name,
+                    first.line_number,
                 );
+                for rule in bare_rules.into_iter().skip(1) {
+                    let types = rule.bare_value_constraint_types.join(", ");
+                    let _ = writeln!(
+                        notice,
+                        "  Additional unitless rule: {:?} (line {}, {types}).",
+                        rule.name, rule.line_number,
+                    );
+                }
             } else {
+                let count = bare_rules.len();
                 let _ = writeln!(
                     notice,
                     "CUSTOM RULES NOT EVALUATED: {count} bare-value rule{} in {} {} not applied:",
@@ -1244,14 +1255,14 @@ impl CustomRulesCoverage {
                     self.file_name,
                     if count == 1 { "was" } else { "were" },
                 );
-            }
-            for rule in bare_rules {
-                let types = rule.bare_value_constraint_types.join(", ");
-                let _ = writeln!(
-                    notice,
-                    "  {:?} (line {}, {types}): KiCad 10.0.5 also ignores this bare-value rule; it needs an explicit unit (for example, mm).",
-                    rule.name, rule.line_number,
-                );
+                for rule in bare_rules {
+                    let types = rule.bare_value_constraint_types.join(", ");
+                    let _ = writeln!(
+                        notice,
+                        "  {:?} (line {}, {types}): this bare-value rule needs an explicit unit (for example, mm).",
+                        rule.name, rule.line_number,
+                    );
+                }
             }
         }
 
@@ -1293,8 +1304,9 @@ impl CustomRulesCoverage {
             notice.push_str(
                 "Copper-clearance findings may therefore be judged against the wrong limit.",
             );
-        } else if !self.not_covered_rules.is_empty()
-            || !self.unsupported_constraint_counts.is_empty()
+        } else if !self.file_inactive_due_to_bare_values
+            && (!self.not_covered_rules.is_empty()
+                || !self.unsupported_constraint_counts.is_empty())
         {
             notice.push_str(
                 "These rules govern checks hauksbee does not report, so they do not qualify reported findings; they are listed in NOT COVERED.",
@@ -2901,7 +2913,7 @@ mod tests {
         .unwrap();
         let coverage = CustomRulesCoverage::from_parsed("scope.kicad_dru".into(), &parsed);
         assert!(coverage.file_inactive_due_to_bare_values);
-        assert_eq!(coverage.unevaluated_rules.len(), 1);
+        assert_eq!(coverage.unevaluated_rules.len(), 2);
         let bare = &coverage.unevaluated_rules[0];
         assert_eq!(bare.name, "bare rule");
         assert_eq!(bare.line_number, 3);
@@ -2909,11 +2921,12 @@ mod tests {
         assert!(!coverage.qualifies_clearance_findings());
 
         let notice = coverage.unevaluated_notice().unwrap();
-        assert!(notice.contains("CUSTOM RULES FILE INACTIVE"));
-        assert!(notice.contains("ignores the entire scope.kicad_dru file"));
-        assert!(notice.contains("\"bare rule\" (line 3, clearance)"));
-        assert!(notice.contains("KiCad 10.0.5 also ignores this bare-value rule"));
-        assert!(notice.contains("needs an explicit unit"));
+        assert!(notice.starts_with(
+            "CUSTOM RULES DISABLED: scope.kicad_dru is not in force. Rule \"bare rule\" on line 3 has a value with no unit"
+        ));
+        assert!(notice.contains("all 2 rules in it are inactive"));
+        assert!(notice.contains("being checked against netclass defaults instead"));
+        assert!(notice.contains("Add the unit to restore the rest."));
     }
 
     /// No routing marker may reach the JSON surface.

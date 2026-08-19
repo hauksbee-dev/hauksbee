@@ -2452,7 +2452,7 @@ mod custom_rule_scope_tests {
         assert!(coverage
             .unevaluated_notice()
             .unwrap()
-            .contains("KiCad 10.0.5 also ignores"));
+            .starts_with("CUSTOM RULES DISABLED: scope.kicad_dru is not in force."));
     }
 }
 

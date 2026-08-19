@@ -7,6 +7,8 @@ const DOORBELL_DRU: &str =
 const PRECEDENCE_BOARD: &str = include_str!("fixtures/kicad_dru_precedence.kicad_pcb");
 const PRECEDENCE_PROJECT: &str = include_str!("fixtures/kicad_dru_precedence.kicad_pro");
 const PRECEDENCE_DRU: &str = include_str!("fixtures/kicad_dru_precedence.kicad_dru");
+const PRECEDENCE_RESTRICTIVE_LAST_DRU: &str =
+    include_str!("fixtures/kicad_dru_precedence_restrictive_last.kicad_dru");
 const BARE_SCOPE_DRU: &str = include_str!("fixtures/kicad_dru_bare_scope.kicad_dru");
 
 #[test]
@@ -66,7 +68,7 @@ fn bare_value_rule_is_retained_with_line_and_type_but_not_applied() {
             .unevaluated_rules()
             .map(|rule| rule.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["bare rule"]
+        vec!["bare rule", "mm rule"]
     );
 }
 
@@ -129,8 +131,29 @@ fn malformed_file_and_unknown_version_fail_closed() {
 }
 
 #[test]
-fn last_matching_global_rule_wins_and_can_tighten_project_clearance() {
+fn last_matching_global_rule_wins_when_the_looser_rule_is_last() {
     let parsed = parse_kicad_dru(PRECEDENCE_DRU).expect("precedence DRU parses");
+    assert_eq!(parsed.global_clearance_mm(), Some(0.15));
+
+    let project_rules = clearance_rules_from_kicad_pro(PRECEDENCE_PROJECT, ["A", "B"])
+        .expect("project netclass parses");
+    let project_only =
+        ExtractedBoard::drc_with_clearance_rules(PRECEDENCE_BOARD, Some(project_rules.clone()))
+            .expect("project-only DRC runs");
+
+    let mut overridden = project_rules;
+    overridden.apply_global_clearance_override(parsed.global_clearance_mm().unwrap());
+    let with_dru = ExtractedBoard::drc_with_clearance_rules(PRECEDENCE_BOARD, Some(overridden))
+        .expect("DRU-backed DRC runs");
+
+    assert_eq!(project_only.clearance_violations().count(), 0);
+    assert_eq!(with_dru.clearance_violations().count(), 0);
+}
+
+#[test]
+fn a_restrictive_last_rule_tightens_clearance_and_produces_more_findings() {
+    let parsed = parse_kicad_dru(PRECEDENCE_RESTRICTIVE_LAST_DRU)
+        .expect("restrictive-last precedence DRU parses");
     assert_eq!(parsed.global_clearance_mm(), Some(0.25));
 
     let project_rules = clearance_rules_from_kicad_pro(PRECEDENCE_PROJECT, ["A", "B"])
@@ -144,6 +167,9 @@ fn last_matching_global_rule_wins_and_can_tighten_project_clearance() {
     let with_dru = ExtractedBoard::drc_with_clearance_rules(PRECEDENCE_BOARD, Some(tightened))
         .expect("DRU-backed DRC runs");
 
-    assert_eq!(project_only.clearance_violations().count(), 0);
-    assert!(with_dru.clearance_violations().count() > 0);
+    let project_count = project_only.clearance_violations().count();
+    let custom_count = with_dru.clearance_violations().count();
+    assert_eq!(project_count, 0);
+    assert_eq!(custom_count, 1);
+    assert!(custom_count > project_count);
 }

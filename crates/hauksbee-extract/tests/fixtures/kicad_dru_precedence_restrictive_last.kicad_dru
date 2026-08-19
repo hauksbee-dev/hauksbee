@@ -1,0 +1,7 @@
+(version 1)
+
+# The 0.180 mm gap passes the first rule and violates the later rule.
+(rule "relaxed 0.150 mm first"
+	(constraint clearance (min 0.150mm)))
+(rule "restrictive 0.250 mm second"
+	(constraint clearance (min 0.250mm)))

@@ -1067,6 +1067,13 @@
     },
     "CustomRuleScopeOmission": {
       "properties": {
+        "bare_value_constraint_types": {
+          "description": "Constraint types whose bounds contain a bare, unitless value. KiCad\n10.0.5 deactivates the whole rules file, so this is disclosure, not a\nfidelity qualification on otherwise matching findings.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "condition": {
           "type": [
             "string",
@@ -1085,18 +1092,28 @@
             "null"
           ]
         },
+        "line_number": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "name": {
           "type": "string"
         }
       },
       "required": [
         "name",
+        "line_number",
         "constraint_types"
       ],
       "type": "object"
     },
     "CustomRulesCoverage": {
       "properties": {
+        "file_inactive_due_to_bare_values": {
+          "description": "KiCad 10.0.5 silently deactivates every custom rule in a file when any\nconstraint bound omits its unit.",
+          "type": "boolean"
+        },
         "file_name": {
           "type": "string"
         },
@@ -1123,6 +1140,7 @@
       },
       "required": [
         "file_name",
+        "file_inactive_due_to_bare_values",
         "unevaluated_rules",
         "not_covered_rules",
         "unsupported_constraint_counts"

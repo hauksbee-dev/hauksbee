@@ -7,18 +7,25 @@
 //!
 //! ## Precedence evidence
 //!
-//! The retained precedence probe is
-//! `tests/fixtures/kicad_dru_precedence.kicad_pcb` with its sibling `.kicad_pro`
-//! and `.kicad_dru`. Its two 0.2 mm tracks have a 0.180 mm copper-edge gap and
-//! the project netclass is 0.150 mm. KiCad CLI 10.0.5 reported the later
-//! `restrictive 0.250 mm second` rule and an actual 0.180 mm gap, proving that
-//! the later matching custom rule wins. The doorbell oracle independently
-//! established that a global 0.127 mm custom clearance overrides the sibling
-//! project's 0.200 mm Default netclass even though the custom rule is looser.
+//! The retained probe uses the outlined
+//! `tests/fixtures/kicad_dru_bare_scope.kicad_pcb` and its 0.150 mm project
+//! netclass with the two rule orderings in the `kicad_dru_precedence` fixtures.
+//! Its two 0.2 mm tracks have a 0.180 mm copper-edge gap. With restrictive
+//! 0.250 mm first and relaxed 0.150 mm last, last-wins predicted no violation
+//! while most-restrictive-wins predicted one. KiCad CLI 10.0.5 produced none.
+//! With relaxed first and restrictive last, both hypotheses predicted a
+//! violation. KiCad produced one naming `restrictive 0.250 mm second`, with a
+//! 0.2500 mm rule and 0.1800 mm actual gap. The loose-last result discriminates
+//! the hypotheses and proves that the later matching custom rule wins. Raw
+//! outputs and hashes are retained in
+//! `qc/evidence/drc-parity/kicad-dru-precedence-10.0.5.md`.
+//! The doorbell oracle independently established that a global 0.127 mm custom
+//! clearance overrides the sibling project's 0.200 mm Default netclass even
+//! though the custom rule is looser.
 //!
 //! The retained bare-value scope probe is
 //! `tests/fixtures/kicad_dru_bare_scope.kicad_pcb`; full evidence is in
-//! `qc/evidence/drc-parity/kicad-dru-bare-scope.md`. Its project rule is
+//! `qc/evidence/drc-parity/dru-bare-value-poisons-the-whole-file.md`. Its project rule is
 //! 0.150 mm, its gap is 0.180 mm, and its custom file contains a bare 0.200
 //! rule followed by an explicit 0.200mm rule. KiCad CLI 10.0.5 reported no
 //! clearance violation. Removing only the bare rule made the explicit `mm
@@ -78,8 +85,8 @@ pub struct KicadDruConstraint {
     pub min_mm: Option<f64>,
     pub max_mm: Option<f64>,
     pub opt_mm: Option<f64>,
-    /// KiCad 10.0.5 silently ignores a rule when one of its constraint bounds
-    /// is a bare number rather than an explicitly unit-suffixed distance.
+    /// KiCad 10.0.5 silently deactivates the entire rules file when one of its
+    /// constraint bounds is a bare number rather than a unit-suffixed distance.
     pub has_bare_value: bool,
 }
 
@@ -158,9 +165,10 @@ impl KicadDruRules {
     }
 
     pub fn unevaluated_rules(&self) -> impl Iterator<Item = &KicadDruRule> {
+        let file_inactive = self.has_bare_values();
         self.rules
             .iter()
-            .filter(|rule| !rule.is_global() || rule.has_bare_value())
+            .filter(move |rule| file_inactive || !rule.is_global() || rule.has_bare_value())
     }
 
     pub fn has_bare_values(&self) -> bool {

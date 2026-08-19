@@ -569,6 +569,33 @@ mod tests {
                 .effective_clearance("A", "B"),
             0.25
         );
+
+        std::fs::write(
+            board_path.with_extension("kicad_dru"),
+            "(version 1)\n(rule \"bare\" (constraint clearance (min 0.3)))\n(rule \"explicit\" (constraint clearance (min 0.25mm)))",
+        )
+        .unwrap();
+        let inactive = super::KicadClearanceInput::load(&board_path, &board).unwrap();
+        assert_eq!(
+            inactive
+                .rules
+                .as_ref()
+                .unwrap()
+                .effective_clearance("A", "B"),
+            0.2
+        );
+        let provenance = inactive.provenance(&board_path, "(kicad_pcb)", 0.2);
+        assert_eq!(
+            provenance.source,
+            crate::result::ClearanceRuleSource::ProjectFileFound
+        );
+        assert!(
+            provenance
+                .custom_rules
+                .as_ref()
+                .unwrap()
+                .file_inactive_due_to_bare_values
+        );
     }
 
     /// The gate predicates and the CI artifacts read one rule. These pin the two
