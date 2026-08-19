@@ -46,6 +46,14 @@ use anyhow::{bail, Context, Result};
 
 /// How long to let a single agent-CLI run (codex or claude) go before we kill
 /// it and (maybe) retry.
+///
+/// Keep this fixed rather than scaling it with rendered-page count. Page count
+/// is a poor proxy for extraction work (one dense pin table can take longer
+/// than several simple pages), while a model that has produced nothing after
+/// ten minutes is more likely stuck than productively reading page fourteen.
+/// Scaling upward would make the observed no-answer failure slower without
+/// evidence that it improves card quality; scaling downward would penalise
+/// short but difficult datasheets. `MAX_RENDERED_PAGES` already bounds input.
 const CLI_BACKEND_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Pages rendered and attached as images.
@@ -789,6 +797,7 @@ pub fn kind_is_legal(kind: &str) -> bool {
 }
 
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
+    let example = format_example_for_kind(kind);
     format!(
         r#"You are a SPICE model extraction assistant.
 
@@ -809,6 +818,13 @@ addressable LED driver), do not invent a kind: use the closest legal kind
 for the part's primary electrical behavior (a charger's power path fits
 vreg; a level shifter fits digital) and say in `description` what real
 behavior the chosen kind does not model.
+
+FORMAT EXAMPLE ONLY -- DIFFERENT PART CLASS ({example_part}, kind={example_kind}):
+This is NOT the part being extracted. Your answer must have the SAME SHAPE,
+using this datasheet's part, kind, pins, parameters, ratings, and sources.
+Copying the example's part number or numbers is a WRONG ANSWER.
+
+{example_card}
 
 DATASHEET TEXT (truncated):
 ---
@@ -959,7 +975,93 @@ OUTPUT (TOML only, starting with [[models]]):
         pin_roles = pin_roles_for_kind(kind),
         ratings_hint = ratings_hint_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),
+        example_part = example.part,
+        example_kind = example.kind,
+        example_card = example.card,
     )
+}
+
+/// A complete shape demonstration from a different component class.
+///
+/// Most extractions see the diode example; diode extractions see an NPN card
+/// instead. Extraction resolves an omitted kind before `build_prompt`, so the
+/// selected example is always from a different class than the requested card.
+#[derive(Clone, Copy)]
+struct FormatExample {
+    part: &'static str,
+    kind: &'static str,
+    card: &'static str,
+}
+
+fn format_example_for_kind(kind: &str) -> FormatExample {
+    if kind == "diode" {
+        FormatExample {
+            part: "BC847",
+            kind: "bjt_npn",
+            card: r#"[[models]]
+id = "bc847"
+kind = "bjt_npn"
+description = "BC847 NPN transistor format example"
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "bf"
+low = 110.0
+high = 800.0
+unit = "1"
+kind = "specification-limits"
+basis = "BC847 datasheet Section 5, Electrical characteristics"
+[models.match]
+value_re = "(?i)^BC847"
+[models.params]
+is = 1.0e-14
+bf = 200.0
+nf = 1.0
+vaf = 80.0
+br = 4.0
+[models.pins]
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"
+[models.ratings]
+max_voltage_v = 45.0
+max_current_a = 0.1"#,
+        }
+    } else {
+        FormatExample {
+            part: "1N4148",
+            kind: "diode",
+            card: r#"[[models]]
+id = "1n4148"
+kind = "diode"
+description = "1N4148 switching diode format example"
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "max_voltage_v"
+low = 0.0
+high = 100.0
+unit = "V"
+kind = "specification-limits"
+basis = "1N4148 datasheet Section 2, Limiting values"
+[models.match]
+value_re = "(?i)^1N4148"
+[models.params]
+is = 4.0e-9
+n = 1.9
+rs = 0.6
+[models.pins]
+"1" = "anode"
+"2" = "cathode"
+[models.ratings]
+max_voltage_v = 100.0
+max_current_a = 0.2"#,
+        }
+    }
 }
 
 /// A behavioural-family kind (charger / pmic / balancer) maps to a base
@@ -1184,6 +1286,53 @@ fn call_backend(prompt: &str, args: &Args) -> Result<String> {
     }
 }
 
+/// Is a failed reply visibly only a classification or another tiny fragment?
+///
+/// The length check catches the measured `digital`, `model = "digital"`, and
+/// `answer = "digital"` failures. The shape checks also catch a longer bare
+/// scalar or single-key TOML document without misclassifying a malformed full
+/// `[[models]]` entry as a classification.
+fn reply_is_kind_or_fragment(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.chars().count() < 200 {
+        return true;
+    }
+    if trimmed.contains("[[models]]") {
+        return false;
+    }
+    let bare_scalar = !trimmed.contains('\n') && !trimmed.contains('=');
+    let one_key_table = toml::from_str::<toml::Table>(trimmed)
+        .map(|table| table.len() <= 1)
+        .unwrap_or(false);
+    bare_scalar || one_key_table
+}
+
+/// Build one retry appendix from the latest failure only.
+///
+/// Quoting a short reply back to the model makes the classification-vs-card
+/// mistake concrete. Keeping this as an appendix to `base_prompt` preserves
+/// non-compounding feedback across attempts.
+fn retry_feedback(raw: &str, validation_error: &str) -> String {
+    let fragment_correction = if reply_is_kind_or_fragment(raw) {
+        format!(
+            "YOUR PREVIOUS REPLY, QUOTED VERBATIM:\n--- BEGIN REPLY ---\n{raw}\n\
+             --- END REPLY ---\n\
+             That reply is only the component kind (or another fragment), not the answer. \
+             The kind is only the `kind = \"...\"` FIELD inside the answer. The answer is \
+             the WHOLE `[[models]]` table, with every required section shown in the FORMAT \
+             EXAMPLE.\n\n"
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{fragment_correction}YOUR PREVIOUS ANSWER FAILED VALIDATION WITH:\n\
+         {validation_error}\n\n\
+         Fix exactly those issues and write the corrected WHOLE `[[models]]` TOML table \
+         to model.toml."
+    )
+}
+
 /// Call codex non-interactively and return its (validated) TOML reply.
 ///
 /// Invocation notes learned the hard way:
@@ -1257,8 +1406,8 @@ fn call_agent_backend(
                 // failure grew the prompt without bound and timed out the
                 // final attempt of a long extraction.
                 prompt = format!(
-                    "{base_prompt}\n\nYOUR PREVIOUS ANSWER FAILED VALIDATION WITH:\n{e:#}\n\n\
-                     Fix exactly those issues and write the corrected TOML to model.toml.",
+                    "{base_prompt}\n\n{}",
+                    retry_feedback(&raw, &format!("{e:#}"))
                 );
                 continue;
             }
@@ -1417,6 +1566,13 @@ fn verification_clause(ws: &Workspace) -> String {
 /// one wrong produces a part that binds cleanly and simulates a different
 /// device. So the default is the strongest tier at high reasoning effort rather
 /// than whatever codex happens to default to.
+///
+/// Deliberately keep `high` for non-sol overrides too. The only observed xhigh
+/// Luna failure answered the old prompt's first sub-question instead of the
+/// card task, so it does not isolate effort as the cause; silently dropping a
+/// weaker model to medium could make the pin-map work less reliable. `high` is
+/// already below that xhigh run, and `HAUKSBEE_CODEX_EFFORT` remains the explicit
+/// escape hatch. A per-model default needs comparative benchmark evidence first.
 ///
 /// Override with `--model` or `HAUKSBEE_CODEX_MODEL` / `HAUKSBEE_CODEX_EFFORT`.
 pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
@@ -2181,6 +2337,69 @@ mod tests {
         assert!(prompt.contains("kind = \"specification-limits\""));
         assert!(prompt.contains("min/typ row without a finite published max"));
         assert!(prompt.contains("status = \"unknown\""));
+    }
+
+    #[test]
+    fn prompt_contains_format_only_example_from_a_different_part_class() {
+        let target_part = "TXB0101";
+        let target_kind = "digital";
+        let example = format_example_for_kind(target_kind);
+        let prompt = build_prompt(target_part, target_kind, "datasheet text");
+        let example_start = prompt.find("FORMAT EXAMPLE ONLY").unwrap();
+        let example_end = prompt.find("DATASHEET TEXT (truncated):").unwrap();
+        let example_section = &prompt[example_start..example_end];
+
+        assert_ne!(example.part, target_part);
+        assert_ne!(example.kind, target_kind);
+        assert!(example_section.contains("FORMAT EXAMPLE ONLY -- DIFFERENT PART CLASS"));
+        assert!(example_section.contains(example.part));
+        assert!(!example_section.contains(target_part));
+        assert!(example_section.contains("SAME SHAPE"));
+        assert!(example_section.contains("Copying the example's part number or numbers"));
+        assert!(example_section.contains("[models.source]"));
+        assert!(example_section.contains("[[models.source.uncertainty]]"));
+        assert!(example_section.contains("basis = \"1N4148 datasheet Section 2"));
+        assert!(example_section.contains("[models.match]"));
+        assert!(example_section.contains("[models.params]"));
+        assert!(example_section.contains("[models.pins]"));
+        assert!(example_section.contains("[models.ratings]"));
+        parse_and_validate_reply(example.card, example.part, example.kind)
+            .expect("the worked example itself must be a valid complete model entry");
+
+        let diode_example = format_example_for_kind("diode");
+        assert_eq!(diode_example.kind, "bjt_npn");
+        assert_ne!(diode_example.kind, "diode");
+        parse_and_validate_reply(diode_example.card, diode_example.part, diode_example.kind)
+            .expect("the diode-target alternative example must also validate");
+    }
+
+    #[test]
+    fn answer_contract_stays_before_kind_and_format_example() {
+        let prompt = build_prompt("TXB0101", "digital", "datasheet text");
+        let contract = prompt.find("YOUR ANSWER IS ONE THING ONLY").unwrap();
+        let kind = prompt.find("Component kind:").unwrap();
+        let example = prompt.find("FORMAT EXAMPLE ONLY").unwrap();
+        assert!(
+            contract < kind,
+            "answer contract must precede the kind line"
+        );
+        assert!(
+            contract < example,
+            "answer contract must precede the example"
+        );
+    }
+
+    #[test]
+    fn short_reply_feedback_quotes_kind_and_corrects_it_to_a_field() {
+        let feedback = retry_feedback("digital", "reply contains no [[models]] table");
+        assert!(feedback.contains(
+            "YOUR PREVIOUS REPLY, QUOTED VERBATIM:\n--- BEGIN REPLY ---\ndigital\n--- END REPLY ---"
+        ));
+        assert!(feedback.contains("only the component kind (or another fragment)"));
+        assert!(feedback.contains("kind is only the `kind = \"...\"` FIELD"));
+        assert!(feedback.contains("answer is the WHOLE `[[models]]` table"));
+        assert!(reply_is_kind_or_fragment("model = \"digital\""));
+        assert!(reply_is_kind_or_fragment("answer = \"digital\""));
     }
 
     #[test]
