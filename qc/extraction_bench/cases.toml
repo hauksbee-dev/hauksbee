@@ -82,9 +82,17 @@ value = 5.5
 tolerance = 0.005
 unit = "V"
 
-# TI TXB0101 Rev. F, Section 5.20 Switching Characteristics (datasheet page
-# 12): at VCCA = 3.3 V +/- 0.3 V and VCCB = 5 V +/- 0.5 V, A-to-B tpd max is
-# 4 ns. Hauksbee timing parameters use SI seconds.
+# TI TXB0101 Rev. F, Section 5.21 Switching Characteristics, Other Packages
+# (datasheet page 13): at VCCA = 3.3 V +/- 0.3 V and VCCB = 5 V +/- 0.5 V,
+# A-to-B tpd max is 4 ns. Hauksbee timing parameters use SI seconds.
+#
+# The package split matters and this citation was wrong before. The datasheet
+# gives every characteristics table twice, once for DRY and once for Other
+# Packages, and the Package Information table reads SOT-23 (DBV) and
+# USON (DRY), so a TXB0101DBV is an Other Packages part. Section 5.20 on
+# page 12 is the DRY table and its A-to-B tpd maxima are 6.3, 5.2 and 4.7 ns.
+# The 4 ns figure exists ONLY in 5.21 on page 13, so a card citing page 12
+# cannot carry this value at all.
 [[cases.facts]]
 name = "tpd_a_to_b_max_s"
 value = 4.0e-9
