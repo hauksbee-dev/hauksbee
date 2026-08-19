@@ -101,10 +101,58 @@ pub fn kicad_pro_clearance_rules(
     board: &ExtractedBoard,
 ) -> Option<hauksbee_extract::ClearanceRules> {
     let text = std::fs::read_to_string(board_path.with_extension("kicad_pro")).ok()?;
+    // A syntactically valid project with no usable class still leaves the DRC
+    // on the extractor fallback. Do not let `Some(defaults)` promote that to
+    // project-backed evidence.
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let has_usable_rule = value
+        .pointer("/net_settings/classes")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|classes| {
+            classes.iter().any(|class| {
+                class
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+                    && (class
+                        .get("clearance")
+                        .and_then(serde_json::Value::as_f64)
+                        .is_some_and(|value| value > 0.0)
+                        || class
+                            .get("diff_pair_gap")
+                            .and_then(serde_json::Value::as_f64)
+                            .is_some_and(|value| value > 0.0))
+            })
+        });
+    if !has_usable_rule {
+        return None;
+    }
     hauksbee_extract::clearance_rules_from_kicad_pro(
         &text,
         board.nets.iter().map(|n| n.name.as_str()),
     )
+}
+
+/// Preserve the provenance that [`kicad_pro_clearance_rules`] alone cannot
+/// express. `rules_read=false` is always defaulted, whether the sibling is
+/// absent or present-but-unusable; the latter distinction is retained only so
+/// the human instruction does not falsely say the file was missing.
+pub fn kicad_pro_clearance_rule_provenance(
+    board_path: &Path,
+    layout_text: &str,
+    rules_read: bool,
+    value_mm: f64,
+) -> crate::result::ClearanceRuleProvenance {
+    if rules_read {
+        crate::result::ClearanceRuleProvenance::project_file(value_mm)
+    } else if !layout_text.contains("(kicad_pcb") {
+        crate::result::ClearanceRuleProvenance::board_file(value_mm)
+    } else {
+        crate::result::ClearanceRuleProvenance::defaulted(
+            value_mm,
+            board_path.with_extension("kicad_pro").is_file(),
+        )
+    }
 }
 
 /// Strict-mode predicate for the connectivity/resource lint: any high/medium
@@ -310,6 +358,76 @@ mod tests {
     use hauksbee_extract::{
         LintCheck, LintFinding, NetLintReport, Severity, SiCheck, SiFinding, SiReport, SiSeverity,
     };
+
+    #[test]
+    fn missing_project_defaults_and_present_project_rules_are_distinguished() {
+        let dir = tempfile::tempdir().unwrap();
+        let board_path = dir.path().join("board.kicad_pcb");
+        let board = hauksbee_extract::ExtractedBoard::from_kicad_pcb(include_str!(
+            "../../../hauksbee-ci/examples/boards/blinky.kicad_pcb"
+        ))
+        .unwrap();
+
+        let missing = super::kicad_pro_clearance_rules(&board_path, &board);
+        assert!(missing.is_none());
+        let missing_source = super::kicad_pro_clearance_rule_provenance(
+            &board_path,
+            "(kicad_pcb)",
+            missing.is_some(),
+            0.2,
+        );
+        assert_eq!(
+            missing_source.source,
+            crate::result::ClearanceRuleSource::Defaulted
+        );
+
+        std::fs::write(
+            board_path.with_extension("kicad_pro"),
+            r#"{"net_settings":{"classes":[]}}"#,
+        )
+        .unwrap();
+        let unreadable = super::kicad_pro_clearance_rules(&board_path, &board);
+        assert!(unreadable.is_none());
+        let unreadable_source = super::kicad_pro_clearance_rule_provenance(
+            &board_path,
+            "(kicad_pcb)",
+            unreadable.is_some(),
+            0.2,
+        );
+        assert!(unreadable_source.project_file_found);
+        assert!(unreadable_source.cli_notice().contains("Repair or replace"));
+        assert!(!unreadable_source
+            .cli_notice()
+            .contains("Place the matching"));
+
+        std::fs::write(
+            board_path.with_extension("kicad_pro"),
+            r#"{"net_settings":{"classes":[{"name":"Default","clearance":0.1}]}}"#,
+        )
+        .unwrap();
+        let found = super::kicad_pro_clearance_rules(&board_path, &board);
+        assert!(found.is_some());
+        let found_source = super::kicad_pro_clearance_rule_provenance(
+            &board_path,
+            "(kicad_pcb)",
+            found.is_some(),
+            0.1,
+        );
+        assert_eq!(
+            found_source.source,
+            crate::result::ClearanceRuleSource::ProjectFileFound
+        );
+
+        std::fs::write(
+            board_path.with_extension("kicad_pro"),
+            r#"{"net_settings":{"classes":[]}}"#,
+        )
+        .unwrap();
+        assert!(
+            super::kicad_pro_clearance_rules(&board_path, &board).is_none(),
+            "an empty project must not be promoted above the fallback"
+        );
+    }
 
     /// The gate predicates and the CI artifacts read one rule. These pin the two
     /// families whose gate is wider than the `serious` severity, from both

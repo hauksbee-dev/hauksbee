@@ -537,6 +537,54 @@
       ],
       "type": "object"
     },
+    "ClearanceRuleProvenance": {
+      "description": "Machine-readable provenance for a reported clearance value.",
+      "properties": {
+        "project_file_found": {
+          "description": "Distinguishes a missing sibling from a present file whose rules could not\nbe read. In both cases `source` is `defaulted`: invented evidence does not\nbecome project evidence merely because a file existed.",
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/definitions/ClearanceRuleSource"
+        },
+        "value_mm": {
+          "description": "The default/report-wide value in millimetres. Pair-specific resolved\nvalues remain on each [`DrcGroup`] as `rule_mm`.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "source",
+        "value_mm",
+        "project_file_found"
+      ],
+      "type": "object"
+    },
+    "ClearanceRuleSource": {
+      "description": "Where the clearance value applied by DRC came from.  A default is not a\ndesign rule merely because the geometric check had to use it.",
+      "oneOf": [
+        {
+          "const": "project_file_found",
+          "description": "Netclass rules were read from the sibling KiCad project file.",
+          "type": "string"
+        },
+        {
+          "const": "defaulted",
+          "description": "No usable project rules were available, so the extractor's fallback was\napplied.  Renderers must never call this the user's rule.",
+          "type": "string"
+        },
+        {
+          "const": "tool_default",
+          "description": "The importer for this format has no design-rule channel and used the\ntool fallback directly.",
+          "type": "string"
+        },
+        {
+          "const": "board_file",
+          "description": "A non-KiCad layout format carried its own clearance value.",
+          "type": "string"
+        }
+      ]
+    },
     "Contribution": {
       "description": "One concrete thing an artifact contributed to the run.",
       "properties": {
@@ -1904,6 +1952,38 @@
       ],
       "type": "object"
     },
+    "OrderTriage": {
+      "properties": {
+        "checked_ok": {
+          "items": {
+            "$ref": "#/definitions/TriageEntry"
+          },
+          "type": "array"
+        },
+        "do_not_order": {
+          "items": {
+            "$ref": "#/definitions/TriageEntry"
+          },
+          "type": "array"
+        },
+        "inspect": {
+          "items": {
+            "$ref": "#/definitions/TriageEntry"
+          },
+          "type": "array"
+        },
+        "not_covered": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "do_not_order",
+        "inspect",
+        "checked_ok",
+        "not_covered"
+      ],
+      "type": "object"
+    },
     "OverrideSource": {
       "description": "How a user-authored override entered the run.",
       "enum": [
@@ -2247,6 +2327,42 @@
       ],
       "type": "object"
     },
+    "TriageEntry": {
+      "description": "The compact decision surface at the front of a combined `--check --plain`\nreport. It classifies findings that already exist; it never runs a check or\nderives a new electrical claim.",
+      "properties": {
+        "id": {
+          "description": "Stable check-family id (`drc`, `lint`, `si`, `usb_c`).",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Stable finding kind within that family.",
+          "type": "string"
+        },
+        "location_mm": {
+          "description": "Layout-space location for findings that identify one physical spot.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "statement": {
+          "description": "The exact one-line statement rendered on the triage screen.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "statement"
+      ],
+      "type": "object"
+    },
     "UnresolvedActive": {
       "description": "One unresolved part that sits on a connected (active) net, with the\nelectrical consequence of defaulting it to open.",
       "properties": {
@@ -2463,6 +2579,17 @@
         "null"
       ]
     },
+    "clearance_rule_source": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ClearanceRuleProvenance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Source and report-wide value for DRC clearance rules. Pair-specific\nvalues remain in `drc.violations[*].rule_mm`; this field says whose rule\nthose numbers are (or are not)."
+    },
     "cosim": {
       "anyOf": [
         {
@@ -2554,6 +2681,17 @@
           "type": "null"
         }
       ]
+    },
+    "triage": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OrderTriage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The compact order-decision surface as data. The `--check --plain` text is\nrendered from this same object, so CI/web consumers and a terminal reader\ncannot receive different bucket assignments."
     },
     "verdict": {
       "enum": [

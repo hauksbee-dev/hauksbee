@@ -104,16 +104,15 @@ pub(crate) fn emit_with_schematic_quiet(
     inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
+    let project_rules = (!altium_present).then(|| kicad_pro_clearance_rules(board_path, board));
+    let project_rules_read = project_rules.as_ref().is_some_and(Option::is_some);
     let mut report = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
         // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
         // concrete net names here (the CLI has both the board path and the
         // extracted netlist), then hand the DRC a pairwise clearance resolver.
-        ExtractedBoard::drc_with_clearance_rules(
-            text,
-            kicad_pro_clearance_rules(board_path, board),
-        )?
+        ExtractedBoard::drc_with_clearance_rules(text, project_rules.flatten())?
     };
     // The companion schematic's declarations, applied before waivers and before
     // anything reads the findings. Reclassifies, never deletes.
@@ -160,11 +159,22 @@ pub(crate) fn emit_with_schematic_quiet(
         )?,
         _ => evidence,
     };
+    let provenance = if altium_present {
+        crate::result::ClearanceRuleProvenance::tool_default(report.clearance_mm)
+    } else {
+        super::kicad_pro_clearance_rule_provenance(
+            board_path,
+            text,
+            project_rules_read,
+            report.clearance_mm,
+        )
+    };
     let mut structured = DrcStructured::from_report_with_ties(
         &report,
         qualification.as_ref(),
         text.contains("<eagle") && schematic_ties.is_none(),
-    );
+    )
+    .with_clearance_rule_provenance(provenance.clone());
     // Run the independent oracle before rendering so agreement on an exact net
     // pair can sit on the finding line itself, where a reader is deciding
     // whether a demoted KiCad-format finding is credible.
@@ -192,6 +202,13 @@ pub(crate) fn emit_with_schematic_quiet(
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.drc = Some(structured.clone());
+            jr.clearance_rule_source = Some(provenance.clone());
+            if provenance.source == crate::result::ClearanceRuleSource::Defaulted {
+                jr.notes.push(crate::result::JsonNote {
+                    kind: crate::result::JsonNoteKind::Coverage,
+                    message: provenance.cli_notice(),
+                });
+            }
             if unrouted {
                 jr.notes.push(crate::result::JsonNote {
                     kind: crate::result::JsonNoteKind::Coverage,
@@ -212,7 +229,14 @@ pub(crate) fn emit_with_schematic_quiet(
             // "at minimum clearance (no margin)" rather than the wrong "below".
             // Repeated near-identical clearance findings condense to aggregate
             // lines past the first few; --verbose restores every instance.
-            print!("{}", crate::render_drc_condensed(&structured, verbose));
+            print!(
+                "{}",
+                crate::plain::render_drc_condensed_with_rule_source(
+                    &structured,
+                    &provenance,
+                    verbose,
+                )
+            );
         }
         OutputMode::Text => {
             if unrouted {
@@ -221,7 +245,10 @@ pub(crate) fn emit_with_schematic_quiet(
             // Grouped, honest DRC: one line per (net pair + cause) with a count,
             // and gap==rule labelled "at minimum clearance (no margin)" rather
             // than the wrong "below the spacing the board asks for" (Fix #8).
-            print!("{}", structured.render());
+            print!(
+                "{}",
+                structured.render_with_clearance_rule_provenance(&provenance)
+            );
         }
     }
     if let Some(summary) = &oracle_summary {
