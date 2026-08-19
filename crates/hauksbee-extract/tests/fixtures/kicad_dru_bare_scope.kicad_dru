@@ -1,0 +1,4 @@
+(version 1)
+
+(rule "bare rule" (constraint clearance (min 0.200)))
+(rule "mm rule" (constraint clearance (min 0.200mm)))
