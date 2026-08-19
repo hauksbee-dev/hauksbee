@@ -204,7 +204,14 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
         ComponentKind::Diode => DIODE,
         ComponentKind::BjtNpn | ComponentKind::BjtPnp => BJT,
         ComponentKind::Nmos | ComponentKind::Pmos => MOSFET,
-        ComponentKind::Vreg => &["vout", "dropout_v", "iq_a"],
+        ComponentKind::Vreg => &[
+            "vout",
+            "dropout_v",
+            "iq_a",
+            "battery_chemistry",
+            "vout_setpoint_low",
+            "vout_setpoint_high",
+        ],
         ComponentKind::Opamp => &["gain", "pole_hz", "slew", "rail_lo", "rail_hi"],
         ComponentKind::Comparator => &[
             "out_lo",

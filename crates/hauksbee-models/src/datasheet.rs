@@ -58,17 +58,28 @@ const CLI_BACKEND_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Pages rendered and attached as images.
 ///
-/// The parts of a datasheet that matter most, the absolute-maximum table and
-/// the pinout, are the parts a text dump mangles worst: a table becomes a
-/// column of loose numbers with nothing saying which row they belonged to.
-/// Rendered pages keep that. The cap exists because a 200-page catalogue would
-/// otherwise cost a fortune to send for no gain, and the pages that carry the
-/// electrical tables are near the front.
-const MAX_RENDERED_PAGES: usize = 14;
+/// Seven letter-sized pages at 200 DPI contain fewer pixels than fourteen at
+/// 150 DPI. Selecting those seven from the text layer preserves that request
+/// budget while making table subscripts and footnotes easier to read.
+const MAX_RENDERED_PAGES: usize = 7;
 
 /// Render resolution, in DPI. Enough to read a small table footnote, which is
 /// often exactly where the condition a value was measured under is hiding.
-const RENDER_DPI: u32 = 150;
+const RENDER_DPI: u32 = 200;
+
+#[derive(Debug, Clone)]
+struct PdfPageText {
+    number: usize,
+    text: String,
+}
+
+#[derive(Debug, Clone)]
+struct SelectedPage {
+    number: usize,
+    reasons: Vec<&'static str>,
+    supplemental_reasons: Vec<&'static str>,
+    score: usize,
+}
 
 /// A private scratch directory holding everything one extraction may touch.
 ///
@@ -104,6 +115,9 @@ pub struct Workspace {
     pub pdf: PathBuf,
     /// One PNG per rendered page, in page order.
     pub pages: Vec<PathBuf>,
+    selected_pages: Vec<SelectedPage>,
+    category_disclosures: Vec<String>,
+    has_text_dump: bool,
 }
 
 impl Workspace {
@@ -138,21 +152,63 @@ fn prepare_workspace(pdf: &Path) -> Result<Workspace> {
     std::fs::copy(pdf, &copied)
         .with_context(|| format!("copying {} into the sandbox", pdf.display()))?;
 
+    let page_text = extract_pdf_pages_text(&copied).ok();
+    let has_text_dump = page_text.as_ref().is_some_and(|pages| {
+        let dump = pages
+            .iter()
+            .map(|page| page.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\u{000c}");
+        std::fs::write(dir.path().join("datasheet.txt"), dump).is_ok()
+    });
+    let selections = page_text
+        .as_deref()
+        .map(|pages| select_relevant_pages(pages, MAX_RENDERED_PAGES))
+        .unwrap_or_else(|| {
+            (1..=MAX_RENDERED_PAGES)
+                .map(|number| SelectedPage {
+                    number,
+                    reasons: vec!["front-page fallback because the PDF text layer was unavailable"],
+                    supplemental_reasons: Vec::new(),
+                    score: 0,
+                })
+                .collect()
+        });
+
     // Page renders are best-effort. Without poppler the extraction still runs
-    // on text alone, which is what it did before, so a missing optional tool
-    // degrades the result rather than failing the command.
+    // on text alone, so a missing optional tool degrades the result rather
+    // than failing the command.
     let mut pages = Vec::new();
+    let mut selected_pages = Vec::new();
     if which("pdftoppm") {
-        let out = Command::new("pdftoppm")
-            .args(["-png", "-r", &RENDER_DPI.to_string(), "-f", "1", "-l"])
-            .arg(MAX_RENDERED_PAGES.to_string())
-            .arg(&copied)
-            .arg(dir.path().join("page"))
-            .output();
-        if let Ok(o) = out {
-            if !o.status.success() {
+        for selection in selections {
+            let stem = dir.path().join(format!("page-{:03}", selection.number));
+            let out = Command::new("pdftoppm")
+                .args([
+                    "-png",
+                    "-r",
+                    &RENDER_DPI.to_string(),
+                    "-f",
+                    &selection.number.to_string(),
+                    "-l",
+                    &selection.number.to_string(),
+                    "-singlefile",
+                ])
+                .arg(&copied)
+                .arg(&stem)
+                .output();
+            if let Ok(o) = out {
+                if o.status.success() {
+                    let rendered = stem.with_extension("png");
+                    if rendered.is_file() {
+                        pages.push(rendered);
+                        selected_pages.push(selection);
+                    }
+                    continue;
+                }
                 eprintln!(
-                    "[model-extract] page rendering failed, continuing on text alone: {}",
+                    "[model-extract] PDF page {} failed to render, continuing without it: {}",
+                    selection.number,
                     String::from_utf8_lossy(&o.stderr)
                         .lines()
                         .next()
@@ -160,25 +216,23 @@ fn prepare_workspace(pdf: &Path) -> Result<Workspace> {
                 );
             }
         }
-        let mut found: Vec<PathBuf> = std::fs::read_dir(dir.path())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "png"))
-            .collect();
-        // pdftoppm zero-pads its suffix, so lexical order is page order.
-        found.sort();
-        pages = found;
     } else {
         eprintln!(
             "[model-extract] pdftoppm not found, so the model sees text only.              Install poppler for page images: the pinout and the ratings table              survive a render far better than a text dump."
         );
     }
 
+    let category_disclosures = page_text
+        .as_deref()
+        .map(|pages| category_disclosures(pages, &selected_pages))
+        .unwrap_or_default();
+
     Ok(Workspace {
         pdf: copied,
         pages,
+        selected_pages,
+        category_disclosures,
+        has_text_dump,
         dir,
     })
 }
@@ -723,6 +777,346 @@ fn extract_pdf_text(path: &Path) -> Result<String> {
     ))
 }
 
+fn extract_pdf_pages_text(path: &Path) -> Result<Vec<PdfPageText>> {
+    if !which("pdftotext") {
+        bail!("pdftotext is unavailable");
+    }
+    let output = Command::new("pdftotext")
+        .args(["-layout"])
+        .arg(path)
+        .arg("-")
+        .output()
+        .context("extracting the PDF text layer page by page")?;
+    if !output.status.success() {
+        bail!(
+            "pdftotext failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .next()
+                .unwrap_or("unknown error")
+        );
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let pages: Vec<PdfPageText> = text
+        .split('\u{000c}')
+        .enumerate()
+        .filter(|(index, page)| *index == 0 || !page.is_empty())
+        .map(|(index, page)| PdfPageText {
+            number: index + 1,
+            text: page.to_string(),
+        })
+        .collect();
+    if pages.is_empty() {
+        bail!("the PDF text layer contained no pages");
+    }
+    Ok(pages)
+}
+
+const PAGE_TOPICS: &[(&str, &[&str])] = &[
+    (
+        "recommended operating conditions",
+        &["recommended operating conditions"],
+    ),
+    (
+        "absolute maximum ratings",
+        &["absolute maximum ratings", "limiting values"],
+    ),
+    ("switching characteristics", &["switching characteristics"]),
+    (
+        "electrical characteristics",
+        &["electrical characteristics"],
+    ),
+    (
+        "pin functions or package pinout",
+        &[
+            "pin functions",
+            "terminal functions",
+            "pin configuration",
+            "package pinout",
+            "top view",
+        ],
+    ),
+    (
+        "application information or programming equations",
+        &[
+            "application information",
+            "typical application",
+            "design procedure",
+            "programming equation",
+        ],
+    ),
+];
+
+fn topic_score(text: &str, terms: &[&str]) -> usize {
+    let lower = text.to_ascii_lowercase();
+    let occurrences: usize = terms.iter().map(|term| lower.matches(term).count()).sum();
+    if occurrences == 0 {
+        return 0;
+    }
+    let heading = lower
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .any(|line| {
+            let heading_text = line
+                .trim()
+                .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c.is_whitespace());
+            let table_heading = heading_text
+                .strip_prefix("table ")
+                .and_then(|text| text.split_once(". ").map(|(_, title)| title));
+            let detailed_heading = heading_text.strip_prefix("detailed ");
+            terms.iter().any(|term| {
+                heading_text.starts_with(term)
+                    || table_heading.is_some_and(|title| title.starts_with(term))
+                    || detailed_heading.is_some_and(|title| title.starts_with(term))
+            })
+        });
+    if !heading {
+        return 0;
+    }
+    let index_or_revision = (lower.contains("contents") && lower.matches(".....").count() >= 5)
+        || lower.contains("revision history")
+        || lower.contains("changes from revision")
+        || lower.contains("change log");
+    if index_or_revision {
+        return 0;
+    }
+    let score = occurrences * 100 + usize::from(heading) * 2_000;
+    score
+}
+
+fn select_relevant_pages(pages: &[PdfPageText], limit: usize) -> Vec<SelectedPage> {
+    if pages.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let mut selected = std::collections::BTreeMap::<usize, SelectedPage>::new();
+    selected.insert(
+        1,
+        SelectedPage {
+            number: 1,
+            reasons: vec!["page 1 feature and supply summary"],
+            supplemental_reasons: Vec::new(),
+            score: usize::MAX,
+        },
+    );
+
+    for (label, terms) in PAGE_TOPICS {
+        // Repeated datasheet tables usually progress from the lowest bias to
+        // the highest and most representative operating point. Prefer the
+        // later page within each category, then disclose every sibling page so
+        // the model can inspect another voltage or package variant if needed.
+        let best = pages
+            .iter()
+            .map(|page| (page, topic_score(&page.text, terms)))
+            .filter(|(_, score)| *score > 0)
+            .max_by_key(|(page, _score)| page.number);
+        if let Some((page, score)) = best {
+            if let Some(chosen) = selected.get_mut(&page.number) {
+                chosen.reasons.push(label);
+                chosen.score = chosen.score.saturating_add(score);
+            } else if selected.len() < limit {
+                selected.insert(
+                    page.number,
+                    SelectedPage {
+                        number: page.number,
+                        reasons: vec![label],
+                        supplemental_reasons: Vec::new(),
+                        score,
+                    },
+                );
+            }
+        }
+    }
+
+    if selected.len() < limit {
+        let mut remaining: Vec<SelectedPage> = pages
+            .iter()
+            .filter(|page| !selected.contains_key(&page.number))
+            .filter_map(|page| {
+                let reasons: Vec<&'static str> = PAGE_TOPICS
+                    .iter()
+                    .filter_map(|(label, terms)| {
+                        (topic_score(&page.text, terms) > 0).then_some(*label)
+                    })
+                    .collect();
+                let lower = page.text.to_ascii_lowercase();
+                let score = reasons
+                    .iter()
+                    .map(|label| match *label {
+                        "recommended operating conditions" | "absolute maximum ratings" => 80_000,
+                        "switching characteristics" => 70_000,
+                        "electrical characteristics" => 60_000,
+                        "pin functions or package pinout" => 50_000,
+                        "application information or programming equations" => 40_000,
+                        _ => 0,
+                    })
+                    .max()
+                    .unwrap_or(0)
+                    + usize::from(!lower.contains("(continued)")) * 1_000
+                    + page.number;
+                (score > 0).then_some(SelectedPage {
+                    number: page.number,
+                    reasons: Vec::new(),
+                    supplemental_reasons: reasons,
+                    score,
+                })
+            })
+            .collect();
+        remaining.sort_by_key(|page| (std::cmp::Reverse(page.score), page.number));
+        let mut supplemented = std::collections::HashSet::new();
+        for page in remaining {
+            if page
+                .supplemental_reasons
+                .iter()
+                .all(|reason| supplemented.contains(reason))
+            {
+                continue;
+            }
+            for reason in &page.supplemental_reasons {
+                supplemented.insert(*reason);
+            }
+            selected.insert(page.number, page);
+            if selected.len() == limit {
+                break;
+            }
+        }
+    }
+
+    let mut ranked: Vec<SelectedPage> = selected.into_values().collect();
+    ranked.sort_by_key(|page| page.number);
+    ranked
+}
+
+fn category_disclosures(pages: &[PdfPageText], selected: &[SelectedPage]) -> Vec<String> {
+    PAGE_TOPICS
+        .iter()
+        .filter_map(|(label, terms)| {
+            let matching: Vec<&PdfPageText> = pages
+                .iter()
+                .filter(|page| topic_score(&page.text, terms) > 0)
+                .collect();
+            let preferred = matching.last()?;
+            let matching_numbers: Vec<usize> = matching.iter().map(|page| page.number).collect();
+            let attached: Vec<usize> = matching_numbers
+                .iter()
+                .copied()
+                .filter(|number| selected.iter().any(|page| page.number == *number))
+                .collect();
+            let omitted: Vec<usize> = matching_numbers
+                .iter()
+                .copied()
+                .filter(|number| !attached.contains(number))
+                .collect();
+            let title = label
+                .split_whitespace()
+                .map(|word| {
+                    let mut chars = word.chars();
+                    chars
+                        .next()
+                        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            if *label == "switching characteristics" {
+                let headings: Vec<String> = matching
+                    .iter()
+                    .flat_map(|page| page.text.lines())
+                    .map(str::trim)
+                    .filter(|line| line.to_ascii_lowercase().contains("switching characteristics"))
+                    .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .collect();
+                let operating_points: std::collections::BTreeSet<String> = headings
+                    .iter()
+                    .filter_map(|heading| {
+                        let value = heading.split("VCCA =").nth(1)?;
+                        Some(value.split(" (").next().unwrap_or(value).trim().to_string())
+                    })
+                    .collect();
+                let package_summary = match (
+                    headings.iter().any(|line| line.contains("(DRY)")),
+                    headings.iter().any(|line| line.contains("(Other Packages)")),
+                ) {
+                    (true, true) => ", with DRY and Other Packages variants",
+                    (true, false) => ", with DRY variants",
+                    (false, true) => ", with Other Packages variants",
+                    (false, false) => "",
+                };
+                let chosen_heading = preferred
+                    .text
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| line.to_ascii_lowercase().contains("switching characteristics"))
+                    .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .unwrap_or_else(|| "the later matching table".to_string());
+                let omitted_note = if omitted.is_empty() {
+                    "All matching pages are attached.".to_string()
+                } else {
+                    format!(
+                        "The other matching {} are in datasheet.txt and datasheet.pdf in your sandbox.",
+                        format_page_numbers(&omitted)
+                    )
+                };
+                return Some(format!(
+                    "{title} spans PDF {} across {} VCCA operating points{package_summary}; PDF page {} ({chosen_heading}) is the preferred attachment. {omitted_note}",
+                    format_page_numbers(&matching_numbers),
+                    number_word(operating_points.len()),
+                    preferred.number,
+                ));
+            }
+
+            let attachment_note = if omitted.is_empty() {
+                match attached.as_slice() {
+                    [only] => format!("The matching page {only} is attached."),
+                    _ => format!("All matching {} are attached.", format_page_numbers(&attached)),
+                }
+            } else {
+                format!(
+                    "Attached {}; omitted matching {} are in datasheet.txt and datasheet.pdf in your sandbox.",
+                    format_page_numbers(&attached),
+                    format_page_numbers(&omitted)
+                )
+            };
+            Some(format!(
+                "{title} matches PDF {}; later PDF page {} is preferred. {attachment_note}",
+                format_page_numbers(&matching_numbers),
+                preferred.number,
+            ))
+        })
+        .collect()
+}
+
+fn format_page_numbers(numbers: &[usize]) -> String {
+    match numbers {
+        [] => "no pages".to_string(),
+        [only] => format!("page {only}"),
+        many if many.windows(2).all(|pair| pair[1] == pair[0] + 1) => {
+            format!("pages {} to {}", many[0], many[many.len() - 1])
+        }
+        many => format!(
+            "pages {}",
+            many.iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn number_word(number: usize) -> String {
+    match number {
+        0 => "no".to_string(),
+        1 => "one".to_string(),
+        2 => "two".to_string(),
+        3 => "three".to_string(),
+        4 => "four".to_string(),
+        5 => "five".to_string(),
+        6 => "six".to_string(),
+        value => value.to_string(),
+    }
+}
+
 fn which(cmd: &str) -> bool {
     Command::new("which")
         .arg(cmd)
@@ -797,7 +1191,21 @@ pub fn kind_is_legal(kind: &str) -> bool {
 }
 
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
-    let example = format_example_for_kind(kind);
+    let examples = format_examples_for_kind(kind);
+    let example_cards = examples
+        .iter()
+        .enumerate()
+        .map(|(index, example)| {
+            format!(
+                "EXAMPLE {} -- DIFFERENT PART CLASS ({}, kind={}):\n{}",
+                index + 1,
+                example.part,
+                example.kind,
+                example.card
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
     format!(
         r#"You are a SPICE model extraction assistant.
 
@@ -819,12 +1227,13 @@ for the part's primary electrical behavior (a charger's power path fits
 vreg; a level shifter fits digital) and say in `description` what real
 behavior the chosen kind does not model.
 
-FORMAT EXAMPLE ONLY -- DIFFERENT PART CLASS ({example_part}, kind={example_kind}):
-This is NOT the part being extracted. Your answer must have the SAME SHAPE,
-using this datasheet's part, kind, pins, parameters, ratings, and sources.
-Copying the example's part number or numbers is a WRONG ANSWER.
+FORMAT EXAMPLES ONLY:
+These are NOT the part being extracted. Each is from a different part class.
+Your answer must have the SAME SHAPE, using this datasheet's part, kind, pins,
+parameters, ratings, and sources. Copying the example's part number or numbers
+is a WRONG ANSWER.
 
-{example_card}
+{example_cards}
 
 DATASHEET TEXT (truncated):
 ---
@@ -840,6 +1249,7 @@ The entry must use [[models]] array syntax and include:
 - [models.params] section with all required numeric params for the kind
 - [models.ratings] section with the absolute-maximum ratings (see below)
 - [models.pins] section mapping pad numbers to pin roles
+- [[models.envelope]] entries for sourced recommended operating conditions
 
 THE EXACT SHAPE. Field names are matched literally by a strict parser: a
 renamed or invented top-level field (type, part, manufacturer, datasheet, ...)
@@ -863,6 +1273,13 @@ value_re = "(?i)^{part_upper}"
 [models.pins]
 "1" = "role_from_the_list_below"
 
+[[models.envelope]]
+kind = "supply_range"
+pin = "supply_role_from_models_pins"
+min_v = 1.0
+max_v = 2.0
+basis = "Recommended Operating Conditions, table and row"
+
 PIN ROLE NAMES for kind="{kind}": {pin_roles}
   Use these exact spellings. They are looked up by exact string, so "output"
   instead of "out", or "ground" instead of "gnd", makes the part bind OPEN: it
@@ -877,6 +1294,30 @@ For kind="{kind}", the required params are:
 "limiting values" table. Include every field the datasheet gives a number for;
 omit a field entirely if the datasheet does not state it (do NOT invent it):
 {ratings_hint}
+
+[[models.envelope]]: read the Recommended Operating Conditions and Absolute
+Maximum Ratings tables. Emit one supply_range entry for every SUPPLY-class pin
+whose recommended minimum and maximum are both published. Emit rail_order for
+each explicit relation such as VCCA <= VCCB. `pin`, `lower`, and `upper` are
+roles from [models.pins], never pad numbers. Every entry requires `basis` naming
+the exact table and row. Add `abs_max_v` only when the absolute-maximum table
+publishes it. There is no envelope without a table row to cite: omitting this
+section is correct when the datasheet lacks the necessary tables. Never infer a
+bound from a typical value, application schematic, or family convention.
+
+WHERE TO LOOK AND HOW TO READ IT:
+- Supply bounds belong in Recommended Operating Conditions.
+- Absolute Maximum Ratings is a separate stress table and does not promise
+  functional operation.
+- Read the numbered Pin Functions table first, then cross-check it against the
+  package top-view figure and a typical application schematic before answering.
+- Electrical Characteristics and Switching Characteristics values are worthless
+  without the bias condition in the table header, row, or footnote. Put that
+  condition in the citation beside the value.
+- Application Information and Design Procedure sections often contain the
+  programming equations. Cite the equation and every stated validity condition.
+- Before answering, re-read every cited row and footnote, then double-check its
+  units, sign, package variant, test bias, and min/typ/max column.
 
 PIN NUMBERING, read this before you fill in [models.pins]:
 
@@ -942,12 +1383,18 @@ IMPORTANT RULES:
 2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
    params not given verbatim (e.g. `is`), you may derive them from a stated
    operating point (e.g. VBE at a known IC) and say so in the comment.
-3. If a required param is genuinely absent and cannot be derived, use a
-   conservative typical value for the part family and comment `# estimated`.
-4. Output ONLY the TOML block, starting with [[models]]; no prose, no markdown
+3. If a required param is genuinely absent and cannot be derived, do not
+   estimate it. Emit an identity-only card with `identity_only = true`, a
+   `warning`, and `unlocked_by`, and name the missing fact as
+   `ABSTAIN: datasheet does not state ...` in the description or an unknown
+   source record. A named abstention is correct; a guessed field is wrong.
+4. For every real behavior the selected schema and params do not represent,
+   the description must say `does not model ...` and name that behavior. Do not
+   let a partial card read as a complete model of the component.
+5. Output ONLY the TOML block, starting with [[models]]; no prose, no markdown
    fences, no leading or trailing text.
-5. Currents in AMPERES, voltages in VOLTS, power in WATTS (convert mA/mW yourself).
-6. Param values must be within these physical bounds:
+6. Currents in AMPERES, voltages in VOLTS, power in WATTS (convert mA/mW yourself).
+7. Param values must be within these physical bounds:
    - is: 1e-20 to 1e-3
    - bf/beta: 1 to 2000
    - n/nf (emission): 0.5 to 3.0
@@ -975,17 +1422,14 @@ OUTPUT (TOML only, starting with [[models]]):
         pin_roles = pin_roles_for_kind(kind),
         ratings_hint = ratings_hint_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),
-        example_part = example.part,
-        example_kind = example.kind,
-        example_card = example.card,
+        example_cards = example_cards,
     )
 }
 
 /// A complete shape demonstration from a different component class.
 ///
-/// Most extractions see the diode example; diode extractions see an NPN card
-/// instead. Extraction resolves an omitted kind before `build_prompt`, so the
-/// selected example is always from a different class than the requested card.
+/// Each candidate teaches all four failure-prone shapes. Filtering out the
+/// requested kind still leaves at least two examples from other part classes.
 #[derive(Clone, Copy)]
 struct FormatExample {
     part: &'static str,
@@ -993,76 +1437,149 @@ struct FormatExample {
     card: &'static str,
 }
 
-fn format_example_for_kind(kind: &str) -> FormatExample {
-    if kind == "diode" {
-        FormatExample {
-            part: "BC847",
-            kind: "bjt_npn",
-            card: r#"[[models]]
-id = "bc847"
-kind = "bjt_npn"
-description = "BC847 NPN transistor format example"
-[models.source]
-tier = "datasheet-derived"
-validation = "physical-bounds-only"
-[[models.source.uncertainty]]
-status = "interval"
-parameter = "bf"
-low = 110.0
-high = 800.0
-unit = "1"
-kind = "specification-limits"
-basis = "BC847 datasheet Section 5, Electrical characteristics"
-[models.match]
-value_re = "(?i)^BC847"
-[models.params]
-is = 1.0e-14
-bf = 200.0
-nf = 1.0
-vaf = 80.0
-br = 4.0
-[models.pins]
-"1" = "base"
-"2" = "emitter"
-"3" = "collector"
-[models.ratings]
-max_voltage_v = 45.0
-max_current_a = 0.1"#,
-        }
-    } else {
-        FormatExample {
-            part: "1N4148",
-            kind: "diode",
-            card: r#"[[models]]
-id = "1n4148"
-kind = "diode"
-description = "1N4148 switching diode format example"
-[models.source]
-tier = "datasheet-derived"
-validation = "physical-bounds-only"
-[[models.source.uncertainty]]
-status = "interval"
-parameter = "max_voltage_v"
-low = 0.0
-high = 100.0
-unit = "V"
-kind = "specification-limits"
-basis = "1N4148 datasheet Section 2, Limiting values"
-[models.match]
-value_re = "(?i)^1N4148"
-[models.params]
-is = 4.0e-9
-n = 1.9
-rs = 0.6
-[models.pins]
-"1" = "anode"
-"2" = "cathode"
-[models.ratings]
-max_voltage_v = 100.0
-max_current_a = 0.2"#,
-        }
-    }
+fn format_examples_for_kind(kind: &str) -> Vec<FormatExample> {
+    FORMAT_EXAMPLES
+        .iter()
+        .copied()
+        .filter(|example| example.kind != kind)
+        .collect()
 }
+
+const FORMAT_EXAMPLES: &[FormatExample] = &[
+    FormatExample {
+        part: "TLV9001",
+        kind: "opamp",
+        card: r##"[[models]]
+id = "tlv9001"
+kind = "opamp"
+description = "TLV9001 format example; models bounded DC gain and output rails, but does not model noise, slew rate, or input-bias-current variation; ABSTAIN: the cited table does not state input noise at 125 C"
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "input_noise_density_at_125c"
+reason = "ABSTAIN: datasheet does not state this fact"
+[models.match]
+value_re = "(?i)^TLV9001"
+[models.params]
+gain = 100000.0 # Source: Electrical Characteristics, AOL typ, VS=5 V, RL=10 kohm, VOUT=0.5 V to 4.5 V
+rail_lo = 0.05 # Source: Electrical Characteristics, VS=5 V, RL=10 kohm
+rail_hi = 4.95 # Source: Electrical Characteristics, VS=5 V, RL=10 kohm
+[models.ratings]
+max_voltage_v = 6.0 # Source: Absolute Maximum Ratings, supply voltage row
+max_junction_temp_c = 150.0 # Source: Absolute Maximum Ratings, TJ row
+[models.pins]
+"1" = "out"
+"2" = "vee"
+"3" = "in_plus"
+"4" = "in_minus"
+"5" = "vcc"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Recommended Operating Conditions, supply voltage row"
+[[models.envelope]]
+kind = "rail_order"
+lower = "vee"
+upper = "vcc"
+basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""##,
+    },
+    FormatExample {
+        part: "TLV3201",
+        kind: "comparator",
+        card: r##"[[models]]
+id = "tlv3201"
+kind = "comparator"
+description = "TLV3201 format example; models thresholds and nominal delay, but does not model overdrive-dependent delay dispersion or output-current curves; ABSTAIN: the cited table does not state delay at 125 C"
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "tpd_at_125c"
+reason = "ABSTAIN: datasheet does not state this fact"
+[models.match]
+value_re = "(?i)^TLV3201"
+[models.params]
+out_lo = 0.1 # Source: Electrical Characteristics, VOL max, VS=5 V, ISINK=4 mA
+out_hi = 4.9 # Source: Electrical Characteristics, VOH min, VS=5 V, ISOURCE=-4 mA
+hysteresis = 0.0012 # Source: Electrical Characteristics, typ, VS=5 V, VCM=2.5 V
+tpd_s = 4.0e-8 # Source: Switching Characteristics, typ, VS=5 V, overdrive=100 mV, CL=15 pF
+[models.ratings]
+max_voltage_v = 7.0 # Source: Absolute Maximum Ratings, supply voltage row
+[models.pins]
+"1" = "out"
+"2" = "vee"
+"3" = "in_plus"
+"4" = "in_minus"
+"5" = "vcc"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Recommended Operating Conditions, supply voltage row"
+[[models.envelope]]
+kind = "rail_order"
+lower = "vee"
+upper = "vcc"
+basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""##,
+    },
+    FormatExample {
+        part: "PCA9306",
+        kind: "digital",
+        card: r##"[[models]]
+id = "pca9306_identity"
+kind = "digital"
+description = "PCA9306 format example; records identity, pin map, and rail constraints, but does not model the bidirectional pass-FET path; ABSTAIN: the datasheet does not state a fixed propagation delay"
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_delay"
+reason = "ABSTAIN: datasheet does not state a fixed propagation delay"
+[models.match]
+value_re = "(?i)^PCA9306"
+[models.params]
+identity_only = true
+warning = "identity and sourced rail constraints only; pass-FET translation behavior is not modeled"
+unlocked_by = "a validated bidirectional pass-FET model covering pull-ups, loading, and edge timing"
+[models.ratings]
+max_voltage_v = 7.0 # Source: Absolute Maximum Ratings, VREF2 row
+[models.pins]
+"1" = "gnd"
+"2" = "vref1"
+"3" = "scl1"
+"4" = "sda1"
+"5" = "sda2"
+"6" = "scl2"
+"7" = "vref2"
+"8" = "en"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vref1"
+min_v = 1.2
+max_v = 3.3
+basis = "Recommended Operating Conditions, VREF1 row, EN=VREF2"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vref2"
+min_v = 1.8
+max_v = 5.5
+basis = "Recommended Operating Conditions, VREF2 row, EN=VREF2"
+[[models.envelope]]
+kind = "rail_order"
+lower = "vref1"
+upper = "vref2"
+basis = "Recommended Operating Conditions, VREF1 must not exceed VREF2""##,
+    },
+];
 
 /// A behavioural-family kind (charger / pmic / balancer) maps to a base
 /// `ComponentKind` for the TOML `kind = "..."` line, and triggers the extra
@@ -1529,13 +2046,44 @@ fn verification_clause(ws: &Workspace) -> String {
          so in `notes` for any value whose meaning depended on a table layout."
             .to_string()
     } else {
+        let inventory = ws
+            .selected_pages
+            .iter()
+            .map(|page| {
+                let reasons = page
+                    .reasons
+                    .iter()
+                    .map(|reason| (*reason).to_string())
+                    .chain(page.supplemental_reasons.iter().map(|reason| {
+                        // A supplemental page is useful context, but it is not
+                        // the later representative chosen for that category.
+                        format!("additional {reason} context")
+                    }))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "- page-{:03}.png is PDF page {}: {}",
+                    page.number, page.number, reasons
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let category_coverage = ws.category_disclosures.join("\n");
+        let text_dump = if ws.has_text_dump {
+            "The complete text dump is `datasheet.txt`."
+        } else {
+            "No separate text dump was available."
+        };
         format!(
-            "{} page image(s) are attached, in page order, and `datasheet.pdf` is in \
-             your working directory. Read values off the IMAGES for anything that \
-             lives in a table or a pinout: the text extraction loses which column a \
-             number belonged to, and that is exactly where the absolute-maximum and \
-             electrical-characteristics tables live.",
-            ws.pages.len()
+            "{} relevance-selected page image(s) are attached:\n{}\n\nPer-category coverage:\n{}\n\nThis is not \
+             the whole datasheet. The complete PDF is `datasheet.pdf`. {} If a needed \
+             fact is on an omitted page, open the PDF or text dump before answering. \
+             Read values off the IMAGES for anything that lives in a table or pinout: \
+             text extraction loses which column a number belonged to.",
+            ws.pages.len(),
+            inventory,
+            category_coverage,
+            text_dump
         )
     };
 
@@ -2340,37 +2888,197 @@ mod tests {
     }
 
     #[test]
-    fn prompt_contains_format_only_example_from_a_different_part_class() {
+    fn prompt_contains_many_format_only_examples_from_other_part_classes() {
         let target_part = "TXB0101";
         let target_kind = "digital";
-        let example = format_example_for_kind(target_kind);
+        let examples = format_examples_for_kind(target_kind);
         let prompt = build_prompt(target_part, target_kind, "datasheet text");
-        let example_start = prompt.find("FORMAT EXAMPLE ONLY").unwrap();
+        let example_start = prompt.find("FORMAT EXAMPLES ONLY").unwrap();
         let example_end = prompt.find("DATASHEET TEXT (truncated):").unwrap();
         let example_section = &prompt[example_start..example_end];
 
-        assert_ne!(example.part, target_part);
-        assert_ne!(example.kind, target_kind);
-        assert!(example_section.contains("FORMAT EXAMPLE ONLY -- DIFFERENT PART CLASS"));
-        assert!(example_section.contains(example.part));
+        assert!(examples.len() >= 2, "the prompt must be many-shot");
+        assert!(example_section.contains("FORMAT EXAMPLES ONLY"));
         assert!(!example_section.contains(target_part));
         assert!(example_section.contains("SAME SHAPE"));
         assert!(example_section.contains("Copying the example's part number or numbers"));
-        assert!(example_section.contains("[models.source]"));
-        assert!(example_section.contains("[[models.source.uncertainty]]"));
-        assert!(example_section.contains("basis = \"1N4148 datasheet Section 2"));
-        assert!(example_section.contains("[models.match]"));
-        assert!(example_section.contains("[models.params]"));
-        assert!(example_section.contains("[models.pins]"));
-        assert!(example_section.contains("[models.ratings]"));
-        parse_and_validate_reply(example.card, example.part, example.kind)
-            .expect("the worked example itself must be a valid complete model entry");
+        for example in examples {
+            assert_ne!(example.part, target_part);
+            assert_ne!(example.kind, target_kind);
+            assert!(example_section.contains(example.part));
+            assert!(example.card.contains("[models.source]"));
+            assert!(example.card.contains("[[models.source.uncertainty]]"));
+            assert!(example.card.contains("[[models.envelope]]"));
+            assert!(example.card.contains("kind = \"rail_order\""));
+            assert!(example.card.contains("ABSTAIN"));
+            assert!(example.card.contains("does not model"));
+            assert!(example.card.contains("Source:"));
+            parse_and_validate_reply(example.card, example.part, example.kind)
+                .expect("every worked example must be a valid complete model entry");
+        }
+        for example in FORMAT_EXAMPLES {
+            parse_and_validate_reply(example.card, example.part, example.kind)
+                .expect("the test must parse every example candidate, including filtered ones");
+        }
 
-        let diode_example = format_example_for_kind("diode");
-        assert_eq!(diode_example.kind, "bjt_npn");
-        assert_ne!(diode_example.kind, "diode");
-        parse_and_validate_reply(diode_example.card, diode_example.part, diode_example.kind)
-            .expect("the diode-target alternative example must also validate");
+        let opamp_examples = format_examples_for_kind("opamp");
+        assert!(opamp_examples.len() >= 2);
+        assert!(opamp_examples.iter().all(|example| example.kind != "opamp"));
+    }
+
+    #[test]
+    fn prompt_names_locations_checks_abstention_and_unmodeled_behavior() {
+        let prompt = build_prompt("TXB0101", "digital", "datasheet text");
+        for required in [
+            "Supply bounds belong in Recommended Operating Conditions",
+            "Absolute Maximum Ratings is a separate stress table",
+            "Pin Functions table first",
+            "package top-view figure",
+            "without the bias condition in the table header, row, or footnote",
+            "Application Information and Design Procedure",
+            "re-read every cited row and footnote",
+            "double-check its",
+            "ABSTAIN: datasheet does not state",
+            "the description must say `does not model ...`",
+        ] {
+            assert!(prompt.contains(required), "prompt omitted: {required}");
+        }
+    }
+
+    #[test]
+    fn verification_clause_includes_per_category_truncation_disclosure() {
+        let dir = tempfile::tempdir().expect("temporary workspace");
+        let rendered = dir.path().join("page-013.png");
+        std::fs::write(&rendered, b"fixture").unwrap();
+        let ws = Workspace {
+            pdf: dir.path().join("datasheet.pdf"),
+            pages: vec![rendered],
+            selected_pages: vec![SelectedPage {
+                number: 13,
+                reasons: vec!["switching characteristics"],
+                supplemental_reasons: Vec::new(),
+                score: 1,
+            }],
+            category_disclosures: vec![
+                "Switching Characteristics spans PDF pages 10 to 13; PDF page 13 is the preferred attachment. The other matching pages 10 to 12 are in datasheet.txt and datasheet.pdf in your sandbox."
+                    .to_string(),
+            ],
+            has_text_dump: true,
+            dir,
+        };
+
+        let clause = verification_clause(&ws);
+        assert!(clause.contains("Per-category coverage:"));
+        assert!(clause.contains("Switching Characteristics spans PDF pages 10 to 13"));
+        assert!(clause.contains("other matching pages 10 to 12"));
+        assert!(clause.contains("datasheet.txt and datasheet.pdf"));
+    }
+
+    #[test]
+    fn relevance_selection_finds_txb0101_tables_and_always_keeps_page_one() {
+        let pdf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../qc/extraction_bench/datasheets/TXB0101.pdf");
+        assert!(
+            pdf.is_file(),
+            "missing real TXB0101 fixture: {}",
+            pdf.display()
+        );
+
+        let page_text = extract_pdf_pages_text(&pdf).expect("extract TXB0101 page text");
+        let selected = select_relevant_pages(&page_text, MAX_RENDERED_PAGES);
+        eprintln!("TXB0101 selected pages: {selected:?}");
+        let page_numbers: Vec<usize> = selected.iter().map(|page| page.number).collect();
+
+        assert!(
+            page_numbers.contains(&1),
+            "page 1 must always be present: {page_numbers:?}"
+        );
+        assert!(
+            page_numbers.contains(&4),
+            "Pin Functions page 4 missing: {page_numbers:?}"
+        );
+        assert!(
+            page_numbers.contains(&6),
+            "Recommended Operating Conditions page 6 missing: {page_numbers:?}"
+        );
+        assert_eq!(
+            selected
+                .iter()
+                .find(|page| page.reasons.contains(&"switching characteristics"))
+                .map(|page| page.number),
+            Some(13),
+            "TXB0101DBV requires the later 3.3 V Other Packages table on PDF page 13"
+        );
+
+        let disclosures = category_disclosures(&page_text, &selected);
+        let switching = disclosures
+            .iter()
+            .find(|line| line.starts_with("Switching Characteristics"))
+            .expect("Switching Characteristics needs per-category disclosure");
+        assert!(switching.contains("pages 10 to 13"), "got: {switching}");
+        assert!(
+            switching.contains("five VCCA operating points"),
+            "got: {switching}"
+        );
+        assert!(
+            switching.contains("DRY and Other Packages"),
+            "got: {switching}"
+        );
+        assert!(switching.contains("page 13"), "got: {switching}");
+        assert!(
+            switching.contains("5.21 Switching Characteristics"),
+            "got: {switching}"
+        );
+        assert!(
+            switching.contains("datasheet.txt and datasheet.pdf"),
+            "got: {switching}"
+        );
+    }
+
+    #[test]
+    fn relevance_selection_preserves_the_old_pixel_budget_on_a_larger_pdf() {
+        assert!(
+            MAX_RENDERED_PAGES * (RENDER_DPI as usize).pow(2) <= 14 * 150usize.pow(2),
+            "the selected-page request must not exceed fourteen pages at 150 DPI"
+        );
+
+        let pdf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../qc/extraction_bench/datasheets/BQ24075.pdf");
+        assert!(
+            pdf.is_file(),
+            "missing real BQ24075 fixture: {}",
+            pdf.display()
+        );
+        let page_text = extract_pdf_pages_text(&pdf).expect("extract BQ24075 page text");
+        let selected = select_relevant_pages(&page_text, MAX_RENDERED_PAGES);
+        eprintln!("BQ24075 selected pages: {selected:?}");
+        let page_numbers: Vec<usize> = selected.iter().map(|page| page.number).collect();
+        assert_eq!(selected.first().map(|page| page.number), Some(1));
+        assert!(selected.len() <= MAX_RENDERED_PAGES);
+        assert_eq!(page_numbers, vec![1, 8, 9, 10, 12, 14, 34]);
+        for (category, expected_page) in [
+            ("pin functions or package pinout", 9),
+            ("recommended operating conditions", 10),
+            ("absolute maximum ratings", 10),
+            ("electrical characteristics", 14),
+            ("application information or programming equations", 34),
+        ] {
+            assert_eq!(
+                selected
+                    .iter()
+                    .find(|page| page.reasons.contains(&category))
+                    .map(|page| page.number),
+                Some(expected_page),
+                "wrong preferred page for {category}: {selected:?}"
+            );
+        }
+
+        let disclosures = category_disclosures(&page_text, &selected).join("\n");
+        assert!(disclosures.contains("Pin Functions Or Package Pinout matches PDF pages 7 to 9"));
+        assert!(disclosures.contains("Electrical Characteristics matches PDF pages 12 to 14"));
+        assert!(disclosures.contains(
+            "Application Information Or Programming Equations matches PDF pages 1, 33, 34"
+        ));
     }
 
     #[test]
@@ -2378,7 +3086,7 @@ mod tests {
         let prompt = build_prompt("TXB0101", "digital", "datasheet text");
         let contract = prompt.find("YOUR ANSWER IS ONE THING ONLY").unwrap();
         let kind = prompt.find("Component kind:").unwrap();
-        let example = prompt.find("FORMAT EXAMPLE ONLY").unwrap();
+        let example = prompt.find("FORMAT EXAMPLES ONLY").unwrap();
         assert!(
             contract < kind,
             "answer contract must precede the kind line"
@@ -2519,6 +3227,48 @@ iq_a = 0.001
         assert!(diode.contains("VRRM"));
         let vreg = build_prompt("AMS1117", "vreg", "x");
         assert!(vreg.contains("max_junction_temp_c"));
+    }
+
+    #[test]
+    fn roc_table_round_trip_retains_envelope_bounds_and_basis() {
+        let reply = r#"
+[[models]]
+id = "roc_supply"
+kind = "digital"
+description = "ROC extraction fixture"
+[models.match]
+value_re = "^ROC_SUPPLY$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vcc"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "Recommended Operating Conditions, Table 6.3, VCC row"
+"#;
+
+        let entry = parse_and_validate_reply(reply, "ROC_SUPPLY", "digital")
+            .expect("a sourced ROC envelope must validate");
+        let round_trip = toml::to_string(&crate::schema::DbFile {
+            models: vec![entry],
+        })
+        .expect("validated model must serialize");
+        assert!(round_trip.contains("[[models.envelope]]"));
+        assert!(round_trip.contains("min_v = 2.7"));
+        assert!(round_trip.contains("max_v = 3.6"));
+        assert!(
+            round_trip.contains("basis = \"Recommended Operating Conditions, Table 6.3, VCC row\"")
+        );
+
+        let prompt = build_prompt("ROC_SUPPLY", "digital", "Recommended Operating Conditions");
+        assert!(prompt.contains("[[models.envelope]]"));
+        assert!(prompt.contains("no envelope without a table row"));
     }
 
     fn testdata(rel: &str) -> PathBuf {
