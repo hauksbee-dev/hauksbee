@@ -77,7 +77,8 @@
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
+    is_plain_resistor as is_source_classified_resistor, Component, ExtractedBoard, LintCheck,
+    LintFinding, NetLintReport, Severity,
 };
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ModelLibrary};
@@ -407,6 +408,7 @@ pub fn device_decode_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLint
         }
         if is_bq2407x(comp) {
             check_bq2407x_tmr(board, comp, &mut report);
+            check_bq2407x_ts(board, comp, &mut report);
         }
         if is_tps25982(comp) {
             check_tps25982_ilim(board, comp, lib, &mut report);
@@ -856,6 +858,9 @@ const BQ2407X_TMR_MAX_OHMS: f64 = 72_000.0;
 /// Below this the strap reads as the documented "timers disabled" tie to VSS
 /// rather than a mis-programmed value.
 const BQ2407X_TMR_DISABLE_OHMS: f64 = 100.0;
+/// Table 7-1 and Section 9.3.6 document this fixed TS-to-VSS value for an
+/// application that intentionally does not use battery temperature monitoring.
+const BQ2407X_TS_DISABLE_OHMS: f64 = 10_000.0;
 
 /// Does this component's value / MPN positively identify it as a BQ2407x
 /// charger? Covers bq24072/73/74/75/79 and the -Q1 automotive variants.
@@ -900,6 +905,166 @@ fn check_bq2407x_tmr(board: &ExtractedBoard, u: &Component, report: &mut NetLint
         ),
         refs: vec![u.reference.clone(), r_ref],
         nets: vec![tmr_name.to_string()],
+    });
+}
+
+/// A source-classified fixed resistor with a concrete ohmic value. Unlike the
+/// older TMR helper, this rung asks the shared part classifier first so a
+/// capacitor or ferrite in an R-numbered slot cannot be promoted to evidence.
+fn fixed_resistor_ohms(c: &Component) -> Option<f64> {
+    if !AssemblyState::of(c).is_present() || !is_source_classified_resistor(c) {
+        return None;
+    }
+    let connected = c.pins.iter().filter(|pin| pin.net.is_some()).count();
+    if connected != 2 {
+        return None;
+    }
+    parse_value(&c.value)
+        .map(|parsed| parsed.si)
+        .filter(|ohms| ohms.is_finite() && *ohms >= 0.0)
+}
+
+/// Thermistors have no first-class PassiveClass yet, so retain only explicit
+/// identity evidence: the conventional RT reference, a thermistor/NTC token in
+/// the library/value/footprint, or the datasheet's named 103AT family token.
+/// A bare numeric resistor value is intentionally insufficient.
+fn is_thermistor_class(c: &Component) -> bool {
+    if !AssemblyState::of(c).is_present() {
+        return false;
+    }
+    let reference = c.reference.trim().to_ascii_uppercase();
+    let identity = format!("{} {} {}", c.value, c.lib_id, c.footprint).to_ascii_lowercase();
+    reference.starts_with("RT")
+        || identity.contains("thermistor")
+        || identity.contains("ntc")
+        || identity.contains("103at")
+}
+
+fn ts_abstention(
+    u: &Component,
+    ts_name: &str,
+    reason: impl AsRef<str>,
+    report: &mut NetLintReport,
+) {
+    report.findings.push(LintFinding {
+        check: LintCheck::DeviceDecode,
+        severity: Severity::Low,
+        message: format!(
+            "{} TS thermistor network abstained on '{}': {}; unlock: identify the battery-pack thermistor part or reduce TS to one source-classified two-terminal element",
+            u.reference,
+            ts_name,
+            reason.as_ref(),
+        ),
+        refs: vec![u.reference.clone()],
+        nets: vec![ts_name.to_string()],
+    });
+}
+
+/// Decode the BQ2407x TS network using the same positive-identity ladder as the
+/// TMR decoder. TI SLUS810N Table 7-1 maps TS to pin 1 and Section 9.3.6 says an
+/// NTC in the battery pack provides over-temperature protection. A fixed 10k
+/// TS-to-VSS resistor is the explicitly documented "TS function not used"
+/// strap and therefore stays silent; another single fixed resistor has enough
+/// evidence to say the temperature-dependent protection is absent. Everything
+/// more complex abstains and names the evidence needed to decide it.
+fn check_bq2407x_ts(board: &ExtractedBoard, u: &Component, report: &mut NetLintReport) {
+    let Some((ts_id, ts_name)) = pin_net_for_role(board, u, "TS") else {
+        return;
+    };
+
+    let mut peers: BTreeMap<&str, &Component> = BTreeMap::new();
+    for (component, _) in board.net_members(ts_id) {
+        if component.reference != u.reference && AssemblyState::of(component).is_present() {
+            peers
+                .entry(component.reference.as_str())
+                .or_insert(component);
+        }
+    }
+
+    if peers
+        .values()
+        .any(|component| is_thermistor_class(component))
+    {
+        return;
+    }
+
+    if peers.len() != 1 {
+        ts_abstention(
+            u,
+            ts_name,
+            format!(
+                "the net has {} fitted non-thermistor components, so its temperature response is not judgeable",
+                peers.len()
+            ),
+            report,
+        );
+        return;
+    }
+
+    let component = *peers.values().next().expect("length checked");
+    let Some(ohms) = fixed_resistor_ohms(component) else {
+        ts_abstention(
+            u,
+            ts_name,
+            format!(
+                "{} is not a parseable source-classified fixed resistor or thermistor",
+                component.reference
+            ),
+            report,
+        );
+        return;
+    };
+    let mut far_nets = BTreeSet::new();
+    for pin in &component.pins {
+        if let Some(net_id) = pin.net.filter(|net_id| *net_id != ts_id) {
+            far_nets.insert(net_id);
+        }
+    }
+    if far_nets.len() != 1 {
+        ts_abstention(
+            u,
+            ts_name,
+            format!(
+                "{} does not resolve to one far-side net",
+                component.reference
+            ),
+            report,
+        );
+        return;
+    }
+    let far_id = *far_nets.iter().next().expect("length checked");
+    let Some(far_net) = board.net(far_id) else {
+        ts_abstention(u, ts_name, "the resistor's far-side net is missing", report);
+        return;
+    };
+    if !is_ground_name(&far_net.name) {
+        ts_abstention(
+            u,
+            ts_name,
+            format!(
+                "{} returns to '{}' rather than VSS",
+                component.reference, far_net.name
+            ),
+            report,
+        );
+        return;
+    }
+
+    if (ohms - BQ2407X_TS_DISABLE_OHMS).abs() <= f64::EPSILON * BQ2407X_TS_DISABLE_OHMS {
+        return;
+    }
+
+    report.findings.push(LintFinding {
+        check: LintCheck::DeviceDecode,
+        severity: Severity::Medium,
+        message: format!(
+            "{} TS thermistor protection: fixed resistor {} = {} from TS to VSS is not the datasheet-documented 10k disable strap and contains no thermistor-class part, so it defeats battery-pack over-temperature protection; TI BQ2407x datasheet SLUS810N, Section 9.3.6 Battery Pack Temperature Monitoring. Fit the battery-pack NTC network, or use the documented 10k TS-to-VSS strap only when temperature monitoring is intentionally disabled",
+            u.reference,
+            component.reference,
+            format_ohms(ohms),
+        ),
+        refs: vec![u.reference.clone(), component.reference.clone()],
+        nets: vec![ts_name.to_string()],
     });
 }
 
@@ -1502,6 +1667,96 @@ mod bq2407x_tests {
         // (crude: detach R31 pad 1; the pin net keeps only the charger)
         let report = lint(&floating);
         assert_eq!(report.of_check(LintCheck::DeviceDecode).count(), 0);
+    }
+
+    fn bq_ts_board(parts: &str) -> String {
+        format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 8 "/left/power/TS")
+  (net 9 "+3V3")
+  (module Package_DFN_QFN:QFN16 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U11 (at 0 0) (layer F.SilkS))
+    (fp_text value BQ24075RGT (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 8 "/left/power/TS") (pinfunction "TS"))
+    (pad 8 smd rect (at 0 1) (net 1 "GND") (pinfunction "VSS"))
+  )
+{parts})
+"#
+        )
+    }
+
+    fn two_pin_part(
+        reference: &str,
+        value: &str,
+        lib: &str,
+        far_net: i64,
+        far_name: &str,
+    ) -> String {
+        format!(
+            r#"  (module {lib} (layer F.Cu) (at 110 100)
+    (fp_text reference {reference} (at 0 0) (layer F.SilkS))
+    (fp_text value {value} (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 8 "/left/power/TS"))
+    (pad 2 smd rect (at 2 0) (net {far_net} "{far_name}"))
+  )
+"#
+        )
+    }
+
+    #[test]
+    fn fixed_non_disable_ts_resistor_fires_with_protection_and_basis() {
+        let text = bq_ts_board(&two_pin_part("R33", "4.7k", "Device:R", 1, "GND"));
+        let report = lint(&text);
+        let findings: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].severity, Severity::Medium);
+        assert!(findings[0]
+            .message
+            .contains("defeats battery-pack over-temperature protection"));
+        assert!(findings[0].message.contains("Section 9.3.6"));
+        assert!(findings[0].message.contains("R33 = 4.7k"));
+    }
+
+    #[test]
+    fn documented_10k_ts_disable_strap_stays_silent() {
+        let text = bq_ts_board(&two_pin_part("R33", "10k", "Device:R", 1, "GND"));
+        let report = lint(&text);
+        assert_eq!(report.of_check(LintCheck::DeviceDecode).count(), 0);
+    }
+
+    #[test]
+    fn thermistor_class_on_ts_stays_silent() {
+        let text = bq_ts_board(&two_pin_part(
+            "RT1",
+            "10k NTC",
+            "Device:Thermistor_NTC",
+            1,
+            "GND",
+        ));
+        let report = lint(&text);
+        assert_eq!(report.of_check(LintCheck::DeviceDecode).count(), 0);
+    }
+
+    #[test]
+    fn complex_ts_network_abstains_with_the_exact_unlock() {
+        let parts = format!(
+            "{}{}",
+            two_pin_part("R33", "100k", "Device:R", 1, "GND"),
+            two_pin_part("R34", "1k", "Device:R", 9, "+3V3")
+        );
+        let report = lint(&bq_ts_board(&parts));
+        let findings: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].severity, Severity::Low);
+        assert!(findings[0]
+            .message
+            .contains("TS thermistor network abstained"));
+        assert!(findings[0].message.contains(
+            "identify the battery-pack thermistor part or reduce TS to one source-classified two-terminal element"
+        ));
     }
 }
 

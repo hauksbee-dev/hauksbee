@@ -1,6 +1,70 @@
 //! The behavioural power-IC models resolve and carry their behavioural blocks.
 
-use hauksbee_models::{schema::CurrentProgramSemantics, ComponentQuery, ModelLibrary};
+use hauksbee_models::{
+    schema::CurrentProgramSemantics, ComponentQuery, ModelLibrary, OperatingEnvelope,
+};
+
+#[test]
+fn bq24075_identity_card_carries_the_sourced_battery_and_pin_contracts() {
+    let lib = ModelLibrary::builtin();
+    for value in ["BQ24075", "BQ24075RGT", "BQ24075RGTR", "BQ24075RGTT"] {
+        let model = lib
+            .resolve(&ComponentQuery {
+                value: Some(value.into()),
+                ..Default::default()
+            })
+            .model
+            .unwrap_or_else(|| panic!("{value} must resolve"));
+        assert_eq!(model.id, "bq24075_identity", "{value}");
+        assert_eq!(model.params.get_bool("identity_only"), Some(true));
+        assert_eq!(model.params.get_str("battery_chemistry"), Some("liion"));
+        assert_eq!(model.params.get_f64("vout_setpoint_low"), Some(4.16));
+        assert_eq!(model.params.get_f64("vout_setpoint_high"), Some(4.23));
+        assert_eq!(model.pins.get("1").map(String::as_str), Some("ts"));
+        assert_eq!(model.pins.get("2").map(String::as_str), Some("bat"));
+        assert_eq!(model.pins.get("3").map(String::as_str), Some("bat"));
+        assert_eq!(model.pins.get("13").map(String::as_str), Some("vbus"));
+        assert!(model.params.get_str("unlocked_by").is_some());
+        assert!(model.envelope.iter().any(|entry| matches!(
+            entry,
+            OperatingEnvelope::SupplyRange {
+                pin,
+                min_v,
+                max_v,
+                abs_max_v,
+                basis,
+                ..
+            } if pin == "vbus"
+                && *min_v == 4.35
+                && *max_v == 6.4
+                && *abs_max_v == Some(28.0)
+                && basis.contains("Section 8.3 Recommended Operating Conditions")
+        )));
+        assert!(model.envelope.iter().any(|entry| matches!(
+            entry,
+            OperatingEnvelope::SupplyRange {
+                pin,
+                min_v,
+                max_v,
+                basis,
+                ..
+            } if pin == "bat"
+                && *min_v == -0.3
+                && *max_v == 5.0
+                && basis.contains("Section 8.1 Absolute Maximum Ratings")
+        )));
+    }
+
+    assert!(
+        lib.resolve(&ComponentQuery {
+            value: Some("BQ24075T".into()),
+            ..Default::default()
+        })
+        .model
+        .is_none_or(|model| model.id != "bq24075_identity"),
+        "the voltage-based-TS BQ24075T sibling must not borrow this current-based-TS card"
+    );
+}
 
 #[test]
 fn power_ics_resolve_and_carry_behavioral() {

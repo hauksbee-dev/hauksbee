@@ -48,6 +48,7 @@ pub mod bus_loading;
 pub mod contention;
 pub mod converter;
 pub mod device_decode;
+pub mod envelope;
 pub mod mcu_coverage;
 pub mod model_controls;
 pub mod ripple;
@@ -75,6 +76,9 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(device_decode::device_decode_lint(board, lib).findings);
+    report
+        .findings
+        .extend(envelope::envelope_lint(board, lib).findings);
     report
         .findings
         .extend(contention::contention_lint(board, lib).findings);
