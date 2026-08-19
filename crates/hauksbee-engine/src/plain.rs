@@ -14,9 +14,12 @@
 
 use std::fmt::Write as _;
 
+use schemars::JsonSchema;
+use serde::Serialize;
+
 use hauksbee_extract::{
-    DrcReport, ItemKind, LintCheck, NetLintReport, Severity, SiCheck, SiFinding, SiReport,
-    SiSeverity, ViolationKind, DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
+    DrcReport, LintCheck, NetLintReport, Severity, SiCheck, SiFinding, SiReport, SiSeverity,
+    DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
 
 use crate::stress::{FaultEvent, FaultKind};
@@ -337,22 +340,84 @@ impl PlainReport {
 /// The compact decision surface at the front of a combined `--check --plain`
 /// report. It classifies findings that already exist; it never runs a check or
 /// derives a new electrical claim.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct OrderTriage {
-    do_not_order: Vec<String>,
-    inspect_before_ordering: Vec<String>,
-    checked_and_ok: Vec<String>,
-    unmodelled_parts: usize,
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
+pub struct TriageEntry {
+    /// Stable check-family id (`drc`, `lint`, `si`, `usb_c`).
+    pub id: String,
+    /// Stable finding kind within that family.
+    pub kind: String,
+    /// The exact one-line statement rendered on the triage screen.
+    pub statement: String,
+    /// Layout-space location for findings that identify one physical spot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_mm: Option<[f64; 2]>,
+}
+
+impl TriageEntry {
+    fn new(
+        id: impl Into<String>,
+        kind: impl Into<String>,
+        statement: impl Into<String>,
+        location_mm: Option<[f64; 2]>,
+    ) -> Self {
+        let statement = statement
+            .into()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self {
+            id: id.into(),
+            kind: kind.into(),
+            statement,
+            location_mm,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, JsonSchema, PartialEq)]
+pub struct OrderTriage {
+    pub do_not_order: Vec<TriageEntry>,
+    pub inspect: Vec<TriageEntry>,
+    pub checked_ok: Vec<TriageEntry>,
+    pub not_covered: String,
 }
 
 impl OrderTriage {
-    fn write_bucket(out: &mut String, heading: &str, entries: &[String]) {
+    fn write_bucket(out: &mut String, heading: &str, entries: &[TriageEntry]) {
         let _ = writeln!(out, "{heading}:");
         if entries.is_empty() {
             let _ = writeln!(out, "  - Empty.");
         } else {
-            for entry in entries {
-                let _ = writeln!(out, "  - {entry}");
+            let mut i = 0;
+            while i < entries.len() {
+                let entry = &entries[i];
+                let same_kind = entries[i..]
+                    .iter()
+                    .take_while(|candidate| {
+                        candidate.id == entry.id && candidate.kind == entry.kind
+                    })
+                    .count();
+                let class = match (heading, entry.id.as_str(), entry.kind.as_str()) {
+                    ("DO NOT ORDER", "drc", "short") => Some("oracle-confirmed copper shorts"),
+                    ("INSPECT BEFORE ORDERING", "drc", "short") => {
+                        Some("tool-only potential copper shorts with coordinates")
+                    }
+                    ("INSPECT BEFORE ORDERING", "drc", "clearance") => {
+                        Some("below-rule clearance groups with coordinates")
+                    }
+                    _ => None,
+                };
+                if let Some(class) = class.filter(|_| same_kind >= 4) {
+                    let _ = writeln!(
+                        out,
+                        "  - {same_kind} {}. Example: {} Full list follows below.",
+                        class, entry.statement
+                    );
+                    i += same_kind;
+                } else {
+                    let _ = writeln!(out, "  - {}", entry.statement);
+                    i += 1;
+                }
             }
         }
     }
@@ -361,24 +426,9 @@ impl OrderTriage {
         let mut out = String::new();
         let _ = writeln!(out, "== ORDER / DON'T-ORDER TRIAGE ==");
         Self::write_bucket(&mut out, "DO NOT ORDER", &self.do_not_order);
-        Self::write_bucket(
-            &mut out,
-            "INSPECT BEFORE ORDERING",
-            &self.inspect_before_ordering,
-        );
-        Self::write_bucket(&mut out, "CHECKED AND OK", &self.checked_and_ok);
-        let noun = if self.unmodelled_parts == 1 {
-            "part lacks"
-        } else {
-            "parts lack"
-        };
-        let _ = writeln!(
-            out,
-            "NOT COVERED: {} {noun} an executable simulation model; model-dependent \
-             firmware/analog/AC/thermal claims involving those parts are not covered. Copper \
-             geometry and datasheet decode rules do not require a simulation model.",
-            self.unmodelled_parts,
-        );
+        Self::write_bucket(&mut out, "INSPECT BEFORE ORDERING", &self.inspect);
+        Self::write_bucket(&mut out, "CHECKED AND OK", &self.checked_ok);
+        let _ = writeln!(out, "NOT COVERED: {}", self.not_covered);
         let _ = writeln!(
             out,
             "DETAIL: Full findings and evidence follow; add --verbose to expand every clearance finding.\n"
@@ -398,6 +448,7 @@ impl OrderTriage {
 /// - explicit abstentions (`UncheckedMcu`, USB-C `Info`, or a nominal USB-C
 ///   result undermined by a model gap on its own CC nets) go to inspect;
 /// - only an unqualified USB-C `Ok` is emitted as a positive result.
+#[cfg(test)]
 pub(crate) fn order_triage(
     drc: &crate::result::DrcStructured,
     lint: &NetLintReport,
@@ -406,24 +457,76 @@ pub(crate) fn order_triage(
     usbc_reliable: bool,
     unmodelled_parts: usize,
 ) -> OrderTriage {
-    let mut triage = OrderTriage {
+    let provenance =
+        crate::result::ClearanceRuleProvenance::defaulted(drc.clearance_rule_mm, false);
+    order_triage_with_rule_source(
+        drc,
+        &provenance,
+        lint,
+        si,
+        usbc,
+        usbc_reliable,
         unmodelled_parts,
+        true,
+    )
+}
+
+pub(crate) fn order_triage_with_rule_source(
+    drc: &crate::result::DrcStructured,
+    clearance_rule_source: &crate::result::ClearanceRuleProvenance,
+    lint: &NetLintReport,
+    si: &SiReport,
+    usbc: Option<&crate::checks::usb_c::UsbcReport>,
+    usbc_reliable: bool,
+    unmodelled_parts: usize,
+    include_clearance_unlock: bool,
+) -> OrderTriage {
+    let noun = if unmodelled_parts == 1 {
+        "part lacks"
+    } else {
+        "parts lack"
+    };
+    let clearance = match clearance_rule_source.source {
+        crate::result::ClearanceRuleSource::Defaulted
+            if include_clearance_unlock && clearance_rule_source.project_file_found =>
+        {
+            " Clearance findings use DEFAULT rules, not your rules, because the sibling .kicad_pro was present but its netclass rules were not read. Repair or replace that .kicad_pro with readable netclass rules and rerun to check your rules."
+        }
+        crate::result::ClearanceRuleSource::Defaulted if include_clearance_unlock => " Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read. Place the matching .kicad_pro next to the board and rerun to check your rules.",
+        crate::result::ClearanceRuleSource::Defaulted => " Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read.",
+        crate::result::ClearanceRuleSource::ToolDefault => " Clearance findings use TOOL DEFAULT rules, not your rules; this importer did not read design rules.",
+        _ => "",
+    };
+    let mut triage = OrderTriage {
+        not_covered: format!(
+            "{unmodelled_parts} {noun} an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered. Copper geometry and datasheet decode rules do not require a simulation model.{clearance}"
+        ),
         ..OrderTriage::default()
     };
 
-    let drc_plain = plain_drc_structured(drc);
+    let drc_plain = plain_drc_structured_with_rule_source(drc, clearance_rule_source);
     let mut serious_shorts = Vec::new();
     let mut tool_only_shorts = Vec::new();
     for (short, finding) in drc.shorts.iter().zip(&drc_plain.findings) {
         if finding.level == PlainLevel::Serious {
-            serious_shorts.push(finding.what.clone());
+            serious_shorts.push(TriageEntry::new(
+                "drc",
+                "short",
+                finding.what.clone(),
+                finding.loc_mm,
+            ));
         } else {
             let evidence = if short.oracle_agreement().is_some() {
                 String::new()
             } else {
                 " Tool-only: no matching KiCad-oracle confirmation is attached.".to_string()
             };
-            tool_only_shorts.push(format!("{}{evidence}", finding.what));
+            tool_only_shorts.push(TriageEntry::new(
+                "drc",
+                "short",
+                format!("{}{evidence}", finding.what),
+                finding.loc_mm,
+            ));
         }
     }
     push_triage_class(
@@ -432,22 +535,22 @@ pub(crate) fn order_triage(
         "oracle-confirmed copper shorts",
     );
     push_triage_class(
-        &mut triage.inspect_before_ordering,
+        &mut triage.inspect,
         tool_only_shorts,
         "tool-only potential copper shorts with coordinates",
     );
     // The structured/plain order is shorts, below-rule violations, then
     // at-limit observations. Only actual below-rule groups belong on the order
     // screen; no-margin observations remain in the detail below.
-    let clearance_findings: Vec<String> = drc_plain
+    let clearance_findings: Vec<TriageEntry> = drc_plain
         .findings
         .iter()
         .skip(drc.shorts.len())
         .take(drc.violations.len())
-        .map(|finding| finding.what.clone())
+        .map(|finding| TriageEntry::new("drc", "clearance", finding.what.clone(), finding.loc_mm))
         .collect();
     push_triage_class(
-        &mut triage.inspect_before_ordering,
+        &mut triage.inspect,
         clearance_findings,
         "below-rule clearance groups with coordinates",
     );
@@ -457,16 +560,31 @@ pub(crate) fn order_triage(
         if finding.level == PlainLevel::Serious
             || (raw.check == LintCheck::DeviceDecode && raw.severity != Severity::Low)
         {
-            triage.do_not_order.push(finding.what.clone());
+            triage.do_not_order.push(TriageEntry::new(
+                "lint",
+                raw.check.as_str(),
+                finding.what.clone(),
+                finding.loc_mm,
+            ));
         } else if raw.check == LintCheck::UncheckedMcu {
-            triage.inspect_before_ordering.push(finding.what.clone());
+            triage.inspect.push(TriageEntry::new(
+                "lint",
+                raw.check.as_str(),
+                finding.what.clone(),
+                finding.loc_mm,
+            ));
         }
     }
 
     let si_plain = plain_si(si);
-    for finding in &si_plain.findings {
+    for (raw, finding) in si.findings.iter().zip(&si_plain.findings) {
         if finding.level == PlainLevel::Serious {
-            triage.do_not_order.push(finding.what.clone());
+            triage.do_not_order.push(TriageEntry::new(
+                "si",
+                raw.check.as_str(),
+                finding.what.clone(),
+                finding.loc_mm,
+            ));
         }
     }
 
@@ -474,11 +592,22 @@ pub(crate) fn order_triage(
         use crate::checks::usb_c::UsbcLevel;
         let item = format!("USB-C CC: {}", report.headline);
         match report.level {
-            UsbcLevel::Serious => triage.do_not_order.push(item),
-            UsbcLevel::Info => triage.inspect_before_ordering.push(item),
-            UsbcLevel::Ok if usbc_reliable => triage.checked_and_ok.push(item),
-            UsbcLevel::Ok => triage.inspect_before_ordering.push(format!(
-                "{item} Nominal result only: an unresolved part on the CC nets prevents relying on it."
+            UsbcLevel::Serious => triage.do_not_order.push(TriageEntry::new(
+                "usb_c", "cc_compliance", item, None,
+            )),
+            UsbcLevel::Info => triage.inspect.push(TriageEntry::new(
+                "usb_c", "cc_compliance", item, None,
+            )),
+            UsbcLevel::Ok if usbc_reliable => triage.checked_ok.push(TriageEntry::new(
+                "usb_c", "cc_compliance", item, None,
+            )),
+            UsbcLevel::Ok => triage.inspect.push(TriageEntry::new(
+                "usb_c",
+                "cc_compliance",
+                format!(
+                    "{item} Nominal result only: an unresolved part on the CC nets prevents relying on it."
+                ),
+                None,
             )),
         }
     }
@@ -490,15 +619,8 @@ pub(crate) fn order_triage(
 /// class. Three or fewer existing findings remain verbatim; a larger class is
 /// one counted line with its first existing finding as an example and an
 /// explicit pointer to the complete coordinate detail below.
-fn push_triage_class(target: &mut Vec<String>, entries: Vec<String>, class: &str) {
-    match entries.as_slice() {
-        [] => {}
-        [one, _, _, _, ..] => target.push(format!(
-            "{} {class}. Example: {one} Full list follows below.",
-            entries.len(),
-        )),
-        _ => target.extend(entries),
-    }
+fn push_triage_class(target: &mut Vec<TriageEntry>, entries: Vec<TriageEntry>, _class: &str) {
+    target.extend(entries);
 }
 
 // ── Severity bridges ─────────────────────────────────────────────────────────
@@ -543,65 +665,14 @@ fn friendly_layer(layer: &str) -> String {
     }
 }
 
-/// Pick a friendly noun for a copper item ("the wire", "the chip pad", ...).
-fn item_noun(kind: ItemKind) -> &'static str {
-    match kind {
-        ItemKind::Track => "a copper wire",
-        ItemKind::Arc => "a copper wire",
-        ItemKind::Via => "a via (layer-to-layer hole)",
-        ItemKind::Pad => "a component pad",
-        ItemKind::Zone => "a copper fill area",
-        ItemKind::Graphic => "a drawn copper shape",
-    }
-}
-
 // ── DRC (copper shorts / clearance) ───────────────────────────────────────────
 
 /// Translate the geometric DRC report (copper shorts and near-shorts).
 pub fn plain_drc(report: &DrcReport) -> PlainReport {
-    let mut out = PlainReport::new("Copper spacing (DRC)");
-    for f in &report.findings {
-        let a = if f.net_a_name.is_empty() {
-            "an unnamed net"
-        } else {
-            &f.net_a_name
-        };
-        let b = if f.net_b_name.is_empty() {
-            "an unnamed net"
-        } else {
-            &f.net_b_name
-        };
-        let where_ = format!(
-            "near x={:.1} mm, y={:.1} mm on {}",
-            f.x,
-            f.y,
-            friendly_layer(&f.layer)
-        );
-        match f.kind {
-            ViolationKind::Short => out.push(
-                PlainLevel::Serious,
-                format!(
-                    "Two separate connections, \"{a}\" and \"{b}\", are touching ({} touches {}), {where_}.",
-                    item_noun(f.item_a.kind),
-                    item_noun(f.item_b.kind),
-                ),
-                format!(
-                    "These are meant to be electrically separate. Where they touch they become one connection (a short), so \"{a}\" and \"{b}\" will be forced to the same voltage. That usually means the board does the wrong thing, and if one is a power rail it can pull large current and overheat."
-                ),
-                "Pull the two pieces of copper apart so there is a clear gap between them, or remove the bit of copper that bridges them. If they really are supposed to connect, give them the same net name.".to_string(),
-            ),
-            ViolationKind::Clearance => out.push(
-                PlainLevel::Warning,
-                format!(
-                    "\"{a}\" and \"{b}\" are very close but not quite touching ({:.3} mm apart, your rule wants {:.3} mm), {where_}.",
-                    f.gap_mm, f.required_clearance_mm,
-                ),
-                "They are not shorted today, but the gap is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.".to_string(),
-                "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.".to_string(),
-            ),
-        }
-    }
-    out
+    // This context has no filesystem/project provenance. Conservative is the
+    // only honest default: callers that did read a project attach that fact to
+    // DrcStructured before rendering.
+    plain_drc_structured(&crate::result::DrcStructured::from_report(report))
 }
 
 /// Translate the *grouped* DRC ([`crate::result::DrcStructured`]) for the plain /
@@ -615,6 +686,18 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
 /// the honesty change removed; this renderer keeps `--plain` and the web report
 /// in step with that.
 pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
+    let provenance = crate::result::ClearanceRuleProvenance::defaulted(st.clearance_rule_mm, false);
+    plain_drc_structured_with_rule_source(st, &provenance)
+}
+
+pub fn plain_drc_structured_with_rule_source(
+    st: &crate::result::DrcStructured,
+    provenance: &crate::result::ClearanceRuleProvenance,
+) -> PlainReport {
+    // Keep the verdict subject stable for downstream contracts. The enclosing
+    // CLI/web section title and the source notice carry the provenance before
+    // any finding; folding it into the grammatical subject would turn
+    // "copper spacing (DRC)" into a different check name.
     let mut out = PlainReport::new("Copper spacing (DRC)");
     out.unvalidated = st.version_warning.clone();
 
@@ -631,7 +714,11 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     // covers every format that arrives without copper, including ones added
     // later. The web front door has a narrower version of this for gerbers
     // only; this is the general case.
-    if st.primitive_count == 0 {
+    if st.primitive_count == 0
+        && st.shorts.is_empty()
+        && st.violations.is_empty()
+        && st.at_limit.is_empty()
+    {
         out.push_note(HeadsUp::glossed(
             "No copper was checked: this input carries connectivity but no traces or pours."
                 .to_string(),
@@ -776,31 +863,45 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         );
         let what = if g.below_count == g.count {
             format!(
-                "\"{a}\" and \"{b}\" are very close but not quite touching at {places} on {} (tightest {:.3} mm, below your {:.3} mm rule).",
-                friendly_layer(&g.layer), g.min_gap_mm, g.rule_mm
+                "\"{a}\" and \"{b}\" are very close but not quite touching at {places} on {} (tightest {:.3} mm, below {}).",
+                friendly_layer(&g.layer),
+                g.min_gap_mm,
+                provenance.rule_reference(g.rule_mm)
             )
         } else {
             format!(
-                "\"{a}\" and \"{b}\" are close at {places} on {}: {} below your {:.3} mm rule (tightest {:.3} mm), the rest exactly at the limit.",
-                friendly_layer(&g.layer), g.below_count, g.rule_mm, g.min_gap_mm,
+                "\"{a}\" and \"{b}\" are close at {places} on {}: {} below {} (tightest {:.3} mm), the rest exactly at the limit.",
+                friendly_layer(&g.layer),
+                g.below_count,
+                provenance.rule_reference(g.rule_mm),
+                g.min_gap_mm,
             )
         };
-        out.push_at(
-            PlainLevel::Warning,
-            what,
-            "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.".to_string(),
-            "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.".to_string(),
-            g.min_gap_loc_mm,
-        );
+        let (why, fix) = if provenance.is_defaulted() {
+            (
+                "They are not shorted today, but at least one spot is below the fallback spacing Hauksbee applied. Because the project rules were not read, this finding is not evidence that the board violates its own rules; it identifies geometry to recheck once the project file is available.".to_string(),
+                "Recheck this gap after the project rules are available; change the layout only if it is below the resolved netclass rule.".to_string(),
+            )
+        } else {
+            (
+                "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.".to_string(),
+                "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.".to_string(),
+            )
+        };
+        out.push_at(PlainLevel::Warning, what, why, fix, g.min_gap_loc_mm);
     }
 
     // At-the-limit groups (gap == rule, no margin). NOT "below" the rule.
-    push_at_limit_findings(&mut out, &st.at_limit);
+    push_at_limit_findings(&mut out, &st.at_limit, provenance);
 
     out
 }
 
-fn push_at_limit_findings(out: &mut PlainReport, at_limit: &[crate::result::DrcGroup]) {
+fn push_at_limit_findings(
+    out: &mut PlainReport,
+    at_limit: &[crate::result::DrcGroup],
+    provenance: &crate::result::ClearanceRuleProvenance,
+) {
     for g in at_limit {
         let a = if g.net_a.is_empty() {
             "an unnamed net"
@@ -820,11 +921,21 @@ fn push_at_limit_findings(out: &mut PlainReport, at_limit: &[crate::result::DrcG
         out.push_at(
             PlainLevel::Warning,
             format!(
-                "\"{a}\" and \"{b}\" sit at minimum clearance (no margin) at {places} on {} ({:.3} mm, exactly your {:.3} mm rule).",
-                friendly_layer(&g.layer), g.min_gap_mm, g.rule_mm
+                "\"{a}\" and \"{b}\" sit at minimum clearance (no margin) at {places} on {} ({:.3} mm, exactly {}).",
+                friendly_layer(&g.layer),
+                g.min_gap_mm,
+                provenance.rule_reference(g.rule_mm)
             ),
-            "These meet your clearance rule exactly, with nothing to spare. They are not below the rule, so this is not a violation, but there is no margin left, so any small manufacturing variation eats into a gap that is already at its allowed minimum.".to_string(),
-            "If you want some safety margin, open these gaps up a little beyond the rule. If the rule already reflects your process limits, this is acceptable as-is; just be aware there is no slack.".to_string(),
+            if provenance.is_defaulted() {
+                "These meet only the fallback clearance exactly. The project rules were not read, so this does not establish whether the board is at its own limit.".to_string()
+            } else {
+                "These meet your clearance rule exactly, with nothing to spare. They are not below the rule, so this is not a violation, but there is no margin left, so any small manufacturing variation eats into a gap that is already at its allowed minimum.".to_string()
+            },
+            if provenance.is_defaulted() {
+                "Recheck this gap after the project rules are available before deciding whether it needs to change.".to_string()
+            } else {
+                "If you want some safety margin, open these gaps up a little beyond the rule. If the rule already reflects your process limits, this is acceptable as-is; just be aware there is no slack.".to_string()
+            },
             g.min_gap_loc_mm,
         );
     }
@@ -838,11 +949,29 @@ fn push_at_limit_findings(out: &mut PlainReport, at_limit: &[crate::result::DrcG
 /// collapse to one aggregated line per (rule, layer). The `--json` surface is
 /// untouched (always complete), and `verbose` restores every instance here.
 pub fn render_drc_condensed(st: &crate::result::DrcStructured, verbose: bool) -> String {
+    let provenance = crate::result::ClearanceRuleProvenance::defaulted(st.clearance_rule_mm, false);
+    render_drc_condensed_with_rule_source(st, &provenance, verbose)
+}
+
+pub fn render_drc_condensed_with_rule_source(
+    st: &crate::result::DrcStructured,
+    provenance: &crate::result::ClearanceRuleProvenance,
+    verbose: bool,
+) -> String {
+    render_drc_condensed_with_rule_source_and_unlock(st, provenance, verbose, true)
+}
+
+pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
+    st: &crate::result::DrcStructured,
+    provenance: &crate::result::ClearanceRuleProvenance,
+    verbose: bool,
+    include_unlock: bool,
+) -> String {
     use std::fmt::Write as _;
     /// How many clearance findings keep the full three-line gloss.
     const FULL: usize = 3;
 
-    let pr = plain_drc_structured(st);
+    let pr = plain_drc_structured_with_rule_source(st, provenance);
     let summary = format!(
         "Summary: {} short(s), {} net pair(s) below the clearance rule, {} at minimum \
          clearance (no margin).",
@@ -850,12 +979,24 @@ pub fn render_drc_condensed(st: &crate::result::DrcStructured, verbose: bool) ->
         st.violations.len(),
         st.at_limit.len()
     );
+    let mut lead = format!(
+        "{}\n",
+        if include_unlock {
+            provenance.cli_notice()
+        } else {
+            provenance.source_notice()
+        }
+    );
+    if let Some(note) = st.default_rule_flood_note(provenance) {
+        let _ = writeln!(lead, "{note}");
+    }
 
     let warning_groups = st.violations.len() + st.at_limit.len();
     if verbose || warning_groups <= FULL + 1 {
         // Nothing worth condensing (or the user asked for everything): the full
         // report, with the trailing summary count appended.
-        let mut s = pr.render();
+        let mut s = lead;
+        s.push_str(&pr.render());
         if warning_groups + st.shorts.len() > 0 {
             let _ = writeln!(s, "{summary}");
         }
@@ -864,7 +1005,7 @@ pub fn render_drc_condensed(st: &crate::result::DrcStructured, verbose: bool) ->
 
     // Condensed: verdict, full shorts + first FULL clearance findings, then one
     // aggregate line per (rule, layer) for the rest.
-    let mut s = String::new();
+    let mut s = lead;
     let _ = writeln!(s, "{}", pr.verdict());
     let _ = writeln!(s);
     let mut shown = 0usize;
@@ -910,10 +1051,11 @@ pub fn render_drc_condensed(st: &crate::result::DrcStructured, verbose: bool) ->
         let _ = writeln!(
             s,
             "  ...and {groups} more net pair{} like this on {} ({locs} location{}, tightest \
-             {tightest:.3} mm vs your {rule:.3} mm rule); pass --verbose for every instance.",
+             {tightest:.3} mm vs {}); pass --verbose for every instance.",
             if *groups == 1 { "" } else { "s" },
             friendly_layer(layer),
             if *locs == 1 { "" } else { "s" },
+            provenance.rule_reference(rule),
         );
     }
     let mut rest_limit: BTreeMap<(String, u64), (usize, usize)> = BTreeMap::new();
@@ -927,10 +1069,10 @@ pub fn render_drc_condensed(st: &crate::result::DrcStructured, verbose: bool) ->
     for ((layer, rule_um), (groups, locs)) in &rest_limit {
         let _ = writeln!(
             s,
-            "  ...and {groups} more net pair{} at exactly the {:.3} mm limit on {} \
+            "  ...and {groups} more net pair{} at exactly {} on {} \
              ({locs} location{}); pass --verbose for every instance.",
             if *groups == 1 { "" } else { "s" },
-            *rule_um as f64 / 1000.0,
+            provenance.rule_reference(*rule_um as f64 / 1000.0),
             friendly_layer(layer),
             if *locs == 1 { "" } else { "s" },
         );
@@ -1361,7 +1503,7 @@ fn volts(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hauksbee_extract::{DrcFinding, Item, LintFinding, SiFinding};
+    use hauksbee_extract::{DrcFinding, Item, ItemKind, LintFinding, SiFinding, ViolationKind};
 
     /// The INCONCLUSIVE verdict must not bury actionable heads-up notes: the
     /// verdict line refuses the clean bill AND still points at the notes
@@ -1418,6 +1560,7 @@ mod tests {
     fn drc_short_is_serious_with_why_and_fix() {
         let mut report = DrcReport {
             clearance_mm: 0.2,
+            primitive_count: 2,
             ..Default::default()
         };
         report.findings.push(drc_short());
@@ -1612,7 +1755,8 @@ mod tests {
             "the rest aggregate into one line pointing at --verbose:\n{condensed}"
         );
         assert!(
-            condensed.contains("tightest 0.150 mm") && condensed.contains("0.200 mm rule"),
+            condensed.contains("tightest 0.150 mm")
+                && condensed.contains("0.200 mm DEFAULT clearance"),
             "the aggregate names the tightest gap and the rule:\n{condensed}"
         );
         assert!(
@@ -1653,13 +1797,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_drc_reads_healthy() {
+    fn empty_drc_refuses_a_healthy_claim_when_no_copper_was_checked() {
         let plain = plain_drc(&DrcReport {
             clearance_mm: 0.2,
             ..Default::default()
         });
-        assert!(plain.verdict().to_lowercase().contains("healthy"));
-        assert!(plain.render().to_lowercase().contains("healthy"));
+        assert!(!plain.verdict().to_lowercase().contains("healthy"));
+        assert!(plain.render().contains("No copper was checked"));
     }
 
     #[test]
@@ -1961,6 +2105,121 @@ mod tests {
         );
     }
 
+    fn one_clearance_group() -> crate::result::DrcGroup {
+        crate::result::DrcGroup {
+            net_a: "SDA".into(),
+            net_b: "SCL".into(),
+            layer: "F.Cu".into(),
+            count: 1,
+            below_count: 1,
+            at_limit: false,
+            min_gap_mm: 0.127,
+            min_gap_loc_mm: [3.0, 4.0],
+            rule_mm: 0.2,
+            between: "track ↔ track".into(),
+            plain: String::new(),
+            fix: "increase spacing".into(),
+        }
+    }
+
+    fn clearance_report(violations: usize, shorts: usize) -> crate::result::DrcStructured {
+        crate::result::DrcStructured {
+            clearance_rule_mm: 0.2,
+            primitive_count: 20,
+            shorts: (0..shorts)
+                .map(|index| structured_short(&format!("SHORT_{index}"), "serious", index as f64))
+                .collect(),
+            violations: (0..violations).map(|_| one_clearance_group()).collect(),
+            at_limit: Vec::new(),
+            version_warning: None,
+            suppression_note: None,
+        }
+    }
+
+    #[test]
+    fn defaulted_clearance_wording_says_not_your_rules_and_names_project_file() {
+        let source = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
+        let report = clearance_report(1, 0).with_clearance_rule_provenance(source.clone());
+        let rendered = render_drc_condensed_with_rule_source(&report, &source, false);
+        assert!(rendered.contains("DEFAULT 0.200 mm"), "{rendered}");
+        assert!(rendered.contains("not your rules"), "{rendered}");
+        assert!(
+            rendered.contains("Place the matching .kicad_pro next to the board"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("below the 0.200 mm DEFAULT clearance"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("below your 0.200 mm rule"), "{rendered}");
+    }
+
+    #[test]
+    fn project_clearance_wording_stays_unqualified() {
+        let source = crate::result::ClearanceRuleProvenance::project_file(0.2);
+        let report = clearance_report(1, 0).with_clearance_rule_provenance(source.clone());
+        let rendered = render_drc_condensed_with_rule_source(&report, &source, false);
+        assert!(rendered.contains("below your 0.200 mm rule"), "{rendered}");
+        assert!(!rendered.contains("not your rules"), "{rendered}");
+        assert!(!rendered.contains("DEFAULT clearance"), "{rendered}");
+    }
+
+    #[test]
+    fn triage_not_covered_discloses_defaulted_clearance_rules() {
+        let source = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
+        let report = clearance_report(1, 0).with_clearance_rule_provenance(source.clone());
+        let triage = order_triage_with_rule_source(
+            &report,
+            &source,
+            &NetLintReport::default(),
+            &SiReport::default(),
+            None,
+            true,
+            0,
+            true,
+        );
+        assert!(triage.not_covered.contains("DEFAULT rules, not your rules"));
+        assert!(triage.not_covered.contains("matching .kicad_pro"));
+        assert!(triage.render().contains("NOT COVERED:"));
+    }
+
+    #[test]
+    fn triage_entries_normalize_statements_to_one_line() {
+        let entry = TriageEntry::new("lint", "device_decode", "first\r\nsecond", None);
+        assert_eq!(entry.statement, "first second");
+        assert!(!entry.statement.contains(['\r', '\n']));
+    }
+
+    #[test]
+    fn default_rule_flood_note_requires_default_source_and_strictly_more_than_ten_x_shorts() {
+        let defaulted = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
+        let project = crate::result::ClearanceRuleProvenance::project_file(0.2);
+        assert!(
+            clearance_report(11, 1)
+                .default_rule_flood_note(&defaulted)
+                .is_some(),
+            "defaulted 11:1 must disclose the flood"
+        );
+        assert!(
+            clearance_report(10, 1)
+                .default_rule_flood_note(&defaulted)
+                .is_none(),
+            "exactly 10x does not exceed 10x"
+        );
+        assert!(
+            clearance_report(11, 1)
+                .default_rule_flood_note(&project)
+                .is_none(),
+            "project-backed rules must never get the default-rule sentence"
+        );
+        assert!(
+            clearance_report(1, 0)
+                .default_rule_flood_note(&defaulted)
+                .is_some(),
+            "one clearance group is more than 10x zero shorts"
+        );
+    }
+
     #[test]
     fn order_triage_buckets_confirmed_short_ratings_unconfirmed_short_and_clean_usb() {
         let mut confirmed = structured_short("+3V3", "serious", 1.0);
@@ -2001,24 +2260,24 @@ mod tests {
             triage
                 .do_not_order
                 .iter()
-                .any(|item| item.contains("+3V3") && item.contains("KiCad")),
+                .any(|item| item.statement.contains("+3V3") && item.statement.contains("KiCad")),
             "{triage:#?}"
         );
         assert!(
             triage
                 .do_not_order
                 .iter()
-                .any(|item| item.contains("eFuse connector budget")),
+                .any(|item| item.statement.contains("eFuse connector budget")),
             "{triage:#?}"
         );
-        assert_eq!(triage.inspect_before_ordering.len(), 1, "{triage:#?}");
+        assert_eq!(triage.inspect.len(), 1, "{triage:#?}");
         assert!(
-            triage.inspect_before_ordering[0].contains("PYRO4_FIRE")
-                && triage.inspect_before_ordering[0].contains("Tool-only"),
+            triage.inspect[0].statement.contains("PYRO4_FIRE")
+                && triage.inspect[0].statement.contains("Tool-only"),
             "{triage:#?}"
         );
-        assert_eq!(triage.checked_and_ok.len(), 1, "{triage:#?}");
-        assert!(triage.checked_and_ok[0].contains("USB-C CC"));
+        assert_eq!(triage.checked_ok.len(), 1, "{triage:#?}");
+        assert!(triage.checked_ok[0].statement.contains("USB-C CC"));
         let rendered = triage.render();
         assert!(rendered.starts_with("== ORDER / DON'T-ORDER TRIAGE =="));
         assert!(rendered.contains("NOT COVERED: 7 parts lack"));

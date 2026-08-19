@@ -13,7 +13,10 @@ use crate::result::{
     JsonInputEvidence, JsonReport,
 };
 
-use super::{kicad_pro_clearance_rules, lint_fails, si_fails, OutputMode};
+use super::{
+    kicad_pro_clearance_rule_provenance, kicad_pro_clearance_rules, lint_fails, si_fails,
+    OutputMode,
+};
 
 /// Run the full static suite and print it in `mode`, then (under `strict`) exit
 /// non-zero if any real finding gates.
@@ -110,13 +113,12 @@ pub(crate) fn emit_with_schematic_quiet(
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
     .with_input_artifact(board_path, raw, input_kind)?;
+    let project_rules = (!altium_present).then(|| kicad_pro_clearance_rules(board_path, board));
+    let project_rules_read = project_rules.as_ref().is_some_and(Option::is_some);
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
-        ExtractedBoard::drc_with_clearance_rules(
-            text,
-            kicad_pro_clearance_rules(board_path, board),
-        )?
+        ExtractedBoard::drc_with_clearance_rules(text, project_rules.flatten())?
     };
 
     // The companion schematic's declarations, applied before anything reads the
@@ -150,11 +152,17 @@ pub(crate) fn emit_with_schematic_quiet(
     let mut waivers = load_waivers(board_path);
     let mut lint = lint;
     let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
+    let provenance = if altium_present {
+        crate::result::ClearanceRuleProvenance::tool_default(drc.clearance_mm)
+    } else {
+        kicad_pro_clearance_rule_provenance(board_path, text, project_rules_read, drc.clearance_mm)
+    };
     let mut drc_structured = DrcStructured::from_report_with_ties(
         &drc,
         qualification.as_ref(),
         text.contains("<eagle") && schematic_ties.is_none(),
-    );
+    )
+    .with_clearance_rule_provenance(provenance.clone());
     let oracle_summary = (oracle && mode != OutputMode::Json).then(|| {
         super::drc::oracle_cross_check_and_annotate(
             board_path,
@@ -194,6 +202,17 @@ pub(crate) fn emit_with_schematic_quiet(
     // is deliberately exempt. Without --strict the exit code is unchanged;
     // under it these blockers exit 3, matching the verdict field.
     let blockers = crate::result::unmodelled_critical_refs(&summary);
+    let usbc_reliable = super::usb_c::scoped_blockers(board, &blockers).is_empty();
+    let triage = crate::plain::order_triage_with_rule_source(
+        &drc_structured,
+        &provenance,
+        &lint,
+        &si,
+        usbc.as_ref(),
+        usbc_reliable,
+        summary.unresolved,
+        true,
+    );
     // This surface's own exit gate, computed before anything renders so the
     // machine document can state the same outcome the exit code will. It is
     // wider than the `serious` severity on purpose (medium lint findings, any
@@ -215,6 +234,8 @@ pub(crate) fn emit_with_schematic_quiet(
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.drc = Some(drc_structured.clone());
+            jr.triage = Some(triage.clone());
+            jr.clearance_rule_source = Some(provenance.clone());
             if unrouted {
                 jr.notes.push(crate::result::JsonNote {
                     kind: crate::result::JsonNoteKind::Coverage,
@@ -234,19 +255,7 @@ pub(crate) fn emit_with_schematic_quiet(
             println!("{}", jr.to_json());
         }
         OutputMode::Plain => {
-            let usbc_reliable = super::usb_c::scoped_blockers(board, &blockers).is_empty();
-            print!(
-                "{}",
-                crate::plain::order_triage(
-                    &drc_structured,
-                    &lint,
-                    &si,
-                    usbc.as_ref(),
-                    usbc_reliable,
-                    summary.unresolved,
-                )
-                .render()
-            );
+            print!("{}", triage.render());
             // Bind-role honesty (Marco): the plain persona surface must not hide
             // that active ICs are unmodelled, otherwise `--check --plain` reads
             // "healthy" while firmware/analog/AC/thermal on their nets are
@@ -266,11 +275,19 @@ pub(crate) fn emit_with_schematic_quiet(
                      them (run --report for the bind table).\n"
                 );
             }
-            println!("== Copper spacing (DRC) ==");
+            println!("== {} ==", drc_structured.section_title(&provenance));
             if unrouted {
                 println!("{}", super::UNROUTED_COPPER_NOTE);
             }
-            print!("{}", crate::render_drc_condensed(&drc_structured, verbose));
+            print!(
+                "{}",
+                crate::plain::render_drc_condensed_with_rule_source_and_unlock(
+                    &drc_structured,
+                    &provenance,
+                    verbose,
+                    false,
+                )
+            );
             if let Some(summary) = &oracle_summary {
                 print!("{summary}");
             }
@@ -310,11 +327,14 @@ pub(crate) fn emit_with_schematic_quiet(
                 }
             );
             print!("{}", summary.render_banner());
-            println!("\n== Copper spacing (DRC) ==");
+            println!("\n== {} ==", drc_structured.section_title(&provenance));
             if unrouted {
                 println!("{}", super::UNROUTED_COPPER_NOTE);
             }
-            print!("{}", drc_structured.render());
+            print!(
+                "{}",
+                drc_structured.render_with_clearance_rule_provenance(&provenance)
+            );
             if let Some(summary) = &oracle_summary {
                 print!("{summary}");
             }
@@ -931,13 +951,12 @@ pub fn emit_combined_json_with_schematic(
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
     .with_input_artifact(board_path, raw, input_kind)?;
+    let project_rules = (!altium_present).then(|| kicad_pro_clearance_rules(board_path, board));
+    let project_rules_read = project_rules.as_ref().is_some_and(Option::is_some);
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
-        ExtractedBoard::drc_with_clearance_rules(
-            text,
-            kicad_pro_clearance_rules(board_path, board),
-        )?
+        ExtractedBoard::drc_with_clearance_rules(text, project_rules.flatten())?
     };
     // The companion schematic's declarations, applied before anything reads the
     // findings. Reclassifies, never deletes: a covered contact keeps its layer,
@@ -966,11 +985,17 @@ pub fn emit_combined_json_with_schematic(
     // written from the waived-down suite reading `failures="0"` beside it.
     let mut waivers = load_waivers(board_path);
     let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
+    let provenance = if altium_present {
+        crate::result::ClearanceRuleProvenance::tool_default(drc.clearance_mm)
+    } else {
+        kicad_pro_clearance_rule_provenance(board_path, text, project_rules_read, drc.clearance_mm)
+    };
     let drc_structured = DrcStructured::from_report_with_ties(
         &drc,
         qualification.as_ref(),
         text.contains("<eagle") && schematic_ties.is_none(),
-    );
+    )
+    .with_clearance_rule_provenance(provenance.clone());
     let usbc = crate::usb_c_report(board);
     let mut findings = lint_findings_json(&lint);
     findings.extend(si_findings_json(&si));
@@ -995,6 +1020,17 @@ pub fn emit_combined_json_with_schematic(
     // command is a lint/SI surface too, and its clean verdict over unmodelled
     // critical parts must carry the same qualification.
     let blockers = crate::result::unmodelled_critical_refs(&combined_summary);
+    let usbc_reliable = super::usb_c::scoped_blockers(board, &blockers).is_empty();
+    let triage = crate::plain::order_triage_with_rule_source(
+        &drc_structured,
+        &provenance,
+        &lint,
+        &si,
+        usbc.as_ref(),
+        usbc_reliable,
+        combined_summary.unresolved,
+        true,
+    );
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
     let drc_gates = drc_gate_fails(&drc, qualification.as_ref());
     let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
@@ -1006,6 +1042,8 @@ pub fn emit_combined_json_with_schematic(
         .with_inputs(inputs)
         .with_evidence(&evidence);
     jr.drc = Some(drc_structured.clone());
+    jr.triage = Some(triage);
+    jr.clearance_rule_source = Some(provenance);
     jr.findings = Some(findings);
     if !blockers.is_empty() {
         jr.notes.push(crate::result::JsonNote {

@@ -1117,6 +1117,162 @@ pub struct NetActivity {
 // DRC grouping (Fix #8 / Theme D)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Where the clearance value applied by DRC came from.  A default is not a
+/// design rule merely because the geometric check had to use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClearanceRuleSource {
+    /// Netclass rules were read from the sibling KiCad project file.
+    ProjectFileFound,
+    /// No usable project rules were available, so the extractor's fallback was
+    /// applied.  Renderers must never call this the user's rule.
+    Defaulted,
+    /// The importer for this format has no design-rule channel and used the
+    /// tool fallback directly.
+    ToolDefault,
+    /// A non-KiCad layout format carried its own clearance value.
+    BoardFile,
+}
+
+/// Machine-readable provenance for a reported clearance value.
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+pub struct ClearanceRuleProvenance {
+    pub source: ClearanceRuleSource,
+    /// The default/report-wide value in millimetres. Pair-specific resolved
+    /// values remain on each [`DrcGroup`] as `rule_mm`.
+    pub value_mm: f64,
+    /// Distinguishes a missing sibling from a present file whose rules could not
+    /// be read. In both cases `source` is `defaulted`: invented evidence does not
+    /// become project evidence merely because a file existed.
+    pub project_file_found: bool,
+}
+
+impl Default for ClearanceRuleProvenance {
+    fn default() -> Self {
+        Self::defaulted(0.0, false)
+    }
+}
+
+impl ClearanceRuleProvenance {
+    pub fn project_file(value_mm: f64) -> Self {
+        Self {
+            source: ClearanceRuleSource::ProjectFileFound,
+            value_mm,
+            project_file_found: true,
+        }
+    }
+
+    pub fn defaulted(value_mm: f64, project_file_found: bool) -> Self {
+        Self {
+            source: ClearanceRuleSource::Defaulted,
+            value_mm,
+            project_file_found,
+        }
+    }
+
+    pub fn board_file(value_mm: f64) -> Self {
+        Self {
+            source: ClearanceRuleSource::BoardFile,
+            value_mm,
+            project_file_found: false,
+        }
+    }
+
+    pub fn tool_default(value_mm: f64) -> Self {
+        Self {
+            source: ClearanceRuleSource::ToolDefault,
+            value_mm,
+            project_file_found: false,
+        }
+    }
+
+    pub fn is_defaulted(&self) -> bool {
+        matches!(
+            self.source,
+            ClearanceRuleSource::Defaulted | ClearanceRuleSource::ToolDefault
+        )
+    }
+
+    fn missing_reason(&self) -> &'static str {
+        if self.project_file_found {
+            "the sibling .kicad_pro was found, but its netclass rules were not read"
+        } else {
+            "no .kicad_pro was found beside this board, so your netclass rules were not read"
+        }
+    }
+
+    /// Qualification appended to every human rule reference.
+    pub fn rule_reference(&self, value_mm: f64) -> String {
+        match self.source {
+            ClearanceRuleSource::ProjectFileFound => format!("your {value_mm:.3} mm rule"),
+            ClearanceRuleSource::Defaulted => format!(
+                "the {value_mm:.3} mm DEFAULT clearance ({}; these are default rules, not your rules)",
+                self.missing_reason()
+            ),
+            ClearanceRuleSource::ToolDefault => format!(
+                "the {value_mm:.3} mm TOOL DEFAULT clearance (the importer did not read design rules; these are default rules, not your rules)"
+            ),
+            ClearanceRuleSource::BoardFile => {
+                format!("the board-file {value_mm:.3} mm clearance rule")
+            }
+        }
+    }
+
+    /// Prominent source + unlocking-input sentence for a CLI report.
+    pub fn source_notice(&self) -> String {
+        match self.source {
+            ClearanceRuleSource::ProjectFileFound => format!(
+                "CLEARANCE RULE SOURCE: sibling .kicad_pro (report-wide value {:.3} mm).",
+                self.value_mm
+            ),
+            ClearanceRuleSource::Defaulted => format!(
+                "CLEARANCE RULE SOURCE: DEFAULT {:.3} mm; {}; these are default rules, not your rules.",
+                self.value_mm,
+                self.missing_reason()
+            ),
+            ClearanceRuleSource::ToolDefault => format!(
+                "CLEARANCE RULE SOURCE: TOOL DEFAULT {:.3} mm; this importer did not read design rules, so these are default rules, not your rules.",
+                self.value_mm
+            ),
+            ClearanceRuleSource::BoardFile => format!(
+                "CLEARANCE RULE SOURCE: clearance carried by the board file (report-wide value {:.3} mm).",
+                self.value_mm
+            ),
+        }
+    }
+
+    /// Prominent source + unlocking-input sentence for a CLI report.
+    pub fn cli_notice(&self) -> String {
+        let notice = self.source_notice();
+        if self.source == ClearanceRuleSource::Defaulted {
+            let unlock = if self.project_file_found {
+                "Repair or replace the sibling .kicad_pro with readable netclass rules and rerun to check your netclass rules."
+            } else {
+                "Place the matching .kicad_pro next to the board and rerun to check your netclass rules."
+            };
+            format!("{notice} {unlock}")
+        } else {
+            notice
+        }
+    }
+
+    /// Web-specific unlocking instruction: this path has upload bytes, not a
+    /// sibling filesystem path.
+    pub fn web_notice(&self) -> String {
+        match self.source {
+            ClearanceRuleSource::Defaulted if self.project_file_found => format!(
+                "CLEARANCE RULE SOURCE: DEFAULT {:.3} mm; the uploaded .kicad_pro was present, but its netclass rules were not read; these are default rules, not your rules. Repair or replace that .kicad_pro and upload it alongside the board to check your netclass rules.",
+                self.value_mm
+            ),
+            ClearanceRuleSource::Defaulted => format!(
+                "CLEARANCE RULE SOURCE: DEFAULT {:.3} mm; this upload did not include a .kicad_pro, so your netclass rules were not read; these are default rules, not your rules. Upload the matching .kicad_pro alongside the board to check your netclass rules.",
+                self.value_mm
+            ),
+            _ => self.cli_notice(),
+        }
+    }
+}
+
 /// A real short between two nets (gap <= 0: touching copper).
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct DrcShort {
@@ -1202,37 +1358,42 @@ impl DrcGroup {
     /// true when gap < rule). For a mixed group we name BOTH counts so we never
     /// overstate how many locations are actually below the rule.
     pub fn label(&self) -> String {
+        self.label_with_rule_provenance(&ClearanceRuleProvenance::defaulted(self.rule_mm, false))
+    }
+
+    pub fn label_with_rule_provenance(&self, provenance: &ClearanceRuleProvenance) -> String {
         let loc = |n: usize| format!("{n} location{}", if n == 1 { "" } else { "s" });
+        let rule = provenance.rule_reference(self.rule_mm);
         if self.at_limit {
             format!(
-                "{} vs {}: {} on {}, all exactly at minimum clearance (no margin) [{:.3} mm]",
+                "{} vs {}: {} on {}, all exactly at minimum clearance (no margin) [{}]",
                 self.net_a,
                 self.net_b,
                 loc(self.count),
                 self.layer,
-                self.rule_mm
+                rule
             )
         } else if self.below_count == self.count {
             format!(
-                "{} vs {}: {} on {}, below the {:.3} mm clearance rule (tightest {:.3} mm, {})",
+                "{} vs {}: {} on {}, below {} (tightest {:.3} mm, {})",
                 self.net_a,
                 self.net_b,
                 loc(self.count),
                 self.layer,
-                self.rule_mm,
+                rule,
                 self.min_gap_mm,
                 self.between
             )
         } else {
             // Mixed: some below, the remainder exactly at the limit.
             format!(
-                "{} vs {}: {} on {} ({} below the {:.3} mm rule, tightest {:.3} mm; {} at the limit)",
+                "{} vs {}: {} on {} ({} below {}, tightest {:.3} mm; {} at the limit)",
                 self.net_a,
                 self.net_b,
                 loc(self.count),
                 self.layer,
                 self.below_count,
-                self.rule_mm,
+                rule,
                 self.min_gap_mm,
                 self.count - self.below_count,
             )
@@ -1455,17 +1616,72 @@ impl DrcStructured {
         }
     }
 
+    /// Attach provenance after the extractor has resolved its rule set. This
+    /// also rebuilds every group label, preventing serialized `plain` text from
+    /// retaining the constructor's conservative default qualification.
+    pub fn with_clearance_rule_provenance(mut self, provenance: ClearanceRuleProvenance) -> Self {
+        for group in self.violations.iter_mut().chain(&mut self.at_limit) {
+            group.plain = group.label_with_rule_provenance(&provenance);
+        }
+        self
+    }
+
+    /// The combined-check section heading. A default must be visible before a
+    /// reader reaches any individual finding.
+    pub fn section_title(&self, provenance: &ClearanceRuleProvenance) -> &'static str {
+        if provenance.is_defaulted() {
+            "Copper spacing (DRC; DEFAULT rules, not your rules)"
+        } else {
+            "Copper spacing (DRC)"
+        }
+    }
+
+    /// The flood warning is evidence about this run, not a guess at the correct
+    /// replacement rule. "Exceeds" is strict: exactly 10x does not qualify.
+    pub fn default_rule_flood_note(&self, provenance: &ClearanceRuleProvenance) -> Option<String> {
+        let clearance = self.violations.len();
+        let shorts = self.shorts.len();
+        (provenance.is_defaulted() && clearance > shorts.saturating_mul(10))
+        .then(|| {
+            format!(
+                "DEFAULT-RULE COUNT: {clearance} below-rule clearance group(s) versus {shorts} short(s) (ratio {clearance}:{shorts}); exceeding the short count by more than 10x is evidence that this default is probably wrong for this board."
+            )
+        })
+    }
+
     /// Render the grouped DRC as text (the honest, de-duplicated view). Shorts
     /// first (the things that actually break a board), then below-rule groups,
     /// then the at-limit bucket (separated and labelled correctly).
     pub fn render(&self) -> String {
+        self.render_with_clearance_rule_provenance(&ClearanceRuleProvenance::defaulted(
+            self.clearance_rule_mm,
+            false,
+        ))
+    }
+
+    pub fn render_with_clearance_rule_provenance(
+        &self,
+        provenance: &ClearanceRuleProvenance,
+    ) -> String {
         use std::fmt::Write as _;
         let mut s = String::new();
-        let _ = writeln!(
-            s,
-            "DRC: {} primitive(s), clearance rule {:.3} mm",
-            self.primitive_count, self.clearance_rule_mm
-        );
+        if provenance.is_defaulted() {
+            let _ = writeln!(
+                s,
+                "DRC (DEFAULT rules, not your rules): {} primitive(s), DEFAULT clearance {:.3} mm",
+                self.primitive_count, self.clearance_rule_mm
+            );
+        } else {
+            let _ = writeln!(
+                s,
+                "DRC: {} primitive(s), clearance rule {:.3} mm",
+                self.primitive_count, self.clearance_rule_mm
+            );
+        }
+        let _ = writeln!(s, "{}", provenance.cli_notice());
+        if let Some(note) = self.default_rule_flood_note(provenance) {
+            let _ = writeln!(s, "{note}");
+        }
         if let Some(w) = &self.version_warning {
             let _ = writeln!(s, "\n⚠ UNRELIABLE: {w}");
         }
@@ -1510,13 +1726,13 @@ impl DrcStructured {
         if !self.violations.is_empty() {
             let _ = writeln!(s, "\nCLEARANCE VIOLATIONS (below rule), grouped:");
             for g in &self.violations {
-                let _ = writeln!(s, "  {}", g.label());
+                let _ = writeln!(s, "  {}", g.label_with_rule_provenance(provenance));
             }
         }
         if !self.at_limit.is_empty() {
             let _ = writeln!(s, "\nAT MINIMUM CLEARANCE (no margin), grouped:");
             for g in &self.at_limit {
-                let _ = writeln!(s, "  {}", g.label());
+                let _ = writeln!(s, "  {}", g.label_with_rule_provenance(provenance));
             }
         }
         let _ = writeln!(
@@ -1883,6 +2099,16 @@ pub struct JsonReport {
     /// section-only consumer sees the same contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
+    /// The compact order-decision surface as data. The `--check --plain` text is
+    /// rendered from this same object, so CI/web consumers and a terminal reader
+    /// cannot receive different bucket assignments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triage: Option<crate::plain::OrderTriage>,
+    /// Source and report-wide value for DRC clearance rules. Pair-specific
+    /// values remain in `drc.violations[*].rule_mm`; this field says whose rule
+    /// those numbers are (or are not).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance_rule_source: Option<ClearanceRuleProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub findings: Option<Vec<JsonFinding>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2025,6 +2251,8 @@ impl JsonReport {
             assumptions: Vec::new(),
             evidence: Vec::new(),
             refusal: None,
+            triage: None,
+            clearance_rule_source: None,
             findings: None,
             drc: None,
             ac: None,
