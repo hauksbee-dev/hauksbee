@@ -562,7 +562,10 @@ pub(crate) fn order_triage_with_rule_source(
     let lint_plain = plain_netlint(lint);
     for (raw, finding) in lint.findings.iter().zip(&lint_plain.findings) {
         if finding.level == PlainLevel::Serious
-            || (raw.check == LintCheck::DeviceDecode && raw.severity != Severity::Low)
+            || (matches!(
+                raw.check,
+                LintCheck::DeviceDecode | LintCheck::OperatingEnvelope
+            ) && raw.severity != Severity::Low)
         {
             triage.do_not_order.push(TriageEntry::new(
                 "lint",
@@ -1210,6 +1213,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 // wrong story, which reads as a bug even when the numbers are right.
                 "Some chips read a resistor on a configuration pin and decode its value against a table in the datasheet to set a mode or a limit: which voltage a USB-PD sink requests, how long a charger's safety timer runs, how much current an eFuse passes. If the fitted resistor lands in the wrong band, the chip silently takes the wrong setting: every part is in spec and every wire connects, so a normal value or short check cannot see it. This finding applies the datasheet's own decode rule to the fitted value, which is why it works even when the part has no simulation model and the report lists it as unresolved.".to_string(),
                 "Change the resistor so the decoded value matches the intent; the finding above names the fitted value, what it decodes to, and the value that would decode correctly. Then re-check against the part's own decode table and any min/max override note.".to_string(),
+            ),
+            LintCheck::OperatingEnvelope => (
+                format!("A sourced operating condition is violated on {parts} at net \"{net}\". {}", f.message),
+                "The model card quotes the part's recommended operating table and compares it with the full rail range the board can present. A nominal point inside the table is not enough when a battery or regulator tolerance crosses a published bound.".to_string(),
+                "Move the pin to a compatible rail, or change the rail so its complete minimum-to-maximum range satisfies the quoted datasheet condition.".to_string(),
             ),
             LintCheck::BackPower => (
                 format!("A pin on {parts} (net \"{net}\") sits in a higher voltage domain than the chip's own supply. {}", f.message),

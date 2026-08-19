@@ -12,6 +12,83 @@
 # designator at bind time, so changing the board resistor changes the behaviour
 # with no model edit, exactly the way the real revision fixes landed.
 
+# ── BQ24075: 1-cell Li-ion charger / power-path manager ──
+#
+# This card is deliberately identity-only. It carries the primary-source pin
+# map and static operating contracts needed by board checks, but it does not
+# stamp the charger's power-path, CC/CV, current-limit, thermal-regulation, or
+# safety-timer behavior into a solve.
+[[models]]
+id = "bq24075_identity"
+kind = "vreg"
+description = "TI BQ24075 1-cell Li-ion charger and power-path manager (identity and sourced static contracts only)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/bq24075.pdf"
+title = "Texas Instruments BQ2407x datasheet, SLUS810N, Rev. N"
+locator = "Section 6 Device Comparison Table; Table 7-1 Pin Functions; Sections 8.1 Absolute Maximum Ratings, 8.3 Recommended Operating Conditions, 8.5 Electrical Characteristics (BATTERY CHARGER), 9.1 Overview, 9.3.5 Battery Charging, and 9.3.6 Battery Pack Temperature Monitoring"
+sha256 = "05585ca0112a74b0ad1ef22f3cc30e92c1cdce50430d32605a00f4c3b57b7435"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "charger_behavior"
+reason = "power-path switching, CC/CV dynamics, current programming and limiting, thermal regulation, safety timers, and battery-temperature response are not modeled"
+
+[models.match]
+# BQ24075, the RGT package code, and its reel/package-quantity suffixes. Do not
+# capture BQ24075T: that sibling uses the voltage-based TS method in Section 6.
+value_re = "(?i)^BQ24075(?:RGT(?:R|T)?)?$"
+
+[models.params]
+identity_only = true
+warning = "BQ24075 identity, pin map, Li-ion chemistry, charge-voltage tolerance, and pin-voltage envelopes are sourced; charger and power-path behavior is not modeled"
+unlocked_by = "a validated BQ24075 power-path, CC/CV charge, thermal-regulation, current-limiting, safety-timer, and TS protection implementation"
+# SLUS810N Section 9.1 identifies the family as integrated Li-Ion linear
+# chargers; Section 9.3.5 and Figure 9-6 describe the normal Li-Ion charge cycle.
+battery_chemistry = "liion"
+# SLUS810N Section 8.5 Electrical Characteristics, BATTERY CHARGER,
+# VBAT(REG) BQ24072/73/74/75 row: 4.16 V minimum and 4.23 V maximum.
+vout_setpoint_low = 4.16
+vout_setpoint_high = 4.23
+
+[models.pins]
+# RGT0016C package. SLUS810N Table 7-1, BQ24075/BQ24079 column.
+"1" = "ts"       # TS, External NTC Thermistor Input
+"2" = "bat"      # BAT, charger output and battery-voltage sense
+"3" = "bat"
+"4" = "ce"
+"5" = "en2"
+"6" = "en1"
+"7" = "pgood"
+"8" = "gnd"      # VSS
+"9" = "chg"
+"10" = "out"     # OUT, system supply output
+"11" = "out"
+"12" = "ilim"
+"13" = "vbus"    # Datasheet pin name IN; external DC/USB input
+"14" = "tmr"
+"15" = "sysoff"
+"16" = "iset"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbus"
+min_v = 4.35
+max_v = 6.4
+abs_max_v = 28.0
+basis = "TI BQ2407x SLUS810N, Section 8.3 Recommended Operating Conditions, IN operating voltage range, BQ24072/73/75/79 row (4.35-6.4 V); Section 8.1 Absolute Maximum Ratings, IN row (28 V maximum)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "bat"
+min_v = -0.3
+max_v = 5.0
+basis = "TI BQ2407x SLUS810N, Section 8.1 Absolute Maximum Ratings, BAT with respect to VSS row (-0.3-5 V); this is a stress bound, not the Section 8.5 charge-regulation range"
+
 # ── LTC4020: 55V buck-boost battery charger controller ────────────────────────
 #
 # MNT Reform motherboard U2. The averaged buck-boost block charges the 8S

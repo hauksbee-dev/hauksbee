@@ -88,6 +88,9 @@ pub enum LintCheck {
     /// grows incrementally; seeded with the CYPD3177 USB-C PD sink. Produced by
     /// the engine-layer `device_decode` check.
     DeviceDecode,
+    /// A model card's sourced recommended operating envelope is violated by
+    /// the full derived DC range of the connected rail.
+    OperatingEnvelope,
     /// A part's signal pin sits in a HIGHER voltage domain than the part's own
     /// supply rail: the pin's net is tied or pulled up to a rail above the
     /// supply, so current flows through the pin's protection clamp into the
@@ -123,7 +126,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [LintCheck; 14] = [
+    pub const ALL: [LintCheck; 15] = [
         LintCheck::MissingI2cPullup,
         LintCheck::MissingSdPullup,
         LintCheck::FloatingControlPin,
@@ -136,6 +139,7 @@ impl LintCheck {
         LintCheck::PlaceholderValue,
         LintCheck::UncheckedMcu,
         LintCheck::DeviceDecode,
+        LintCheck::OperatingEnvelope,
         LintCheck::BackPower,
         LintCheck::I2cBusLoading,
     ];
@@ -154,6 +158,7 @@ impl LintCheck {
             LintCheck::PlaceholderValue => "placeholder_value",
             LintCheck::UncheckedMcu => "unchecked_mcu",
             LintCheck::DeviceDecode => "device_decode",
+            LintCheck::OperatingEnvelope => "operating_envelope",
             LintCheck::BackPower => "back_power",
             LintCheck::I2cBusLoading => "i2c_bus_loading",
         }

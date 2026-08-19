@@ -7,7 +7,65 @@
 //! or a DC short. Each case pins the classification that clears (or honestly
 //! declines to clear) it.
 
-use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary};
+use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary, OperatingEnvelope};
+
+#[test]
+fn txb0101_card_has_sourced_pin_roles_and_operating_envelopes() {
+    let lib = ModelLibrary::builtin();
+    for value in ["TXB0101", "TXB0101DCK"] {
+        let resolved = lib.resolve(&ComponentQuery {
+            value: Some(value.into()),
+            ..Default::default()
+        });
+        let model = resolved
+            .model
+            .unwrap_or_else(|| panic!("{value} must bind the TXB0101 card"));
+        assert_eq!(model.id, "txb0101_identity", "{value}");
+        assert_eq!(model.kind, ComponentKind::Digital, "{value}");
+        assert_eq!(model.params.get_bool("identity_only"), Some(true));
+        assert_eq!(model.pins.get("1").map(String::as_str), Some("vcca"));
+        assert_eq!(model.pins.get("6").map(String::as_str), Some("vccb"));
+        assert_eq!(model.envelope.len(), 3);
+
+        assert!(model.envelope.iter().any(|entry| matches!(
+            entry,
+            OperatingEnvelope::SupplyRange {
+                pin,
+                min_v,
+                max_v,
+                basis,
+                ..
+            } if pin == "vcca"
+                && *min_v == 1.2
+                && *max_v == 3.6
+                && basis.contains("Section 5.3 Recommended Operating Conditions")
+        )));
+        assert!(model.envelope.iter().any(|entry| matches!(
+            entry,
+            OperatingEnvelope::SupplyRange {
+                pin,
+                min_v,
+                max_v,
+                basis,
+                ..
+            } if pin == "vccb"
+                && *min_v == 1.65
+                && *max_v == 5.5
+                && basis.contains("Section 5.3 Recommended Operating Conditions")
+        )));
+        assert!(model.envelope.iter().any(|entry| matches!(
+            entry,
+            OperatingEnvelope::RailOrder {
+                lower,
+                upper,
+                basis,
+                ..
+            } if lower == "vcca"
+                && upper == "vccb"
+                && basis.contains("Section 5.3 Recommended Operating Conditions, note (2)")
+        )));
+    }
+}
 
 #[test]
 fn hyphenated_mouse_bite_footprint_is_ignored() {
