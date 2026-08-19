@@ -28,6 +28,7 @@ fn vreg(vout: f64) -> ModelEntry {
         r#match: Default::default(),
         params,
         pins,
+        envelope: Default::default(),
         ratings: Default::default(),
         straps: Vec::new(),
         behavioral: Default::default(),

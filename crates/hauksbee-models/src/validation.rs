@@ -6,7 +6,7 @@
 
 use crate::schema::{
     AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics,
-    ModelEntry, PeripheralSpec,
+    ModelEntry, OperatingEnvelope, PeripheralSpec,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
 use thiserror::Error;
@@ -25,6 +25,75 @@ pub struct ValidationError {
 /// Returns `Ok(())` on success, or a list of violations.
 pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
+
+    let role_exists = |role: &str| {
+        entry
+            .pins
+            .values()
+            .any(|known| known.eq_ignore_ascii_case(role))
+    };
+    for envelope in &entry.envelope {
+        if envelope.basis().trim().is_empty() {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "operating envelope requires a non-empty basis naming the datasheet table and row"
+                    .to_string(),
+            });
+        }
+        match envelope {
+            OperatingEnvelope::SupplyRange {
+                pin,
+                min_v,
+                max_v,
+                abs_max_v,
+                ..
+            } => {
+                if !role_exists(pin) {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "operating envelope pin '{pin}' is not a role in [models.pins]"
+                        ),
+                    });
+                }
+                if !min_v.is_finite() || !max_v.is_finite() || min_v >= max_v {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "operating envelope requires finite min_v < max_v, got {min_v} and {max_v}"
+                        ),
+                    });
+                }
+                if abs_max_v.is_some_and(|value| !value.is_finite() || value < *max_v) {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "operating envelope abs_max_v must be finite and at least max_v {max_v}"
+                        ),
+                    });
+                }
+            }
+            OperatingEnvelope::RailOrder { lower, upper, .. } => {
+                for (field, role) in [("lower", lower), ("upper", upper)] {
+                    if !role_exists(role) {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: format!(
+                                "operating envelope {field} role '{role}' is not a role in [models.pins]"
+                            ),
+                        });
+                    }
+                }
+                if lower.eq_ignore_ascii_case(upper) {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: "operating envelope rail_order lower and upper roles must differ"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+    }
 
     // An identity-only card is useful provenance, but it is deliberately not a
     // simulation model. Keep that state explicit and machine-checkable instead
@@ -1079,6 +1148,7 @@ mod tests {
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
@@ -1095,6 +1165,78 @@ mod tests {
     fn valid_diode_passes() {
         let entry = make_diode(1e-14, 1.5, 1.0);
         assert!(validate(&entry).is_ok());
+    }
+
+    fn envelope_entry(body: &str) -> ModelEntry {
+        toml::from_str(&format!(
+            r#"
+id = "envelope_test"
+kind = "digital"
+description = "identity-only envelope test"
+[match]
+value_re = "^ENVELOPE_TEST$"
+[params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[pins]
+"1" = "vcc"
+{body}
+"#
+        ))
+        .expect("envelope fixture must parse")
+    }
+
+    #[test]
+    fn malformed_operating_envelopes_are_rejected() {
+        let cases = [
+            (
+                "missing basis",
+                r#"
+[[envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+"#,
+                "basis",
+            ),
+            (
+                "unknown role",
+                r#"
+[[envelope]]
+kind = "supply_range"
+pin = "missing"
+min_v = 2.7
+max_v = 3.6
+basis = "Recommended Operating Conditions, VCC row"
+"#,
+                "missing",
+            ),
+            (
+                "inverted range",
+                r#"
+[[envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.6
+max_v = 2.7
+basis = "Recommended Operating Conditions, VCC row"
+"#,
+                "min_v",
+            ),
+        ];
+
+        for (name, body, needle) in cases {
+            let errors = match validate(&envelope_entry(body)) {
+                Ok(()) => panic!("{name} envelope must fail validation"),
+                Err(errors) => errors,
+            };
+            assert!(
+                errors.iter().any(|error| error.message.contains(needle)),
+                "{name} must name {needle}: {errors:?}"
+            );
+        }
     }
 
     #[test]
@@ -1701,6 +1843,7 @@ high_offset = 1.3333333333333333
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
@@ -1730,6 +1873,7 @@ high_offset = 1.3333333333333333
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
@@ -1760,6 +1904,7 @@ high_offset = 1.3333333333333333
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
@@ -1789,6 +1934,7 @@ high_offset = 1.3333333333333333
             r#match: Default::default(),
             params: ok,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
@@ -1819,6 +1965,7 @@ high_offset = 1.3333333333333333
                 r#match: Default::default(),
                 params: p,
                 pins: BTreeMap::new(),
+                envelope: Default::default(),
                 ratings: Default::default(),
                 straps: Vec::new(),
                 behavioral: Default::default(),
@@ -1846,6 +1993,7 @@ high_offset = 1.3333333333333333
             r#match: Default::default(),
             params: bad,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
@@ -1881,6 +2029,7 @@ high_offset = 1.3333333333333333
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
@@ -1913,6 +2062,7 @@ high_offset = 1.3333333333333333
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
@@ -1941,6 +2091,7 @@ high_offset = 1.3333333333333333
             r#match: Default::default(),
             params: ok,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
@@ -1971,6 +2122,7 @@ high_offset = 1.3333333333333333
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            envelope: Default::default(),
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),

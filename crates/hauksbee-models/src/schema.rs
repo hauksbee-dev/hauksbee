@@ -64,6 +64,12 @@ pub struct ModelEntry {
     #[serde(default)]
     pub pins: BTreeMap<String, String>,
 
+    /// Pin-scoped recommended operating conditions and rail relationships.
+    /// Every entry carries its own source basis so a static finding can quote
+    /// the exact table row that authorizes the constraint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub envelope: Vec<OperatingEnvelope>,
+
     /// Absolute maximum ratings for the fault/stress monitor. Absent fields
     /// mean "no limit known"; the engine may derive defaults (e.g. resistor
     /// power from footprint size).
@@ -712,6 +718,59 @@ pub struct Ratings {
     /// heatsinked path; the free-air estimate uses `theta_ja_c_per_w`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theta_jc_c_per_w: Option<f64>,
+}
+
+/// Severity requested by a sourced operating-envelope entry.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvelopeSeverity {
+    Serious,
+    #[default]
+    Medium,
+    Note,
+}
+
+/// A pin-scoped recommended operating condition carried by a model card.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OperatingEnvelope {
+    SupplyRange {
+        pin: String,
+        min_v: f64,
+        max_v: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        abs_max_v: Option<f64>,
+        #[serde(default)]
+        severity: EnvelopeSeverity,
+        #[serde(default)]
+        basis: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        note: String,
+    },
+    RailOrder {
+        lower: String,
+        upper: String,
+        #[serde(default)]
+        severity: EnvelopeSeverity,
+        #[serde(default)]
+        basis: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        note: String,
+    },
+}
+
+impl OperatingEnvelope {
+    pub fn basis(&self) -> &str {
+        match self {
+            Self::SupplyRange { basis, .. } | Self::RailOrder { basis, .. } => basis,
+        }
+    }
+
+    pub fn severity(&self) -> EnvelopeSeverity {
+        match self {
+            Self::SupplyRange { severity, .. } | Self::RailOrder { severity, .. } => *severity,
+        }
+    }
 }
 
 impl Ratings {
