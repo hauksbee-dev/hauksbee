@@ -540,6 +540,25 @@
     "ClearanceRuleProvenance": {
       "description": "Machine-readable provenance for a reported clearance value.",
       "properties": {
+        "custom_rules": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CustomRulesCoverage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Parsed custom-rule coverage, including scopes Hauksbee did not evaluate."
+        },
+        "overridden_project_value_mm": {
+          "description": "The netclass value replaced by a report-wide custom rule, when known.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "project_file_found": {
           "description": "Distinguishes a missing sibling from a present file whose rules could not\nbe read. In both cases `source` is `defaulted`: invented evidence does not\nbecome project evidence merely because a file existed.",
           "type": "boolean"
@@ -581,6 +600,11 @@
         {
           "const": "board_file",
           "description": "A non-KiCad layout format carried its own clearance value.",
+          "type": "string"
+        },
+        {
+          "const": "custom_rules_file",
+          "description": "A sibling KiCad custom-rules file supplied the report-wide value.",
           "type": "string"
         }
       ]
@@ -1038,6 +1062,70 @@
         "what",
         "agreed",
         "detail"
+      ],
+      "type": "object"
+    },
+    "CustomRuleScopeOmission": {
+      "properties": {
+        "condition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "constraint_types": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "layer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "constraint_types"
+      ],
+      "type": "object"
+    },
+    "CustomRulesCoverage": {
+      "properties": {
+        "file_name": {
+          "type": "string"
+        },
+        "not_covered_rules": {
+          "items": {
+            "$ref": "#/definitions/CustomRuleScopeOmission"
+          },
+          "type": "array"
+        },
+        "unevaluated_rules": {
+          "items": {
+            "$ref": "#/definitions/CustomRuleScopeOmission"
+          },
+          "type": "array"
+        },
+        "unsupported_constraint_counts": {
+          "additionalProperties": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "file_name",
+        "unevaluated_rules",
+        "not_covered_rules",
+        "unsupported_constraint_counts"
       ],
       "type": "object"
     },

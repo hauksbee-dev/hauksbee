@@ -114,6 +114,7 @@ pub struct NetClassRule {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClearanceRules {
     pub default_clearance_mm: f64,
+    global_clearance_override_mm: Option<f64>,
     classes: HashMap<String, NetClassRule>,
     net_classes: HashMap<String, String>,
     /// Explicit clearance for a concrete (class, class) pair, keyed with the
@@ -136,6 +137,7 @@ impl ClearanceRules {
         };
         Self {
             default_clearance_mm: default,
+            global_clearance_override_mm: None,
             classes: HashMap::new(),
             net_classes: HashMap::new(),
             class_pair_clearances: HashMap::new(),
@@ -153,6 +155,16 @@ impl ClearanceRules {
         // spacing (see `clearance_for_net`) while still contributing its gap.
         if rule.clearance_mm > 0.0 || rule.diff_pair_gap_mm.is_some_and(|g| g > 0.0) {
             self.classes.insert(rule.name.clone(), rule);
+        }
+    }
+
+    /// Apply a report-wide custom-rule clearance. KiCad custom rules outrank
+    /// netclass rules in both directions, so this value is returned before any
+    /// class, pair-matrix, or differential-pair fallback.
+    pub fn apply_global_clearance_override(&mut self, clearance_mm: f64) {
+        if clearance_mm > 0.0 && clearance_mm.is_finite() {
+            self.global_clearance_override_mm = Some(clearance_mm);
+            self.default_clearance_mm = clearance_mm;
         }
     }
 
@@ -198,6 +210,9 @@ impl ClearanceRules {
     }
 
     pub fn effective_clearance(&self, net_a: &str, net_b: &str) -> f64 {
+        if let Some(clearance) = self.global_clearance_override_mm {
+            return clearance;
+        }
         if let Some(gap) = self.diff_pair_gap(net_a, net_b) {
             return gap;
         }
@@ -227,6 +242,7 @@ impl ClearanceRules {
             .map(|r| r.clearance_mm)
             .chain(self.class_pair_clearances.values().copied())
             .fold(self.default_clearance_mm, f64::max)
+            .max(self.global_clearance_override_mm.unwrap_or(0.0))
     }
 
     fn diff_pair_gap(&self, net_a: &str, net_b: &str) -> Option<f64> {
