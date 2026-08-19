@@ -840,6 +840,7 @@ The entry must use [[models]] array syntax and include:
 - [models.params] section with all required numeric params for the kind
 - [models.ratings] section with the absolute-maximum ratings (see below)
 - [models.pins] section mapping pad numbers to pin roles
+- [[models.envelope]] entries for sourced recommended operating conditions
 
 THE EXACT SHAPE. Field names are matched literally by a strict parser: a
 renamed or invented top-level field (type, part, manufacturer, datasheet, ...)
@@ -863,6 +864,13 @@ value_re = "(?i)^{part_upper}"
 [models.pins]
 "1" = "role_from_the_list_below"
 
+[[models.envelope]]
+kind = "supply_range"
+pin = "supply_role_from_models_pins"
+min_v = 1.0
+max_v = 2.0
+basis = "Recommended Operating Conditions, table and row"
+
 PIN ROLE NAMES for kind="{kind}": {pin_roles}
   Use these exact spellings. They are looked up by exact string, so "output"
   instead of "out", or "ground" instead of "gnd", makes the part bind OPEN: it
@@ -877,6 +885,16 @@ For kind="{kind}", the required params are:
 "limiting values" table. Include every field the datasheet gives a number for;
 omit a field entirely if the datasheet does not state it (do NOT invent it):
 {ratings_hint}
+
+[[models.envelope]]: read the Recommended Operating Conditions and Absolute
+Maximum Ratings tables. Emit one supply_range entry for every SUPPLY-class pin
+whose recommended minimum and maximum are both published. Emit rail_order for
+each explicit relation such as VCCA <= VCCB. `pin`, `lower`, and `upper` are
+roles from [models.pins], never pad numbers. Every entry requires `basis` naming
+the exact table and row. Add `abs_max_v` only when the absolute-maximum table
+publishes it. There is no envelope without a table row to cite: omitting this
+section is correct when the datasheet lacks the necessary tables. Never infer a
+bound from a typical value, application schematic, or family convention.
 
 PIN NUMBERING, read this before you fill in [models.pins]:
 
@@ -2519,6 +2537,46 @@ iq_a = 0.001
         assert!(diode.contains("VRRM"));
         let vreg = build_prompt("AMS1117", "vreg", "x");
         assert!(vreg.contains("max_junction_temp_c"));
+    }
+
+    #[test]
+    fn roc_table_round_trip_retains_envelope_bounds_and_basis() {
+        let reply = r#"
+[[models]]
+id = "roc_supply"
+kind = "digital"
+description = "ROC extraction fixture"
+[models.match]
+value_re = "^ROC_SUPPLY$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vcc"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "Recommended Operating Conditions, Table 6.3, VCC row"
+"#;
+
+        let entry = parse_and_validate_reply(reply, "ROC_SUPPLY", "digital")
+            .expect("a sourced ROC envelope must validate");
+        let round_trip = toml::to_string(&crate::schema::DbFile {
+            models: vec![entry],
+        })
+        .expect("validated model must serialize");
+        assert!(round_trip.contains("[[models.envelope]]"));
+        assert!(round_trip.contains("min_v = 2.7"));
+        assert!(round_trip.contains("max_v = 3.6"));
+        assert!(round_trip.contains("basis = \"Recommended Operating Conditions, Table 6.3, VCC row\""));
+
+        let prompt = build_prompt("ROC_SUPPLY", "digital", "Recommended Operating Conditions");
+        assert!(prompt.contains("[[models.envelope]]"));
+        assert!(prompt.contains("no envelope without a table row"));
     }
 
     fn testdata(rel: &str) -> PathBuf {
