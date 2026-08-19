@@ -503,6 +503,10 @@ pub(crate) fn order_triage_with_rule_source(
         ),
         ..OrderTriage::default()
     };
+    if let Some(custom_rules) = clearance_rule_source.custom_rules_not_covered() {
+        triage.not_covered.push(' ');
+        triage.not_covered.push_str(&custom_rules);
+    }
 
     let drc_plain = plain_drc_structured_with_rule_source(drc, clearance_rule_source);
     let mut serious_shorts = Vec::new();
@@ -987,6 +991,9 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
             provenance.source_notice()
         }
     );
+    if let Some(notice) = provenance.custom_rules_notice() {
+        let _ = writeln!(lead, "{notice}");
+    }
     if let Some(note) = st.default_rule_flood_note(provenance) {
         let _ = writeln!(lead, "{note}");
     }

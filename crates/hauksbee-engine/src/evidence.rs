@@ -876,6 +876,61 @@ impl BoardEvidence {
         Ok(self)
     }
 
+    /// Attach only custom-rule omissions that can change a reported DRC
+    /// clearance assertion. Rules for checks Hauksbee does not implement stay
+    /// in the report's not-covered bucket and do not qualify unrelated results.
+    pub fn with_custom_rules_coverage(
+        self,
+        coverage: Option<&crate::result::CustomRulesCoverage>,
+    ) -> Result<Self, EvidenceError> {
+        let Some(coverage) = coverage else {
+            return Ok(self);
+        };
+        if coverage.file_inactive_due_to_bare_values {
+            // Hauksbee intentionally matches KiCad 10.0.5's fallback: the file
+            // contributes no active rule, so this is disclosed prominently but
+            // does not reduce the fidelity of findings judged by the fallback.
+            return Ok(self);
+        }
+        let assumptions = coverage
+            .unevaluated_rules
+            .iter()
+            .filter(|rule| {
+                rule.bare_value_constraint_types.is_empty()
+                    && rule
+                        .constraint_types
+                        .iter()
+                        .any(|kind| kind == "clearance")
+            })
+            .map(|rule| {
+                let key = format!("custom-rules/{}/{}", coverage.file_name, rule.name);
+                let text = format!("custom clearance rule {:?}", rule.name);
+                let scope = match (&rule.condition, &rule.layer) {
+                    (Some(condition), Some(layer)) => {
+                        format!("condition {condition:?} and layer {layer:?}")
+                    }
+                    (Some(condition), None) => format!("condition {condition:?}"),
+                    (None, Some(layer)) => format!("layer {layer:?}"),
+                    (None, None) => "an unknown scope".to_string(),
+                };
+                Assumption::reduced_fidelity(
+                    AssumptionSource::Check,
+                    Subject::new(&key, &text),
+                    Scope::Check {
+                        check: "drc".into(),
+                        kind: Some("clearance".into()),
+                    },
+                    &format!(
+                        "hauksbee read {} but cannot evaluate its {scope}",
+                        coverage.file_name
+                    ),
+                    "evaluate the rule in KiCad's DRC, or add an equivalent supported unconditional rule and rerun",
+                )
+            })
+            .collect::<Vec<_>>();
+        self.with_assumptions(assumptions)
+    }
+
     /// Add only substitutions the scheduler actually recorded. Binder family
     /// matching is provenance, not automatically a semantic stand-in; it does
     /// not enter this assumption registry.
@@ -1105,7 +1160,9 @@ impl BoardEvidence {
     ) -> Result<Vec<EvidenceMap>, EvidenceError> {
         let mut maps = Vec::new();
         for short in &drc.shorts {
-            let mut map = self.geometry_map(
+            let mut map = self.geometry_map_for_check_key(
+                "drc",
+                "short",
                 short.plain.clone(),
                 &[short.net_a.clone(), short.net_b.clone()],
             )?;
@@ -1128,7 +1185,9 @@ impl BoardEvidence {
             maps.push(map);
         }
         for group in drc.violations.iter().chain(&drc.at_limit) {
-            maps.push(self.geometry_map(
+            maps.push(self.geometry_map_for_check_key(
+                "drc",
+                "clearance",
                 group.plain.clone(),
                 &[group.net_a.clone(), group.net_b.clone()],
             )?);
@@ -1179,6 +1238,18 @@ impl BoardEvidence {
         nets: &[String],
     ) -> Result<EvidenceMap, EvidenceError> {
         let assertion = assertion.into();
+        let assertion_key = assertion.clone();
+        self.geometry_map_for_check_key(check, &assertion_key, assertion, nets)
+    }
+
+    fn geometry_map_for_check_key(
+        &self,
+        check: &str,
+        assertion_key: &str,
+        assertion: impl Into<String>,
+        nets: &[String],
+    ) -> Result<EvidenceMap, EvidenceError> {
+        let assertion = assertion.into();
         let empty: Vec<String> = Vec::new();
         let incidence: Vec<(&str, &[String])> = nets
             .iter()
@@ -1186,7 +1257,7 @@ impl BoardEvidence {
             .collect();
         let index = CausalPathIndex::from_net_parts(incidence)?;
         let scope = NetScope::new(nets.iter().map(String::as_str), None)?;
-        let traversal = index.traverse_assertion(&scope, check, &assertion, &self.registry)?;
+        let traversal = index.traverse_assertion(&scope, check, assertion_key, &self.registry)?;
         let mut map =
             EvidenceMap::from_traversal(assertion, traversal, &self.registry, self.today)?;
         let artifacts = self.board_artifact;
@@ -2276,6 +2347,112 @@ mod compact_appendix_tests {
             !rendered.contains("U2") && !rendered.contains("PART-B"),
             "unrelated part provenance must be absent: {rendered}"
         );
+    }
+}
+
+#[cfg(test)]
+mod custom_rule_scope_tests {
+    use super::*;
+    use crate::result::{CustomRulesCoverage, DrcGroup, DrcStructured};
+
+    fn board() -> ExtractedBoard {
+        ExtractedBoard {
+            name: "custom-rule-scope".into(),
+            nets: [(1, "A"), (2, "B")]
+                .into_iter()
+                .map(|(id, name)| hauksbee_extract::Net {
+                    id,
+                    name: name.into(),
+                })
+                .collect(),
+            components: Vec::new(),
+        }
+    }
+
+    fn clearance_result() -> DrcStructured {
+        DrcStructured {
+            clearance_rule_mm: 0.2,
+            primitive_count: 2,
+            shorts: Vec::new(),
+            violations: vec![DrcGroup {
+                net_a: "A".into(),
+                net_b: "B".into(),
+                layer: "F.Cu".into(),
+                count: 1,
+                below_count: 1,
+                at_limit: false,
+                min_gap_mm: 0.1,
+                min_gap_loc_mm: [0.0, 0.0],
+                rule_mm: 0.2,
+                between: "track to track".into(),
+                plain: "A and B are below clearance".into(),
+                fix: "increase spacing".into(),
+            }],
+            at_limit: Vec::new(),
+            version_warning: None,
+            suppression_note: None,
+        }
+    }
+
+    fn coverage(constraint: &str) -> CustomRulesCoverage {
+        let parsed = hauksbee_extract::parse_kicad_dru(&format!(
+            "(version 1) (rule \"conditional\" (condition \"A.Type == 'x'\") (constraint {constraint} (min 0.3mm)))"
+        ))
+        .unwrap();
+        CustomRulesCoverage::from_parsed("scope.kicad_dru".into(), &parsed)
+    }
+
+    #[test]
+    fn conditional_clearance_qualifies_only_clearance_results() {
+        let coverage = coverage("clearance");
+        let evidence =
+            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
+                .unwrap()
+                .with_custom_rules_coverage(Some(&coverage))
+                .unwrap();
+        let maps = evidence.maps_for_drc(&clearance_result()).unwrap();
+        assert_eq!(maps.len(), 1);
+        assert_eq!(maps[0].status(), EvidenceStatus::Qualified);
+        assert!(maps[0]
+            .assumptions()
+            .iter()
+            .any(|id| id.as_str().starts_with("reduced-fidelity:custom-rules/")));
+    }
+
+    #[test]
+    fn conditional_hole_rule_is_not_covered_without_qualifying_clearance() {
+        let coverage = coverage("hole_clearance");
+        let evidence =
+            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
+                .unwrap()
+                .with_custom_rules_coverage(Some(&coverage))
+                .unwrap();
+        let maps = evidence.maps_for_drc(&clearance_result()).unwrap();
+        assert_eq!(maps[0].status(), EvidenceStatus::Clean);
+        assert!(coverage
+            .not_covered_summary()
+            .unwrap()
+            .contains("hole_clearance"));
+    }
+
+    #[test]
+    fn bare_clearance_rule_is_disclosed_but_does_not_qualify_results() {
+        let parsed = hauksbee_extract::parse_kicad_dru(include_str!(
+            "../../hauksbee-extract/tests/fixtures/kicad_dru_bare_scope.kicad_dru"
+        ))
+        .unwrap();
+        let coverage = CustomRulesCoverage::from_parsed("scope.kicad_dru".into(), &parsed);
+        let evidence =
+            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
+                .unwrap()
+                .with_custom_rules_coverage(Some(&coverage))
+                .unwrap();
+        let maps = evidence.maps_for_drc(&clearance_result()).unwrap();
+        assert_eq!(maps[0].status(), EvidenceStatus::Clean);
+        assert!(coverage
+            .unevaluated_notice()
+            .unwrap()
+            .contains("KiCad 10.0.5 also ignores"));
     }
 }
 

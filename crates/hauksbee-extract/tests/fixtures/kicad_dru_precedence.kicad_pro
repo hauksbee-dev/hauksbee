@@ -1,0 +1,30 @@
+{
+  "board": {
+    "design_settings": {
+      "rule_severities": {
+        "clearance": "error",
+        "shorting_items": "error",
+        "unconnected_items": "ignore"
+      }
+    }
+  },
+  "meta": {
+    "filename": "kicad_dru_precedence.kicad_pro",
+    "version": 3
+  },
+  "net_settings": {
+    "classes": [
+      {
+        "clearance": 0.15,
+        "name": "Default",
+        "priority": 2147483647,
+        "track_width": 0.2
+      }
+    ],
+    "meta": {
+      "version": 5
+    },
+    "netclass_assignments": null,
+    "netclass_patterns": []
+  }
+}

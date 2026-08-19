@@ -25,6 +25,7 @@ pub mod usb_c;
 
 use std::path::Path;
 
+use anyhow::Context;
 use hauksbee_extract::ExtractedBoard;
 
 /// The output surface a report renders into, resolved once from the CLI flags so
@@ -152,6 +153,88 @@ pub fn kicad_pro_clearance_rule_provenance(
             value_mm,
             board_path.with_extension("kicad_pro").is_file(),
         )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct KicadClearanceInput {
+    pub rules: Option<hauksbee_extract::ClearanceRules>,
+    project_rules_read: bool,
+    project_value_mm: Option<f64>,
+    custom_global_mm: Option<f64>,
+    custom_coverage: Option<crate::result::CustomRulesCoverage>,
+}
+
+impl KicadClearanceInput {
+    pub fn load(board_path: &Path, board: &ExtractedBoard) -> anyhow::Result<Self> {
+        let mut rules = kicad_pro_clearance_rules(board_path, board);
+        let project_rules_read = rules.is_some();
+        let project_value_mm = rules.as_ref().map(|rules| rules.default_clearance_mm);
+        let custom_path = board_path.with_extension("kicad_dru");
+        let (custom_global_mm, custom_coverage) = if custom_path.is_file() {
+            let text = std::fs::read_to_string(&custom_path).with_context(|| {
+                format!("failed to read custom rules file {}", custom_path.display())
+            })?;
+            let parsed = hauksbee_extract::parse_kicad_dru(&text).with_context(|| {
+                format!(
+                    "failed to parse custom rules file {}",
+                    custom_path.display()
+                )
+            })?;
+            let file_name = custom_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("sibling .kicad_dru")
+                .to_string();
+            let coverage = crate::result::CustomRulesCoverage::from_parsed(file_name, &parsed);
+            let global = parsed.global_clearance_mm();
+            if let Some(clearance_mm) = global {
+                rules
+                    .get_or_insert_with(hauksbee_extract::ClearanceRules::default)
+                    .apply_global_clearance_override(clearance_mm);
+            }
+            (global, Some(coverage))
+        } else {
+            (None, None)
+        };
+        Ok(Self {
+            rules,
+            project_rules_read,
+            project_value_mm,
+            custom_global_mm,
+            custom_coverage,
+        })
+    }
+
+    pub fn provenance(
+        &self,
+        board_path: &Path,
+        layout_text: &str,
+        value_mm: f64,
+    ) -> crate::result::ClearanceRuleProvenance {
+        if self.custom_global_mm.is_some() {
+            return crate::result::ClearanceRuleProvenance::custom_rules_file(
+                value_mm,
+                self.project_value_mm,
+                self.custom_coverage
+                    .clone()
+                    .expect("a custom global rule came from parsed custom-rule coverage"),
+            );
+        }
+        let provenance = kicad_pro_clearance_rule_provenance(
+            board_path,
+            layout_text,
+            self.project_rules_read,
+            value_mm,
+        );
+        match &self.custom_coverage {
+            Some(coverage) => provenance.with_custom_rules(coverage.clone()),
+            None => provenance,
+        }
+    }
+
+    pub fn custom_coverage(&self) -> Option<&crate::result::CustomRulesCoverage> {
+        self.custom_coverage.as_ref()
     }
 }
 
@@ -426,6 +509,65 @@ mod tests {
         assert!(
             super::kicad_pro_clearance_rules(&board_path, &board).is_none(),
             "an empty project must not be promoted above the fallback"
+        );
+    }
+
+    #[test]
+    fn custom_rules_load_fail_closed_and_override_project_in_both_directions() {
+        let dir = tempfile::tempdir().unwrap();
+        let board_path = dir.path().join("board.kicad_pcb");
+        let board = hauksbee_extract::ExtractedBoard::from_kicad_pcb(include_str!(
+            "../../../hauksbee-ci/examples/boards/blinky.kicad_pcb"
+        ))
+        .unwrap();
+        std::fs::write(
+            board_path.with_extension("kicad_pro"),
+            r#"{"net_settings":{"classes":[{"name":"Default","clearance":0.2}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            board_path.with_extension("kicad_dru"),
+            "(version 1) (rule \"broken\"",
+        )
+        .unwrap();
+        let error = super::KicadClearanceInput::load(&board_path, &board)
+            .expect_err("a malformed sibling must stop the run");
+        assert!(error
+            .to_string()
+            .contains("failed to parse custom rules file"));
+
+        std::fs::write(
+            board_path.with_extension("kicad_dru"),
+            "(version 1) (rule \"relax\" (constraint clearance (min 0.127mm)))",
+        )
+        .unwrap();
+        let relaxed = super::KicadClearanceInput::load(&board_path, &board).unwrap();
+        assert_eq!(
+            relaxed
+                .rules
+                .as_ref()
+                .unwrap()
+                .effective_clearance("A", "B"),
+            0.127
+        );
+        assert_eq!(
+            relaxed.provenance(&board_path, "(kicad_pcb)", 0.127).source,
+            crate::result::ClearanceRuleSource::CustomRulesFile
+        );
+
+        std::fs::write(
+            board_path.with_extension("kicad_dru"),
+            "(version 1) (rule \"tighten\" (constraint clearance (min 0.25mm)))",
+        )
+        .unwrap();
+        let tightened = super::KicadClearanceInput::load(&board_path, &board).unwrap();
+        assert_eq!(
+            tightened
+                .rules
+                .as_ref()
+                .unwrap()
+                .effective_clearance("A", "B"),
+            0.25
         );
     }
 

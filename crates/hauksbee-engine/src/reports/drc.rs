@@ -11,7 +11,7 @@ use hauksbee_models::ModelLibrary;
 use crate::binder::bind_board;
 use crate::result::{BindSummary, DrcStructured, JsonInputEvidence, JsonReport};
 
-use super::{kicad_pro_clearance_rules, OutputMode};
+use super::{KicadClearanceInput, OutputMode};
 
 /// Run geometric short / clearance detection, print it in `mode`, cross-check the
 /// oracle when asked, then (under `strict`) exit non-zero on a true short. Returns
@@ -104,15 +104,21 @@ pub(crate) fn emit_with_schematic_quiet(
     inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
-    let project_rules = (!altium_present).then(|| kicad_pro_clearance_rules(board_path, board));
-    let project_rules_read = project_rules.as_ref().is_some_and(Option::is_some);
+    let clearance_input = (!altium_present)
+        .then(|| KicadClearanceInput::load(board_path, board))
+        .transpose()?;
     let mut report = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
         // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
         // concrete net names here (the CLI has both the board path and the
         // extracted netlist), then hand the DRC a pairwise clearance resolver.
-        ExtractedBoard::drc_with_clearance_rules(text, project_rules.flatten())?
+        ExtractedBoard::drc_with_clearance_rules(
+            text,
+            clearance_input
+                .as_ref()
+                .and_then(|input| input.rules.clone()),
+        )?
     };
     // The companion schematic's declarations, applied before waivers and before
     // anything reads the findings. Reclassifies, never deletes.
@@ -147,7 +153,12 @@ pub(crate) fn emit_with_schematic_quiet(
         reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
-    .with_input_artifact(board_path, raw, input_kind)?;
+    .with_input_artifact(board_path, raw, input_kind)?
+    .with_custom_rules_coverage(
+        clearance_input
+            .as_ref()
+            .and_then(KicadClearanceInput::custom_coverage),
+    )?;
     // The schematic contributed to the verdict, so it enters the inventory with
     // its own hash and what it did. A reader who sees a contact reported as a
     // declared tie must be able to find the file that declared it.
@@ -162,12 +173,10 @@ pub(crate) fn emit_with_schematic_quiet(
     let provenance = if altium_present {
         crate::result::ClearanceRuleProvenance::tool_default(report.clearance_mm)
     } else {
-        super::kicad_pro_clearance_rule_provenance(
-            board_path,
-            text,
-            project_rules_read,
-            report.clearance_mm,
-        )
+        clearance_input
+            .as_ref()
+            .expect("non-Altium DRC loaded KiCad clearance inputs")
+            .provenance(board_path, text, report.clearance_mm)
     };
     let mut structured = DrcStructured::from_report_with_ties(
         &report,
