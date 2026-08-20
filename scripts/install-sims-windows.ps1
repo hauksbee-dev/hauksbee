@@ -104,7 +104,9 @@ function Assert-InstallTree([string]$Actual, [string]$Expected, [string]$Label) 
 
 function Assert-RenodeVersion([string]$Path) {
     $output = & $Path --version 2>&1 | Select-Object -First 1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or $output.Trim() -notmatch "^(Renode v|Renode, version )$([regex]::Escape($RenodeVersion))(?:\.|\s|$)") {
+    $escapedVersion = [regex]::Escape($RenodeVersion)
+    $versionPattern = "^(?:Renode v|Renode, version )${escapedVersion}(?:[.\s]|$)"
+    if ($LASTEXITCODE -ne 0 -or $output.Trim() -notmatch $versionPattern) {
         throw "Renode payload reports the wrong version: $($output.Trim())"
     }
 }

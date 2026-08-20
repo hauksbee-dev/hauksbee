@@ -23,6 +23,11 @@ def read(path: str) -> str:
 
 
 class WindowsPortContract(unittest.TestCase):
+    def test_renode_version_check_accepts_pinned_build_suffix(self) -> None:
+        installer = read("scripts/install-sims-windows.ps1")
+        self.assertIn('$escapedVersion = [regex]::Escape($RenodeVersion)', installer)
+        self.assertIn('${escapedVersion}(?:[.\\s]|$)', installer)
+
     def test_verified_simulator_snapshots_preserve_zip_extension(self) -> None:
         installer = read("scripts/install-sims-windows.ps1")
         self.assertIn('$Asset.Name.EndsWith(".zip"', installer)

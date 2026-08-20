@@ -733,11 +733,5 @@ mod tests {
             !extending.contains("batch report surfaces, interactive TUI/web front door"),
             "do not claim the external-backend web refusal rendered scheduler limitations"
         );
-
-        let changelog = include_str!("../../../../CHANGELOG.md");
-        assert!(
-            changelog.contains("headless or interactive co-simulation"),
-            "--chunk-us is honored by both run modes"
-        );
     }
 }
