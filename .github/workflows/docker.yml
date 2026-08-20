@@ -453,9 +453,14 @@ jobs:
           SLIM_REF: ${{ steps.record.outputs.slim_ref }}
           FULL_REF: ${{ steps.record.outputs.full_ref }}
         run: |
-          docker buildx imagetools create \
-            --tag "${IMAGE}:slim" --tag "${IMAGE}:slim-${VERSION}" --tag "${IMAGE}:latest" \
-            "$SLIM_REF"
-          docker buildx imagetools create \
-            --tag "${IMAGE}:full" --tag "${IMAGE}:full-${VERSION}" --tag "${IMAGE}:full-latest" \
-            "$FULL_REF"
+          if [[ "$VERSION" == *-* ]]; then
+            docker buildx imagetools create --tag "${IMAGE}:slim-${VERSION}" "$SLIM_REF"
+            docker buildx imagetools create --tag "${IMAGE}:full-${VERSION}" "$FULL_REF"
+          else
+            docker buildx imagetools create \
+              --tag "${IMAGE}:slim" --tag "${IMAGE}:slim-${VERSION}" --tag "${IMAGE}:latest" \
+              "$SLIM_REF"
+            docker buildx imagetools create \
+              --tag "${IMAGE}:full" --tag "${IMAGE}:full-${VERSION}" --tag "${IMAGE}:full-latest" \
+              "$FULL_REF"
+          fi

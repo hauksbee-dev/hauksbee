@@ -40,9 +40,8 @@ see `docs/extending/add-a-hardware-trace.md` for the workflow.
 ## First real-capture targets: the Tarski bring-up
 
 The physical Tarski board was brought up with an oscilloscope alongside the
-sim; that knowledge survives only as recalled numbers (validation plan
-`docs/dev-plans/08-validation-and-test-campaign.md` §T6), with no capture
-files. The recalled observations, recorded here so they are not lost again:
+sim; that knowledge survives only as recalled numbers, with no capture files.
+The recalled observations, recorded here so they are not lost again:
 
 - hidden-neuron **V_out peak ≈ 2.1–2.3 V** — vs the faithful sim's ~1.5 V-pinned
   peak: the load-bearing discrepancy this tier exists to adjudicate honestly

@@ -59,13 +59,13 @@ sha2 = "0.11"
 # pattern as hauksbee-ci's spec schema).
 schemars = "1.2"
 same-file = "1.0"
-hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
-hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
-hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
-hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
-hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false }
-hauksbee-frontdoor-api = { version = "0.1.0", path = "../hauksbee-frontdoor-api" }
-hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false, optional = true }
+hauksbee-extract = { version = "0.1.0-beta.1", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0-beta.1", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0-beta.1", path = "../hauksbee-ir" }
+hauksbee-solve = { version = "0.1.0-beta.1", path = "../hauksbee-solve" }
+hauksbee-mcu = { version = "0.1.0-beta.1", path = "../hauksbee-mcu", default-features = false }
+hauksbee-frontdoor-api = { version = "0.1.0-beta.1", path = "../hauksbee-frontdoor-api" }
+hauksbee-server = { version = "0.1.0-beta.1", path = "../hauksbee-server", default-features = false, optional = true }
 forge-model = { workspace = true }
 forge-codegen = { workspace = true }
 forge-sexpr.workspace = true

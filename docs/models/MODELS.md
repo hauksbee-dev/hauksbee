@@ -1,15 +1,12 @@
 # Device models: built-in, SPICE, and datasheet extraction
 
-For the end-to-end human, CLI, MCP, and evidence workflow, including the public
-Pedalboard reference journey, see
-[`BOARD_MODELING_WORKFLOW.md`](BOARD_MODELING_WORKFLOW.md).
-
 The source-selection, provenance, uncertainty, and fail-closed accuracy policy
 is documented in [SOURCE_LADDER.md](SOURCE_LADDER.md). Source tier and storage
 layer are deliberately separate; inspect both with `hauksbee models resolve`.
 
-Every component the binder meets needs a simulation model. Physics arrives by
-**four** authoring routes. The resolver records both the semantic source tier
+Components may resolve to executable models, identity-only records, or an
+explicit unresolved/open result. Executable models arrive by **four** authoring
+routes. The resolver records both the semantic source tier
 and the six storage layers; semantic tier orders sources first, while layer and
 specificity make selection deterministic inside one tier.
 
@@ -25,8 +22,9 @@ The four authoring routes:
   `hauksbee models extract`, or from the standalone `model-extract` binary.
   Every one of the three states what leaves your machine and asks before it
   sends anything. The result is a draft to check, carries provenance
-  `datasheet-extracted`, lands in `~/.hauksbee/models/`, and loads as a
-  user-dir entry.
+  `datasheet-extracted`. Electrical model cards land in
+  `~/.hauksbee/models/` and load as user-dir entries; register-map sensor
+  drafts use `<part>.sensor.toml` and must be reviewed and attached explicitly.
 - **Hand-written behavioural** TOML: a `[models.behavioral]` entry you
   author by hand for a power IC (see "Behavioural device models" below).
   hauksbee loads it from the same user model directories as the extracted
@@ -98,16 +96,16 @@ the same validation, and the same retry-with-feedback loop:
 | `claude-code` | `claude` CLI in PATH, signed in | `--backend claude-code`, `--model` |
 | `api` | key in the env var named by `--api-key-env` (default `OPENAI_API_KEY`; a set `HAUKSBEE_LLM_API_KEY` is honoured) | `--backend api`, `--api-base`, `--model`, `--api-key-env` |
 
-With no `--backend`, a set `HAUKSBEE_LLM_API_KEY` selects the api backend,
-matching the behaviour from before the flag existed. `--api-key-env` takes the
+With no `--backend`, a set `HAUKSBEE_LLM_API_KEY` selects the API backend.
+`--api-key-env` takes the
 NAME of an environment variable, never the key itself: the key is read from
 the environment at call time and is never stored or logged. A missing CLI or
 an unset key variable errors up front with the exact fix (install the tool, or
 `export OPENAI_API_KEY=...`), before anything is sent.
 
-The older standalone binary still works and holds the same contract
-(`cargo build -p hauksbee-models --bin model-extract`, then
-`HAUKSBEE_EXTRACT_YES=1` for the scripted case).
+The standalone extractor uses the same contract: build it with
+`cargo build -p hauksbee-models --bin model-extract`; scripted use additionally
+requires `HAUKSBEE_EXTRACT_YES=1`.
 
 `--kind` is optional, and leaving it off is usually right: the datasheet says
 what the part is on its first page, and the model is about to read that page.
@@ -124,9 +122,10 @@ nmos | pmos | vreg | opamp | comparator | analog_switch | digital | dac | adc |
 shift_register | mcu | connector | i2c_sensor | spi_sensor`, plus the
 behavioural families `charger | pmic | balancer`.
 
-The tool writes `<part>.toml` to the output directory. The library loads any
-TOML in `~/.hauksbee/models/` as a user-dir entry the next time it builds,
-so an extracted part becomes immediately resolvable by value/MPN.
+For electrical model kinds the tool writes `<part>.toml`; the library loads it
+from `~/.hauksbee/models/` on the next run. Register-map kinds write
+`<part>.sensor.toml`; lint and attach that sensor specification to the intended
+board or model instead of treating it as an automatically resolved device card.
 
 ## Start from an unresolved board part (without invented physics)
 
@@ -349,16 +348,13 @@ Where a datasheet can accelerate authoring, the page also offers the optional
 extraction workflow. It holds the same consent contract as the CLI. The flow is
 fixed in this order, and the order is the contract:
 
-1. **Can it run at all**, from `GET /api/models/extract/ready`. If codex is
-   missing, or installed but not signed in, the blocker and the one command
-   that fixes it are shown here and the file picker is never reached. Learning
-   that codex is unauthenticated *after* choosing a datasheet would be a
-   consent question asked for nothing.
+1. **Can it run at all**, from `GET /api/models/extract/ready`. The selected
+   backend and any missing CLI, authentication, or API-key requirement are
+   shown before the file picker.
 2. **The consent notice**, served verbatim from
    `hauksbee_models::datasheet::CONSENT_NOTICE` so the page cannot soften the
-   CLI's wording, plus the cost line: codex signs in with a ChatGPT account,
-   so for anyone already paying for one this costs nothing extra. An explicit
-   click is required.
+   CLI's wording, plus backend-specific cost and privacy information. An
+   explicit click is required.
 3. **The datasheet**, the part number (prefilled from the board's value field)
    and the kind (a picker generated from the engine's own kind list, so it
    cannot offer a kind the extractor rejects).
@@ -377,9 +373,10 @@ fixed in this order, and the order is the contract:
    nothing.
 
 The extraction itself is the same `hauksbee_models::datasheet` code the CLI
-runs, with the same scratch sandbox: the agent gets a copy of the PDF and its
-page renders, never the directory the user's file came from. The web plumbing
-is `crates/hauksbee-engine/src/webextract.rs` (the engine hooks) and
+runs. Local Codex/Claude backends read the copied PDF, text, and selected page
+renders in a scratch workspace; the API backend receives extracted text and
+instructions at the configured endpoint. The web plumbing is
+`crates/hauksbee-engine/src/webextract.rs` and
 `crates/hauksbee-server/src/frontdoor.rs` (`datasheet_routes`).
 
 ## What gets extracted
@@ -390,8 +387,8 @@ The extractor pulls two things from the datasheet:
    for a BJT; `is`, `n`, `rs` for a diode; `vout`, `dropout_v`, `iq_a` for
    an LDO; and so on). Where a value is not stated verbatim, the model
    derives it from a stated operating point (e.g. `is` from VBE at a known
-   IC) and says so in a comment, or falls back to a family-typical value
-   tagged `# estimated`.
+   IC) and says so in a comment. If the required fact is absent, extraction
+   abstains or emits an identity-only draft; it does not invent a family value.
 2. **Absolute-maximum ratings** into `[models.ratings]`: `max_current_a`,
    `max_surge_current_a`, `max_power_w`, `max_voltage_v`,
    `max_junction_temp_c`. These feed the **stress monitor**
@@ -406,21 +403,20 @@ from, so an extracted model stays auditable.
 
 `crates/hauksbee-models/src/datasheet.rs`:
 
-0. **A sandbox** is built first: a scratch directory holding a copy of the
-   datasheet and nothing of yours. The agent runs there, so what it can write
-   is bounded even though it runs unattended. Read the module doc for what
-   that does and does not buy: the profile confines writes and kills network,
-   it does not confine reads.
-1. **PDF to text** through `pdftotext` (if present), and **one image per page**
-   through `pdftoppm` at 150 DPI, capped at fourteen pages. The renders matter
-   more than the text: an absolute-maximum table survives a render and becomes
-   a column of loose numbers in a text dump.
+0. **A scratch workspace** is built first with a copy of the datasheet. Codex
+   runs with workspace-write restrictions; Claude uses its non-interactive
+   edit permission mode. These are backend controls, not a universal network
+   sandbox. The API path sends its request to the configured provider.
+1. **PDF to text** through `pdftotext` (if present), plus selected page images
+   through `pdftoppm` at 200 DPI. At most seven pages are rendered: page one
+   and the pages most relevant to pinout, ratings, and electrical tables. The
+   complete copied PDF and text remain available to local agent backends.
 2. **Prompt** built per kind, listing the required params, the ratings to
    pull, and the physical bounds each value must respect.
 3. **Backend call** (see the backend matrix above):
    - **codex** (default): `codex exec --sandbox workspace-write
-     --skip-git-repo-check --cd <pdf_dir>`. stdin is closed so codex does
-     not block; the final agent message (clean TOML) comes back on stdout
+     --skip-git-repo-check --cd <pdf_dir>`. A short pointer to `prompt.md` is
+     written to stdin before EOF; the final agent message (clean TOML) comes back
      while session logging goes to stderr. A hard timeout (10 min) kills a
      stuck run.
    - **claude-code** (`--backend claude-code`): headless `claude -p` in the
@@ -433,7 +429,7 @@ from, so an extracted model stays auditable.
 4. **Parse and validate**: the tool parses the reply as TOML, checks the
    device kind against the requested kind, and range-checks every param
    (`crates/hauksbee-models/src/validation.rs`). A failure feeds the error
-   back to the backend for one retry.
+   back to the backend for up to two retries (three attempts total).
 5. **Write** `<part>.toml`.
 
 ### Failure modes
@@ -465,14 +461,14 @@ in `crates/hauksbee-engine/tests/datasheet_validation.rs`:
 |-------|-----------------------------------------------------------------------|
 | diode | forward voltage at a stated forward current (1N4148: ~0.7 V at 10 mA) |
 | BJT   | DC current gain beta = Ic/Ib **and** Vbe at the bias (BC847: hFE in 110..450, Vbe ~0.66 V at 2 mA) |
-| LDO   | output voltage under a real load, within tolerance (AMS1117-3.3: 3.30 V) |
+| LDO   | output voltage under a simulated resistor load, within tolerance (AMS1117-3.3: 3.30 V) |
 
 The same suite has a garbage-rejection test proving simulation rejects a
 physically absurd model (a "transistor" with beta 5, or a junction that
 never turns on) rather than silently binding it.
 
-Measured results from real codex extractions of the three reference
-datasheets:
+Example simulation checks from the reference fixtures (not hardware
+measurements):
 
 | Part         | Simulated                     | Datasheet truth                  |
 |--------------|-------------------------------|----------------------------------|
@@ -539,14 +535,15 @@ would need a `[models.behavioral]` block (see the LTC4020 entry in
     no codex, no network.
   - `hauksbee-engine` `fixture_*` physical-validation tests simulate canned
     models and assert the datasheet numbers.
-  - `hauksbee-models` `tests/suite/power_fet_afe_resolve.rs` (10 tests): resolves
+  - `hauksbee-models` `tests/suite/power_fet_afe_resolve.rs`: resolves
     each new specific part (IPA045N10N3G, IRF9358, SIR182DP, bq76952,
     LM5107, LM5109, INA181, INA2181) by value and asserts kind + sane
     ratings; it also asserts that the generic power-FET fallback binds an
     unknown FET-in-DPAK by footprint, and that a specific value entry beats
     the catch-all when both match.
 - **Live (manual)**: `hauksbee-models` `extract_bc847_live` is `#[ignore]`d
-  and runs real codex against `testdata/datasheets/BC847.pdf`. See
+  and runs the configured live backend against `testdata/datasheets/BC847.pdf`.
+  `HAUKSBEE_LLM_API_KEY` selects the API; otherwise it uses Codex. See
   `crates/hauksbee-models/README_DATASHEET.md`.
 
 # Behavioural device models (power ICs)
@@ -916,16 +913,12 @@ law):
 model-extract --pdf testdata/datasheets/LTC4020.pdf --part LTC4020 --kind charger
 ```
 
-A live codex run against the LTC4020 datasheet produced a model that agreed
-with the hand-written one on the load-bearing structure, base kind `vreg`,
-the exact pin map, `topology = "buck_boost"`, `out_pin`/`in_pin`,
-`vout_setpoint = 28.8` (8S LiFePO4), `efficiency = 0.92`, and a populated
-`iin_program` block, and honestly left the ILIMIT transfer-function
-constants at zero because the datasheet excerpt did not state the
-programming equation. The checked-in hand model now uses the primary datasheet
-transfer (`VILIMIT = 50 uA * RILIMIT`, effective over 0--1 V, scaling the 50 mV
-input-sense threshold) rather than fitting constants to the reported fault
-wattage.
-The captured output is regression-locked offline in
-`crates/hauksbee-models/tests/suite/codex_behavioral_fixture.rs`; the live run is
-the `#[ignore]`d `extract_ltc4020_charger_live`.
+The LTC4020 fixture demonstrates the expected output: base kind `vreg`, exact
+pin map, `topology = "buck_boost"`, `out_pin`/`in_pin`, `vout_setpoint = 28.8`
+for an 8S LiFePO4 pack, `efficiency = 0.92`, and a populated `iin_program`
+block. Unknown transfer-function constants remain zero instead of being fitted
+to a desired result. The checked-in model sources its ILIMIT transfer directly
+from the primary datasheet (`VILIMIT = 50 uA * RILIMIT`, effective over 0--1 V,
+scaling the 50 mV input-sense threshold). Offline coverage lives in
+`crates/hauksbee-models/tests/suite/codex_behavioral_fixture.rs`; the live
+backend check is `extract_ltc4020_charger_live` and is ignored by default.

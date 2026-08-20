@@ -11,10 +11,9 @@ live in `ci/` in a hardware repo; `run` also accepts several specs at once and
 writes one merged JUnit file, exiting with the worst code of the set), then
 publishes the JUnit XML so the assertions show up as test results.
 
-The GHCR image is public, so every recipe pulls it anonymously; no registry
-credential is needed. (A private mirror or GitHub Enterprise registry works
-too: add your CI system's usual registry credential, kept in its protected
-secret store, never in the pipeline file.)
+After the public GHCR package is published, these recipes can pull it
+anonymously. Before publication, or with a private mirror, add the registry
+credential through the CI system's protected secret store.
 Replace `REPLACE_WITH_SLIM_DIGEST` with the slim digest from the matching
 release's `container-digests-<tag>` record
 (`hauksbee-<version>-docker-digests.txt`). A moving tag is
@@ -29,7 +28,7 @@ This is the canonical table. The other CI docs link here.
 | 0 | every assertion held (GREEN) |
 | 1 | at least one assertion failed (RED) |
 | 2 | spec / usage / board error |
-| 3 | invalid for analysis: the analog co-sim did not converge, so the result is not trustworthy and the run refuses to pretend |
+| 3 | invalid for analysis: the requested claim is not trustworthy because of an analogue, timing, evidence, or coverage refusal; inspect the structured result |
 
 Exit 3 poses a policy question: it is not a hardware verdict (the board was
 neither proven good nor proven bad), so teams usually surface it as an
@@ -86,7 +85,7 @@ pipeline {
                     )
                     if (code == 3) {
                         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                            error 'exit 3: analog co-sim did not converge, no hardware verdict'
+                            error 'exit 3: invalid for analysis, no hardware verdict'
                         }
                     } else if (code != 0) {
                         error "hauksbee-ci failed with exit code ${code}"
@@ -134,7 +133,7 @@ jobs:
           hauksbee-ci run ci/power-up.toml --junit report.xml
           code=$?
           if [ "$code" -eq 3 ]; then
-            echo "##vso[task.complete result=SucceededWithIssues;]analog co-sim did not converge, no hardware verdict"
+            echo "##vso[task.complete result=SucceededWithIssues;]invalid for analysis, no hardware verdict"
             exit 0
           fi
           exit $code

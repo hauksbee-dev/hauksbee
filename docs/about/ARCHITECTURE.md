@@ -1,11 +1,10 @@
 # Hauksbee Architecture
 
-Hauksbee takes a real PCB design (KiCad first), extracts the circuit it
-implements, and brings it to life: a fast, physically accurate analog
-simulation co-simulated with emulated microcontrollers, rendered live on the
-actual board layout. No existing tool, open or commercial, as of mid-2026,
-does this end-to-end. Proteus VSM comes closest, but it simulates from its
-own schematic, never from a layout.
+Hauksbee takes PCB and manufacturing artifacts, extracts the circuit they
+describe, couples supported firmware emulators to the analogue solver, and
+renders the result on the board layout. The exact supported inputs, models,
+backends, and evidence boundaries are listed in
+[CAPABILITIES](CAPABILITIES.md) and [LIMITATIONS](LIMITATIONS.md).
 
 ## Lineage
 
@@ -61,4 +60,4 @@ Each report runs from `hauksbee run <board> --report/--drc/--lint/--si/--resourc
 - The workspace crates: extraction, models, solver, MCU co-sim, server, UI.
 - The server layer ships as three binaries: `hauksbee` (CLI + web front door),
   `hauksbee-ci` (the CI gate), and `hauksbee-mcp` (a stdio MCP server exposing
-  the same engine to coding agents; see `agents/AGENTS.md`).
+  the same engine to coding agents).

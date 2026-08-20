@@ -12,18 +12,18 @@ gain). Run that from a normal checkout when you want the live viewer.
 | Image | Tag | Contains | Unlocks |
 |-------|-----|----------|---------|
 | slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, the linked-in simavr (the AVR microcontroller emulator) | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim (running firmware on the emulated MCU against the live analog solve). The everyday CI image. |
-| full | `ghcr.io/hauksbee-dev/hauksbee:full` | Everything in slim, plus Renode, the Espressif QEMU fork, and freerouting (with a JRE) | STM32 / nRF52 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU), and production autorouting of recompiled boards (freerouting). |
+| full | `ghcr.io/hauksbee-dev/hauksbee:full` | Everything in slim, plus Renode, the Espressif QEMU fork, and freerouting (with a JRE) | STM32 / nRF52840 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU), and production autorouting of recompiled boards (freerouting). |
 
-Each is also published with the release version baked in:
-`:slim-<version>` / `:full-<version>` (for example `:slim-0.1.0`), and a tag
-push moves `:latest` (slim) and `:full-latest`.
+Release images use versioned tags such as `:slim-0.1.0-beta.1` and
+`:full-0.1.0-beta.1`. Use the immutable digest from the matching release for
+reproducible CI; floating tags are not release evidence.
 
 ### Why two
 
-The slim image is roughly 183 MB (measured on a local amd64 build) and covers
-most CI needs: the static checks and the
-built-in AVR co-simulation have no external dependencies at all. Boards are
-read through the vendored forge crates, not through KiCad.
+Image size varies by architecture and build. The slim image covers most CI
+needs: static checks and built-in AVR co-simulation have no external
+dependencies. Boards are read through the vendored forge crates, not through
+KiCad.
 The full image adds the heavy external backends (Renode and the Espressif
 QEMU fork are large prebuilt toolchains, freerouting needs a JRE). Pull it
 only when you actually run STM32 / ESP32 firmware or autoroute a board.
@@ -41,7 +41,7 @@ vars. The full image sets these so everything works with no setup:
 
 | Variable | Value | Backend |
 |----------|-------|---------|
-| `HAUKSBEE_RENODE` | `/usr/local/bin/renode` | Renode (STM32 / nRF52 / RISC-V) |
+| `HAUKSBEE_RENODE` | `/usr/local/bin/renode` | Renode (STM32 / nRF52840 / RISC-V) |
 | `HAUKSBEE_QEMU_DIR` | `/opt/qemu/bin` | Espressif QEMU (both arches) |
 | `HAUKSBEE_QEMU_XTENSA` | `/opt/qemu/bin/qemu-system-xtensa` | ESP32 / ESP32-S3 |
 | `HAUKSBEE_QEMU_RISCV32` | `/opt/qemu/bin/qemu-system-riscv32` | ESP32-C3 |
@@ -55,17 +55,17 @@ CI runner). The bundled example boards live inside the image, under the
 binaries' embedded data. The boards and specs you check usually come from
 your own repo, mounted in.
 
-The images are public: no registry login is needed. Pull and run directly:
+The images are public only after the owner publishes the GHCR package. During
+beta, or when using a private mirror or GitHub Enterprise registry, authenticate
+with a package-read token before pulling (`docker login ghcr.io`):
 
 ```bash
 docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee run path/to/board.kicad_pcb --report
 ```
 
-(Private mirrors and GitHub Enterprise registries still work the usual way:
-`docker login ghcr.io` with a package-read token before the first pull,
-preferably confined to a temporary `DOCKER_CONFIG` that is logged out and
-removed afterwards.)
+(For reproducible CI, use the immutable digest from the matching release rather
+than a moving tag.)
 
 Report a board (the bind report table):
 
@@ -121,7 +121,7 @@ source. Set `use-image: true`, and optionally pick the image:
 - uses: hauksbee-dev/hauksbee/integrations/github-action@REPLACE_WITH_RELEASE_COMMIT_SHA
   with:
     hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
-    hauksbee-version: v0.1.0
+    hauksbee-version: v0.1.0-beta.1
     spec: ci/watchy.toml
     use-image: true
     # Use the digest in the matching `container-digests-<tag>` prerelease's
@@ -146,14 +146,11 @@ back to `cargo build`.
 `docker/login-action` + `docker/build-push-action` chain and pushes multi-arch
 manifests to GHCR.
 
-The first publication is fail-closed too. GHCR has no package visibility to
-inspect until a package exists, so the workflow first pushes a zero-layer,
-non-runnable `privacy-bootstrap-<commit>` marker built `FROM scratch`, which
-contains no Hauksbee binaries or source. The package is therefore born
-private, verified as such before any real image is built, and made public
-only as a deliberate owner decision at launch, never as a push side effect. A
-final visibility check runs unconditionally after the push; it cannot turn an
-earlier build/push failure into success.
+GHCR visibility is an owner-controlled release setting. If GHCR has no package
+yet, the publication preflight uses an inert `privacy-bootstrap-<commit>` marker
+that contains no Hauksbee binaries or source. A beta package may remain private;
+authenticate before pulling it. Once published, use the immutable release
+digest in CI and keep floating tags for interactive use only.
 
 The build is **multi-stage from source**, not a repackaged release tarball:
 

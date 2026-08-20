@@ -11,7 +11,7 @@ the board actually does with the short present (`hauksbee-engine`).
 
 ![How a copper short travels through Hauksbee: DRC on the .kicad_pcb produces a DrcReport of shorts and clearance violations, the scheduler bridges the shorted nets with a few-milliohm resistor, and the transient solve and stress monitor raise a short fault event on the frontend fault channel](../assets/diagrams/short-detection.svg)
 
-## Detection (`hauksbee-extract/src/drc.rs`)
+## Detection (`crates/hauksbee-extract/src/drc.rs`)
 
 ### Geometry kinds covered
 
@@ -73,14 +73,12 @@ straight *through* a pad is caught even when no endpoint or vertex is near):
   few microns under it): routing-to-rule, **not reported**. See the tolerance
   note below.
 
-#### Clearance tolerance (the boundary-noise fix)
+#### Clearance tolerance
 
-A gap reported as `clearance - epsilon` is overwhelmingly a routing-to-rule
-artifact, not a defect: KiCad lets the router lay copper exactly at the design
-rule, and the nm grid plus our arc/capsule flattening (chord error a few
-microns) leaves the *measured* gap a hair under the nominal rule. Reporting
-those produced **137 spurious clearance notes on bms-c1 and 66 on the PD-sink
-board**, which drowned the real findings. So a small tolerance
+A gap reported as `clearance - epsilon` is usually a routing-to-rule artifact,
+not a defect: KiCad lets the router lay copper exactly at the design rule, and
+the nm grid plus our arc/capsule flattening (chord error a few microns) can leave
+the *measured* gap a hair under the nominal rule. A small tolerance
 (`CLEARANCE_TOLERANCE_MM = 0.005 mm`, 5 um, well under any real copper clearance
 yet above the geometry's own rounding noise) raises the floor for the soft
 clearance band: a positive gap is a clearance violation only when it falls more
@@ -88,12 +86,8 @@ than the tolerance below the rule. **Shorts (gap <= 0, real copper overlap) are
 unaffected**. The tolerance only relaxes the soft clearance band, never a true
 intersection.
 
-Validated: bms-c1 drops from 137 spurious notes to **0** ("no shorts or
-clearance violations"). The PD-sink board drops from 66 to **4** genuinely
-sub-rule gaps (0.15 / 0.18 mm under the 0.2 mm rule) that were previously
-buried. The DRC corpus + fixture tests (including the at-rule,
-sub-micron-under-rule, and genuinely-sub-rule cases) stay green. True shorts
-still fire.
+The DRC corpus and fixtures gate at-rule, sub-micron-under-rule, genuinely
+sub-rule, and true-overlap cases. True shorts always fire.
 
 Filled zones are handled specially for performance: a single GND pour can carry
 thousands of boundary vertices and a board-spanning bounding box, which would
@@ -123,11 +117,9 @@ CLI surfaces it: `hauksbee run <board> --drc` prints the table and exits, and
 `ExtractedBoard::drc(text)` is the library entry point, alongside the existing
 `lint()`.
 
-## Eagle `.brd` detection (`hauksbee-extract/src/drc.rs`, `eagle_drc_from_text`)
+## Eagle `.brd` detection (`crates/hauksbee-extract/src/drc.rs`, `eagle_drc_from_text`)
 
-The most famous open-hardware boards (Arduino Uno, five Adafruit, four SparkFun)
-are Eagle, not KiCad, so they used to get `n/a` for DRC. The Eagle path closes
-that gap: it reads copper *geometry* per net out of the `.brd` XML and feeds it
+For Eagle boards, the reader extracts copper *geometry* per net from `.brd` XML and feeds it
 to the same `sweep_buckets` engine the KiCad path uses. There is one detection
 / classification core. Only the front-end geometry reader differs.
 `ExtractedBoard::drc(text)` dispatches on content (`(kicad_pcb` vs `<eagle`), so
@@ -199,17 +191,13 @@ near the boundary depends on those settings.
 One pour-to-pour construct **is** checked: two overlapping same-rank pours of
 different signals get no arbitration from their rank, and the overlap is reported.
 
-That rule over-reports, and by how much is measured rather than estimated. The
-emonTx revision family ships copper gerbers beside its `.brd`, so its six
-layer-instances can be scored by asking whether any filled region of a layer
-contains vias of both nets: the rule is right about four, flagging the three layers
-where the nets really do share copper and over-reporting two top layers where the
-outlines overlap and nothing bridges them
-([`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md)).
-Narrowing it by `isolate` was implemented and reverted: `isolate` is necessary but
-not sufficient for two pours to merge, so the narrowing fixed one over-report and
-silenced a layer where a trace genuinely joins the nets. Removing the over-reports
-needs Eagle's fill reconstructed, which is not implemented
+This class can over-report because Eagle fill is not reconstructed. Comparison
+with the emonTx revision's copper Gerbers shows the rule identifies four of six
+layer instances correctly and over-reports two where outlines overlap without a
+copper bridge
+([`../evidence/CORPUS.md`](../evidence/CORPUS.md)).
+The `isolate` setting is parsed but cannot determine whether two pours merge;
+removing those over-reports requires reconstructed Eagle fill
 ([`../about/LIMITATIONS.md`](../about/LIMITATIONS.md)).
 
 The pour settings ride along on the finding's `Item::owner` field, which
@@ -289,20 +277,11 @@ all three must hold:
 3. no `<device>` in that deviceset names a **package**, because a supply symbol is
    a schematic-only marker with no physical part behind it.
 
-Tests 1 and 3 are not decoration, and dropping either one silences real shorts.
-Ordinary Eagle libraries mark a component's power pins `direction="sup"`: the
-`SD-MMC` symbol in `margay_logger/Hardware/Margay.sch` has 13 pins of which 4 are
-`sup`, and `XBEE` in `emonTx V3.2.sch` has 20 of which 2 are. An
-any-`sup`-pin rule made the SD socket and the radio module "declare" ground tied
-to every net they touch: 6 false declarations on Margay and 19 on emonTx V3.2,
-including `3.3V` to `GND`, each of which would attach false schematic context
-to a genuine rail-to-ground short. The historical twelve-pair
-exploratory sweep was not retained as a release artifact, so it is not used as
-completion evidence. The release regression uses two tracked board/schematic
-pairs (one declared, one undeclared) and focused parser cases for multi-pin,
-packaged and duplicate-library-URN false positives. A packaged testpoint whose
-symbol is a single `sup` pin is likewise not a supply symbol, which is what test
-3 is for.
+Tests 1 and 3 prevent multi-pin power components from silencing real shorts.
+The regression covers declared and undeclared board/schematic pairs plus parser
+cases for multi-pin symbols, packaged devices, and duplicate library URNs. A
+packaged testpoint whose symbol is a single `sup` pin is not a supply symbol;
+the package test enforces that distinction.
 
 **Context, not physical authorization.** A matching finding keeps its net pair,
 layer, location, measured gap, `serious` severity, and `--strict` gate, and gains
@@ -317,10 +296,8 @@ join. `DrcTieQualification::declaration_for` exposes that context;
 **No schematic, no invented context.** With none supplied, the finding stays
 `serious` and names the schematic as the input that may explain the net-pair
 intent. Supplying a schematic never downgrades the physical finding. A schematic
-that declares nothing adds no context at all. emonTx V3.4.0, the revision before
-the pair was drawn, declares none and its contacts remain serious; the tracked
-declared and undeclared fixtures pin both sides without requiring that external
-corpus.
+that declares nothing adds no context; the declared and undeclared fixtures pin
+both sides.
 
 **Identity and physical scope fail closed.** An explicit companion must share the
 board basename, physical reference/value set, and canonical physical
@@ -381,9 +358,9 @@ carries current across the bridge and the existing **stress monitor** sees the
 fallout (rails collapsing, series parts driven over their power/current
 ratings).
 
-Each applied bridge is itself surfaced as a `FaultEvent` of kind `short` through
-the same channel as the rating-based faults, so the frontend highlights it with
-no UI change. Two entry points on `HauksbeeEngine` / `Scheduler`:
+Each applied bridge is surfaced as a `FaultEvent` of kind `short` through the
+same channel as rating-based faults, so the frontend highlights it. Two entry
+points on `HauksbeeEngine` / `Scheduler`:
 
 - `apply_drc_shorts(&report)`: apply every true overlap a `DrcReport` found
   (clearance-only violations are not applied), and the convenience
@@ -449,12 +426,10 @@ fraction of a second, dominated by the XML parse
 
 ### A documented corpus finding
 
-An earlier sweep hid contacts on several Olimex ESP32-EVB revisions behind a
-blanket same-owner waiver. Re-investigation found the surviving case in a
-dedicated `0R_0603` footprint: an auxiliary same-number copper pad locally
-touches the opposite terminal. It is now handled by the explicit, owner- and
-location-scoped copper-link rule above. Ordinary same-footprint pads are never
-waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
+A dedicated `0R_0603` footprint can contain an auxiliary same-number copper pad
+that touches the opposite terminal. The explicit owner- and location-scoped
+copper-link rule handles that case; ordinary same-footprint pads are never
+waived. The corpus test (`tests/drc_corpus.rs`) documents the rule.
 
 ## Tests
 
@@ -522,11 +497,11 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
   the suppressed class, run KiCad's own DRC.
 
 - **KiCad 10 and newer: exact native-DRC parity remains unvalidated.** The
-  `20260206` name-only net encoding and baked keyhole-antipad contours are now
-  handled. A format-20260206 fixture checked with kicad-cli 10.0.5 keeps the pad
+  `20260206` name-only net encoding and baked keyhole-antipad contours are
+  supported. A format-20260206 fixture checked with kicad-cli 10.0.5 keeps the pad
   inside a real keyhole antipad silent while reporting a pad under solid
   different-net fill; the same oracle reports no Zone↔Pad violations on the
-  VENDETTA ESC that formerly produced 1,668 phantom shorts.
+  VENDETTA ESC.
 
   The version warning remains because the complete finding set is not yet exact
   KiCad parity (VENDETTA reports 67 Hauksbee shorts versus 60 native

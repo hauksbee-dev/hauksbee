@@ -83,7 +83,6 @@ client inherits.
 
 ## The full contract
 
-[`agents/AGENTS.md`](../../agents/AGENTS.md) is the agent-facing contract: the
-complete tool schemas, the refusal shape, the code-mode sandbox and its limits,
-a worked request/response pair, and the ground rules for reading hauksbee's
-output. Read it before writing an agent against this server.
+MCP clients discover the current tool schemas through `tools/list`. Treat
+refusal results and evidence classifications as part of the response contract;
+do not reinterpret an unverified or invalid result as a hardware verdict.

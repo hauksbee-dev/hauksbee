@@ -245,27 +245,11 @@ are in the [board-as-code README](../../examples/board-as-code/README.md).
 | [`watchy_v15_display_res`](../../crates/hauksbee-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../../crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml) † | `boot_coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | **GREEN** / **RED** |
 | [`pic_programmer_schematic.toml`](../../crates/hauksbee-ci/examples/pic_programmer_schematic.toml) † | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | **GREEN** |
 
-† These three specs (the Watchy v1.5 pair and the pic_programmer schematic)
-run against boards in the developer board corpus: the historical-revision
-Watchy v1.5 and KiCad's `pic_programmer` demo. That corpus is not redistributed
-in this repo, and the Watchy pair also needs the Espressif QEMU ESP32 backend.
-Their integration tests skip cleanly when the corpus or backend is absent. They
-are also **dropped from the release tarball at staging** (`scripts/bundle.sh`),
-because their `board =` paths escape the bundle and resolve to nothing there, so
-if you installed from a release you will not find these three specs at all. They
-are checkout-only, which is the only place they ever worked.
-
-**Running them from a checkout takes more than `fetch-corpus.sh`, and it is worth
-saying why rather than letting you find out.** The `board` paths in those three
-specs are `board-corpus/famous/watchy_history/v1.5/...` and
-`board-corpus/kicad-demos-src/demos/pic_programmer/...`, and
-`scripts/fetch-corpus.sh` **does not produce those paths**. The fetch writes one
-directory per `corpus.toml` id (`board-corpus/watchy_history_v1_5/`,
-`board-corpus/kicad_demos/`), with no `famous/` level and different directory
-names. The specs were written against the maintainers' hand-built corpus layout
-and the two have never agreed, so a fetched corpus leaves these specs pointing at
-nothing. Fetch and then re-point the `board` line, or symlink the layout, until
-the two are reconciled.
+† These three specs require the external developer board corpus and the
+Espressif QEMU backend. They are not included in the public release bundle, and
+their integration tests skip when either dependency is unavailable. For a
+self-contained smoke test, use `hauksbee-ci run --example blinky` or
+`hauksbee run boards/watchy.kicad_pcb --report`.
 
 To run a real board here with no extra setup at all, use
 `hauksbee run boards/watchy.kicad_pcb --report` above, or
@@ -311,9 +295,9 @@ CI-safe (colours auto-disable when not on a TTY or when `NO_COLOR` is set).
 
 ## Releases and the GitHub Action
 
-- [`.github/workflows/release.yml`](../../.github/workflows/release.yml) builds the
-  binaries on macOS and Linux on a `vX.Y.Z` tag. It attaches the bundles to
-  the GitHub Release.
+- [`.github/workflows/release.yml`](../../.github/workflows/release.yml) builds
+  release bundles on version tags, including prereleases, and attaches them to
+  the GitHub Release. The workflow also publishes a Windows x86_64 bundle.
 - The composite [GitHub Action](../../integrations/github-action) **prefers a
   prebuilt release binary** and falls back to building from source. Users do
   not have to compile.

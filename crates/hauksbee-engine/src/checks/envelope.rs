@@ -1,4 +1,13 @@
 //! Sourced operating-envelope checks.
+//!
+//! The checker derives conservative DC rail intervals from declared supplies,
+//! modelled converter outputs, and assembly state, then compares connected pin
+//! roles with model-authored operating limits. Unknown rail authority remains
+//! unknown; it is never replaced by a nominal voltage merely to produce a
+//! verdict. Findings retain the limit, inferred range, model source, and any
+//! uncertainty that raised their severity.
+//!
+//! Design rationale: `docs/how-and-why/hauksbee-engine/checks.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -114,7 +123,8 @@ fn looks_like_battery_connector(comp: &Component) -> bool {
     let text = format!("{} {} {}", comp.value, comp.lib_id, comp.footprint).to_ascii_lowercase();
     // Match only actual battery connector/holder parts, not chargers that mention "battery".
     // The discriminant is "holder" or specific connector keywords.
-    text.contains("batt_holder") || text.contains("cell_holder")
+    text.contains("batt_holder")
+        || text.contains("cell_holder")
         || (text.contains("battery") && (text.contains("holder") || text.contains("clip")))
 }
 
@@ -148,10 +158,12 @@ fn battery_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, O
         let Some(model) = resolve(lib, part).model else {
             continue;
         };
-        let Some(battery_role) = ["bat", "vbat", "battery"]
-            .into_iter()
-            .find(|role| model.pins.values().any(|known| known.eq_ignore_ascii_case(role)))
-        else {
+        let Some(battery_role) = ["bat", "vbat", "battery"].into_iter().find(|role| {
+            model
+                .pins
+                .values()
+                .any(|known| known.eq_ignore_ascii_case(role))
+        }) else {
             continue;
         };
         let Some(net_id) = role_net_id(comp, &model, battery_role) else {
@@ -289,7 +301,9 @@ pub fn envelope_lint_with_drives(
                     let Some(net_id) = role_net_id(comp, &model, pin) else {
                         continue;
                     };
-                    let Some(net) = board.net(net_id) else { continue };
+                    let Some(net) = board.net(net_id) else {
+                        continue;
+                    };
                     let range = match resolver.range(net_id) {
                         RailKnowledge::Known(range) => range,
                         knowledge => {
@@ -299,10 +313,7 @@ pub fn envelope_lint_with_drives(
                                     severity: Severity::Low,
                                     message: unknown_abstention(
                                         &net.name,
-                                        matches!(
-                                            knowledge,
-                                            RailKnowledge::BatteryWithoutChemistry
-                                        ),
+                                        matches!(knowledge, RailKnowledge::BatteryWithoutChemistry),
                                     ),
                                     refs: vec![comp.reference.clone()],
                                     nets: vec![net.name.clone()],
@@ -356,7 +367,9 @@ pub fn envelope_lint_with_drives(
                         continue;
                     };
                     let mut known = Vec::new();
-                    for (net_id, net_name) in [(lower_id, &lower_net.name), (upper_id, &upper_net.name)] {
+                    for (net_id, net_name) in
+                        [(lower_id, &lower_net.name), (upper_id, &upper_net.name)]
+                    {
                         match resolver.range(net_id) {
                             RailKnowledge::Known(range) => known.push(range),
                             knowledge => {
@@ -366,7 +379,10 @@ pub fn envelope_lint_with_drives(
                                         severity: Severity::Low,
                                         message: unknown_abstention(
                                             net_name,
-                                            matches!(knowledge, RailKnowledge::BatteryWithoutChemistry),
+                                            matches!(
+                                                knowledge,
+                                                RailKnowledge::BatteryWithoutChemistry
+                                            ),
                                         ),
                                         refs: vec![comp.reference.clone()],
                                         nets: vec![net_name.clone()],
@@ -445,10 +461,8 @@ mod tests {
     }
 
     fn library(tag: &str, source: &str) -> ModelLibrary {
-        let dir = std::env::temp_dir().join(format!(
-            "hauksbee_envelope_{tag}_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("hauksbee_envelope_{tag}_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("models.toml"), source).unwrap();
         let mut lib = ModelLibrary::empty();
@@ -488,9 +502,7 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
             ),
             &library("range", SUPPLY_CARD),
         );
-        let findings: Vec<_> = report
-            .of_check(LintCheck::OperatingEnvelope)
-            .collect();
+        let findings: Vec<_> = report.of_check(LintCheck::OperatingEnvelope).collect();
         assert_eq!(findings.len(), 1);
         assert!(findings[0].message.contains("3.135"));
         assert!(findings[0].message.contains("3.465"));
@@ -522,9 +534,7 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
             ],
         );
         let report = envelope_lint(&b, &library("unknown", SUPPLY_CARD));
-        let findings: Vec<_> = report
-            .of_check(LintCheck::OperatingEnvelope)
-            .collect();
+        let findings: Vec<_> = report.of_check(LintCheck::OperatingEnvelope).collect();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Low);
         assert!(findings[0].message.contains(
@@ -591,10 +601,7 @@ basis = "Recommended Operating Conditions, VCCA <= VCCB note"
                 ],
             )],
         );
-        let drives = BTreeMap::from([
-            ("V_SYS".to_string(), 3.3),
-            ("VSW".to_string(), 3.0),
-        ]);
+        let drives = BTreeMap::from([("V_SYS".to_string(), 3.3), ("VSW".to_string(), 3.0)]);
         let report = envelope_lint_with_drives(&b, &ModelLibrary::builtin(), &drives);
         let findings: Vec<_> = report
             .of_check(LintCheck::OperatingEnvelope)
@@ -670,11 +677,7 @@ vout_setpoint_high = 4.23
             &[(1, "GND"), (2, "CELL")],
             vec![
                 part("D1", "RANGE_PART", vec![pin("1", 2), pin("2", 1)]),
-                part(
-                    "J1",
-                    "Battery holder",
-                    vec![pin("1", 2), pin("2", 1)],
-                ),
+                part("J1", "Battery holder", vec![pin("1", 2), pin("2", 1)]),
             ],
         );
         let report = envelope_lint(&b, &library("battery_unknown", SUPPLY_CARD));
@@ -683,7 +686,9 @@ vout_setpoint_high = 4.23
             .next()
             .expect("battery topology without chemistry must abstain");
         assert_eq!(finding.severity, Severity::Low);
-        assert!(finding.message.contains("no charger card declares its chemistry"));
+        assert!(finding
+            .message
+            .contains("no charger card declares its chemistry"));
         assert!(finding.message.contains("battery_chemistry"));
     }
 }

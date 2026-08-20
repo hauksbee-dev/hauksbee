@@ -428,6 +428,7 @@ fn list_capabilities_reports_backends_probed_on_this_machine() {
             "doctor-style status token: {b}"
         );
     }
+    #[cfg(feature = "avr")]
     let avr = backends
         .iter()
         .find(|backend| backend["name"] == "avr")
@@ -440,6 +441,15 @@ fn list_capabilities_reports_backends_probed_on_this_machine() {
             |commit| format!("simavr linked into this binary; source commit {commit}"),
         ),
         "MCP capability provenance must match doctor --backends"
+    );
+    #[cfg(not(feature = "avr"))]
+    assert_eq!(
+        backends
+            .iter()
+            .find(|backend| backend["name"] == "avr")
+            .expect("avr backend row")["status"],
+        "disabled",
+        "the permissive Windows shape must name AVR as compiled out"
     );
     assert!(v["assertions"]
         .as_array()

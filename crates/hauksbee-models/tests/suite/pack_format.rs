@@ -49,6 +49,13 @@ fn valid_pack_loads() {
 }
 
 #[test]
+fn prerelease_builds_use_their_numeric_compatibility_line() {
+    let manifest = PackManifest::from_toml(GOOD_MANIFEST, "0.1.0-beta.1")
+        .expect("a 0.1.0 prerelease must load a pack with a 0.1.0 floor");
+    assert_eq!(manifest.min_hauksbee_version, "0.1.0");
+}
+
+#[test]
 fn missing_dir_is_named() {
     let e = Pack::load(Path::new("/nonexistent/definitely-not-a-pack")).unwrap_err();
     assert!(matches!(e, PackError::NotADirectory(_)), "got {e:?}");

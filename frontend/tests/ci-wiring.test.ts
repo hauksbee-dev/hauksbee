@@ -46,7 +46,7 @@ describe('frontend release gates', () => {
 
   test('the generated workflow can publish its default Checks report', async () => {
     Object.assign(globalThis, {
-      __APP_VERSION__: '0.1.0',
+      __APP_VERSION__: '0.1.0-beta.1',
       __RELEASE_COMMIT__: '0123456789abcdef0123456789abcdef01234567',
     })
     const { specStemFor, workflowYaml } = await import('../src/lib/ci-workflow')
@@ -61,8 +61,8 @@ describe('frontend release gates', () => {
     )
     expect(generated).not.toContain('secrets.')
     expect(generated).toContain('hauksbee-ref: 0123456789abcdef0123456789abcdef01234567')
-    expect(generated).toContain('hauksbee-version: v0.1.0')
-    expect(generated).not.toContain('ref: v0.1.0')
+    expect(generated).toContain('hauksbee-version: v0.1.0-beta.1')
+    expect(generated).not.toContain('ref: v0.1.0-beta.1')
     for (const inputPath of ['**/*.xml', '**/*.zip', '**/*.tgz', '**/*.tar.gz', '**/*.tar']) {
       expect(generated).toContain(`"${inputPath}"`)
     }

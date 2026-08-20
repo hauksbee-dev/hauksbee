@@ -5,9 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        A board file that reproduces the problem is worth more than any
-        description. If you cannot share the board, `hauksbee to-code <board>`
-        produces an editable text form that is often small enough to paste.
+        Attach only material you are allowed to publish. A minimal board or
+        redacted export is useful; `hauksbee to-code <board>` can produce a
+        smaller editable reproduction. Do not post confidential design data.
   - type: textarea
     id: what
     attributes:
@@ -40,4 +40,4 @@ body:
     id: board
     attributes:
       label: Board file
-      description: Attach it, or paste the `to-code` form. Say so if you cannot share it.
+      description: Optional. Attach a shareable minimal input or redacted `to-code` form; never attach confidential design data.

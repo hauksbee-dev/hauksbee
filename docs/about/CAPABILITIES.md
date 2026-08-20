@@ -21,7 +21,7 @@
 | Full static suite (`--check`, alias `--all`) | Bind report + DRC + lint + SI in one pass | Convenience over the rows above | No |
 | CI artifacts (`--junit`, `--sarif`) | The static suite as JUnit XML or SARIF 2.1.0, so a pipeline renders findings without a spec | Commodity formats, zero-config path | No |
 | AC analysis (`--ac`) | Small-signal Bode, gain crossover, phase margin | Differentiated | No |
-| Firmware co-sim (`--firmware --headless`) | Firmware-driven GPIO/peripheral faults, actual rail voltages under real firmware load | **The differentiator** | AVR: no. STM32/nRF52/RISC-V: Renode. ESP32 family: Espressif QEMU |
+| Firmware co-sim (`--firmware --headless`) | Backend-dependent firmware-driven GPIO, peripheral, and simulated-rail checks | **The differentiator** | AVR: no. Supported STM32/nRF52840/RISC-V: Renode. Supported ESP32 variants: Espressif QEMU |
 | Behavioral goal assertions (`hauksbee-ci run`) | Whether the firmware makes the hardware do its job: rails, UART output, blink rate, boot timing, temperature, loop stability. The two time-based kinds are clock-verified on every Renode part and AVR; the ESP32 family is wall-paced and says so at runtime (see below) | **The differentiator** | Same as co-sim above |
 | Board-as-Code (`to-code` / `from-code` / `check-code`) | Edit-simulate loop: catch miswire, stress faults, and thermal issues in a pre-commit hook | Differentiated | Optional (co-sim in `check-code` uses whichever backend the board's MCU needs) |
 | MCP server (`hauksbee-mcp`) | The same engine exposed to coding agents as a stdio MCP server | Differentiated | Same as the analysis it runs |
@@ -169,13 +169,12 @@ never as zero or guessed percentage accuracy.
 
 ---
 
-## Layer 3: Firmware co-simulation, the differentiator
+## Layer 3: Firmware co-simulation
 
-No other tool does this from the layout. hauksbee boots real firmware on an
-emulated MCU. Its GPIO and peripheral edges drive currents and voltages
-through the analog circuit solver in lockstep. Every static check becomes a
-dynamic check. hauksbee measures rails under actual firmware-driven load. GPIO
-transitions fire in the correct order.
+Hauksbee boots compiled firmware on a supported emulated MCU. Its GPIO and
+peripheral edges drive currents and voltages through the analogue circuit
+solver in lockstep. This enables dynamic checks in addition to the static
+checks; it does not turn emulator observations into measured hardware.
 
 Boot timing shows in simulated time on the backends whose clock rate is
 measured against the part, which is every Renode part and AVR: on
@@ -259,19 +258,20 @@ For a deadline-gated, *named* pass/fail check on a specific net, use the
 
 ### The `Mcu` trait and three backends
 
-All three backends expose the identical lockstep surface: `run_micros`,
-GPIO/ADC/UART exchange via `PinId { port, bit }` and byte streams. The engine's
-scheduler couples to any of them without change. The trait lives in
+The `Mcu` trait defines a common lockstep surface, but implemented capabilities
+and fidelity are backend- and part-specific. Missing or dropped paths are
+reported rather than inferred. The trait lives in
 `crates/hauksbee-mcu/src/traits.rs`. The backends live in
 `crates/hauksbee-mcu/src/`.
 
-Proof levels in the current release, by named integration tests
+Proof levels in this source tree, by named integration tests
 (`crates/hauksbee-engine/tests/stm32_renode_cosim.rs`, `esp32_qemu_cosim.rs`,
 `renode_riscv_arm_cosim.rs`): AVR, STM32, ESP32, and ESP32-C3 are proven
 end-to-end (firmware drives a net through the solved circuit); nRF52840 and
 FE310 are proven to UART boot; ESP32-S3 is wiring-proven (machine boots and
-locksteps, app proof pending a flash image). The external simulators install
-via `scripts/install-sims.sh` and are found automatically at runtime.
+locksteps, app proof pending a flash image). On macOS/Linux the external
+simulators install via `scripts/install-sims.sh`; Windows x64 uses
+`scripts\install-sims-windows.ps1`. They are found automatically at runtime.
 
 #### AVR, `AvrMcu` (libsimavr, linked in-process)
 
@@ -429,12 +429,16 @@ no-op.
 
 ### Installing the external simulators
 
-AVR works without any install. For everything else:
+The default Unix release bundle includes AVR support. Source builds install
+libsimavr with `scripts/install-sims.sh --avr`; the Windows x64 permissive shape
+does not include AVR. Install the external backends with:
 
 ```
 scripts/install-sims.sh          # install Renode + Espressif QEMU
 scripts/install-sims.sh --check  # verify hauksbee will find them
 ```
+
+On Windows x64 PowerShell use `scripts\install-sims-windows.ps1` (or `-Check`).
 
 Full discovery order, env-var overrides (`HAUKSBEE_RENODE`,
 `HAUKSBEE_QEMU_XTENSA`, `HAUKSBEE_QEMU_RISCV32`, `HAUKSBEE_QEMU_DIR`), macOS
@@ -491,7 +495,7 @@ netlist), `.d356`, Board-as-Code `.board`, or gerbers.
 ### Assertion kinds
 
 All fourteen kinds, validated by the kind list in
-`crates/hauksbee-ci/src/spec.rs` (near line 1590) and implemented in
+`crates/hauksbee-ci/src/spec.rs` and implemented in
 `crates/hauksbee-ci/src/assertions.rs`:
 
 | Kind | What it checks |
@@ -508,7 +512,7 @@ All fourteen kinds, validated by the kind list in
 | `boot-coverage` | A control net is driven to at least `min` volts within `deadline_ms` of reset, with no fault during the boot window. Answers whether firmware drives a Hi-Z control input in time |
 | `phase_margin` | Loop phase margin from the AC sweep is within `[min, max]` degrees |
 | `ac_gain` | A net's AC gain is within `[min, max]` dB at an optional `freq_hz` |
-| `hwtrace` | Checks the sim's waveforms feature-by-feature against a captured hardware trace (scope CSV or logic-analyzer VCD) |
+| `hwtrace` | Checks simulated waveforms against a scope CSV or logic-analyzer VCD. Provenance is explicit (`real` or `synthetic`); bundled fixtures are synthetic. |
 | `model_coverage` | Pins the fraction of active ICs that must bind to a device model |
 
 Additional spec features: `[[supply]]` (ideal / bench / wall / USB / battery
@@ -589,7 +593,7 @@ The rest of the CLI surface, one line each:
 `hauksbee` and `hauksbee-ci`): a stdio MCP server exposing the same engine,
 so a coding agent can analyze boards, run specs, and read reports over
 JSON-RPC without shelling out to the CLI. Documented in
-[`agents/AGENTS.md`](../../agents/AGENTS.md).
+[`crates/hauksbee-mcp/README.md`](../../crates/hauksbee-mcp/README.md).
 
 ---
 

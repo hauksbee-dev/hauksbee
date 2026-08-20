@@ -16,27 +16,25 @@ stronger conclusion instead of guessing.
 
 ## Install and first run
 
-The quickest path needs no terminal at all: on macOS, download `Hauksbee.app`
-from the [latest release](https://github.com/hauksbee-dev/hauksbee/releases/latest),
-unzip, and double-click. It starts the engine on your machine and opens the
-web interface in your browser, with sample boards ready to run. The app is
-signed and notarised; nothing you drop on it leaves your machine.
+During beta, use only the exact prerelease link and checksum supplied with the
+invitation. A macOS app is offered only after its same-source signing and
+notarisation gates pass. The engine runs locally; optional datasheet drafting
+has the separate privacy boundary described in [BETA](../BETA.md#privacy).
 
-For the CLI, one line downloads and installs the released binaries
+After a stable release is published, the convenience installer downloads
 (`hauksbee`, `hauksbee-ci`, `hauksbee-mcp`), verifying checksums:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
 ```
 
-Windows uses the PowerShell twin
+Windows x64 uses the PowerShell twin
 (`irm .../scripts/get-hauksbee.ps1 | iex`), and CI can pull
-`ghcr.io/hauksbee-dev/hauksbee:slim` or `:full` instead; see
+the public GHCR package after it is published; see
 [DOCKER](ci/DOCKER.md).
 
-From a checkout, the first command checks or installs simulator
-prerequisites; the second builds the web front door and the three binaries,
-then installs them:
+From a macOS/Linux checkout, check simulator prerequisites, then build and
+install the web front door and binaries:
 
 ```bash
 scripts/install-sims.sh --check
@@ -44,6 +42,22 @@ scripts/install.sh
 hauksbee doctor --json
 hauksbee run --example blinky --check --plain
 hauksbee serve
+```
+
+On Windows x64 PowerShell, the beta shape is permissive-only (Renode and QEMU,
+without AVR/libsimavr):
+
+```powershell
+.\scripts\install-sims-windows.ps1 -Check
+Push-Location frontend
+bun install --frozen-lockfile
+bun run build
+Pop-Location
+cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp `
+  --no-default-features --features renode,qemu,embed-web
+.\target\release\hauksbee.exe doctor --json
+.\target\release\hauksbee.exe run --example blinky --check --plain
+.\target\release\hauksbee.exe serve
 ```
 
 In the browser, the `hauksbee serve` page has one-click samples: a real
@@ -66,7 +80,7 @@ covers the three files hauksbee needs at most, where each comes from (KiCad
 PlatformIO firmware), a recommended repo layout, and the one local command
 that runs it. CI wrappers are optional, and you add them later.
 
-## Your next four reads
+## Your next five reads
 
 1. [`docs/about/CAPABILITIES.md`](about/CAPABILITIES.md): the authoritative
    scope and per-backend evidence matrix.
@@ -74,9 +88,8 @@ that runs it. CI wrappers are optional, and you add them later.
    input becomes an extracted circuit, bound model set, solve, and co-simulation.
 3. [`docs/models/MODELS.md`](models/MODELS.md): inspect unresolved parts,
    scaffold or extract a model, validate it, and prove that it binds.
-4. [`docs/models/BOARD_MODELING_WORKFLOW.md`](models/BOARD_MODELING_WORKFLOW.md):
-   click-to-model browser workflow, approval-gated pack preparation, full
-   behavior layers, reference-board proof, and multi-board regeneration.
+4. [`docs/analysis/RUN_MANIFESTS.md`](analysis/RUN_MANIFESTS.md): bind a run to
+   its exact inputs, configuration, tool revision, and simulator selection.
 5. [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md): runnable examples and, when useful,
    the CI/spec surface over the same engine.
 

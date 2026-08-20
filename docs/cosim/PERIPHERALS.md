@@ -85,9 +85,7 @@ and the datasheet software-data-protection enable/program and disable sequences.
 On simavr, direct GPIO and 74HC595-supplied address bits are
 resolved on each firmware edge, and a read drives the MCU's input pins before
 its next instruction. This is the path a real parallel EEPROM programmer uses;
-no synthetic I2C/SPI adapter is inserted. See
-[`logic_spec.md`](../how-and-why/hauksbee-models/logic_spec.md) for the model
-contract and its timing boundary.
+no synthetic I2C/SPI adapter is inserted.
 
 ### I2C
 
@@ -108,8 +106,9 @@ MCU's `on_i2c` callback. It dispatches each bus event to the slave whose
 
 `SpiBus` owns one `SpiSlave`, so one slave per bus is active. Chip-select,
 when it is known, frames that slave's transactions rather than selecting among
-several (three framing tiers, see "SPI transaction framing" below). Two
-concrete devices:
+several. The report exposes three framing modes: `exact`, `backend`, and
+`heuristic`. It records exact-mode provenance (see "SPI transaction framing"
+below). Two concrete devices:
 
 - **25xx EEPROM** (`Spi25Eeprom`); WREN/WRDI/RDSR/READ/WRITE instruction
   set, 16-bit addressing, write-enable latch. Memory readable for
@@ -451,11 +450,11 @@ above over a `field`.) Each peripheral's `state()` in
   master is resolved exactly on the push backend (simavr) through the
   synchronous input responders above, and not at all on the poll backends
   (Renode, QEMU), where its edges alias at the chunk rate like any GPIO.
-- **SPI transaction framing has three tiers**, reported per slave so a
-  verdict never hides which one it got. Exact framing is reached by more than one
-  route; they all give the same tier because they all give the same electrical
-  fact, and the route is reported alongside it (`cs_provenance` in the `--json`
-  coverage) because they fail differently:
+- **SPI transaction framing has three reported modes**: `exact`, `backend`, and
+  `heuristic`, so a verdict never hides which one it got. Exact framing is
+  reached by more than one route; they all give the same mode because they all
+  give the same electrical fact, and the route is reported alongside it
+  (`cs_provenance` in `--json` coverage) because they fail differently:
   - **Exact, from the spec** (`cs_provenance: "spec"`): the peripheral's
     `cs_net` resolved to the MCU GPIO pin that drives it, so
     `select`/`deselect` fire on the true active-low falling and rising edges,
