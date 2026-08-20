@@ -326,7 +326,12 @@ ZIP="$OUT_ABS/$NAME.zip"
 # between the two writes can never leave a fresh zip next to a stale checksum,
 # write the checksum in the same step that produced the zip, and verify the
 # pair before claiming success.
-rm -f "$ZIP" "$ZIP.sha256"
+for stale_artifact in "$ZIP" "$ZIP.sha256"; do
+  if [ -e "$stale_artifact" ]; then
+    have trash || die "trash is required to replace an existing app artifact safely"
+    trash "$stale_artifact"
+  fi
+done
 # ditto preserves the bundle structure and extended attributes the way
 # Archive Utility expects; a plain `zip -r` can produce a bundle Finder
 # quarantines more aggressively.
