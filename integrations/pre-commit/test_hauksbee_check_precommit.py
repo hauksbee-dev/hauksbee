@@ -41,7 +41,12 @@ def _quiet_main(argv, runner=None):
         if runner is None:
             code = hook.main(argv)
         else:
-            code = hook.main(argv, runner=runner)
+            saved = hook.find_hauksbee
+            hook.find_hauksbee = lambda explicit=None: "hauksbee"
+            try:
+                code = hook.main(argv, runner=runner)
+            finally:
+                hook.find_hauksbee = saved
     return code, out.getvalue(), err.getvalue()
 
 

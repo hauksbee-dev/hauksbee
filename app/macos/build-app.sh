@@ -119,7 +119,10 @@ if [ "$DO_BUILD" -eq 1 ]; then
   # embed-web enabling and the feature flags. Its tarball goes to a temp dir
   # we throw away; we only want the target/release binaries it leaves behind.
   BUNDLE_OUT="$(mktemp -d "${TMPDIR:-/tmp}/hauksbee-app-build.XXXXXX")"
-  trap 'rm -rf "$BUNDLE_OUT"' EXIT
+  cleanup_app_build() {
+    if have trash; then trash "$BUNDLE_OUT" >/dev/null 2>&1 || true; fi
+  }
+  trap cleanup_app_build EXIT
   log "Building binaries via scripts/bundle.sh"
   "$HAUKSBEE_ROOT/scripts/bundle.sh" --version "$VERSION" --out "$BUNDLE_OUT" \
     ${BUNDLE_FLAGS[@]+"${BUNDLE_FLAGS[@]}"}
@@ -139,7 +142,12 @@ else
 fi
 OUT_ABS="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/hauksbee-app.XXXXXX")"
-trap 'rm -rf "$STAGE" ${BUNDLE_OUT:+"$BUNDLE_OUT"}' EXIT
+cleanup_app_stage() {
+  if have trash; then
+    trash "$STAGE" ${BUNDLE_OUT:+"$BUNDLE_OUT"} >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_app_stage EXIT
 APP="$STAGE/Hauksbee.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin"
 
