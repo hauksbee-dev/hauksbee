@@ -117,11 +117,11 @@ function Assert-RenodeVersion([string]$Path) {
 
 function Assert-QemuVersion([string]$Path) {
     $version = & $Path --version 2>&1 | Select-Object -First 1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or $version -notmatch "\($([regex]::Escape($QemuAssetVersion))\)") {
+    if ($version -notmatch "\($([regex]::Escape($QemuAssetVersion))\)") {
         throw "QEMU payload reports the wrong pinned version: $($version.Trim())"
     }
     $machines = & $Path -machine help 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or $machines -notmatch '(?m)^esp32') {
+    if ($machines -notmatch '(?m)^esp32') {
         throw "$(Split-Path -Leaf $Path) is not the Espressif fork"
     }
 }

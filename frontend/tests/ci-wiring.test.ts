@@ -45,10 +45,6 @@ describe('frontend release gates', () => {
   })
 
   test('the generated workflow can publish its default Checks report', async () => {
-    Object.assign(globalThis, {
-      __APP_VERSION__: '0.1.0-beta.1',
-      __RELEASE_COMMIT__: '0123456789abcdef0123456789abcdef01234567',
-    })
     const { specStemFor, workflowYaml } = await import('../src/lib/ci-workflow')
     const generated = workflowYaml('power-up')
     expect(generated).toContain('permissions:\n  contents: read\n  checks: write')
