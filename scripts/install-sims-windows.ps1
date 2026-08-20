@@ -122,6 +122,9 @@ function Assert-QemuVersion([string]$Path) {
 
 function New-VerifiedSnapshot($Asset, [string]$Path) {
     $snapshot = Join-Path ([IO.Path]::GetTempPath()) "$($Asset.Name).snapshot-$([guid]::NewGuid().ToString('N'))"
+    if ($Asset.Name.EndsWith(".zip", [StringComparison]::OrdinalIgnoreCase)) {
+        $snapshot = "$snapshot.zip"
+    }
     $complete = $false
     try {
         Copy-Item -LiteralPath $Path -Destination $snapshot
