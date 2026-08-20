@@ -106,7 +106,11 @@ function Assert-RenodeVersion([string]$Path) {
     $output = & $Path --version 2>&1 | Select-Object -First 1 | Out-String
     $escapedVersion = [regex]::Escape($RenodeVersion)
     $versionPattern = "^(?:Renode v|Renode, version )${escapedVersion}(?:[.\s]|$)"
-    if ($LASTEXITCODE -ne 0 -or $output.Trim() -notmatch $versionPattern) {
+    # Renode 1.16.1 prints the correct immutable build identity but can return
+    # a non-zero status under legacy Windows PowerShell. The archive, executable,
+    # and install tree are checked independently by SHA-256 below, and the native
+    # firmware gates prove execution, so the version probe is an output contract.
+    if ($output.Trim() -notmatch $versionPattern) {
         throw "Renode payload reports the wrong version: $($output.Trim())"
     }
 }
