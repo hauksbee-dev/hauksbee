@@ -1,8 +1,20 @@
 {
   "repository": "hauksbee-dev/hauksbee",
   "excluded_prefixes": [
+    {"path": ".wiley/", "classification": "local-orchestration-runtime-not-release-source"},
+    {"path": "docs/dev-plans/", "classification": "development-plans-not-distribution-surfaces"},
+    {"path": "docs/how-and-why/", "classification": "internal-design-notes-not-distribution-surfaces"},
     {"path": "docs/hunts/", "classification": "historical-hunt-records-not-used-for-release-or-distribution"},
-    {"path": "qc/defect_regressions/", "classification": "upstream-defect-provenance-records-not-distribution-surfaces"}
+    {"path": "docs/learn/", "classification": "development-course-not-distribution-surfaces"},
+    {"path": "docs/record/", "classification": "development-records-not-distribution-surfaces"},
+    {"path": "docs/teach/", "classification": "internal-teaching-apparatus-not-distribution-surfaces"},
+    {"path": "packaging/private-beta/", "classification": "private-beta-packaging-not-stable-distribution"},
+    {"path": "qc/claims/results/", "classification": "generated-claim-receipts-not-distribution-surfaces"},
+    {"path": "qc/defect_regressions/", "classification": "upstream-defect-provenance-records-not-distribution-surfaces"},
+    {"path": "qc/evidence/", "classification": "internal-evidence-receipts-not-distribution-surfaces"},
+    {"path": "qc/model_workflow/", "classification": "internal-model-workflow-fixtures-not-distribution-surfaces"},
+    {"path": "qc/release-results/", "classification": "internal-release-qc-transcripts-not-distribution-surfaces"},
+    {"path": "qc/showcase/", "classification": "internal-showcase-claim-adapters-not-distribution-surfaces"}
   ],
   "surfaces": [
     {"path": ".github/ISSUE_TEMPLATE/config.yml", "classification": "repository-policy", "occurrences": 1},
@@ -13,7 +25,7 @@
     {"path": "COMPLIANCE.md", "classification": "shipped-documentation", "occurrences": 2},
     {"path": "CONTRIBUTING.md", "classification": "shipped-documentation", "occurrences": 1},
     {"path": "Cargo.toml", "classification": "package-metadata", "occurrences": 2},
-    {"path": "README.md", "classification": "shipped-documentation", "occurrences": 4},
+    {"path": "README.md", "classification": "shipped-documentation", "occurrences": 3},
     {"path": "SECURITY.md", "classification": "shipped-documentation", "occurrences": 1},
     {"path": "app/macos/build-app.sh", "classification": "release-artifact-metadata", "occurrences": 2, "required_fragments": ["https://github.com/hauksbee-dev/hauksbee   commit"]},
     {"path": "crates/hauksbee-ci/src/integrate.rs", "classification": "generated-integration", "occurrences": 4, "required_fragments": ["repo: https://github.com/hauksbee-dev/hauksbee"]},
@@ -21,7 +33,7 @@
     {"path": "crates/hauksbee-mcp/README.md", "classification": "shipped-documentation", "occurrences": 1},
     {"path": "docker/Dockerfile.full", "classification": "release-artifact-metadata", "occurrences": 1, "required_fragments": ["org.opencontainers.image.source=\"https://github.com/hauksbee-dev/hauksbee\""]},
     {"path": "docker/Dockerfile.slim", "classification": "release-artifact-metadata", "occurrences": 1, "required_fragments": ["org.opencontainers.image.source=\"https://github.com/hauksbee-dev/hauksbee\""]},
-    {"path": "docs/START_HERE.md", "classification": "shipped-documentation", "occurrences": 3},
+    {"path": "docs/START_HERE.md", "classification": "shipped-documentation", "occurrences": 1},
     {"path": "docs/ci/DOCKER.md", "classification": "shipped-documentation", "occurrences": 12},
     {"path": "docs/ci/RECIPES.md", "classification": "shipped-documentation", "occurrences": 5},
     {"path": "docs/dev-plans/launch-checklist.md", "classification": "release-plan", "occurrences": 1, "scopes": ["development"]},

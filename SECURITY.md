@@ -7,11 +7,11 @@ through GitHub's
 [private vulnerability reporting](https://github.com/hauksbee-dev/hauksbee/security/advisories/new),
 or by email to `security@hauksbee.dev`.
 
-Include what you did, what happened, and the input that triggered it. A board
-file, firmware image, or spec that reproduces the problem is the most useful
-thing you can send.
+Include what you did, what happened, and a minimal redacted reproduction when
+one can be shared safely. Do not send proprietary board files, firmware, or
+specifications until a confidential channel and handling terms are agreed.
 
-You should get an acknowledgement within a few days. This is a small project, so
+We aim to acknowledge reports within a few days. This is a small project, so
 please be patient with fixes.
 
 ## What is in scope

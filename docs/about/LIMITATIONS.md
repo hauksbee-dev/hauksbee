@@ -1,16 +1,8 @@
-# Limitations: triage and closure
+# Limitations
 
-hauksbee's other docs each record the honest limitations of their own surface.
-This doc is the triage: what is open today and why, and what was chased to
-ground truth and fixed. The bar for "fixed" is the project's: every change
-covered by a test, no false positive introduced into any lint/check, and any
-flipped result proven two-sided, that is, shown both to fire on the fault and
-to stay silent on a clean counterpart, with file-level evidence.
-
-The governing rule throughout: a surprising pass or fail is presumed a defect
-in *our* tool until chased to ground truth. Several of the closed items below
-began as recorded "honest limitations" and turned out, once chased, to be
-hauksbee defects.
+This document states the structural and current implementation limits that
+bound a Hauksbee result. Surface-specific limits also appear beside the
+relevant commands and reports.
 
 ## Structural ceilings
 
@@ -149,42 +141,18 @@ re-run. The two-sided gate is
 kills the primary march is rescued and recorded, and a structurally singular
 board still refuses loudly.
 
-### A backend's clock rate is verified on five of six, and QEMU is approximate
+### Six backend clock rates are verified; QEMU timing is approximate
 
 Time-based co-sim results rest on the emulator advancing at the part's clock
 rate. `simavr:atmega328p`, `renode:rp2040`, `renode:stm32f103`,
-`renode:stm32f4_discovery` and `renode:nrf52840` are each measured at the part's
-rate to within the 0.2% quantization of the measurement, and
-`crates/hauksbee-mcu/tests/clock_truth.rs` re-measures the Renode STM32, nRF and
-FE310 parts on every run. Four platforms previously ran 4.5x to 9x fast, because
-the stock platform file declared a 72 MHz SysTick and a 100 MIPS core whatever
-part the descriptor claimed, and `frequency_hz` cancelled out of the engine's
-arithmetic so nothing disagreed. Each descriptor now declares the part's
-reset-default core clock inline, and the loader refuses a descriptor whose
-declarations disagree with `frequency_hz` or which declares no core clock at all,
-bundled platforms included, so the defect cannot be re-added as data.
+`renode:stm32f4_discovery`, `renode:nrf52840`, and `renode:sifive_fe310` have
+clock-truth regressions in `crates/hauksbee-mcu/tests/clock_truth.rs`.
+Descriptors must declare a core clock consistent with `frequency_hz`.
 
-The two former gaps here are closed and gated. `renode:sifive_fe310` now
-declares the real FE310's 32768 Hz `mtime` (the stock platform had it 1892x
-wrong at 62 MHz), held by a two-sided measurement in the same clock-truth
-suite: an mtime-timed oracle firmware measures 1.00x on the corrected platform
-and the identical measurement fails loudly against the old rate. `qemu:esp32`,
-`-s3` and `-c3` credit each chunk from the measured QMP RESUME/STOP window
-instead of the slept one, so the control-channel slack that used to make them
-read 1.35x-1.6x biased is now priced in
-(`crates/hauksbee-mcu/tests/qemu_clock_truth.rs` measures both crediting
-schemes from one run). What remains on the ESP32 family is wall-clock pacing
-itself: virtual time tracks the host clock only approximately and degrades
-under load, which every affected run states through the same
-`timing_limitation` coverage channel the watchdog gaps use. The STM32F103's
-TIMx blocks likewise stay at the post-PLL 72 MHz on purpose (a stock HAL
-project cannot boot otherwise) and every F103 run says so.
-
-One trap worth keeping, because it hides the defect in the flattering direction:
-the GPIO poll aliases any half-period near the chunk width. At 5 ms chunks the
-9x-fast STM32F103 firmware measured a perfect 100 edges. A clock measurement must
-use a chunk finer than the half-period a WRONG sim would produce, not merely
-finer than the right one.
+ESP32 QEMU credits time from measured QMP RESUME/STOP windows, but virtual time
+remains approximate and degrades under host load. Affected runs carry a
+`timing_limitation`. STM32F103 TIMx blocks stay at the post-PLL 72 MHz required
+by stock HAL projects, and those runs disclose that constraint.
 
 ### Parallel EEPROM programming models digital busy status, not charge-pump physics
 
@@ -199,12 +167,10 @@ justified by an explicitly resolved faster part, not inferred from the family.
 
 ### An unserviced watchdog does not reset the MCU on most Renode parts or on QEMU
 
-`simavr` is the exception and now behaves: a starved `wdt_enable(WDTO_15MS)`
-reboots the core at the right virtual time, repeatedly, and the reboots are
-reported rather than treated as a silent restart, because an assertion that
-passed across a reboot was not measuring the run it claimed. It previously
-livelocked the co-sim, because the reset rewound a cycle counter the chunk loop
-was waiting on.
+`simavr` models a starved `wdt_enable(WDTO_15MS)` by rebooting the core at the
+right virtual time, repeatedly. Reboots are reported rather than treated as a
+silent restart, because an assertion that passed across a reboot was not
+measuring the run it claimed.
 
 Elsewhere the watchdog is a coverage hole and is surfaced as one per part. On
 `renode:nrf52840` a watchdog arms and reads back as running with a correct
@@ -389,7 +355,7 @@ ships fabrication output beside the design and so can be scored. Across the six
 layer-instances with copper gerbers, the rule is right about four: it flags the
 three layers where the two nets really do share copper, and over-reports two top
 layers where the outlines overlap and nothing bridges them. The scoring table is in
-[`../evidence/KNOWN_FAULTS_VALIDATION.md`](../evidence/KNOWN_FAULTS_VALIDATION.md).
+[`../evidence/CORPUS.md`](../evidence/CORPUS.md).
 
 **The two over-reports, and why no threshold removes them.** Whether two
 overlapping pours end up in contact is a property of the fill, and the `.brd` does
@@ -432,9 +398,8 @@ names a package: a supply symbol is a schematic-only marker, not a part. Ordinar
 libraries mark a real component's power pins `sup`, so an any-`sup`-pin rule turned
 an SD socket and an XBEE module into blanket ground exemptions, 6 false
 declarations on `margay_logger` and 19 on emonTx V3.2 including `3.3V` to `GND`,
-each able to attach false context to a genuine rail-to-ground short. The historical twelve-pair
-exploratory sweep is not a retained release artifact and is not claimed as one.
-The always-run contract is the tracked declared/undeclared pair under
+each able to attach false context to a genuine rail-to-ground short. The
+always-run contract is the tracked declared/undeclared pair under
 `crates/hauksbee-extract/tests/fixtures/eagle_ties/`, plus focused parser tests for
 multi-pin, packaged, URN-collision and structural-scope false positives.
 
@@ -481,70 +446,6 @@ fab folder.
 
 ### Capacitor ESR/ESL parasitics stay opt-in by design
 
-The class inference was broadened (see "Recently closed"), but parasitics are
-deliberately **not** on by default. The opt-in policy exists precisely so the
-global solver behavior stays unchanged; flipping it on would alter every
-transient/operating-point result across the corpus. The right broadening was
-the inference quality, not the default-on switch. Intentionally not changed.
-
-## Recently closed
-
-Each of these was chased to ground truth, fixed with two-sided evidence, and is
-pinned by tests. One line each; the tests are the record.
-
-- **Gerber X2 attributes discarded wholesale**: the reader now parses
-  `%TA.AperFunction` / `%TO.P` / `%TO.N` / `%TO.C` / `%TD` and binds
-  pad→refdes→pin→net from the film (via flashes classify as vias, nets take
-  the film's names, geometry-vs-film disagreements are named in notes),
-  proven against the ZSWatch same-batch netlist oracle (405 pads, 100% name
-  and partition agreement) with the stripped-film path pinned unchanged, by
-  `tests/gerber_x2.rs` and the rs274x/connect unit tests.
-- **Exposure-off macro primitives hulled over as solid copper**: a macro's
-  punched-out void is now a real hole contour (paint-order aware; repainted
-  or boundary-crossing clears stay conservatively solid), pinned two-sided by
-  `macro_void_does_not_swallow_foreign_copper` and the macros unit tests.
-- **`.gbrjob` manifest unread while inner-layer order was guessed from
-  filename digits**: the manifest now classifies files and orders copper by
-  the rank of (side, number), trusting numbers as physical positions only
-  when contiguous (KiCad 9 writes internal IDs: L1/L5/L7/L4 on a four-layer
-  board), pinned by `tests/gerber_gbrjob.rs` and the restored watchy
-  closed-loop floor.
-- **Aperture hole diameters read as copper and grid-footprint windows
-  ignoring rotation**: a holed flash now carries its hole contour, and a
-  header's pad window follows the P&P rotation, pinned by
-  `aperture_hole_diameter_is_bare_board_not_copper` and
-  `a_header_window_follows_its_stored_rotation`.
-- **USB-C CC audit under-read on dual-receptacle boards**: the audit now reads
-  every distinct receptacle and credits an Rd returning to any recognized
-  ground (GNDA/AGND, GNDD/DGND, GNDPWR/PGND, VSS, numbered grounds), proven on
-  Lily58 Pro V2 (both halves independently terminated, clean) and pinned by
-  `usb_c_double_termination::lily58_dual_receptacle_both_halves_terminated`
-  and `checks::usb_c::tests::ground_names_recognise_the_gnd_family_only`.
-- **Schematic bus-alias references not expanded**: `{ALIAS}` references now
-  expand through the per-sheet alias map, including vector members and
-  cross-sheet references, pinned by the expander unit tests and the
-  `bus_alias_top.kicad_sch`/`bus_alias_child.kicad_sch` fixture pair.
-- **Capacitor ESR/ESL class inference too narrow**: metric size codes, a 0201
-  class, and explicit tantalum-vs-electrolytic markers are now recognized
-  (still opt-in, no default solver change), pinned by the
-  `footprint_inference_*` tests.
-- **Crystal/resonator mis-bound as a gigafarad capacitor**: a frequency-valued
-  or crystal-prefixed 2-pin part (`Y`/`CRYSTAL`/`XTAL`/`RESONATOR`) now binds
-  `Ignore` before the passive first-char fallback could read `16Mhz` as 16
-  megafarads and collapse the whole co-sim solve to ~0 V; a `600@100MHz`
-  ferrite bead is not caught, load caps stay, and the fix is pinned by the
-  classification and fallback-regression tests.
-- **MCP4728 not emulated as an I2C slave**: it now is, as a spec-driven
-  `RegisterMapSensor` (`testdata/sensor-specs/mcp4728.toml`) with three
-  instances auto-attached at 0x60/0x61/0x62 and VOUT drivers into the analog
-  solve. The pinning tests (`mcp4728_cosim.rs`,
-  `tarski_firmware_cosim.rs::host_programs_dacs_over_serial`) live in the
-  development repository only, because their board fixtures cannot be
-  redistributed (see [PRIVATE_SUITE.md](PRIVATE_SUITE.md)).
-- **Bit-banged SPI at sub-chunk timing collapsed in full co-sim**: the
-  scheduler now resolves ordered pin edges within a chunk, so firmware-driven
-  bit-banged buses work end-to-end, pinned by the shipped tests
-  `crates/hauksbee-engine/tests/bitbang_spi_cosim.rs` (sub-chunk SCLK edges
-  clock a register-exact WHO_AM_I + burst read, twice, proving CS re-framing)
-  and `soft_i2c_cosim.rs`, plus `cosim_spi_cs_frames_transactions.rs` for
-  chunk-boundary framing.
+Parasitics are deliberately **not** on by default. Enabling them changes
+transient and operating-point results, so a run must opt in explicitly even
+when the component class is inferred confidently.

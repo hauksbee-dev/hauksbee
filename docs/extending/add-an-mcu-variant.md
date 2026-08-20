@@ -109,22 +109,18 @@ have their own shape (`arch`, `icount_shift`, mailbox-style `banks`), see
   (`sysbus.`-qualified, exactly as Renode's monitor addresses them).
 - `frequency_hz`: the part's core clock, and NOT advisory. It is cross-checked
   against the platform's own declarations above and a mismatch is refused at
-  load, because four shipped platforms once ran 4.5x to 9x fast on the strength
-  of the two disagreeing in silence.
+  load.
 - `expected_e_machine` (`EM_ARM`, `EM_RISCV`, `EM_XTENSA`, `EM_AVR`). hauksbee
   checks firmware ELFs against this field, so an ESP32 binary refuses loudly on
   an ARM part. `mcu_label` is the report string.
 - `watchdog_limitation` (optional): one sentence saying how this part's watchdog
   fidelity falls short, rendered verbatim on the four batch report surfaces and in
-  `hauksbee models lint`, though not in the TUI. Leaving it out
-  claims that a starved watchdog reboots the core the way silicon does, which on
-  the shipped parts is true of exactly one of them, so leave it out only if you
-  measured it.
+  `hauksbee models lint`, though not in the TUI. Declare the limitation whenever
+  the backend does not model the watchdog behavior required by your scope.
 - `timing_limitation` (optional): the timing twin of the field above, one
   sentence rendered verbatim on the same surfaces. Leaving it out claims a
-  firmware delay costs the virtual time it costs on silicon; the shipped parts
-  earn that silence through the clock-truth gate, so a variant that diverges (a
-  timer block deliberately clocked off its reset default, say) must say so here.
+  firmware delay has the expected virtual-time behavior. Declare it when a clock
+  domain or peripheral differs from the behavior your scope requires.
 - `[[soc.ports]]`, one per GPIO port: `letter`, the platform `peripheral`
   name (**without** `sysbus.`, the backend prepends it when polling),
   `odr_offset` (the output-data register's byte offset), and `width` (the port's
@@ -163,22 +159,16 @@ have their own shape (`arch`, `icount_shift`, mailbox-style `banks`), see
   `full_scale_volts`, `max_count`, and exactly one of `monitor_command` or
   `memory_word`).
 
-> **Why this is data at all: the ODR footgun.** The STM32F1 GPIO output-data
-> register sits at offset `0x0C`. The F4 family moved it to `0x14`. Read the
-> wrong offset and you observe the wrong register, silently. That exact bug
-> class is why the per-part Rust constructors gave way to reviewed TOML. The
-> F103 file's header comment tells the story, compare it to
-> `stm32f4_discovery.soc.toml`. When you write your descriptor, triple-check
-> the ODR offset against the reference manual.
+> **Why this is data: the ODR footgun.** The STM32F1 GPIO output-data register
+> sits at offset `0x0C`; the F4 family uses `0x14`. Read the wrong offset and
+> you observe the wrong register silently. Keep the offset in reviewed TOML and
+> triple-check it against the reference manual for your part.
 
-**Trap: values are backend-facing strings, not pretty names.** The plan's
-original sketch wrote `sysbus.gpioPortA` and `platforms/...`. The shipped
-schema stores exactly what the backend consumes: `gpioPortA` (no `sysbus.`
-prefix, the backend adds it) but `@platforms/...` (with the `@`) and
-`sysbus.usart1` (with the prefix, because the monitor command uses it
-verbatim). Copy a shipped file and keep each field's existing shape rather
-than normalizing them to look consistent. They are inconsistent because the
-backend is.
+**Trap: values are backend-facing strings, not pretty names.** The schema stores
+exactly what the backend consumes: `gpioPortA` (no `sysbus.` prefix, the backend
+adds it), `@platforms/...` (with the `@`), and `sysbus.usart1` (with the prefix,
+because the monitor command uses it verbatim). Keep each field's documented
+shape; the backend treats these forms differently.
 
 ## Step 3, install the descriptor
 
@@ -260,52 +250,22 @@ error. `cargo test -p hauksbee-engine --lib soc_wiring` pins that the
 scheduler's backend instantiation actually consults the override dirs (the
 product path, not just the library function).
 
-The end-to-end proof is a real boot, and you can run it from a clone. Copy the
-shipped F103 descriptor into an override directory and point
-`HAUKSBEE_MCU_DIR` at it: the resolver then loads *your* file rather than the
-embedded one, which is the same path your new part will take. Renode must be
-installed; `hauksbee doctor` reports whether it was found.
+The end-to-end check boots firmware in the external Renode emulator. Copy the
+F103 descriptor into an override directory and point `HAUKSBEE_MCU_DIR` at it;
+the resolver then uses that file, which is the same path a new part takes.
+Renode must be installed; `hauksbee doctor` reports whether it was found. This
+checks the emulator/backend integration, not fabricated silicon.
 
 ```
 $ mkdir mcu && cp crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml mcu/
 $ HAUKSBEE_MCU_DIR=./mcu hauksbee run testdata/boards/stm32_bluepill_demo.kicad_pcb \
     --firmware testdata/firmware/stm32_blinky/blinky.elf --headless --seconds 1
-
-co-sim: 1.00s on an external emulator (slow: roughly wall-clock per simulated second; this is normal for Renode/QEMU). Progress:
-  ... 0.20 / 1.00s simulated
-  ... 0.40 / 1.00s simulated
-  ... 0.60 / 1.00s simulated
-  ... 0.80 / 1.00s simulated
-
-simulated 1.000s in 13.37s wall (0.075x realtime) over 5 nets
-
-most active nets:
-┌────────────────────────────┬──────────┬──────────┬──────────┐
-│ Net                        │ min (V)  │ max (V)  │ toggles  │
-├────────────────────────────┼──────────┼──────────┼──────────┤
-│ PC13_LED                   │    0.000 │    3.265 │        6 │
-│ LED_A                      │    1.905 │    1.905 │        0 │
-│ PA5_OUT                    │    3.116 │    3.116 │        0 │
-│ +3V3                       │    3.300 │    3.300 │        0 │
-│ GND                        │    0.000 │    0.000 │        0 │
-└────────────────────────────┴──────────┴──────────┴──────────┘
-
-UART output (18 bytes):
-hello from stm32
 ```
 
-The toggling PC13 and the UART banner show the descriptor's port map and
-`uart` field doing real work. Your own part needs one more piece, the
-`[[models]]` routing entry from step 4, plus `--models-dir` pointing at it, so
-the board's MCU value resolves to `renode:<yourpart>`. The same board, firmware
-and override run in a `hauksbee-ci` spec the same way.
-
-**Try the footgun, once.** Edit `mcu/stm32f103.soc.toml` and change every
-`odr_offset = 0x0C` to `0x14` (the F4 family's offset), then re-run. The board
-still boots, the UART banner still prints, and `PC13_LED` reports
-`0.000 / 0.000 / 0 toggles`. Nothing errors. That silent, plausible, entirely
-wrong result is why the register offsets are reviewed data instead of code, and
-why the walkthrough keeps saying to check them against the reference manual.
+The run should show firmware activity on the mapped GPIO and UART. Your own part
+needs the `[[models]]` routing entry from step 4, plus `--models-dir` pointing at
+it, so the board's MCU value resolves to `renode:<yourpart>`. The same board,
+firmware, and override can run in a `hauksbee-ci` spec.
 
 ## The honest boundary
 

@@ -216,12 +216,10 @@ added.
 - A new top-level key on the report line.
 - A new key inside a `results` entry.
 - A new `kind` token, or new wording inside `detail`, `why`, `coverage`, or any
-  of the qualifier arrays. All of these are prose for a human, computed per
-  assertion kind and per finding. Do not parse them, and do not match on them
+  of the qualifier arrays. These are human prose; do not parse or match them
   exactly.
 - A new element in any of `substitutions`, `coverage_warnings`, `dead_rails`,
-  `waiver_notes`, because a new honesty qualifier can start firing on a board
-  that did not previously produce one.
+  `waiver_notes`, because another applicable honesty qualifier may be reported.
 
 Write consumers that ignore unknown keys. The published schema deliberately
 leaves `additionalProperties` open on both line kinds so that a document from a
@@ -233,11 +231,9 @@ newer `hauksbee-ci` still validates against an older copy of the schema, and
 - Removing or renaming any key in the tables above.
 - Changing a key's type, including making a currently-always-present key
   absent, or an always-present-and-nullable key non-nullable.
-- Changing what a key MEANS while keeping its name and type. The one already
-  scheduled is the invalid-for-analysis boundary: when the engine's
-  Undermined verdict starts yielding invalid-for-analysis, a run that reports
-  `run_valid: true` today will report `false`, and that is a semantic change
-  even though no field moves.
+- Changing what a key means while keeping its name and type. For example, a
+  run-level undermined claim yields invalid-for-analysis; changing that
+  boundary would require a version bump even if no field moved.
 
 **Guaranteed regardless of version.**
 
@@ -248,14 +244,12 @@ newer `hauksbee-ci` still validates against an older copy of the schema, and
 - Exit codes keep the meanings in
   [CI.md](CI.md#exit-codes-the-pipeline-contract).
 
-**Current version.** Version 2 records the assumption-identity migration:
-anonymous ids now cover the complete typed claim, and repeated component
-designators use occurrence-safe causal subjects. That changes the meaning of
-the embedded assumption ids even though their JSON field type is still a
-string, so a version bump is required. The constant lives in
+**Current version.** In version 2, anonymous assumption ids cover the complete
+typed claim, and repeated component designators use occurrence-safe causal
+subjects. The constant lives in
 `crates/hauksbee-ci/src/report.rs` as `CI_REPORT_SCHEMA_VERSION`, the
 generated file's description quotes it, and the drift test fails until the
-schema is regenerated with it, so the bump cannot land half-applied.
+schema is regenerated with it.
 
 ## Validating the stream yourself
 

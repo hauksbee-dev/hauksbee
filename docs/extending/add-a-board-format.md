@@ -25,11 +25,11 @@ pub trait BoardReader: Send + Sync {
 }
 ```
 
-`Registry::builtin()` holds the six shipped readers (altium, eagle,
-kicad-netlist, kicad-schematic, kicad-pcb, ipc-d356) in a documented order.
-Detection walks front to back, and the first reader to claim the bytes wins.
-When nothing matches, the error lists every reader it tried. This replaces
-the old sniff ladder's arbitrary fallback.
+`Registry::builtin()` holds nine shipped readers in a documented order:
+Altium, ODB++, Protel ASCII, IPC-2581, Eagle, KiCad netlist, KiCad schematic,
+KiCad PCB, and IPC-D-356. Detection walks front to back, and the first reader
+to claim the bytes wins. When nothing matches, the error lists every reader it
+tried.
 
 > **Why `register` prepends.** The builtins are mutually exclusive by
 > construction: they have distinct magics, and the Altium OLE2 container
@@ -107,11 +107,11 @@ Two layers, both in `crates/hauksbee-extract/tests/reader_matrix.rs`:
    unintended shadowing.
 2. **The detection matrix.** `detection_matrix_every_fixture` sweeps every
    board or netlist fixture in the repo, plus synthesized Eagle and Altium
-   samples. It checks that exactly one reader claims each file, with no
-   false positives, and that the winner matches the legacy sniff's routing,
-   so behavior does not change. Add a fixture of your format to the corpus
-   and extend the expectation. If your `detects` overlaps another reader,
-   this test finds it and prints a matrix that names the offender.
+   samples. It checks that exactly one reader claims each file, with no false
+   positives, and that the winner is the expected reader for that fixture. Add
+   a fixture of your format to the corpus and extend the expectation. If your
+   `detects` overlaps another reader, this test finds it and prints a matrix
+   that names the offender.
 
 ```
 cargo test -p hauksbee-extract --test reader_matrix

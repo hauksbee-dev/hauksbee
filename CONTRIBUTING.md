@@ -176,14 +176,9 @@ CERN-OHL-S, CERN-OHL-W, CERN-OHL-P, TAPR-OHL, Apache-2.0 and MIT terms, and
 fetching means you get each one from its author under that author's terms rather
 than through us.
 
-The fetch ends by running `scripts/check-corpus.py`, which reads the manifest
-back against the tree that landed and fails if they disagree. That is not
-belt-and-braces: `subdir = "demos"` sat on the KiCad entry from the day it was
-added and nothing acted on it, so the fetch pulled KiCad's `qa/` tree and the
-zero-shorts gate spent that whole time grading itself on boards whose purpose is
-to reproduce KiCad bugs. The check fails on a field nothing honours, an
-abbreviated pin, an entry with no declared axes or `expect` paths, and an entry
-whose landed files do not match its declaration. Run it on its own with
+The fetch ends by running `scripts/check-corpus.py`, which fails when manifest
+fields are not honoured, pins are abbreviated, declared axes or `expect` paths
+are missing, or landed files disagree with the declaration. Run it alone with
 `python3 scripts/check-corpus.py --manifest-only` before you have a corpus.
 
 Adding a board means adding all of it: the upstream, a full commit sha, the
@@ -205,31 +200,22 @@ The fetched layout and the hand-built `board-corpus/famous/<id>/...` layout the
 maintainers use are both accepted. Address a board through
 `hauksbee_testkit::corpus_board` (one path) or `corpus_board_any` (alternates when
 the two corpora hold different upstream revisions), and a sweep's root through
-`corpus_boards_root`, never by joining `famous` yourself. Joining it directly is
-what used to make corpus guards skip for everyone who followed these instructions.
+`corpus_boards_root`, never by joining `famous` yourself.
 
-`corpus_dir` finds the corpus from a git worktree as well as from the checkout: it
-walks up from the crate it was compiled in, and reads the `.git` file to reach the
-main worktree when the worktree lives outside the checkout. It used to check the
-repository root and its parent and nothing else, so from
-`<checkout>/.claude/worktrees/<name>` no corpus resolved, every corpus gate
-skipped, and the skip read as a pass. If you work in a worktree, read the
-`SCANNED` lines rather than the green tick.
+`corpus_dir` finds the corpus from a worktree as well as from the main checkout.
+If you work in a worktree, verify the printed `SCANNED` lines rather than relying
+on the final test status alone.
 
-Without the corpus, corpus-dependent tests **report as passed**, not as ignored.
-Rust has no runtime ignored state, so they early-return with a note on stderr and
-`cargo test` counts them green. This is the trap the whole section is about: a
-green suite on a machine with no corpus has measured nothing. Never read one as
-evidence. Make it a hard failure instead:
+Without the corpus, corpus-dependent tests return after printing `NOT RUN`, and
+the Rust harness counts that target as passed. Require the corpus whenever the
+result is being used as evidence:
 
 ```bash
 HAUKSBEE_REQUIRE_CORPUS=1 cargo test --workspace
 ```
 
-Every corpus gate prints what it covered, so add `--nocapture` and read the
-`SCANNED  <gate>: N board(s)` lines. A gate that scanned zero fails outright:
-`hauksbee_testkit::scanned` refuses the pass, because a gate that opened no board
-has proved nothing and a green tick next to it is a lie about coverage.
+Every corpus gate prints `SCANNED <gate>: N board(s)` with `--nocapture`; a
+required gate that scans zero fails.
 `.github/workflows/corpus-gate.yml` runs the whole thing this way nightly and
 lifts those counts into the run summary.
 

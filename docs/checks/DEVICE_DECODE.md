@@ -23,32 +23,40 @@ config pins, its own band table, and its own consistency rules. So each supporte
 part is a hand-written decoder seeded from its datasheet. Adding coverage means
 adding a part, deliberately, one at a time. This is by design, not a stub.
 
-Two parts are seeded today: the Cypress / Infineon **CYPD3177** (EZ-PD BCR)
-USB-C PD sink controller, and the TI **BQ2407x** charger family's TMR
-safety-timer resistor. The BQ2407x decoder fires only when the TMR
-programming resistor lands *outside* the datasheet's 18-72 kOhm band
-(tMAXCHG = 10 x 48 s/kOhm x R): a floating pin (internal defaults) and a
-VSS tie (timers deliberately disabled) are documented modes and stay
-silent. The seed case is a published keyboard whose 4.7 k-for-47 k typo cut
-the fast-charge safety timer from ~6.3 h of design intent to an undefined
-sub-band value (~38 min taken at face value): every net connected, every
-part in spec, invisible to DRC and SPICE alike.
+The current decoder covers three families:
+
+- **CYPD3177** (Cypress / Infineon EZ-PD BCR): decodes VBUS selector bands and
+  the VBUS_MIN/VBUS_MAX consistency rule.
+- **BQ2407x** (TI charger family): checks the TMR safety-timer resistor and the
+  TS battery-temperature network.
+- **TPS25982** (TI eFuse family): decodes the ILIM resistor and, when a rated
+  connector is reachable through the protected path, checks the connector
+  current budget.
+
+Each family has its own datasheet table and evidence boundary. A valid decode is
+not a generic claim about every configuration pin.
 
 ## Zero-false-positive discipline (binding)
 
-In line with the project's zero-false-positive rule, the check fires
-ONLY when:
+In line with the project's zero-false-positive rule, every decoder first requires
+positive part identification from the value/MPN string; it does not depend on a
+model-DB entry. The remaining evidence and refusal path is family-specific:
 
-1. the part is **positively identified** (its value / MPN string contains the
-   part token, e.g. `CYPD3177`). Identification is by value string, not by a
-   model-DB entry, so it works on layout-only extraction and does not depend
-   on a device model existing. AND
-2. the configuration divider on the pin **resolves to concrete resistor values**:
-   a parseable pull-up to the reference rail and a parseable pull-down to ground,
-   so the pin voltage is actually computable.
+- CYPD3177 and BQ2407x TMR require parseable network values before making a
+  voltage or timer-band judgement. Floating, tied-off, or otherwise unresolvable
+  documented modes remain silent.
+- TPS25982 treats a floating ILIM network as silent, reports an unparseable ILIM
+  resistor as a low-severity **unjudgeable** note, and reports an out-of-range
+  82--1650 ohm resistor as medium severity. An in-range resistor gets a low
+  informational decode; a medium connector-budget finding requires a rated
+  connector on a reachable protected path.
+- BQ2407x TS stays silent for an explicit 10 kOhm TS-to-VSS disable strap or a
+  recognised thermistor network. A different fixed resistor to VSS is a medium
+  finding; a complex or unresolved network abstains with a low note.
 
-If the divider cannot be resolved to known values, the check stays **silent**. A
-check that cannot resolve the divider does not fire.
+An unresolved network therefore does not produce a confident fault, but it may
+produce an explicit coverage note when the decoder can identify what evidence is
+missing.
 
 It is **DNP-aware**, but through the shared DNP policy rather than a rule of its
 own: `resistor_ohms` skips any component still carrying the Do-Not-Populate flag
@@ -56,10 +64,10 @@ when the check runs. What that means on a given run depends on the policy, and t
 default is `FitExceptLinks` (`crates/hauksbee-extract/src/dnp.rs`), which clears
 the flag on every DNP part that is not a near-zero-ohm link *before* the checks see
 the board. So by default a DNP divider resistor **is** counted, and
-`--honour-dnp` is what leaves it out. The walkthrough below is exactly this
-difference on a real board.
+`--honour-dnp` is what leaves it out. The walkthrough below shows this difference
+on a board file.
 
-## CYPD3177 seed
+## CYPD3177 decoder
 
 ### Table 2 (EZ-PD BCR, VBUS_MAX bands, verbatim, mV; VDDD = 3.3 V reference)
 
@@ -116,9 +124,9 @@ that detent: the part requests VBUS_MAX, not the (higher) labeled voltage.
   the config net is not enumerated. The static (permanent) divider is still
   decoded and the Note-1 check still runs.
 
-## The board this was calibrated on
+## Board-file example
 
-The seed case is the INGBZGMBH PD-Sink-Trigger-Board's rotary VBUS selector
+The example is the INGBZGMBH PD-Sink-Trigger-Board's rotary VBUS selector
 (a CYPD3177 with a per-detent switched divider).
 
 The decode arithmetic is locked down by the unit tests
@@ -156,7 +164,7 @@ note: gate-grade finding(s) above, but this is a report command so the exit code
 ```
 
 Those are the same two findings, with the same detent voltages, that the unit
-tests derive by hand. The real board reproduces them on the default policy.
+tests derive by hand. The board-file run reproduces them under the default policy.
 
 **`--honour-dnp`: the check goes quiet.** Build only what the fab would build and
 the divider the finding rests on is not there:
@@ -183,7 +191,7 @@ this assembly BOM but it will be there" and "this link is deliberately open", an
 hauksbee cannot tell which one a given footprint means. Defaulting to fitted
 surfaces the latent fault, which is the useful answer for a board still in design:
 stuff R12 and R9 and the selector really is mis-coded. `--honour-dnp` answers the
-other question, what the fab builds today. Neither is a false positive, because
+assembly-BOM question. Neither is a false positive, because
 every run prints the policy line and the per-part fitted/left-open decision above
 the findings, so which board was analysed is never in doubt. `--fit R12` /
 `--no-fit R12` override a single part by name.

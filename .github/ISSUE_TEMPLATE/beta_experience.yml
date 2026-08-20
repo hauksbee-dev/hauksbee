@@ -1,0 +1,62 @@
+name: Beta experience
+description: Report a workflow that was confusing, incomplete, slow, or unexpectedly good.
+labels: ["beta-feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not attach a proprietary board, firmware image, or unredacted
+        report to a public issue. Hauksbee never uploads one automatically.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What were you trying to learn about the board?
+      description: Describe the engineering question, not only the button or command.
+    validations:
+      required: true
+  - type: textarea
+    id: journey
+    attributes:
+      label: What did you do, and where did the experience break down?
+      description: Include the input types and the exact message or result that stopped helping.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What would a genuinely useful result or next step have looked like?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The full output of `hauksbee --version`, including its source commit.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Platform
+      options: [macOS app, macOS CLI, Windows, Linux, Docker, Other]
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - Found a real issue
+        - Reported something that was not an issue
+        - Missed a real issue
+        - Refused with a useful explanation
+        - Refused without a useful next step
+        - Could not complete the flow
+        - Experience was successful
+    validations:
+      required: true
+  - type: textarea
+    id: shareable
+    attributes:
+      label: Shareable evidence
+      description: Attach a public/minimal board, redacted report, screenshot, or fixed control only if you are allowed to share it.

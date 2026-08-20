@@ -139,18 +139,11 @@ cpu:
 frequency_hz = 8_000_000
 ```
 
-This is not ceremony. Four shipped platforms used to run simulated time at
-Renode's clock rate instead of the part's, measured 9.09x, 6.58x and 4.51x fast,
-because the stock `.repl` declared a 72 MHz SysTick and a 100 MIPS core whatever
-part the descriptor claimed, and `frequency_hz` cancels out of the engine's own
-arithmetic so nothing disagreed. Declare the RESET DEFAULT unless you can justify
-otherwise: a platform with no clock-tree model cannot follow a firmware's PLL
-bring-up, so the rate the part runs at before firmware touches anything is the
-one that is true for every image. Other clock domains (a watchdog's own
-oscillator, a timer block on its own bus branch) are yours to get right and are
-deliberately not policed by the cross-check. `docs/cosim/MCU.md` carries the
-measured per-backend table and `crates/hauksbee-mcu/tests/clock_truth.rs` is the
-gate that keeps it true.
+`frequency_hz` is part of the timing contract: the loader cross-checks it against
+the platform's declared core and SysTick clocks. Use the reset-default clock when
+the platform has no clock-tree model, and document any independent clock domains
+that are outside this check. `crates/hauksbee-mcu/tests/clock_truth.rs` exercises
+the emulator timing contract; it is not a measurement of fabricated silicon.
 
 The literal `{support}` token in `platform_repl`, `extra_setup` and
 `post_load_setup` is replaced with the unpacked support-bundle directory. A
@@ -328,12 +321,9 @@ Run it after every edit. The full boot is the last check, not the first.
 
 ## Tier B, worked: STM32F072 on a stock Renode platform
 
-The STM32F072 began as a part hauksbee did not ship. Renode 1.16.1 already
-shipped `platforms/cpus/stm32f072.repl`, so it was tier B: one descriptor, one
-package-faithful routing entry and a two-sided fixture. The completed
-contribution now ships at `crates/hauksbee-mcu/db/mcu/stm32f072.soc.toml` and is
-embedded in the binary. Reading the steps as history shows the path a new tier-B
-part follows; running them against the current tree checks the landed result.
+This is a tier-B example: Renode provides the platform, and the part needs a
+descriptor, a package-faithful routing entry, and a two-sided fixture. The
+reference descriptor is `crates/hauksbee-mcu/db/mcu/stm32f072.soc.toml`.
 
 ### Step 1, read the platform, not the datasheet
 
@@ -454,7 +444,8 @@ Void FeedVoltageSampleToChannel (Int32 channel, Decimal valueInmV, UInt32 repeat
 windows, so a per-chunk write lands before the next instruction and every later
 conversion returns it. It takes millivolts, so the recipe uses `{millivolts}`.
 
-Proven against firmware doing a real ADEN / ADSTART / read-`ADC_DR` sequence:
+Emulator check: feed Renode's ADC and run firmware through an ADEN / ADSTART /
+read-`ADC_DR` sequence:
 
 ```
 sysbus.adc SetDefaultValue 1650 0   ->  firmware printed adc0=00000800   (2048)
@@ -467,7 +458,8 @@ channel 0 re-read afterwards        ->  firmware printed adc0=00000400   (1024)
 converter's own arithmetic on the fed voltage, and the last line shows the
 channels hold independent state. Channels 16 to 18 (on-die temperature, VREFINT,
 VBAT) are not external nodes, so they stay unmapped and take the loud drop rather
-than a fabricated count.
+than a fabricated count. This is an emulator/firmware result, not a silicon
+measurement.
 
 ### Step 5, write the descriptor
 
@@ -537,16 +529,17 @@ cp crates/hauksbee-mcu/db/mcu/stm32f072.soc.toml ~/.config/hauksbee/mcu/
 hauksbee models lint ~/.config/hauksbee/mcu/stm32f072.soc.toml
 ```
 
-For a new part, its `renode:<part>` name now resolves to the override with no
-recompile. The F072 itself resolves without this copy because it has graduated
-to the embedded set; the override exercise remains the same development loop.
+For a new part, its `renode:<part>` name resolves to the override without a
+recompile. The same directory is the development path for a descriptor that is
+not embedded in the build.
 
 ### Step 7, route your board's part to it
 
 During development, the descriptor alone is inert: nothing on a board says it is
 your part. Add a routing entry in `~/.config/hauksbee/models/` or a directory you
-pass with `--models-dir`. The F072 version below is now shipped in
-`crates/hauksbee-models/db/mcu.toml`; a new contribution starts in an override:
+pass with `--models-dir`. The routing entry below maps a board value to the
+descriptor; use the embedded model database when the part is already shipped,
+or keep the entry in an override while developing a new part:
 
 ```toml
 [[models]]

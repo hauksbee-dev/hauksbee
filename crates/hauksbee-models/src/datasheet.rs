@@ -436,15 +436,17 @@ RULES:
 4. Use only values stated in the datasheet; do not invent register addresses.
 
 DATASHEET TEXT (truncated):
----
+{datasheet_text_begin}
 {pdf_text}
----
+{datasheet_text_end}
 
 OUTPUT (TOML only, starting with [sensor]):
 "#,
         part = part,
         bus = bus,
         bus_specifics = bus_specifics,
+        datasheet_text_begin = DATASHEET_TEXT_BEGIN,
+        datasheet_text_end = DATASHEET_TEXT_END,
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
     )
 }
@@ -539,7 +541,7 @@ pub struct Args {
     pub part: String,
     pub kind_str: String,
     pub out_dir: Option<PathBuf>,
-    /// Retry count for LLM calls (default 1)
+    /// Retry count for LLM calls (default 2, for at most three attempts)
     pub retries: usize,
     /// Model the extraction agent runs on. `None` takes
     /// `HAUKSBEE_CODEX_MODEL` (codex) / `HAUKSBEE_LLM_MODEL` (api), then
@@ -767,14 +769,11 @@ fn extract_pdf_text(path: &Path) -> Result<String> {
         }
     }
 
-    // Fallback: read raw bytes and let the LLM handle it (works with codex)
-    // Return a placeholder that tells the prompt to read the PDF directly
-    eprintln!("[model-extract] pdftotext not found; LLM backend will read the PDF directly");
-    Ok(format!(
-        "<pdf_path>{}</pdf_path>\n\
-         [Note: pdftotext not available. The LLM should read the PDF at the path above directly.]",
-        path.display()
-    ))
+    // Local agent backends can read the copied PDF in their scratch workspace.
+    // Do not embed the original path: an API request must not leak local path
+    // metadata, and the API backend cannot open the file anyway.
+    eprintln!("[model-extract] pdftotext not found; local agent backends will read the copied PDF directly");
+    Ok(PDF_TEXT_UNAVAILABLE.to_string())
 }
 
 fn extract_pdf_pages_text(path: &Path) -> Result<Vec<PdfPageText>> {
@@ -880,8 +879,7 @@ fn topic_score(text: &str, terms: &[&str]) -> usize {
     if index_or_revision {
         return 0;
     }
-    let score = occurrences * 100 + usize::from(heading) * 2_000;
-    score
+    occurrences * 100 + usize::from(heading) * 2_000
 }
 
 fn select_relevant_pages(pages: &[PdfPageText], limit: usize) -> Vec<SelectedPage> {
@@ -1118,13 +1116,47 @@ fn number_word(number: usize) -> String {
 }
 
 fn which(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    let extensions =
+        command_extensions(cmd, cfg!(windows), std::env::var("PATHEXT").ok().as_deref());
+    std::env::split_paths(&path).any(|dir| {
+        extensions
+            .iter()
+            .map(|suffix| dir.join(format!("{cmd}{suffix}")))
+            .any(|candidate| executable_file(&candidate))
+    })
+}
+
+fn command_extensions(cmd: &str, windows: bool, pathext: Option<&str>) -> Vec<String> {
+    if !windows || std::path::Path::new(cmd).extension().is_some() {
+        return vec![String::new()];
+    }
+    pathext
+        .unwrap_or(".COM;.EXE;.BAT;.CMD")
+        .split(';')
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| extension.to_ascii_lowercase())
+        .collect()
+}
+
+fn executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn truncate_to_chars(s: &str, max: usize) -> String {
@@ -1156,6 +1188,30 @@ mod truncate_tests {
 }
 
 // ── Prompt construction ───────────────────────────────────────────────────────
+
+const DATASHEET_TEXT_BEGIN: &str = "<<<HAUKSBEE_DATASHEET_TEXT_BEGIN>>>";
+const DATASHEET_TEXT_END: &str = "<<<HAUKSBEE_DATASHEET_TEXT_END>>>";
+const PDF_TEXT_UNAVAILABLE: &str = "<<<HAUKSBEE_PDF_TEXT_UNAVAILABLE>>>";
+
+/// Agent backends can read the sandboxed PDF, complete text dump, and selected
+/// page images directly. Repeating 40,000 characters of layout-lost PDF text in
+/// their instruction competes with those higher-fidelity sources: in measured
+/// runs it turned a successful table extraction into a one-word component-kind
+/// reply. The API backend has no local-file access, so it keeps the text.
+fn prompt_for_agent_backend(prompt: &str) -> String {
+    let Some((before, rest)) = prompt.split_once(DATASHEET_TEXT_BEGIN) else {
+        return prompt.to_string();
+    };
+    let Some((_embedded, after)) = rest.split_once(DATASHEET_TEXT_END) else {
+        return prompt.to_string();
+    };
+    format!(
+        "{before}{DATASHEET_TEXT_BEGIN}\n\
+         [Not embedded for this local agent backend. Read the attached page images first. \
+         If a needed fact is absent, open datasheet.txt or datasheet.pdf in the sandbox.]\n\
+         {DATASHEET_TEXT_END}{after}"
+    )
+}
 
 /// The kinds the schema actually deserializes, extracted from serde's own
 /// "unknown variant" error so this list can never drift from the enum. The
@@ -1236,9 +1292,9 @@ is a WRONG ANSWER.
 {example_cards}
 
 DATASHEET TEXT (truncated):
----
+{datasheet_text_begin}
 {pdf_text}
----
+{datasheet_text_end}
 
 Produce a TOML model entry that exactly conforms to the hauksbee-models schema.
 The entry must use [[models]] array syntax and include:
@@ -1417,6 +1473,8 @@ OUTPUT (TOML only, starting with [[models]]):
         part_upper = part.to_uppercase(),
         legal_kinds = legal_kinds().join(", "),
         kind = kind,
+        datasheet_text_begin = DATASHEET_TEXT_BEGIN,
+        datasheet_text_end = DATASHEET_TEXT_END,
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
         required_params = required_params_for_kind(kind),
         pin_roles = pin_roles_for_kind(kind),
@@ -1776,6 +1834,13 @@ fn call_backend(prompt: &str, args: &Args) -> Result<String> {
         }
     });
 
+    if chosen == Backend::Api && !api_source_available(prompt) {
+        bail!(
+            "the API backend cannot read the local PDF and pdftotext is unavailable. \
+             Install Poppler/pdftotext, then retry; nothing was sent."
+        );
+    }
+
     match chosen {
         Backend::Api => call_api_backend(prompt, args),
         Backend::Codex => {
@@ -1787,7 +1852,8 @@ fn call_backend(prompt: &str, args: &Args) -> Result<String> {
                      (needs `claude` in PATH) or --backend api (set OPENAI_API_KEY)."
                 );
             }
-            call_agent_backend(prompt, args, "codex", run_codex_once)
+            let prompt = prompt_for_agent_backend(prompt);
+            call_agent_backend(&prompt, args, "codex", run_codex_once)
         }
         Backend::ClaudeCode => {
             if !which("claude") {
@@ -1798,9 +1864,14 @@ fn call_backend(prompt: &str, args: &Args) -> Result<String> {
                      `codex` in PATH) or --backend api (set OPENAI_API_KEY)."
                 );
             }
-            call_agent_backend(prompt, args, "claude", run_claude_once)
+            let prompt = prompt_for_agent_backend(prompt);
+            call_agent_backend(&prompt, args, "claude", run_claude_once)
         }
     }
+}
+
+fn api_source_available(prompt: &str) -> bool {
+    !prompt.contains(PDF_TEXT_UNAVAILABLE)
 }
 
 /// Is a failed reply visibly only a classification or another tiny fragment?
@@ -1855,11 +1926,10 @@ fn retry_feedback(raw: &str, validation_error: &str) -> String {
 /// Invocation notes learned the hard way:
 ///   * `--sandbox workspace-write` (`--full-auto` is deprecated).
 ///   * `--skip-git-repo-check`, codex otherwise refuses to run outside a repo.
-///   * `--cd <pdf_dir>` so codex can open the datasheet PDF / extracted text
-///     directly when pdftotext was unavailable.
-///   * stdin must be closed/empty or codex blocks "Reading additional input
-///     from stdin..." forever. We give it an empty stdin and read only stdout;
-///     the answer itself comes from --output-last-message.
+///   * `--cd <scratch_dir>` so codex can open only the copied datasheet inputs.
+///   * stdin receives one short pointer to the workspace prompt, then EOF, so
+///     codex cannot block waiting for more input. The answer is preferred from
+///     `model.toml`, then `--output-last-message`.
 ///   * the prompt goes in a FILE inside the sandbox, not in argv. It embeds up
 ///     to 40,000 characters of the datasheet, and argv is world-readable on
 ///     Linux via /proc/<pid>/cmdline and visible to `ps -ww` on macOS. Putting
@@ -2746,9 +2816,11 @@ fn default_out_dir() -> PathBuf {
 }
 
 fn dirs_next() -> PathBuf {
-    std::env::var("HOME")
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 #[cfg(test)]
@@ -2757,6 +2829,27 @@ mod tests {
 
     fn argv(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn windows_command_discovery_uses_pathext_without_unix_which() {
+        assert_eq!(
+            command_extensions("pdftotext", true, Some(".EXE;.CMD")),
+            [".exe", ".cmd"]
+        );
+        assert_eq!(
+            command_extensions("pdftotext.exe", true, Some(".EXE;.CMD")),
+            [""]
+        );
+        assert_eq!(command_extensions("pdftotext", false, None), [""]);
+    }
+
+    #[test]
+    fn api_never_receives_a_local_pdf_path_fallback() {
+        assert!(!api_source_available(&format!(
+            "prompt {PDF_TEXT_UNAVAILABLE}"
+        )));
+        assert!(api_source_available("prompt with extracted datasheet text"));
     }
 
     #[test]
@@ -2885,6 +2978,37 @@ mod tests {
         assert!(prompt.contains("kind = \"specification-limits\""));
         assert!(prompt.contains("min/typ row without a finite published max"));
         assert!(prompt.contains("status = \"unknown\""));
+    }
+
+    #[test]
+    fn local_agent_prompt_does_not_embed_layout_lost_pdf_text() {
+        let marker = "RAW_TABLE_NOISE_THAT_MUST_NOT_REACH_THE_AGENT".repeat(1_000);
+        let model_prompt = build_prompt("TXB0101", "digital", &marker);
+        let local = prompt_for_agent_backend(&model_prompt);
+        assert!(!local.contains(&marker));
+        assert!(local.contains("Read the attached page images first"));
+        assert!(local.contains("datasheet.txt or datasheet.pdf"));
+        assert!(local.len() < model_prompt.len());
+
+        let sensor_prompt = build_sensor_prompt("TMP117", "i2c_sensor", &marker);
+        let local_sensor = prompt_for_agent_backend(&sensor_prompt);
+        assert!(!local_sensor.contains(&marker));
+        assert!(local_sensor.contains("datasheet.txt or datasheet.pdf"));
+
+        // Kind identification is a separate small call made before the
+        // workspace exists, so prompts without the bounded source markers are
+        // deliberately unchanged.
+        let identify = "identify this part from the first-page text";
+        assert_eq!(prompt_for_agent_backend(identify), identify);
+    }
+
+    #[test]
+    fn api_prompt_keeps_the_embedded_datasheet_source() {
+        let marker = "API_BACKEND_NEEDS_THIS_TEXT";
+        let prompt = build_prompt("TXB0101", "digital", marker);
+        assert!(prompt.contains(marker));
+        assert!(prompt.contains(DATASHEET_TEXT_BEGIN));
+        assert!(prompt.contains(DATASHEET_TEXT_END));
     }
 
     #[test]
@@ -3332,11 +3456,11 @@ max_current_a = 0.1\n\
         assert!(raw.starts_with("[[models]]"), "fence should be stripped");
     }
 
-    /// Live integration: run the REAL codex backend against the BC847 datasheet
-    /// shipped in testdata, then physically sanity-check the result. Marked
-    /// #[ignore] because it shells out to codex and takes ~1-2 minutes. Run with:
-    ///   cargo test -p hauksbee-models --bin model-extract -- \
-    ///       extract_bc847_live --ignored --nocapture
+    /// Live integration: run the configured backend against the BC847 datasheet
+    /// and validate the simulated model result. Marked #[ignore] because it
+    /// calls an external backend. Run with:
+    ///   cargo test -p hauksbee-models --lib extract_bc847_live -- \
+    ///       --ignored --nocapture
     /// See crates/hauksbee-models/README_DATASHEET.md.
     #[test]
     #[ignore]
@@ -3383,12 +3507,12 @@ max_current_a = 0.1\n\
         println!("live BC847: bf={bf} ratings={:?}", entry.ratings);
     }
 
-    /// Live integration: run the REAL codex backend with `--kind charger`
+    /// Live integration: run the configured backend with `--kind charger`
     /// against the LTC4020 datasheet excerpt in testdata, then assert the
     /// extracted behavioural model is structurally sound. Marked #[ignore]
     /// (shells out to codex, ~30-60s). Run with:
-    ///   cargo test -p hauksbee-models --bin model-extract -- \
-    ///       extract_ltc4020_charger_live --ignored --nocapture
+    ///   cargo test -p hauksbee-models --lib extract_ltc4020_charger_live -- \
+    ///       --ignored --nocapture
     #[test]
     #[ignore]
     fn extract_ltc4020_charger_live() {

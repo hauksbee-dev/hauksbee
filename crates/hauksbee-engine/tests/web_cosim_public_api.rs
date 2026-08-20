@@ -10,12 +10,6 @@ use std::path::{Path, PathBuf};
 
 #[test]
 fn unchanged_main_era_web_cosim_literal_still_compiles() {
-    assert_eq!(
-        env!("CARGO_PKG_VERSION"),
-        "0.1.0",
-        "the unreleased workspace and its first release tag stay on one version line"
-    );
-
     let section = WebCosimSection {
         ran: true,
         seconds_simulated: 0.2,

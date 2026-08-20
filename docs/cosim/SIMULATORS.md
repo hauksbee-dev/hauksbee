@@ -28,21 +28,17 @@ Two entries in that table need reading carefully:
   for ports A through D, so a part with ports beyond those needs
   `register_port_hooks` called for them, and the shipped board recipes are
   ATmega328P.
-- **RP2040 brings its own platform.** Renode ships no rp2040 platform, on 1.16.1
-  or on `master`, so hauksbee carries one: the peripheral models are vendored C#
-  that Renode compiles at run time, unpacked from the binary when the machine is
-  created. Nothing extra to install, but each machine creation compiles about
-  377 kB of C#, so an RP2040 run spends roughly eight seconds on bring-up before
-  firmware executes. A bound RP2040 or Pico board is routed automatically; the
-  proven and unproven features are itemized in
-  [`docs/cosim/MCU.md`](MCU.md).
+- **RP2040 brings its own platform.** Hauksbee bundles the RP2040 peripheral
+  models and Renode compiles them when the machine is created. Nothing extra is
+  needed; a bound RP2040 or Pico board is routed automatically. Proven and
+  unproven features are itemized in [`docs/cosim/MCU.md`](MCU.md).
 
 ---
 
 ## Why the default downloads do not bundle them
 
-Renode is MIT-licensed and ~150 MB. Espressif QEMU is GPL-2.0 and similarly
-large. The normal tarballs and macOS app keep both as separately installed
+Renode is MIT-licensed and Espressif QEMU is GPL-2.0. The normal tarballs and
+macOS app keep both as separately installed
 programs so the everyday download stays small. The optional private `:full`
 container deliberately bundles them for turnkey CI; it retains their exact
 license texts and a corresponding-source offer under
@@ -186,9 +182,7 @@ hauksbee calls `find_qemu(arch)` in
 2. `$HAUKSBEE_QEMU_DIR/bin/<name>`, the `bin/` directory of the unpacked
    fork.
 3. `~/.hauksbee-qemu-esp/qemu/bin/<name>`, both the conventional manual-unpack
-   location and where `hauksbee install esp-qemu` puts it. The legacy
-   `~/.galvani-qemu-esp/qemu/bin/<name>` is still honoured right after it, so
-   a fork unpacked before the rename keeps resolving.
+   location and where `hauksbee install esp-qemu` puts it.
 4. `<idf-tools-root>/tools/qemu-*/<ver>/qemu/bin/<name>`, the location
    ESP-IDF's `idf_tools.py install qemu-xtensa qemu-riscv32` uses. The roots
    tried, in order, are `$IDF_TOOLS_PATH`, `~/.espressif`, and on Windows
@@ -228,19 +222,20 @@ conventional paths:
 Ask the binary itself. `hauksbee doctor --backends` runs the engine's own
 `find_qemu` / `find_renode`, so it can never disagree with what a co-sim would
 resolve, and prints one tab-separated `NAME<TAB>STATUS<TAB>PATH-OR-HINT` line
-per backend (add `--json` for machine consumption). On this machine:
+per backend (add `--json` for machine consumption). Paths and versions depend
+on the host; the output shape is:
 
 ```
 $ hauksbee doctor --backends
 hauksbee co-sim backends (resolved by the engine's own discovery)
     avr           ATmega / ATtiny firmware co-sim
-avr	builtin	simavr linked into this binary; source commit f44723e8c42431136d5b4de81f789ded56d7e8fa
+avr	builtin	simavr linked into this binary
     qemu-xtensa   ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)
-qemu-xtensa	ok	/Users/you/.hauksbee-qemu-esp/qemu/bin/qemu-system-xtensa
+qemu-xtensa	ok	<path-to-qemu-system-xtensa>
     qemu-riscv32  ESP32-C3 firmware co-sim (Espressif QEMU fork)
-qemu-riscv32	ok	/Users/you/.hauksbee-qemu-esp/qemu/bin/qemu-system-riscv32
-    renode        STM32 / nRF52 / RISC-V firmware co-sim
-renode	ok	/Users/you/renode-portable/Renode.app/Contents/MacOS/renode
+qemu-riscv32	ok	<path-to-qemu-system-riscv32>
+    renode        STM32 / nRF52840 / RISC-V firmware co-sim
+renode	ok	<path-to-renode>
 ```
 
 The indented lines are the human header on stderr; the flush lines are the
@@ -348,15 +343,15 @@ Run `scripts\install-sims-windows.ps1 -RenodeOnly`. It downloads the pinned
 portable release, verifies the repository-recorded SHA-256, probes
 `Renode.exe`, and transactionally installs it under
 `%USERPROFILE%\renode-portable`. A manual alternative is to download the same
-`windows-portable-dotnet.zip` or use the `.msi` installer. Discovery checks,
+`windows-portable-dotnet.zip` or use the release's Windows setup executable.
+Discovery checks,
 in order: `HAUKSBEE_RENODE`,
 `Renode.exe`/`renode.exe` on `PATH`, the `%USERPROFILE%\renode-portable` zip
 layout (`Renode.exe` at the top or under `bin\`), then the installer trees
 under `%ProgramFiles%\Renode` and `%LOCALAPPDATA%\Programs\Renode`. These
-lookups are unit-tested on every OS. Both the ordinary Windows CI lane and the
-release job install that exact archive and require the named RP2040
-firmware-to-ADC flow; a missing backend, missing firmware, `SKIP:`, wrong SHA,
-or absent one-test pass record fails the job.
+lookups have cross-platform unit coverage. The native Windows CI and release
+jobs are required to install that exact archive and retain the named RP2040
+firmware-to-ADC receipt before a Windows asset is published.
 
 ---
 
@@ -376,12 +371,15 @@ discovers automatically (slot 4).
 
 **Direct download (no ESP-IDF)**
 
-1. Go to [github.com/espressif/qemu/releases](https://github.com/espressif/qemu/releases)
-   and find the latest release. Tags look like `esp-develop-9.2.2-20260417`;
+1. Use the QEMU version pinned in
+   `scripts/required-simulator-versions.env` (currently
+   `esp-develop-9.2.2-20260417`) and select its matching assets from
+   [github.com/espressif/qemu/releases](https://github.com/espressif/qemu/releases).
+   Tags look like `esp-develop-9.2.2-20260417`;
    the asset names carry the same version with **underscores**
    (`esp_develop_9.2.2_20260417`), so the tag is not a substring of the asset.
 2. Download the asset for your platform for **both** `qemu-xtensa` and
-   `qemu-riscv32`. Every current asset is `.tar.xz`:
+   `qemu-riscv32`:
 
    | Platform | Asset |
    |----------|-------|
@@ -393,11 +391,8 @@ discovers automatically (slot 4).
 
    `<tool>` is `xtensa` or `riscv32`; `<ver>` is the underscored version. The
    release also publishes `qemu-<ver>-checksum.sha256`, which lists
-   `<sha256hex> *<asset-name>` for each. Upstream has changed both the
-   separator convention and the compression (`.tar.bz2` to `.tar.xz`) across
-   releases, which is why `hauksbee install esp-qemu` resolves the name by
-   listing the release's published assets rather than constructing it. Check
-   the release page before assuming a suffix.
+   `<sha256hex> *<asset-name>` for each. Match the archive name and checksum
+   to the pinned release before extracting it.
 3. Extract each into `~/.espressif/tools/<tool-name>/<ver>/qemu/`. The
    tarball has a top-level `qemu/` directory. Extract one level up and strip
    it. `.tar.xz` needs `-J`, not `-z` or `-j`:

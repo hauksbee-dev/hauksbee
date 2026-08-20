@@ -12,7 +12,7 @@ walkthrough assumes you can read TOML and run `cargo`. Except for
 | I want to add a… | Walkthrough | Rust required? |
 |---|---|---|
 | **analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator) | [add-an-analog-part.md](add-an-analog-part.md) | no, one `[[models]]` entry |
-| I2C/SPI **sensor** (register map, e.g. BME280) | [add-a-sensor.md](add-a-sensor.md) | no, one TOML file |
+| I2C/SPI **sensor** (register map, e.g. BME280) | [add-a-sensor.md](add-a-sensor.md) | no, one `[sensor]` TOML spec |
 | **logic IC** (gates, flip-flops, shift registers) | [add-a-logic-ic.md](add-a-logic-ic.md) | no, one TOML entry |
 | **MCU variant** (a sibling of a family hauksbee already supports) | [add-an-mcu-variant.md](add-an-mcu-variant.md) | no, two TOML files, no recompile |
 | **MCU family** (a part hauksbee does not support at all) | [add-a-microcontroller.md](add-a-microcontroller.md) | no for a part the emulator models; one static list for a part it does not |
@@ -39,9 +39,7 @@ The rows above go from cheapest to most invasive:
 
 One design rule applies to every layer: bad data fails loud *where it is
 validated*. Every validator in these walkthroughs produces a named error for
-each failure category, never a generic parse error and never a silent
-fallback. When a walkthrough shows a validation rule, that rule exists because
-a past run without it corrupted a result.
+each failure category, never a generic parse error and never a silent fallback.
 
 ## Where validation actually happens
 
@@ -61,27 +59,14 @@ all-empty one would match every component on the board), and that every regex
 compiles. It does **not** run the per-kind parameter validation. That lives in
 `hauksbee models lint`, and nothing calls it for you.
 
-The gap is not hypothetical: two entries in hauksbee's own built-in database
-load fine and fail lint. `hauksbee models lint crates/hauksbee-models/db/bjt.toml`
-reports `model 's8050': missing required param 'vaf'`, and the diodes file
-reports `model 'led_blue': param 'is' = 0.0000000000000000000001 is outside
-physical range`. Both still resolve and bind. Put either entry inside a pack and
-`hauksbee models add` refuses to install it, because the pack path *does* run the
-full validation up front:
+Loading a model database checks its TOML, match rules, and regular expressions;
+it does not run every per-kind parameter check. **Run `hauksbee models lint
+<file>` on anything you author.** Pack installation repeats the full validation
+before copying files.
 
-```
-$ hauksbee models add ./badpack
-error: pack model file 'parts.toml' failed validation: model 's8050': model 's8050': missing required param 'vaf'
-```
-
-So: **run `hauksbee models lint <file>` on anything you author.** It is not
-redundant with loading, and packaging is the only route that runs it
-automatically.
-
-A `[sensor]` register-map spec and a `[models.logic]` block ride the same three
-gates as the model entry they sit in: `models lint` checks both standalone, and
-`hauksbee models add` re-checks them (compiling every logic block through the
-engine's own bind path) before it copies a pack.
+A `[sensor]` register-map spec can be linted as its own file. A model's
+`[models.logic]` block is checked by `models lint` and rechecked when its model
+pack is installed, using the same compiler as board binding.
 
 The `.soc.toml` row is the strict one. A descriptor that exists but does not
 validate aborts the run, naming the file and the field, rather than falling back
@@ -108,15 +93,13 @@ EM_ARM, EM_RISCV, EM_XTENSA, EM_AVR
   to debug.
 - `hauksbee models add | list | remove` manages packs
   ([make-a-model-pack.md](make-a-model-pack.md)).
-- `hauksbee models extract --pdf <datasheet.pdf> --part <PART>` drafts a model
-  TOML from a PDF datasheet with an LLM. Use the draft as a starting point,
-  then lint and correct it. Both flags are required and there are no
-  positional arguments: the part number is what the entry claims, so the
-  command will not guess it. `--kind` is optional (omit it and the extractor
-  works it out from the datasheet), `--out-dir` defaults to your user model
-  directory, and `--yes` skips the consent prompt for scripts that already have
-  it. The same extractor also ships as a standalone binary that takes the same
-  flags, for use without the engine:
+- `hauksbee models extract --pdf <datasheet.pdf> --part <PART>` drafts either a
+  model TOML or, for `i2c_sensor`/`spi_sensor`, a separate `[sensor]` spec. Use
+  every draft as a starting point, then lint and correct it. Both flags are
+  required; `--kind` is optional and can be inferred from the datasheet.
+  `--yes` is the engine command's explicit non-interactive consent flag. The
+  standalone binary takes the same extraction flags, but scripted use requires
+  `HAUKSBEE_EXTRACT_YES=1` because its parser has no `--yes` option:
   `cargo run -p hauksbee-models --bin model-extract -- --pdf <p> --part <PART>`.
   See
   [the datasheet workflow in MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet).

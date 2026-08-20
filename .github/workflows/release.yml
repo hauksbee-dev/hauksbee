@@ -175,6 +175,105 @@ jobs:
           path: hauksbee
           persist-credentials: false
 
+      # Release macOS assets must be signed with the real Developer ID
+      # certificate. GitHub-hosted runners do not retain a maintainer's login
+      # keychain, so import the PKCS#12 certificate into a throw-away keychain
+      # before any build step. This is deliberately workflow-only: local
+      # bundle.sh/build-app.sh invocations remain unsigned unless a developer
+      # explicitly supplies HAUKSBEE_SIGN_IDENTITY.
+      - name: Import macOS Developer ID credentials (release only)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
+          HAUKSBEE_SIGNING_CERTIFICATE_BASE64: ${{ secrets.HAUKSBEE_SIGNING_CERTIFICATE_BASE64 }}
+          HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD }}
+          HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
+          HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
+          HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          required=(
+            HAUKSBEE_SIGN_IDENTITY
+            HAUKSBEE_SIGNING_CERTIFICATE_BASE64
+            HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD
+            HAUKSBEE_NOTARY_APPLE_ID
+            HAUKSBEE_NOTARY_TEAM_ID
+            HAUKSBEE_NOTARY_PASSWORD
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error title=Missing macOS release credential::$name must be configured as a protected repository or environment secret."
+              exit 1
+            fi
+          done
+          if [[ "$HAUKSBEE_SIGN_IDENTITY" == *$'\n'* ]]; then
+            echo "::error title=Invalid signing identity::HAUKSBEE_SIGN_IDENTITY must be one certificate identity line."
+            exit 1
+          fi
+
+          state_dir="$RUNNER_TEMP/hauksbee-signing"
+          keychain="$state_dir/developer-id-signing.keychain-db"
+          p12="$state_dir/developer-id-signing.p12"
+          mkdir -p "$state_dir"
+          chmod 700 "$state_dir"
+          # The original search list is restored by the always-run cleanup
+          # step. Do not print it: runner usernames and paths are unnecessary
+          # release output.
+          security list-keychains -d user > "$state_dir/original-keychains"
+          chmod 600 "$state_dir/original-keychains"
+
+          keychain_password="$(uuidgen | tr -d '\n')"
+          [[ -n "$keychain_password" ]] || {
+            echo "::error title=Keychain setup failed::uuidgen returned no temporary password."
+            exit 1
+          }
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+
+          # macOS uses -D for base64 decoding (GNU runners use --decode; this
+          # step intentionally runs only on macOS). The decoded file is never
+          # added to GITHUB_ENV or an artifact and is removed in cleanup.
+          printf '%s' "$HAUKSBEE_SIGNING_CERTIFICATE_BASE64" | base64 -D > "$p12"
+          chmod 600 "$p12"
+          [[ -s "$p12" ]] || {
+            echo "::error title=Invalid signing certificate::the base64 P12 decoded to an empty file."
+            exit 1
+          }
+          security import "$p12" \
+            -k "$keychain" \
+            -P "$HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain"
+
+          original_keychains=()
+          while IFS= read -r line; do
+            line="${line#\"}"
+            line="${line%\"}"
+            [[ -n "$line" ]] && original_keychains+=("$line")
+          done < "$state_dir/original-keychains"
+          security list-keychains -d user -s "$keychain" "${original_keychains[@]}"
+
+          # Fail before the expensive build if the imported P12 does not carry
+          # the exact identity requested by the release secrets.
+          identities="$(security find-identity -v -p codesigning "$keychain")"
+          if ! grep -F -- "$HAUKSBEE_SIGN_IDENTITY" <<< "$identities" >/dev/null; then
+            echo "::error title=Signing identity not found::the imported P12 does not contain HAUKSBEE_SIGN_IDENTITY."
+            exit 1
+          fi
+
+          # Only non-secret paths cross the step boundary. The signing scripts
+          # discover the imported identity through the user's keychain search
+          # list; the cleanup step uses this state directory to restore it.
+          {
+            printf 'HAUKSBEE_SIGNING_KEYCHAIN=%s\n' "$keychain"
+            printf 'HAUKSBEE_SIGNING_STATE_DIR=%s\n' "$state_dir"
+          } >> "$GITHUB_ENV"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-03
 
@@ -587,6 +686,40 @@ jobs:
             hauksbee/dist/*.sha256
           if-no-files-found: error
 
+      # The runner is disposable, but still restore its keychain search list
+      # and delete the imported certificate before this matrix leg exits. This
+      # runs after success, failure, cancellation, and an early credential
+      # preflight failure alike.
+      - name: Clean up macOS signing keychain
+        if: ${{ always() && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_dir="${HAUKSBEE_SIGNING_STATE_DIR:-$RUNNER_TEMP/hauksbee-signing}"
+          keychain="${HAUKSBEE_SIGNING_KEYCHAIN:-$state_dir/developer-id-signing.keychain-db}"
+          original_keychains=()
+          if [[ -f "$state_dir/original-keychains" ]]; then
+            while IFS= read -r line; do
+              line="${line#\"}"
+              line="${line%\"}"
+              [[ -n "$line" ]] && original_keychains+=("$line")
+            done < "$state_dir/original-keychains"
+            if ((${#original_keychains[@]} > 0)); then
+              security list-keychains -d user -s "${original_keychains[@]}"
+            fi
+          fi
+          if [[ -f "$keychain" ]]; then
+            security delete-keychain "$keychain"
+          fi
+          for secret_file in \
+            "$state_dir/developer-id-signing.p12" \
+            "$state_dir/original-keychains"; do
+            if [[ -e "$secret_file" ]]; then
+              unlink "$secret_file"
+            fi
+          done
+          rmdir "$state_dir" 2>/dev/null || true
+
   build-windows:
     name: build windows-x86_64 (permissive)
     needs: resolve-source
@@ -682,8 +815,19 @@ jobs:
       - name: Package and verify permissive Windows zip
         shell: pwsh
         working-directory: hauksbee
+        env:
+          # Windows release assets are never allowed to leave this job
+          # unsigned. Store the PFX as base64 (one-line or whitespace-wrapped)
+          # and keep its password in a separate repository/environment secret.
+          # The packager consumes these only when the explicit requirement
+          # switch below is present; ordinary local bundles stay unsigned.
+          HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64 }}
+          HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD }}
+          # Optional override for the RFC 3161 timestamp service. When absent,
+          # scripts/bundle-windows.ps1 uses timestamp.digicert.com.
+          HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL }}
         run: |
-          .\scripts\bundle-windows.ps1 -Version "${{ steps.ver.outputs.version }}" -ExpectedCommit "${{ steps.ver.outputs.source_sha }}" -Out dist
+          .\scripts\bundle-windows.ps1 -Version "${{ steps.ver.outputs.version }}" -ExpectedCommit "${{ steps.ver.outputs.source_sha }}" -Out dist -RequireAuthenticodeSignature
           $V = "${{ steps.ver.outputs.version }}"
           $zip = "dist\hauksbee-$V-windows-x86_64-permissive.zip"
           $sum = "$zip.sha256"
@@ -696,6 +840,24 @@ jobs:
           $root = Join-Path $extract "hauksbee-$V-windows-x86_64-permissive"
           foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
             if (-not (Test-Path (Join-Path $root "bin\$binary"))) { throw "$binary missing from Windows bundle" }
+          }
+          $signToolCommand = Get-Command signtool.exe -ErrorAction SilentlyContinue
+          $signToolPath = if ($null -ne $signToolCommand) {
+            $signToolCommand.Path
+          } else {
+            $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+            Get-ChildItem -LiteralPath $kitsRoot -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match '^10\.0\.[0-9.]+$' } |
+              Sort-Object Name -Descending |
+              ForEach-Object { Join-Path $_.FullName "x64\signtool.exe" } |
+              Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+              Select-Object -First 1
+          }
+          if ([string]::IsNullOrWhiteSpace($signToolPath)) { throw "signtool.exe is unavailable; refusing to publish an unverified Windows bundle" }
+          foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
+            $binaryPath = Join-Path $root "bin\$binary"
+            & $signToolPath verify /q /pa /all $binaryPath | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for packaged $binary" }
           }
           if (-not (Test-Path (Join-Path $root "LICENSE-BINARY.txt"))) { throw "LICENSE-BINARY.txt missing" }
           $doctor = & (Join-Path $root "bin\hauksbee.exe") doctor | Out-String
@@ -1035,6 +1197,10 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
+          # SemVer prerelease tags (for example v0.1.0-beta.1) must remain
+          # visibly pre-release and must not replace the latest stable pointer.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           target_commitish: ${{ github.sha }}
           body: |
             Source commit: `${{ github.sha }}`

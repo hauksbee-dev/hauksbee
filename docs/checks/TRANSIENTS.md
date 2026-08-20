@@ -14,7 +14,7 @@ The pieces:
    (ESP32 boot/WiFi-TX/deep-sleep, a generic MCU, a servo/BLDC class), stamped
    as a time-varying current sink on the part's supply pin.
 2. **Capacitor ESR/ESL**: opt-in series parasitics that turn decoupling from
-   ideal to honest, so the rail sags the way the real board's does.
+   ideal to honest, so the modeled rail captures the effects seen in hardware.
 3. **Battery protection**: a BMS over-current cutoff on the battery supply, so
    the inrush-vs-protection interaction is modelled.
 4. **The scenario runner**: a `[[scenario]]` spec section that attaches a
@@ -22,9 +22,9 @@ The pieces:
    (min/max/dip-duration/recovery, protection-trip yes/no).
 
 Everything is cross-checked against hand math: the analytic decoupling-sag
-tests below match the solver to better than 1%, and the same Isource machinery
-is verified to give identical results in both the monolithic and partitioned
-solver paths.
+tests below match the solver to better than 1%, and the PWL `Isource` machinery
+used by profile loads gives identical results in both the monolithic and
+partitioned solver paths.
 
 ---
 
@@ -104,8 +104,8 @@ its value each chunk from `profile.current_at(t)`. This rides the existing
 `decoupling_sag.rs::profile_isource_agrees_in_both_solver_paths` drives the same
 PWL-current-step decoupling network through `Partitioning::Off` and
 `Partitioning::Auto` and asserts the rails agree to better than 0.1% and both
-match the closed form to <1%. So a profile-driven load is carried identically
-by either path. No extra machinery was needed.
+match the closed form to <1%. This validates the current-input-column machinery
+used by profile-driven loads; it is not a hardware measurement.
 
 ---
 
@@ -128,14 +128,15 @@ two internal nodes (`crates/hauksbee-engine/src/decoupling.rs`):
 This is purely additive: the solver already handles R, L and C, and it works
 identically in both solver paths (the RLC island is linear). When ESR and ESL
 are both zero, the network collapses to the ideal capacitor (zero legs are
-skipped), so existing analytic capacitor tests are bit-unchanged.
+skipped), so the zero-parasitic case is the ideal-capacitor model.
 
 ### Defaults (opt-in, cited)
 
 Defaults are looked up by package / dielectric class, inferred from each cap's
 footprint string and value. They are **off by default**: the binder stamps ideal
 capacitors unless a scenario requests parasitics (`[decoupling] parasitics =
-true`) or names a per-ref override. This keeps global behaviour unchanged.
+true`) or names a per-ref override. Unrequested runs continue to use ideal
+capacitors.
 
 | class        | ESR     | ESL    | source                                   |
 |--------------|---------|--------|------------------------------------------|
@@ -246,9 +247,12 @@ code, and GitHub annotations for free.
 
 The `rail_window` assertion measures over the scenario's window
 (`start_ms` to end of run): minimum / maximum voltage, total dip time below a
-threshold (rectangular integration on the frame grid), and recovery time (first
-dip below `dip_below` to last sample below `recover_to`). `protection_trip`
-reports whether any battery supply's protection latched during the run.
+threshold (rectangular integration on the sampled frame grid), and recovery
+time. Minimum and maximum include the solver's intra-frame extrema. Recovery is
+measured from the first sample below `dip_below` to the first sample at or above
+`recover_to` after the last below-threshold sample, and is infinite when the rail
+never recovers. `protection_trip` is run-wide when no scenario is supplied; with
+`scenario = ...`, it reports only trips inside that scenario window.
 
 ---
 
@@ -272,8 +276,8 @@ closed form in the test and checks the solver against it.
   60 mV.
 - **Both solver paths agree**: the same PWL-current-step network through
   `Partitioning::Off` and `Partitioning::Auto` matches the closed form to <1% and
-  each other to **< 0.1%**, proving the current-input-column machinery carries a
-  profile-driven load correctly.
+  each other to **< 0.1%**, validating the current-input-column machinery used by
+  profile-driven loads. This is solver evidence, not a hardware measurement.
 
 ### (b) The Inkplate-class two-sided demo
 
@@ -295,23 +299,23 @@ cell voltage. The USB-fed side is therefore modelled as the LDO's stiff
 *output*, a 3.3 V bench supply with a 3 A limit: the fixture has no VBUS net to
 regulate down, and stamping the USB 5 V straight onto the 3V3 net puts 5 V on the
 ESP32's VDD, which the stress monitor correctly flags as an overvoltage against
-the module's 3.6 V absolute maximum. That does not change the demonstrated
-physics: the headline is the battery-side protection tripping on the inrush while
-the stiff supply rides it out.
+the module's 3.6 V absolute maximum. The fixture therefore demonstrates
+battery-side protection tripping on the inrush while the stiff supply rides it
+out.
 
-Two sides, same firmware activity (`esp32_cold_boot_inrush`, ~1.2 A surge),
-ESR/ESL decoupling on both:
+Two sides, the same modeled load profile (`esp32_cold_boot_inrush`, ~1.2 A
+surge), with ESR/ESL decoupling on both:
 
 | side             | supply                       | protection | rail behaviour                                   | result   |
 |------------------|------------------------------|------------|--------------------------------------------------|----------|
-| **battery**      | 1S LiPo, 0.25 Ω, 400 mAh     | 1 A / 2 ms | **TRIPS** at ~4 ms; rail collapses below 3 V for 6.40 ms (dips to -0.300 V on the ESL kick) | brownout caught |
-| **stiff supply** | 3.3 V bench, 3 A limit       | none       | rail holds at **min 3.299 V** (max 3.300 V), no faults | survives |
+| **battery**      | 1S LiPo, 0.25 Ω, 400 mAh     | 1 A / 2 ms | **TRIPS** in the simulation; the modeled rail violates the brownout window | brownout caught |
+| **stiff supply** | 3.3 V bench, 3 A limit       | none       | modeled rail remains in the window; no simulated stress fault | survives |
 
-The contrast is the whole point: the same activity is fatal on a small cell and
-harmless behind a stiff supply, which is why the Inkplate failures were
-intermittent and supply-dependent. The trip is the protection state machine
-firing on the real solved rail current. The survival is the measured rail staying
-up.
+The contrast is the whole point: the same modeled activity is fatal on a small
+cell and harmless behind a stiff supply, which is why the Inkplate failure mode
+is supply-dependent. The trip is the protection state machine firing on the
+simulated rail current. The surviving rail is a simulated trace, not a hardware
+measurement.
 
 ### (c) Corpus calibration: Olimex ESP32-EVB, must PASS
 
@@ -319,11 +323,11 @@ up.
 `board-corpus/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch`
 (corpus-gated).
 
-A standard ESP32 WiFi-TX burst (240 mA over 40 mA baseline) on the **real**
-Olimex EVB with its robust wall supply holds **+3.3V at min 3.300 V**: the 0.1 Ω
-wall source and the board's own bulk plus decoupling swallow the burst outright,
-so the rail never leaves its nominal and never dips below the 3.1 V threshold at
-all.
+A standard ESP32 WiFi-TX burst (240 mA over 40 mA baseline) on the **corpus
+REV-L board design** with its modeled robust wall supply stays within the +3.3 V
+window: the 0.1 Ω source and the board's modeled bulk plus decoupling absorb the
+burst, so the simulated rail does not dip below the 3.1 V threshold. This is
+calibration evidence from a board-file simulation, not a hardware measurement.
 
 ```
 $ hauksbee-ci run olimex_burst.toml
@@ -346,14 +350,15 @@ hauksbee-ci: Olimex ESP32-EVB: WiFi burst on robust supply (calibration)
 GREEN - 2/2 assertions passed in 5.24s
 ```
 
-The EVB's `VDD1A-2A` net carries no `[[supply]]` in this spec, so the runner says
+The corpus design's `VDD1A-2A` net carries no `[[supply]]` in this spec, so the runner says
 so instead of quietly solving around a 0 V rail. It is the Ethernet PHY's
 analog-supply label, a net of its own rather than part of +3.3V, so the burst and
 the rail window judging it are untouched.
 
-This is the calibration side. A robust board ridden by a normal burst must not go
-red, or the load / supply models would be too pessimistic and the Inkplate-class
-red could not be trusted. It passing is what makes the brownout meaningful.
+This is the calibration side. A robust modeled board under a normal burst must
+stay green, or the load / supply models would be too pessimistic and the
+Inkplate-class red could not be trusted. The pass calibrates the simulation; it
+does not establish a measured hardware result.
 
 ---
 

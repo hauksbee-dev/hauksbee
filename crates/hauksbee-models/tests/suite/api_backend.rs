@@ -10,6 +10,45 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
 
+fn write_test_pdf(path: &std::path::Path) {
+    let stream = b"BT /F1 12 Tf 72 720 Td (IF 200mA VRRM 100V test datasheet body) Tj ET";
+    let objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        format!(
+            "<< /Length {} >>\nstream\n{}\nendstream",
+            stream.len(),
+            String::from_utf8_lossy(stream)
+        )
+        .into_bytes(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        pdf.extend_from_slice(object);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+    );
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    std::fs::write(path, pdf).expect("write valid test PDF");
+}
+
 /// A syntactically and physically valid diode card for the stub to answer
 /// with, so the full parse + validate + write path runs.
 const DIODE_TOML: &str = r#"[[models]]
@@ -80,13 +119,11 @@ fn api_backend_sends_the_documented_request_shape() {
     let (base, rx) = one_shot_server();
 
     let dir = tempfile::tempdir().unwrap();
-    // A text stand-in for the PDF: the backend under test never renders it,
-    // and extract_pdf_text degrades to a placeholder when it cannot. It must
-    // still carry the %PDF magic, because `run` prechecks the magic bytes
-    // before choosing a backend so a renamed HTML page is never shipped to an
-    // LLM; a header-less stand-in is rejected before any request goes out.
+    // The API backend requires extractable text because it cannot open local
+    // files. Use a tiny valid PDF so the end-to-end test does not depend on the
+    // old local-path fallback.
     let pdf = dir.path().join("1n914test.pdf");
-    std::fs::write(&pdf, "%PDF-1.4\nIF=200mA VRRM=100V test datasheet body").unwrap();
+    write_test_pdf(&pdf);
 
     let key_env = "HAUKSBEE_API_BACKEND_TEST_KEY";
     // SAFETY: this variable is unique to this test; nothing else reads it.

@@ -16,7 +16,7 @@ name = "model-extract"
 path = "src/bin/model_extract.rs"
 
 [dependencies]
-hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
+hauksbee-ir = { version = "0.1.0-beta.1", path = "../hauksbee-ir" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
