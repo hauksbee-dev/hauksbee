@@ -33,6 +33,16 @@ class WindowsPortContract(unittest.TestCase):
         ]
         self.assertNotIn("$LASTEXITCODE", version_check)
 
+    def test_qemu_identity_checks_are_output_and_payload_bound(self) -> None:
+        installer = read("scripts/install-sims-windows.ps1")
+        version_check = installer[
+            installer.index("function Assert-QemuVersion") :
+            installer.index("function New-VerifiedSnapshot")
+        ]
+        self.assertIn("$QemuAssetVersion", version_check)
+        self.assertIn("(?m)^esp32", version_check)
+        self.assertNotIn("$LASTEXITCODE", version_check)
+
     def test_verified_simulator_snapshots_preserve_zip_extension(self) -> None:
         installer = read("scripts/install-sims-windows.ps1")
         self.assertIn('$Asset.Name.EndsWith(".zip"', installer)

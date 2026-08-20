@@ -1,12 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { WebReport } from '../src/types/report'
 
-Object.assign(globalThis, {
-  __APP_VERSION__: '0.1.0',
-  __RELEASE_COMMIT__: '0'.repeat(40),
-  __RELEASE_TAG__: 'v0.1.0',
-})
-
 const { checksStorageKey } = await import('../src/components/ChecksView')
 const { boardBytesMatchExpected, canReanalyzeSavedSession, expectedBoardSha256 } = await import('../src/hooks/useSessions')
 const { sessionIdFor } = await import('../src/lib/session-store')
