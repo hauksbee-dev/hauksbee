@@ -2889,10 +2889,18 @@ mod tests {
 
     #[test]
     fn doorbell_custom_rule_provenance_names_override_and_coverage_gap() {
-        let parsed = hauksbee_extract::parse_kicad_dru(include_str!(
-            "../../../qc/blind_trials/work/doorbell/kicad/doorbell.kicad_dru"
-        ))
-        .unwrap();
+        let rules = r#"(version 1)
+(rule "fine-pitch routing clearance"
+  (constraint clearance (min 0.127mm)))
+(rule "via/NPTH hole-to-copper clearance"
+  (constraint hole_clearance (min 0.2mm)))
+(rule "PTH hole-to-copper clearance"
+  (condition "A.Pad_Type == 'Through Hole Pad'")
+  (constraint hole_clearance (min 0.28mm)))
+(rule "board-edge copper clearance"
+  (constraint edge_clearance (min 0.3mm)))
+"#;
+        let parsed = hauksbee_extract::parse_kicad_dru(rules).unwrap();
         let coverage = CustomRulesCoverage::from_parsed("doorbell.kicad_dru".into(), &parsed);
         let provenance = ClearanceRuleProvenance::custom_rules_file(0.127, Some(0.2), coverage);
         assert_eq!(
