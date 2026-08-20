@@ -12,10 +12,10 @@ judged.
 
 ## Why oracles are NOT bundled into hauksbee
 
-KiCad is a ~1.4 GB GPL-3.0 EDA suite. Vendoring it into hauksbee's
-distribution would bloat the package, impose GPL redistribution terms on
-hauksbee, and undercut the core premise: DRC from the copper, no EDA needed.
-So hauksbee **detects** an existing oracle install and uses it on demand.
+KiCad is a large GPL-3.0 EDA suite. Vendoring it into hauksbee's distribution
+would bloat the package, impose GPL redistribution terms on hauksbee, and
+undercut the core premise: DRC from the copper, no EDA needed. So hauksbee
+**detects** an existing oracle install and uses it on demand.
 "Bundling the oracle" means *wiring it in cleanly*, not shipping the binary.
 
 ## The DRC oracle: `kicad-cli`
@@ -23,11 +23,10 @@ So hauksbee **detects** an existing oracle install and uses it on demand.
 KiCad's own `kicad-cli pcb drc` is the ground truth for geometric DRC.
 
 **hauksbee auto-detects it** (`find_kicad_cli` in `hauksbee-engine`). It
-checks `kicad-cli` on `PATH`, then
-`*/Applications/KiCad*/{,KiCad.app/}Contents/MacOS/kicad-cli` and the
-Linux/Homebrew locations, and **prefers the highest version** (a KiCad-10 cli
-is required to read the `version 20260206` board format; KiCad 9's cli fails
-to load those files with "Failed to load board").
+checks `kicad-cli` on `PATH` and standard platform application locations, and
+**prefers the highest version** (a KiCad-10 CLI is required to read the
+`version 20260206` board format; KiCad 9's CLI fails to load those files with
+"Failed to load board").
 
 **Use it** with `--oracle` on a DRC run:
 
@@ -95,21 +94,18 @@ KiCad 10 stable is in Homebrew:
 brew install --cask kicad          # needs sudo for the /Library demos artifact
 ```
 
-If you cannot give sudo (headless / sandbox), install just the app from the
-cached dmg with no sudo (this is what is installed on this machine, at
-`~/Applications/KiCad10/KiCad.app`, leaving any existing `/Applications/KiCad`
-untouched):
+If you cannot give sudo (for example in a headless or sandboxed environment),
+install the app in a user-writable directory from the downloaded package. The
+auto-detector searches `PATH` and standard application locations; verify the
+resolved tool with `hauksbee doctor --backends`.
 
 ```
-DMG=$(brew --cache --cask kicad)
-hdiutil attach "$DMG" -nobrowse -mountpoint /tmp/kicad10mnt
-mkdir -p ~/Applications/KiCad10
-cp -R /tmp/kicad10mnt/KiCad/KiCad.app ~/Applications/KiCad10/
-hdiutil detach /tmp/kicad10mnt -force
+DMG=/path/to/KiCad.dmg
+hdiutil attach "$DMG" -nobrowse -mountpoint /tmp/kicad-mnt
+mkdir -p "$HOME/Applications"
+cp -R /tmp/kicad-mnt/KiCad/KiCad.app "$HOME/Applications/"
+hdiutil detach /tmp/kicad-mnt -force
 ```
-
-hauksbee's auto-detect finds it in `~/Applications` automatically. No PATH
-change is needed.
 
 ## The analog oracle: `ngspice`
 

@@ -58,7 +58,6 @@ own board, firmware, and spec, and the one local command that runs them, and
 | File | Covers |
 |---|---|
 | [`models/MODELS.md`](models/MODELS.md) | Device models: built-in, SPICE, datasheet extraction |
-| [`models/BOARD_MODELING_WORKFLOW.md`](models/BOARD_MODELING_WORKFLOW.md) | Human-first browser/CLI model workflow, approvals, public-board journey, and multi-board regeneration |
 | [`models/PACKS.md`](models/PACKS.md) | Model-pack format: bundle + share model/sensor/logic data |
 
 **"How do I wire it into a pipeline?"**: [`ci/`](ci/)
@@ -75,16 +74,8 @@ own board, firmware, and spec, and the one local command that runs them, and
 
 | File | Covers |
 |---|---|
-| [`evidence/KNOWN_FAULTS_VALIDATION.md`](evidence/KNOWN_FAULTS_VALIDATION.md) | Eight documented faults on four famous boards: which ones hauksbee catches, and the honest miss |
-| [`evidence/BUG_HUNT.md`](evidence/BUG_HUNT.md) | The Raspberry Pi 4 USB-C fault re-derived cold, with the hand-checked numbers |
-| [`evidence/FAMOUS_SWEEP.md`](evidence/FAMOUS_SWEEP.md) | The famous-board sweep: zero findings, zero false positives, and what that proves |
-
-**"How does it actually work, from first principles?"**: [`learn/`](learn/) and [`how-and-why/`](how-and-why/)
-
-| Path | Covers |
-|---|---|
-| [`learn/`](learn/) | The ten-chapter course: from copper to a co-simulated solve, taught from this codebase |
-| [`how-and-why/`](how-and-why/) | Per-crate deep dives: how each crate works and why it is built that way |
+| [`evidence/README.md`](evidence/README.md) | Evidence scope and the public boundary |
+| [`evidence/CORPUS.md`](evidence/CORPUS.md) | Pinned board inventory, formats, and gate coverage |
 
 **"What is this thing, honestly?"**: [`about/`](about/)
 
@@ -104,11 +95,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 | [`spice-compat/`](spice-compat/) | SPICE compatibility statement and ngspice cross-check results |
 | [`assets/`](assets/) | Images embedded by docs |
 
-Four directories are internal working notes rather than user-path docs, and this
-map indexes none of them: `record/`, `teach/`, `dev-plans/` (implementation plans
-and their status) and `hunts/` (raw bug-hunt logs). Together they are well over a
-hundred files in the development tree, and a release does not carry them. So
-"every doc" here means every doc in the shipped set.
+This map covers the public documentation shipped with the repository.
 
 ## Outside `docs/`
 
@@ -116,6 +103,5 @@ hundred files in the development tree, and a release does not carry them. So
 |---|---|
 | [`../COMPLIANCE.md`](../COMPLIANCE.md) | Licence compliance, one row per shipped artifact and what redistributing it obliges |
 | [`../crates/hauksbee-mcp/README.md`](../crates/hauksbee-mcp/README.md) | The stdio MCP server: the six tools, including read-only staged model coverage, install, and registration |
-| [`../agents/AGENTS.md`](../agents/AGENTS.md) | The agent-facing contract: JSON shapes, exit codes, full MCP tool schemas |
 
 Root: `START_HERE.md`, `PROJECT_LAYOUT.md`, `STYLE.md`, and this map.

@@ -1,15 +1,9 @@
 # CI for hardware
 
 **On every layout change: boot the firmware on the emulated board, assert the
-rail comes up above 4.9 V, assert the UART says hello, assert the LED blinks.**
+rail comes up above 4.9 V, assert the UART says hello, and assert the LED blinks.**
 
-One habit transformed software: run the tests on every commit. A red build
-stops a regression before it reaches anyone. Hardware has had nothing like it.
-A board change goes from a layout edit to a fab order to a reflow oven to a
-bench session weeks later. The first time anyone learns the rail browns out is
-with a multimeter in hand.
-
-`hauksbee-ci` closes that loop. It runs the hauksbee PCB emulator headless in
+`hauksbee-ci` runs the hauksbee PCB emulator headless in
 a pipeline. Point it at a board file and (optionally) a firmware ELF, and give
 it a short list of assertions in a checked-in TOML file. It boots the firmware
 on the board the layout actually implements. It then reports, with an exit
@@ -553,10 +547,8 @@ min = 3.0             # the driven level (V) the firmware must reach
 deadline_ms = 20.0    # by this long after reset
 ```
 
-`boot_coverage` was spelled `boot-coverage` before every kind settled on one
-naming convention; the old spelling is accepted as a silent alias, forever,
-so a spec that was correct when written stays correct. New specs and waivers
-should use `boot_coverage`.
+The assertion kind is `boot_coverage`; `boot-coverage` remains accepted as an
+alias. New specs and waivers should use `boot_coverage`.
 
 See [the boot_coverage section](#boot-coverage-watching-the-firmware-define-a-hi-z-control-net) for what problem this solves and the two-sided demo.
 
@@ -565,8 +557,8 @@ See [the boot_coverage section](#boot-coverage-watching-the-firmware-define-a-hi
 Analogue accuracy is capped by model availability, and part of that cap is
 outside your control: many vendors encrypt their SPICE and IBIS models. What
 you can control is whether the number is visible and whether it is allowed to
-fall. Pin what your board reaches today, and the day a new part drops coverage
-the build says so instead of quietly simulating a hole.
+fall. Pin the coverage your board currently reaches; if a new part drops
+coverage, the build says so instead of quietly simulating a hole.
 
 ```toml
 [[assert]]
@@ -667,9 +659,9 @@ waiver file gives the same verdict whichever gate reads it, so a waiver is a
 real staged-rollout mechanism: land the board, waive the one finding you have
 judged (with a reason and an expiry), and the rest of the suite keeps gating.
 
-A check that fires on your board and is wrong leaves you two bad options: live
-with a red build, or stop running the check. Nobody removes one rule, they drop
-the suite, and then the tool stops catching the things it was right about.
+A check that fires on your board and is wrong should be waived with a reason and
+expiry while it is reviewed; removing the whole suite also removes its valid
+coverage.
 
 A waiver is the third option. Put `hauksbee-waivers.toml` beside the board:
 
@@ -855,8 +847,8 @@ from **4.987 V to 0.802 V**: one stray boot-time bit makes the whole network
 non-functional, and the fuzzing is what surfaces it (a single all-low run would
 have looked healthy; five of the eight power-up states do).
 
-Now the repair. The documented fix is a real milliohm sense shunt. Expressed as
-a one-line override on the same board, same fuzz, same assertion:
+The repaired variant uses a milliohm sense shunt, expressed as a one-line
+override on the same board, fuzz, and assertion:
 
 ```toml
 # crates/hauksbee-ci/examples/tarski_brownout_repaired.toml
@@ -872,19 +864,17 @@ value = "0.05"            # milliohm-class sense shunt instead of 1 kΩ
 1/1 assertions passed - GREEN
 ```
 
-With the milliohm shunt the same enabled weight cannot drop the rail. It
-holds at **4.987 V** across all eight power-up states. The single override is
-the whole difference between RED and GREEN. That is the model: a bug that
-cost weeks on the bench is now caught in 0.1 s, on every layout change, by a
-regression that can never be silently lost.
+With the milliohm shunt the same enabled weight holds the rail at **4.987 V**
+across all eight power-up states. The single override changes the verdict from
+RED to GREEN.
 
-These two specs are also an integration test
+These two specs are also covered by an integration test
 (`crates/hauksbee-ci/tests/flagship_brownout.rs`), so hauksbee's own CI
 proves the broken layout stays red and the fixed one stays green.
 
 ## Boot coverage: watching the firmware define a Hi-Z control net
 
-There is a class of fault the *netlist alone cannot adjudicate*. A control
+Some faults cannot be adjudicated from the *netlist alone*. A control
 net (a MOSFET gate, a level-translator enable, a display reset, a
 chip-select) is driven only by an MCU GPIO that goes high-impedance at reset.
 Its power-up default is therefore undefined. Whether that is a *bug* depends
@@ -932,22 +922,22 @@ integration test, `crates/hauksbee-ci/tests/boot_coverage.rs`.
 
 This proof uses the **AVR (simavr)** backend, one of hauksbee's **three**
 co-sim backends. The mechanism is backend-agnostic and runs on all three.
-Besides AVR, the **Renode** backend co-sims STM32, **nRF52**, and SiFive
-RISC-V, and the **QEMU** backend co-sims ESP32 / ESP32-S3 / ESP32-C3 (see
-`docs/cosim/MCU.md` for the full matrix). nRF52 works out of the box today:
+Besides AVR, the **Renode** backend co-sims supported STM32, **nRF52840**, and
+SiFive RISC-V, and the **QEMU** backend co-sims ESP32 / ESP32-S3 / ESP32-C3 (see
+`docs/cosim/MCU.md` for the full matrix). The nRF52840 fixture boots with:
 `hauksbee run` boots the bundled
 `testdata/firmware/renode_demos/nrf52840-zephyr_shell.board` +
 `nrf52840-zephyr_shell.elf` pair to the Zephyr `uart:~$` prompt through
 Renode.
 
-A backend covers both faulted boards named above: ZSWatch is nRF52 (Renode)
-and Watchy is ESP32 (QEMU), and both architectures co-sim. What each still
-needs to run *this* boot_coverage check is its own firmware image built for
-the target.
+Watchy uses an ESP32 QEMU path. ZSWatch uses nRF5340, for which Hauksbee does
+not currently ship a Renode platform. A `boot_coverage` assertion requires a
+supported backend plus firmware built for that exact target; the bundled
+two-sided proof is AVR.
 
 Honest per-backend caveat for boot_coverage: GPIO-drive detection reads the
 port's output register once per co-sim chunk. On AVR (cycle-accurate simavr)
-and Renode (STM32/nRF52 ODR poll) that read is direct. The ESP32 QEMU model
+and Renode (STM32/nRF52840 ODR poll) that read is direct. The ESP32 QEMU model
 does not expose GPIO output read-back, so the firmware must mirror its output
 word to the RAM mailbox the backend reads (the bundled ESP32 demo does).
 Edges faster than the chunk alias on the poll bridge either way, so match the
@@ -964,15 +954,9 @@ junctions, labels, power symbols, hierarchy). See `docs/ingest/SCHEMATICS.md`.
 Everything else in this document, supplies, drives, fuzzing, every assertion
 kind, works unchanged.
 
-This is where the most expensive hardware bugs are cheapest to catch. They
-are schematic-level faults: the original Raspberry Pi 4's USB-C port that
-would not charge from compliant cables was a *schematic* mistake (the two CC
-pins shared one resistor instead of one each), shipped on millions of boards.
-A rail that browns out, a missing pull-up, a power pin on the wrong net, an
-interaction between a wrong value and a floating strap: these are all
-decidable from the schematic alone, weeks before a layout exists.
-Schematic-stage CI is the commit that turns "we found it on the bench" into
-"the build went red."
+Schematic-level faults include a brownout, a missing pull-up, a power pin on the
+wrong net, or an interaction between a wrong value and a floating strap. These
+are decidable from the schematic before a layout exists.
 
 ```toml
 # A schematic-stage spec: board is a .kicad_sch hierarchy root.
@@ -1036,12 +1020,10 @@ must agree.
 ### Editor integration: the honest state
 
 KiCad's PCB editor (pcbnew) has an action-plugin API, and hauksbee-ci ships a
-plugin for it (`integrations/kicad-plugin`). The **schematic editor
-(eeschema) has no equivalent yet**: KiCad's new IPC plugin API is implemented
-for the PCB editor only in KiCad 9 and 10, schematic-editor support is
-explicitly future work, and headless operation through `kicad-cli` only
-arrives in KiCad 11. This documentation does not fake an eeschema button that
-cannot exist.
+plugin for it (`integrations/kicad-plugin`). The **schematic editor (eeschema)
+has no hauksbee plugin integration**. Use the pre-commit hook or the CLI for
+schematic-stage checks; the project PCB plugin can discover specs whose board
+is a schematic.
 
 So drive schematic-stage CI the way it is actually natural to drive it:
 
@@ -1055,12 +1037,10 @@ So drive schematic-stage CI the way it is actually natural to drive it:
 - **From pcbnew, on the project**: the pcbnew plugin discovers every spec next to
   the board (and in a sibling `ci/`), including specs whose `board` is the
   project's `.kicad_sch`, so you can run a schematic-stage check from the PCB
-  editor on the same project today.
+  editor on the same project.
 
-When eeschema gains a plugin API, the entry point drops in next to the
-existing one: the shared core (`hauksbee_ci_core.py`) is already
-file-type-agnostic. It only handles the spec path, and the binary does the
-rest.
+The shared core (`hauksbee_ci_core.py`) is file-type-agnostic; it handles the
+spec path and the binary performs the check.
 
 ## Wiring it into your repo
 
@@ -1148,11 +1128,8 @@ present-and-ignored.
 
 Both grade on the finding's own `gating` flag, which the `--json` findings carry
 too, and NOT on the severity word. The gates are wider than the `serious`
-severity (below), so a run that gates on a medium lint finding or on a co-sim
-fault used to archive `failures="0"` beside its red verdict and exit 2, and a
-dashboard reading the artifact instead of the exit code was told the build was
-fine. The `invalid` route keeps its own shapes: a whole-run refusal is a JUnit
-`<error>` and a SARIF `hauksbee/invalid-for-analysis` result, never a
+severity below. The `invalid` route keeps its own shapes: a whole-run refusal is
+a JUnit `<error>` and a SARIF `hauksbee/invalid-for-analysis` result, never a
 `<failure>`. The routes that go through an evidence finding instead (unbound
 verdict-critical parts, undermined run-level coverage) are a `<failure>` like
 any other gate-grade finding, so what tells those apart is the text
@@ -1214,16 +1191,12 @@ the CLI says so on stderr.
 | 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict` that raised no faults, thermal table with no usable coverage, a PARTIAL-coverage `--thermal` result, undermined run-level evidence under `--strict`, or unbound verdict-critical parts on a model-dependent surface under `--strict`, see below) |
 
 `--thermal` gates on coverage **by default**: a partial-coverage table (real
-rows while an active power IC on the live circuit is open/unresolved) exits 3,
-because a table that understates the true thermal load must not read as "runs
-cool". This is a deliberate default flip: a pipeline that ran bare `--thermal`
-on a partial-coverage board and relied on exit 0 will now see exit 3, and the
-fix is either to bind the named power ICs or to pass `--no-strict-thermal`.
-The opt-out restores the old non-strict behaviour (exit 0 for partial coverage
-and for undermined thermal evidence) while the INCONCLUSIVE coverage caveat
-still prints on stderr and rides the JSON `notes`. `--strict-thermal` is
-accepted as a quiet no-op: it used to opt in to what is now the default, so
-invocations that passed it keep their exact behaviour.
+rows while an active power IC on the live circuit is open or unresolved) exits
+3, because a table that understates the true thermal load must not read as
+"runs cool". Bind the named power ICs or pass `--no-strict-thermal` for a
+report-only result. The INCONCLUSIVE coverage caveat remains on stderr and in
+the JSON `notes`. `--strict-thermal` is accepted as an equivalent explicit
+selection of the default policy.
 
 The INCONCLUSIVE verdict never moves an exit code on its own. When
 current-carrying / active parts have no model, `--lint` / `--si` / `--check`
@@ -1309,8 +1282,9 @@ one run concluded.
 ## Limitations
 
 - The MCU co-sim runs on three backends, each co-simming its own cores (no
-  silent fall-back to AVR): **AVR** (ATmega/ATtiny via simavr), **Renode**
-  (STM32, nRF52, SiFive RISC-V), and **QEMU** (ESP32/-S3/-C3). Renode and
+  silent fall-back to AVR): **AVR** (shipped pin-map recipes target
+  ATmega328P), **Renode** (supported STM32, nRF52840, SiFive RISC-V), and
+  **QEMU** (ESP32/-S3/-C3). Renode and
   QEMU are external emulators located at run time. If the emulator is not
   installed, instantiation fails with a clear install message rather than
   degrading to a different core. `hauksbee doctor --backends` reports which
@@ -1346,12 +1320,9 @@ one run concluded.
 
 ## For contributors: the static-check corpus gates
 
-The real-browser release layer is documented separately in
-[`RELEASE_BOARD_GATES.md`](RELEASE_BOARD_GATES.md). It distinguishes the
-exhaustive known-corpus journey from the exactly-five external unseen-board
-iteration and records append-only, content-addressed evidence. These browser
-gates complement the static-check calibration below; neither is evidence that
-the other ran.
+Release candidates also run browser and unseen-board gates. Those gates retain
+their own content-addressed receipts; they do not imply that the static-check
+corpus below ran, and the static corpus does not imply browser coverage.
 
 This section is about hauksbee's own test discipline, not about writing specs.
 The bring-up CI this page documents runs *firmware on a board under

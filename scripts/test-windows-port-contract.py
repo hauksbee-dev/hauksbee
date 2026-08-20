@@ -48,6 +48,48 @@ class WindowsPortContract(unittest.TestCase):
         self.assertIn("hauksbee-$V-windows-x86_64-permissive.zip", release)
         self.assertIn("LICENSE-BINARY.txt", release)
 
+    def test_windows_release_requires_authenticode_before_and_after_compression(self) -> None:
+        release = read(".github/workflows/release.yml")
+        bundle = read("scripts/bundle-windows.ps1")
+
+        # The release job must opt into the fail-closed path and provide the
+        # certificate material only through masked environment secrets.
+        package_step = release[
+            release.index("- name: Package and verify permissive Windows zip") :
+            release.index("- name: Upload Windows build artifact")
+        ]
+        self.assertIn("-RequireAuthenticodeSignature", package_step)
+        for secret in (
+            "HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64",
+            "HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD",
+            "HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL",
+        ):
+            self.assertIn(f"secrets.{secret}", package_step)
+        self.assertIn("signtool.exe", package_step)
+        self.assertIn("verify /q /pa /all", package_step)
+
+        # The packager leaves ordinary local calls unsigned, but its explicit
+        # release switch requires both credentials and a verifiable signature
+        # on every staged executable before Compress-Archive runs.
+        self.assertIn("if (-not $RequireAuthenticodeSignature)", bundle)
+        for secret in (
+            "HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64",
+            "HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD",
+        ):
+            self.assertIn(secret, bundle)
+        self.assertIn("/fd SHA256", bundle)
+        self.assertIn("/tr $timestampUrl", bundle)
+        self.assertIn("/td SHA256", bundle)
+        self.assertIn("verify /q /pa /all", bundle)
+        self.assertIn("Resolve-SignTool", bundle)
+        self.assertLess(
+            bundle.index("    Sign-And-VerifyBinaries $binDir $work"),
+            bundle.index("Compress-Archive -LiteralPath"),
+            "the zip must be assembled only after Authenticode signing and verification",
+        )
+        self.assertIn("HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64 is missing", bundle)
+        self.assertIn("HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD is missing", bundle)
+
     def test_windows_bundle_contains_every_release_binary_and_checksum(self) -> None:
         bundle = read("scripts/bundle-windows.ps1")
         for binary in ("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe"):

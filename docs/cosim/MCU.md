@@ -54,7 +54,7 @@ per-port output hook that fires `on_pin_change`, and it raises the pins it
 returns onto their ioport input IRQs *synchronously*, before the firmware's
 next instruction. All bits changed by one port-register write are delivered in
 one batch, so a multipin device evaluates the externally visible final levels,
-not a transient bit-order artifact. The legacy single-edge hook remains the
+not a transient bit-order artifact. The single-edge hook remains the
 source-compatible fallback. A backend must separately advertise
 `input_responder_synchronous()` before the engine trusts that optional hook; it
 may then own a memory with one mutable MCU input and otherwise ground-only
@@ -149,11 +149,11 @@ only name the part. Those two remain code changes by design.
 
 ### Peripheral-coupling coverage (what each backend actually implements)
 
-The `Mcu` trait above is the full contract, and all three backends now
-implement every coupling, at different fidelity tiers, stated honestly
-below. GPIO (both directions) and UART co-sim work identically on all
-three; ADC injection and I2C/SPI byte interception are exact on the
-in-process AVR backend and bridged/contracted on the external emulators.
+The `Mcu` trait is the capability surface; actual support and fidelity vary by
+backend and part. Missing, dropped, or unexercised paths are reported. QEMU
+ADC/I2C/SPI exchange requires the documented firmware-mailbox contract;
+ordinary declarative sensor/peripheral attachments do not create a native QEMU
+bus model.
 
 | Coupling | AVR (`simavr`) | Renode (STM32/nRF/RISC-V) | QEMU (ESP32/-S3/-C3) |
 |----------|----------------|---------------------------|----------------------|
@@ -161,8 +161,8 @@ in-process AVR backend and bridged/contracted on the external emulators.
 | GPIO in (`set_digital_in`) | yes | yes | firmware-mailbox contract (gdbstub `M` write) |
 | UART (`uart_write` / `on_uart`) | yes | yes | yes (serial socket) |
 | ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write), and only where a descriptor declares one: `renode:stm32f072` inputs 0..7 and `renode:rp2040` inputs 0..3 are live-proven. STM32F103/F4/nRF52/FE310 model no ADC peripheral in their stock platforms, so injections there are DROPPED and surfaced on every report surface that runs the external backend (run text, `--plain`, `--json`, hauksbee-ci, and the TUI pane), never silently. The synchronous web front door refuses external-emulator runs before these scheduler signals exist and points to live/CLI co-sim instead. See "ADC / bus coverage by platform" | yes, RAM-mailbox count slots (firmware contract) |
-| I2C slave models (`on_i2c`) | yes (TWI decode) | yes on platforms whose descriptor names controllers (STM32F103/F4 `i2c1`, nRF52840 `twi0`/`twi1`); a slave bound on a controller-less platform is recorded as UNEXERCISED on every report surface that runs that backend, and a CI `peripheral` assertion against it FAILS | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
-| SPI slave models (`on_spi`) | yes | yes on platforms with named controllers (STM32F103 `spi1` via `extra_repl`, F4 `spi2`/`spi3`, nRF52840 `spi2`); controller-less platforms get the same UNEXERCISED recording/surfacing | yes, RAM-mailbox bus cells (firmware contract) |
+| I2C slave models (`on_i2c`) | yes (TWI decode) | yes on platforms whose descriptor names controllers (STM32F103/F4 `i2c1`, nRF52840 `twi0`/`twi1`); a slave bound on a controller-less platform is recorded as UNEXERCISED on every report surface that runs that backend, and a CI `peripheral` assertion against it FAILS | firmware-mailbox contract only; declarative bus attachments are NO-OP, while temperature can be pushed into the machine's own tmp105 |
+| SPI slave models (`on_spi`) | yes | yes on platforms with named controllers (STM32F103 `spi1` via `extra_repl`, F4 `spi2`/`spi3`, nRF52840 `spi2`); controller-less platforms get the same UNEXERCISED recording/surfacing | firmware-mailbox contract only; declarative bus attachments are NO-OP |
 | Drive direction (`pins_configured_output`) | yes (DDR hooks) | yes on dir-mapped platforms: STM32F103 (CRL/CRH), STM32F4 (MODER), nRF52840 (DIR), polled alongside the ODR; RP2040/FE310 carry no verified dir map and stay direction-blind | yes on the capability-probed patched build (real GPIO ENABLE); no on the mailbox fallback, which carries levels only |
 
 Drive direction is what lets a boot-state check tell a held-LOW output from
@@ -209,53 +209,23 @@ the fork grows the corresponding peripheral hook.
 
 ### Clock fidelity by backend: does a firmware delay cost the right virtual time?
 
-Two of the assertions hauksbee sells are time-based, so this is the table to
-read before you trust one. It answers a single question per backend: firmware
-whose real-silicon half-period is a known quantity is booted, and the ratio
-below is the rate simulated time ran at, divided by the rate the part runs at.
-`1.00x` means a `sleep_ms(20)` costs 20 ms of virtual time. Above `1.00x`
-means virtual time is CHEAPER than the board's, which is the direction that
-turns a rate no hardware can hit into a passing assertion.
+Two assertions are time-based, so this section states whether each backend's
+timing is exact, gated, or qualified. Treat a qualified or unmeasured path as a
+limitation rather than as a silicon-equivalent clock.
 
-Every number is measured on this host, not derived from a datasheet.
+| Backend | timing status | evidence or limitation |
+|---------|---------------|------------------------|
+| `simavr:atmega328p` | cycle-exact model | `tests/clock_truth.rs` and the AVR timing contract |
+| `renode:stm32f072` | unmeasured; claims qualified | the stock RCC is a stub and has no two-sided clock-truth gate |
+| `renode:rp2040` | clock-truth gate passes | stock pico-sdk timing fixture |
+| `renode:stm32f103` / `stm32f4_discovery` / `nrf52840` | clock-truth gate passes | SysTick timing fixture in `tests/clock_truth.rs` |
+| `renode:sifive_fe310` | `mtime` gate passes; instruction timing is not silicon-gated | `tests/clock_truth.rs` |
+| `qemu:esp32` / `-s3` / `-c3` | approximate and host-load dependent | `tests/qemu_clock_truth.rs`; reports carry a timing limitation |
 
-| Backend | ratio | how it is measured |
-|---------|-------|--------------------|
-| `simavr:atmega328p` | **1.00x, exact** | cycle-exact by construction: 80,000 cycles per 5 ms chunk is 16.000 MHz, and one `_delay_ms(5)` toggle per chunk |
-| `renode:stm32f072` | **unmeasured; timing claims qualified** | its reset-default 8 MHz is declared and load-checked, but the stock RCC is a stub and no two-sided clock-truth firmware gate exists |
-| `renode:rp2040` | **1.00x** | stock pico-sdk firmware, 20 ms of virtual time per `sleep_ms(20)` |
-| `renode:stm32f103` | **1.00x** (was 9.09x fast) | `tests/clock_truth.rs`, a SysTick-timed 100 ms half-period |
-| `renode:stm32f4_discovery` | **1.00x** (was 4.51x fast) | same gate |
-| `renode:nrf52840` | **1.00x** (was 6.58x fast) | same gate |
-| `renode:sifive_fe310` | **1.00x on `mtime`** (the stock platform declared it 1892x wrong); instruction timing corrected but not silicon-gated, see below | `tests/clock_truth.rs`, an mtime-timed 100 ms half-period, two-sided (the gate is also proven to FAIL a deliberately wrong rate) |
-| `qemu:esp32` / `-s3` / `-c3` | **0.94x measured, host-load dependent** (was 1.35x-1.63x biased when the QMP round-trip slack went uncredited) | `tests/qemu_clock_truth.rs`, `vTaskDelay(100 ms)` toggles priced in credited time; carries a runtime timing caveat, see below |
-
-**What was wrong, and why nothing caught it.** Four Renode platforms ran
-simulated time at the EMULATOR's clock rate instead of the part's. The stock
-`platforms/cpus/stm32f103.repl` declares `nvic systickFrequency: 72000000`
-against a descriptor that declares an 8 MHz part, and 72/8 is exactly the 9.09x
-measured; `stm32f4.repl` carries the same 72 MHz line against a 16 MHz part, for
-4.51x. Every stock platform also left `cpu PerformanceInMips` at Renode's 100,
-against roughly 8 MIPS of real F103 silicon, which is the 7.14x an instruction
-busy-wait showed. The nRF52840's platform declared neither property, so both
-fell to Renode defaults with no relation to the part.
-
-Nothing complained because the descriptor's `frequency_hz` was decorative on
-Renode: it cancels out of both `cycles = seconds * frequency_hz` and
-`Mcu::frequency`, so the descriptor could disagree with its platform by 9x in
-silence. RP2040 was right for the opposite reason: its platform is hauksbee's
-own, and it set `PerformanceInMips` and `systickFrequency` to the part's real
-125 MHz and carried real clock-tree models.
-
-**How it is prevented rather than just corrected.** Each affected descriptor now
-declares the part's clock inline (`platform_repl` accepts multi-line `.repl`
-source, so a stock platform is extended with a `using` line and two properties
-rather than vendored), and the descriptor loader cross-checks those declarations
-against `frequency_hz` and REFUSES a mismatch, or a Renode platform that
-declares no core clock at all (`soc::check_clock_declarations`). A new part
-cannot be added with a lying clock. `tests/clock_truth.rs` then measures each
-gated part against real firmware and fails outside 5%, because a declaration
-proves what the platform says and only a measurement proves what it does.
+The descriptor loader cross-checks each declared clock against its platform and
+refuses a mismatch or a Renode platform with no core-clock declaration
+(`soc::check_clock_declarations`). `tests/clock_truth.rs` gates supported parts
+against firmware and fails outside the allowed tolerance.
 
 **Which clock each part declares, and why.** The reset default, in every case
 where firmware has not configured a PLL: 8 MHz HSI on the F103 (RM0008 §7.2),
@@ -267,40 +237,17 @@ could follow a firmware's PLL bring-up, so one fixed rate has to be declared,
 and the rate the part runs at before firmware touches anything is the one that
 is true for every image rather than for some.
 
-**The measurement trap, stated because it nearly buried the bug.** GPIO is
-observed by polling the output register once per chunk, so a half-period at or
-below the chunk width aliases. At 5 ms chunks the 9x-fast F103 firmware read a
-perfect 100 edges in 2 s and looked exact; the same firmware at 200 us chunks
-read 450. Any clock measurement here uses a chunk at least 10x finer than the
-half-period a WRONG sim would produce, not merely finer than the right one, and
-the gate measures the sim time at which the Nth edge arrives rather than an edge
-count, so a missed edge can only make the part look slow and never fast.
+**Clock-truth gates.** GPIO is polled once per analog chunk, so clock tests use
+a chunk at least 10x finer than the smallest half-period under test and measure
+the simulated time at which a named edge arrives.
 
-**What was closed since, and how.**
-
-- **The FE310's CLINT (`mtime`) was declared at 62 MHz** by the stock platform,
-  while the real FE310 drives `mtime` from the 32.768 kHz always-on RTC tick.
-  It stayed wrong for a while because no in-tree firmware exercised `mtime` on
-  an observable path, and a 1892x edit to a timer nobody can measure is how the
-  original core-clock defect was introduced. The missing oracle was built
-  first: `testdata/firmware/clock_truth/fe310_tick.rs` toggles a pin every 3277
-  mtime ticks (100.006 ms of real time on any FE310), and the descriptor's
-  `clint frequency: 32768` override is held by a TWO-SIDED gate in
-  `tests/clock_truth.rs`: the corrected platform measures 1.00x, and the same
-  measurement against a deliberately restored 62 MHz fails loudly, so the gate
-  is proven able to tell right from wrong. The mtime domain is separate from
-  the core clock, so the loader's `PerformanceInMips` cross-check deliberately
-  does not police it; the measurement is what holds it.
-- **`qemu:esp32*` used to run 1.35x-1.6x biased, with the bias uncredited.**
-  `run_seconds` does QMP `cont`, host sleep, QMP `stop`, and the guest keeps
-  running during the round trips. That slack was called unmeasurable and left
-  uncredited; it is not unmeasurable: QEMU stamps its RESUME/STOP events with
-  the host time of the state transition, and the backend now credits the
-  measured cont→stop window. `tests/qemu_clock_truth.rs` prices the same
-  firmware delays in both currencies from one run: 1.63x biased under the
-  old requested-window crediting, 0.94x under the measured crediting, on this
-  host. The boot-window floor is unchanged and its chunks are credited from
-  the same measurement.
+- **FE310 CLINT:** `mtime` is declared at its 32.768 kHz always-on RTC tick.
+  `testdata/firmware/clock_truth/fe310_tick.rs` toggles a pin every 3277 ticks,
+  and `tests/clock_truth.rs` holds the rate with a two-sided oracle. The CLINT
+  domain is separate from the core clock and is therefore measured directly.
+- **`qemu:esp32*` timing is approximate.** `run_seconds` credits the measured
+  QMP RESUME-to-STOP window, including control round trips. Host load still
+  affects wall-clock pacing, so affected reports carry a timing limitation.
 
 **What remains open, and how a run says so.** These are systematic, so prose
 here is not enough: each one is a `Mcu::timing_limitation` sentence that
@@ -313,29 +260,21 @@ interactive TUI carries it as well, from the same
 external-emulator runs before a scheduler exists; its live/CLI alternatives
 carry the limitation.
 
-- **ESP32 virtual time is wall-paced.** icount breaks esp32 boot (measured, see
-  `src/qemu/mod.rs`), so even with the cont→stop window measured, TCG pace
-  tracks the host clock only approximately and degrades under host load. The
-  `qemu:` backends state this on every run; treat ESP32 time as correct to
-  within a few percent on an idle host, not as a clock.
-- **The F103's TIMx blocks stay at 72 MHz** while its core and SysTick are at
-  8 MHz. That is deliberate: only the post-PLL timer rate lets a stock CubeMX
-  HAL project boot at all on a platform with no clock tree, and the alternative
-  was a HAL time base landing at 139 Hz. The cost is that bare-metal firmware
-  running TIMx from the reset-default HSI sees its timers 9x fast. The paths a
-  delay loop and a SysTick tick take are gated; a TIMx time base is not, and
-  the descriptor's `timing_limitation` says so on every F103 run.
+- **ESP32 virtual time is wall-paced.** `-icount` is not used for the ESP32
+  machines because it prevents boot. QMP control-window timing is credited,
+  but host load still affects pacing; affected reports carry a limitation.
+- **F103 TIMx timing is not covered by the clock gate.** The platform keeps the
+  timer model needed by supported CubeMX firmware while core/SysTick timing is
+  checked. Firmware that uses TIMx as its time base must treat that path as
+  qualified, not silicon-equivalent.
 
 **What the gates do NOT cover, on any Renode part.** The clock-truth gates
 measure timer-paced delays: SysTick on the Cortex-M parts, `mtime` on the
 FE310, each part's dominant delay path. Raw instruction busy-waits ride
 `PerformanceInMips` instead, which encodes the one-instruction-per-cycle
-approximation on every Renode CPU and is silicon-gated nowhere: the FE310's
-went from Renode's 100 to the part's 16 (roughly right instead of roughly 6x
-fast), and the M-class parts carry the same identity. This is a bounded
-approximation shared by every part above, not a per-part divergence, which is
-why it is stated here rather than as a per-run `timing_limitation` sentence;
-judge firmware by its timer-paced delays, which are the gated paths.
+approximation on every Renode CPU and is not silicon-gated. This is a bounded
+limitation shared by the supported Renode parts; judge firmware by its
+timer-paced delays, which are the gated paths.
 
 ### Watchdog fidelity by backend (an unserviced watchdog may not reset)
 
@@ -351,42 +290,28 @@ both statements. The simavr web run can report a reboot, while the synchronous
 web report refuses the external backends that emit watchdog limitations (see
 [Which surface carries a coverage hole](#which-surface-carries-a-coverage-hole)).
 
-`Mcu::watchdog_limitation` returns the whole sentence, which every surface that
-carries the signal renders verbatim through one shared formatter
-(`scheduler::watchdog_limitation_message`) so two of them cannot word the same
-gap differently. `Mcu::watchdog_resets` reports reboots that DID happen, because firmware
-behaviour observed after a reboot belongs to a rebooted core and an assertion
-that passed across one was not measuring the run it claimed. The two mean
-nothing apart: a backend that cannot reboot at all reports zero resets, so a
-quiet counter is only good news next to a quiet limitation. A part that claims
-full fidelity (only `simavr` does) produces NOTHING on any surface, and that
-silence is what makes the warning worth reading.
+`Mcu::watchdog_limitation` returns the sentence that each surface renders
+through the shared formatter (`scheduler::watchdog_limitation_message`).
+`Mcu::watchdog_resets` reports reboots that occur; assertions spanning a reboot
+are not valid evidence for one continuous run. A backend that cannot reboot
+reports zero resets alongside its watchdog limitation. Only `simavr` claims
+full watchdog fidelity and therefore emits neither disclosure when healthy.
 
 | Backend | armed and never fed | how it is known |
 |---------|---------------------|-----------------|
 | `simavr:atmega328p` | **reboots, at the right virtual time, repeatedly** | `tests/avr_watchdog.rs`, two-sided against the same firmware with the arming line removed |
-| `renode:stm32f103` | **resets once, then the core does not resume** | measured: the heartbeat stops at the timeout and the boot marker flips a second time, then 450 ms of silence where the part would reboot every 50 ms |
-| `renode:nrf52840` | **never fires** | measured: RUNSTATUS reads 1 and CRV reads back a correct 32768 Hz reload, and 1.000 s of simulated time gives zero resets where the part gives twenty |
+| `renode:stm32f103` | **resets once, then the core does not resume** | watchdog limitation is reported after the reset |
+| `renode:nrf52840` | **never fires** | watchdog limitation is reported; no reset is inferred |
 | `qemu:esp32` / `-s3` / `-c3` | **disabled on purpose** | the backend passes `wdt_disable=true` for the timer groups at launch |
-| `renode:stm32f072`, `renode:stm32f4_discovery`, `renode:sifive_fe310`, `renode:rp2040` | **unverified** | nobody has run a starved watchdog to the timeout on these parts, and the two that were measured disagree with each other, so neither can be inferred |
+| `renode:stm32f072`, `renode:stm32f4_discovery`, `renode:sifive_fe310`, `renode:rp2040` | **unverified** | no starvation fixture establishes reset behavior for these parts |
 
-Disabling the ESP32 watchdogs is the right call and stays: co-simulation pauses
-the guest at every chunk boundary while the analog side solves, and a running
-timer-group watchdog would read those pauses as a hung firmware and reset a core
-that is doing nothing wrong. What was wrong was that the trade lived only in a
-source comment, where a user reading a green report never saw it.
+ESP32 watchdogs are disabled during co-simulation because chunk boundaries pause
+the guest while the analog side solves. The backend reports this limitation on
+every affected run.
 
-**The AVR watchdog used to hang the co-simulator**, which is worth knowing
-because the symptom looked like slowness rather than a bug.
-`wdt_enable(WDTO_15MS)` with no `wdt_reset()` livelocked: simavr's `avr_reset`
-zeroes `avr->cycle`, and the backend's step loop ran against an absolute
-cumulative cycle target that a rewound counter can never reach, so the chunk in
-which the watchdog first fired never returned while the emulator kept executing
-firmware at full speed. The loop now follows a rewound counter, re-anchoring the
-target and keeping the unspent part of the chunk's budget so the rebooted core
-still runs out the simulated time the engine paid for. A watchdog reboot is
-reported as a finding, not treated as a silent restart, because an assertion
-that passed across one was not measuring the run it claimed to.
+For AVR, `wdt_enable(WDTO_15MS)` without `wdt_reset()` reboots the emulated core
+and the step loop preserves the unspent part of the chunk budget. A watchdog
+reboot is reported as a finding rather than a silent restart.
 
 ### ADC / bus coverage by platform (and how a hole is surfaced)
 
@@ -462,15 +387,11 @@ sentence attached, so a consumer has to read the field to learn about it.
 detail line and to the `spi_framing` field, so a spec with no `peripheral`
 assertion gets the field only.
 
-**One enumeration behind all six columns.** Each class already had exactly one
-wording (`AdcDrop::message`, `scheduler::watchdog_reset_message`, and so on), but
-nothing said WHICH classes existed, so every surface re-listed them by hand and
-the interactive ones fell behind. `reports::coverage::CoverageInputs::
-from_scheduler` is now the single extraction point from the scheduler and
-`::caveats` the single enumeration, and each caveat's sentence is produced by the
-formatter that already owned that wording rather than paraphrased. The four batch
-columns still read the scheduler accessors directly, which is why they are the
-three `no` cells above; they were never the surface that fell behind.
+**One enumeration behind all six columns.**
+`reports::coverage::CoverageInputs::from_scheduler` is the extraction point for
+the scheduler signals, and `::caveats` provides the shared enumeration. Each
+surface uses the formatter that owns the caveat wording; the matrix above shows
+which projections are available on each surface.
 
 **Reading the TUI column.** The co-sim pane renders the WHOLE caveat list, so a
 class added to the enumeration appears there without a second edit. Screen space
@@ -522,11 +443,9 @@ no watchdog limitation and no timing limitation, its ADC injection is exact, and
 it decodes TWI and SPI natively, so there is no dropped injection or unexercised
 bus to report. The synchronous report refuses boards containing Renode/QEMU before
 these signals exist; the projection is wired for a future backend addition but
-is not counted as current operational coverage. Watchdog reboots were the class
-this surface reached and did not report: `simavr`'s watchdog does bite and
-`Mcu::watchdog_resets` counts the reboots, so a run whose firmware was rebooted
-mid-window used to read quiet here. `interactive_coverage_parity.rs` proves both
-sides of that against the same firmware with and without its one arming line.
+is not counted as current operational coverage. `simavr` watchdog reboots are
+reported through `Mcu::watchdog_resets`; `interactive_coverage_parity.rs`
+proves both sides with the same firmware with and without its arming line.
 
 Two further co-sim signals sit outside this count for stated reasons. The
 `analog_valid` / failed-window refusal has its own run-validity contract.
@@ -577,23 +496,21 @@ vendored alongside the rest of the SoC (see the support-bundle section below)
 and takes a real voltage through `SetDefaultVoltageOnChannel`, so there is a
 converter to feed rather than a wrong-layout model to abuse.
 
-We verified the nRF52840 controller names against the live Renode 1.16.1
-(`peripherals` lists `twi0`/`twi1`/`spi2`, and the Hauksbee bridge
-peripherals register on them, `tests/renode_nrf52840_bus.rs`). Renode
+The pinned Renode 1.16.1 controller names are `twi0`/`twi1`/`spi2`, and the
+Hauksbee bridge registers on them (`tests/renode_nrf52840_bus.rs`). Renode
 models the pre-EasyDMA TWI/SPI register interfaces there. TWIM/SPIM
 (EasyDMA-only) firmware drives registers the model does not implement, and
 an end-to-end nRF sensor round-trip awaits an nRF bus firmware fixture.
 
 ### Why QEMU (the Espressif fork) for the ESP32 family
 
-Renode (as of 1.16.1) ships **no** `esp32.repl` / `esp32c3.repl` (verified:
-the portable distribution's `platforms/cpus/` has nrf52840 and sifive-fe310
-but no esp32 of any kind). Neither the Xtensa ESP32/S3 nor the RISC-V
-ESP32-C3 has a turnkey Renode platform. Espressif maintains a QEMU fork with
-the ESP32 SoC peripherals modelled (GPIO matrix, UART, SPI-flash
-controller, timers) and publishes **native macOS-arm64 / Linux prebuilt
-binaries**. So the ESP32 path is a separate, backend-pluggable QEMU
-backend, which is exactly why the engine's backend dispatch is pluggable
+The pinned Renode distribution ships **no** ESP32 platform. Neither the Xtensa
+ESP32/S3 nor the RISC-V ESP32-C3 has a turnkey Renode model. Espressif maintains
+a QEMU fork with the ESP32 SoC peripherals modelled (GPIO matrix, UART,
+SPI-flash controller, timers) and publishes platform-specific macOS, Linux, and
+Windows x86_64 archives used by Hauksbee's pinned installers. The ESP32 path is
+a separate, backend-pluggable QEMU backend, which is why the engine's backend
+dispatch is pluggable
 (`qemu:<part>` alongside `renode:<part>`).
 
 ### QEMU lockstep mechanism (chosen by measurement, not assumption)
@@ -650,7 +567,7 @@ chunk over RSP runs far too slow).
   QOM properties. The backend probes both live properties and only then reads
   the real MMIO OUT and ENABLE words.
   Ordinary ESP-IDF firmware is therefore visible without any Hauksbee code.
-  An unpatched binary fails closed to the legacy RTC-RAM output mirror and
+  An unpatched binary fails closed to the compatibility RTC-RAM output mirror and
   prints that mailbox requirement; the edge-diff logic is identical.
 
 - **GPIO in (push)**: the backend pokes the mailbox `hauksbee_gpio_in`
@@ -681,13 +598,9 @@ runs at host speed rather than pacing to wall-clock, which is what we want
 when the analog solver sets the pace. Renode's virtual-time resolution is
 1 ns.
 
-We considered QEMU and unicorn as fallbacks. Neither was needed: QEMU's
-`-icount` gives deterministic time but no clean bounded "run for exactly T
-then stop and let me poke peripherals" loop over a stable control socket,
-and unicorn is a raw CPU emulator with no peripheral models (no USART, no
-GPIO blocks), so the firmware's `printf`/blink would have nothing to
-drive. Renode gives both the time control and the peripheral models, so
-the firmware runs unmodified.
+Renode supplies the bounded `RunFor` primitive and peripheral models required
+for the supported non-AVR targets. QEMU uses its own bounded QMP control path;
+the backend-specific contracts and limitations are listed below.
 
 ### How the Renode backend bridges each path
 
@@ -770,12 +683,9 @@ ZSWatch is an **nRF5340**, not the nRF52840 proven above, and hauksbee claims
 no config for it. The gap is precise rather than vague, and it is a different
 gap from the one RP2040 had.
 
-No nRF5340 platform exists in the installed Renode 1.16.1 portable build
-(`platforms/cpus/` carries `nrf52840.repl` and zero `*nrf5340*` files), and
-none exists on Renode `master` either. What matters is why that cannot be
-patched the way RP2040's was: with RP2040 the peripheral **models** existed
-in a third-party repo and only needed vendoring, whereas here the models do
-not exist anywhere to vendor. The pieces line up like this:
+The pinned Renode version has no nRF5340 platform. The missing pieces are
+specific to the part rather than its CPU: the SPU, IPC, and network-core models
+needed by a booting image are not present. The support boundary is:
 
 - **Cortex-M33 is supported.** The core the nRF5340 application processor uses
   is a Renode-supported CPU, so the ISA is not the obstacle.
@@ -789,22 +699,15 @@ not exist anywhere to vendor. The pieces line up like this:
   unmodelled.
 - **There is nothing for the network core** at all.
 
-So the honest estimate is that a boot-only nRF5340 is days of work (writing SPU
-and IPC models from the product specification, then debugging a Zephyr boot
-against them), not an afternoon of vendoring. Consequence, stated plainly: the
-ZSWatch nRF5340 known-fault miss stands. Any check on that board that needs
-firmware to run is still out of reach, and the nRF52840 proof is the closest
-Nordic part hauksbee can actually co-simulate.
+Consequently, firmware-dependent checks on ZSWatch's nRF5340 remain
+unsupported; nRF52840 is the closest Nordic part currently co-simulated.
 
 ### RP2040 / Raspberry Pi Pico, honestly
 
-RP2040 co-sim runs, and the platform it runs on is hauksbee's, not Renode's.
-Renode 1.16.1 ships no rp2040 platform (`platforms/cpus/` carries only
-`picosoc` and `litex_picorv32`, unrelated RISC-V soft cores) and neither does
-Renode `master`, so unlike the STM32F1 case there was nothing to extend: the
-peripheral **models** were missing, not just their wiring. They are vendored
-into `crates/hauksbee-mcu/db/mcu/rp2040/` and compiled by Renode at run time
-through the support-bundle mechanism described in the next section.
+RP2040 co-sim runs on Hauksbee's bundled platform, not on a Renode-provided
+platform. The peripheral models are embedded in
+`crates/hauksbee-mcu/db/mcu/rp2040/` and compiled by Renode at run time through
+the support-bundle mechanism described in the next section.
 
 The proof is a real boot. Stock pico-sdk 2.1.1 firmware
 (`testdata/firmware/rp2040_blink_uart/`) loads, runs through the real boot ROM's
@@ -911,25 +814,16 @@ decision the `include_str!`-ed `db/mcu/*.soc.toml` descriptors already make,
 applied to files that must exist on disk because Renode, not hauksbee, is the
 one reading them.
 
-**The cost is real and worth knowing before you wonder why a suite is slow.**
-Every machine creation compiles the whole bundle: for RP2040 that is 23 C#
-sources, about 377 kB, and Renode's compiler runs on each new machine rather
-than once per process. Measured on the 2.00 s corpus run above: 15.5 s of
-wall clock in total, of which the simulation itself accounted for 7.3 s, so
-bring-up costs roughly eight seconds before any firmware instruction executes.
-The three RP2040 integration suites therefore take tens of seconds each,
-measured between 8 s and 28 s per suite across runs for one to six tests, where
-the whole five-test STM32 suite takes 6 s to 11 s.
-Nothing is wrong when that happens; the trade is paying compile time for a
-platform that does not otherwise exist.
+RP2040 machine creation compiles the embedded C# support bundle, so bring-up is
+slower than a standard Renode platform. This cost is expected for the bundled
+platform and does not change the co-simulation contract.
 
 ### ESP32 in Renode, honestly
 
-ESP32 remains **not usable in Renode** as of 1.16.1: no `esp32.repl` /
-`esp32c3.repl` ships, and the ESP32 SoC peripheral set is unmodelled. That
-gap is exactly why the `qemu:` backend (Espressif QEMU fork) serves the
-ESP32 family rather than Renode. Both Xtensa (ESP32) and RISC-V (ESP32-C3)
-ESP32 parts are proven through QEMU above.
+The pinned Renode distribution has no ESP32 platform or ESP32 SoC peripheral
+model. The `qemu:` backend (Espressif QEMU fork) therefore serves the ESP32
+family; ESP32 and ESP32-C3 are proven through QEMU, while ESP32-S3 remains
+wiring-only until an app image is available.
 
 ### Co-sim fidelity notes (debugging all-zero or "never driven" results)
 
@@ -1111,14 +1005,21 @@ U0TXD/U0RXD.
 
 Firmware: `testdata/firmware/esp32_blinky/`, esp-idf C app. It drives GPIO2
 HIGH at boot, toggles GPIO4 at ~5 Hz, prints `hello from esp32` on UART0
-and answers `i`/`v` commands. It also mirrors output into the legacy mailbox so
-the same fixture proves compatibility with Espressif's unpatched prebuilt. The
+and answers `i`/`v` commands. It also mirrors output into the compatibility
+mailbox so the same fixture proves compatibility with Espressif's unpatched
+prebuilt. The
 independent `esp32_native_gpio` fixture contains no mailbox at all and proves
 the patched backend observes ordinary ESP-IDF `gpio_set_level` writes.
 
-Install (two pieces, both native macOS-arm64 / Linux):
+Unix install and firmware-build recipe:
+
+On Windows x64, install the pinned QEMU archives with
+`scripts\install-sims-windows.ps1 -QemuOnly`. A Windows release is publishable
+only after the native same-source integration receipt passes; local cross-builds
+do not substitute for that gate.
 
 ```
+
 # 1. Espressif QEMU fork binary (small, ~4 MB; no esp-idf needed for it):
 #    grab the prebuilt release and unpack to ~/.hauksbee-qemu-esp/qemu
 #    https://github.com/espressif/qemu/releases   (qemu-xtensa-softmmu-... and
@@ -1162,7 +1063,7 @@ The nRF52840 ships **built in**: no `db/mcu.toml` edit, no
 `renode:nrf52840` backend directly (`hauksbee models resolve <board>`
 prints `nrf52840  builtin(0)  mcu`).
 
-A committed board + firmware pair runs end to end today:
+A committed board and firmware pair runs end to end:
 
 ```
 hauksbee run testdata/firmware/renode_demos/nrf52840-zephyr_shell.board \
@@ -1266,8 +1167,8 @@ on a RISC-V core, proving the backend stays ISA-agnostic.
   rate. Match the firmware's switching rate to the analog chunk size (the
   demo blinks at ~5 Hz vs ~50-100 us chunks, comfortably oversampled).
   Bit-banged MHz signals are not resolved by the poll bridge; they would
-  need the binary external-control GPIO event channel (future work, see
-  below).
+  need the binary external-control GPIO event channel, which is not currently
+  supported (see below).
 
 - **Monitor round-trip cost.** Each `RunFor` and each ODR read is a TCP
   request/response. A long co-sim with many ports polled every chunk spends
@@ -1299,8 +1200,8 @@ on a RISC-V core, proving the backend stays ISA-agnostic.
 
 ### QEMU (ESP32 family) specific limitations
 
-- **GPIO output no longer requires a firmware contract when the reviewed
-  source build is installed.** Run
+- **GPIO output is observed directly when the reviewed source build is
+  installed.** Run
   `scripts/install-sims.sh --qemu-patched-source`; it fetches the exact pinned
   Espressif commit, applies the reviewed patch, builds both architectures, and
   live-probes paired `gpio-out`/`gpio-enable` QOM capabilities on ESP32,

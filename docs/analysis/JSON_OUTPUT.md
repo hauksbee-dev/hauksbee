@@ -2,7 +2,8 @@
 
 `hauksbee run <board> --json` (and the per-check `--report --json`, `--ac --json`,
 etc.) writes one JSON object to stdout, designed to be parsed by a CI step or an
-agent. This documents every field so a consumer does not have to read the source.
+agent. This documents the stable consumer contract; the generated JSON Schema
+is the exhaustive field authority.
 
 Stability: fields are **additive**. New fields may appear. Existing fields
 keep their meaning. Empty/absent sections are omitted
@@ -11,7 +12,9 @@ did not run", not "it failed".
 
 ## `schema_version` and the generated schema
 
-Every document carries a top-level `schema_version` (integer, currently `3`).
+Every successful run-report document carries a top-level `schema_version`
+(integer, currently `3`). A hard-error envelope is only
+`{"ok":false,"error":"..."}`.
 It bumps only on a breaking change (a field removed or changed in meaning);
 additive fields never bump it. The machine-checkable contract is the JSON
 Schema generated from the Rust types at
@@ -19,10 +22,10 @@ Schema generated from the Rust types at
 keeps the file and the types identical (regenerate with
 `UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift`).
 
-Version 3 records the assumption-identity migration: anonymous assumption ids
-now cover their complete typed claim (source, causal scope, prose and expiry),
-and repeated component designators use occurrence-safe causal subjects. An
-acknowledgment or diff consumer must not interpret an older id under this rule.
+In schema version 3, anonymous assumption ids cover the complete typed claim:
+source, causal scope, prose, and expiry. Repeated component designators use
+occurrence-safe causal subjects. Consumers must reject older schema versions
+if they depend on those identity rules.
 
 ## Numeric `error_budget`
 
@@ -38,8 +41,7 @@ zero. Values inside `failed_windows` are invalid. See
 Net names in every field (`nets`, `bind` lists, `--list-nets`, DRC shorts)
 are the names the schematic shows: KiCad file-syntax escapes are decoded
 (`/GPIO0{slash}XTAL1` arrives as `/GPIO0/XTAL1`) and render markup braces are
-dropped (`SCL_{2}` arrives as `SCL_2`). Consumers that previously saw the
-escaped spellings should match on the real names.
+dropped (`SCL_{2}` arrives as `SCL_2`). Match on those decoded names.
 
 ## CI artifact flags
 
@@ -194,11 +196,10 @@ field):
 
 ### `waived` (findings a waiver overruled)
 
-A waiver can only overrule a **serious** finding (waiving a note would suppress
-information without changing an outcome). When it fires, the finding is dropped
-from *both* `serious_count` and `actionable_count`, so the verdict can go green
-on its account. The finding is never silently discarded: it lands in the
-top-level `waived[]` array, which a pipeline can watch grow.
+A waiver can match supported lint, SI, static-check, and short findings at their
+native severity. Clearance-margin violations remain unwaivable. A matched
+finding is removed from the applicable rollups but never silently discarded: it
+lands in the top-level `waived[]` array, which a pipeline can watch grow.
 
 | field | type | meaning |
 |---|---|---|

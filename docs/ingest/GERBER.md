@@ -416,12 +416,9 @@ calibrated to (`CALIBRATED_KICAD_CLI` in the test); the test prints both the
 calibrated and the running version so a floor breach can be attributed to the
 side that moved.
 
-A design note earned the hard way: this sweep resolves boards through a shared
-corpus resolver that accepts both the hand-built `famous/<id>/…` layout and the
-flat `<id>/…` layout the fetch script writes. It used to join `famous/` directly,
-so on a fetched corpus every lookup missed while the directory-exists check kept
-the skip from firing, and the gate reported green having examined nothing. Both
-layouts resolve now, and a gate that cannot find its inputs says so.
+The corpus resolver accepts both the hand-built `famous/<id>/…` layout and the
+flat `<id>/…` layout written by `scripts/fetch-corpus.sh`. A gate that cannot
+resolve its required inputs says so instead of reporting an empty success.
 
 Layout tolerance at the corpus root is not enough on its own, because two corpora
 can also disagree about the path WITHIN a board. The Corne row is the case: the
@@ -545,8 +542,7 @@ real fab-only board in an unfamiliar dialect.
 - **No pick-and-place**: nets and geometry (DRC) still reconstruct from
   copper alone, but components cannot be bound; there is nothing to say
   which pads form which part. `from_gerber_dir` returns the nets with zero
-  components. (The Inkplate 6 gerber set is exactly this case; see
-  docs/evidence/FAMOUS_SWEEP.md Round 5.)
+  components.
 - **No BOM**: components still bind; their value/part-number is only the
   P&P `Val`/`Package` field rather than an enriched MPN.
 - **No drill**: single-layer boards are fine; on multi-layer boards each
@@ -574,11 +570,8 @@ identity, so it runs but finds nothing unless a current can be tied to a
 specific reconstructed net. And a board whose fab draws its traces as
 G36/G37 filled regions rather than with draw apertures reads those nets as
 `Poured`, so the check goes inert on them, the safe failure direction (a
-`Poured` net is never flagged). See docs/evidence/FAMOUS_SWEEP.md Round 5.
-That was once read as a property of the Inkplate 6 export, but it was the
-negative-pour defect below: the board-sized dark region landed on every net,
-so every net looked poured. With the voids cut, the Inkplate's routed nets
-carry discrete widths and the check runs on them.
+`Poured` net is never flagged). This is the safe failure direction for
+trace-current analysis.
 
 ## Negative-drawn pours (LPC)
 
@@ -712,9 +705,7 @@ budget rather than each taking the resolution ceiling.
 
 The retained bounded stress regression replays 10,000 non-overlapping annular
 antipads in one convex plane and requires one plane plus all 10,000 isolated
-islands. The prior 62,500-antipad timing figures describe the earlier signed
-implementation and are not claimed for the new release candidate until that
-exact final-HEAD benchmark is rerun.
+islands.
 
 Two-layer boards extract in tens to hundreds of milliseconds. The 6-layer
 reform motherboard (about 75k draws and four 35k-vertex plane pours)

@@ -34,7 +34,7 @@ Before launching anything, `reproduce` verifies all four boundaries:
    kind, and (for directories) file count;
 3. the current tool version and git revision match the recorded build; and
 4. behavior-changing environment selectors which were set during capture have
-   the same value hashes now.
+   the same value hashes at replay.
 
 Only the fixed `hauksbee` and `hauksbee-ci` binaries can be replayed. A manifest
 cannot nominate an arbitrary executable. The original `--emit-manifest` option
@@ -79,9 +79,9 @@ directories, a sibling KiCad project file, and a board-local
 
 For `hauksbee-ci run`, each spec and its resolved board, firmware, as-built
 overlay, MCU descriptor directory, external sensor specs, hardware-trace
-manifests and capture files are included, plus the same implicit/explicit model,
-KiCad-project, and waiver inputs. Multi-spec roles carry indices, so their
-identity cannot collapse.
+manifests and capture files are included, plus each `variant` file and the same
+implicit/explicit model, KiCad-project, and waiver inputs. Multi-spec roles carry
+indices, so their identity cannot collapse.
 
 Built-in models and solver code are pinned by the tool git revision and the
 component versions rather than duplicated as input files.

@@ -1006,6 +1006,56 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "every release build checkout must erase even its read credential before dependencies run",
         )
 
+    def test_macos_release_imports_ephemeral_signing_credentials_and_cleans_up(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        import_start = workflow.index("- name: Import macOS Developer ID credentials")
+        import_end = workflow.index("- name: Install Rust toolchain", import_start)
+        import_step = workflow[import_start:import_end]
+        cleanup_start = workflow.index("- name: Clean up macOS signing keychain")
+        cleanup_end = workflow.index("\n  build-windows:", cleanup_start)
+        cleanup_step = workflow[cleanup_start:cleanup_end]
+        for secret in (
+            "HAUKSBEE_SIGN_IDENTITY",
+            "HAUKSBEE_SIGNING_CERTIFICATE_BASE64",
+            "HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD",
+            "HAUKSBEE_NOTARY_APPLE_ID",
+            "HAUKSBEE_NOTARY_TEAM_ID",
+            "HAUKSBEE_NOTARY_PASSWORD",
+        ):
+            with self.subTest(secret=secret):
+                self.assertIn(f"secrets.{secret}", import_step)
+        for contract in (
+            "security create-keychain",
+            "security unlock-keychain",
+            "base64 -D",
+            "security import",
+            "security set-key-partition-list",
+            "security find-identity -v -p codesigning",
+            "HAUKSBEE_SIGNING_KEYCHAIN=",
+            "HAUKSBEE_SIGNING_STATE_DIR=",
+        ):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, import_step)
+        self.assertIn("if: ${{ always() && runner.os == 'macOS' }}", cleanup_step)
+        for contract in (
+            "security list-keychains -d user -s",
+            "security delete-keychain",
+            "unlink",
+        ):
+            with self.subTest(cleanup=contract):
+                self.assertIn(contract, cleanup_step)
+
+        signing_doc = (ROOT / "app/macos/SIGNING.md").read_text()
+        for secret in (
+            "HAUKSBEE_SIGN_IDENTITY",
+            "HAUKSBEE_SIGNING_CERTIFICATE_BASE64",
+            "HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD",
+            "HAUKSBEE_NOTARY_APPLE_ID",
+            "HAUKSBEE_NOTARY_TEAM_ID",
+            "HAUKSBEE_NOTARY_PASSWORD",
+        ):
+            self.assertIn(secret, signing_doc)
+
     def test_shipped_installer_examples_use_the_public_one_liner(self) -> None:
         one_liner = (
             "curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/"
@@ -1268,6 +1318,9 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         promotion = workflow[promote:]
         self.assertIn('"$SLIM_REF"', promotion)
         self.assertIn('"$FULL_REF"', promotion)
+        self.assertIn('if [[ "$VERSION" == *-* ]]; then', promotion)
+        self.assertIn('--tag "${IMAGE}:slim-${VERSION}"', promotion)
+        self.assertIn('--tag "${IMAGE}:full-${VERSION}"', promotion)
         self.assertNotIn("SLIM_DIGEST", promotion)
         self.assertNotIn("FULL_DIGEST", promotion)
         for notice in ("RENODE-LICENSE", "QEMU-COPYING", "FREEROUTING-LICENSE"):
@@ -1434,6 +1487,17 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("hauksbee-ci-pcm-v*.zip", workflow[upload:publish])
         self.assertIn("hauksbee-ci-pcm-v*.zip.sha256", workflow[upload:publish])
 
+    def test_semver_beta_tags_publish_only_as_prereleases(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        publish = workflow.index("Stage immutable GitHub Release draft")
+        verify = workflow.index("Verify GitHub's immutable release attestations")
+        release_step = workflow[publish:verify]
+        self.assertIn("prerelease: ${{ contains(github.ref_name, '-') }}", release_step)
+        self.assertIn(
+            "make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}",
+            release_step,
+        )
+
     def test_consumers_keep_optional_credentials_out_of_argv(self) -> None:
         # The optional-token path in the installer must still feed the header
         # through curl's config stdin, never argv.
@@ -1467,14 +1531,15 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("Hauksbee and libsimavr", slim)
         self.assertIn("Hauksbee and libsimavr", full)
 
-        # Public state: the default Docker path pulls anonymously; the
-        # private-mirror fallback keeps its credential-hygiene guidance.
+        # Published public packages pull anonymously; the pre-publication and
+        # private-mirror paths keep their credential-hygiene guidance.
         docker_doc = (ROOT / "docs/ci/DOCKER.md").read_text()
         self.assertIn("The images are public", docker_doc)
         self.assertIn("docker login ghcr.io", docker_doc)
 
         recipes = (ROOT / "docs/ci/RECIPES.md").read_text()
-        self.assertIn("pulls it anonymously", recipes)
+        self.assertIn("can pull it\nanonymously", recipes)
+        self.assertIn("Before publication", recipes)
         for credential_contract in (
             "DOCKER_AUTH_CONFIG",
             "registryCredentialsId",

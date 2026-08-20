@@ -19,20 +19,14 @@ informational note carrying the computed value), never a confident false
 positive. The `info` notes are observations on the record, not findings: they
 make the negative auditable.
 
-The checks were swept across the full known-good corpus (KiCad `.kicad_pcb` +
-Eagle `.brd`, 67 board files: Arduino, Adafruit, SparkFun, MNT Reform, Olimex
-ESP32-EVB + Pico-PC, Watchy + history, ZSWatch mainboard + DevKit, LumenPnP,
-Corne, Lily58, RP2040-minimal. The corpus's `hunt/` subtree is excluded from the
-gate by design: those boards are suspected-fault targets, not proven-good
-references). **Result: one open question, and nothing else.** Checks 1, 2 and 4 to
-7 raise no finding on any known-good board, of any class. Check 3
-(`antenna_keepout`) fires `high` on 11 of the 12 Olimex ESP32-EVB revisions, on
-ground copper inside Espressif's 15 mm band. Whether that is a genuine RF
-compromise on a shipping board or a keepout rectangle stricter than practice is a
-hardware question nobody has settled, so the corpus gate is `#[ignore]`d and runs
-under `-- --ignored` until it is (check 3 carries the geometry). Four tool
-defects were found and fixed by chasing each surprise to the file (the Tarski
-meta-lesson). They are recorded below.
+The corpus gate covers the current KiCad `.kicad_pcb` and Eagle `.brd` board set;
+its `hunt/` subtree is excluded because those files are suspected-fault targets,
+not reference boards. The gate requires at least 50 parseable board files. On the
+current corpus, checks 1, 2 and 4 to 7 report no findings. Check 3
+(`antenna_keepout`) reports `high` on 11 of the 12 Olimex ESP32-EVB revisions,
+where board-file geometry places ground copper inside Espressif's 15 mm band.
+That result is a static extraction question, not a hardware measurement, so the
+corpus gate remains `#[ignore]`d and runs under `-- --ignored` pending review.
 
 Severity ladder: `high` (functional failure), `medium` (margin / robustness),
 `low` (cosmetic), `info` (a computed value, not a finding).
@@ -115,20 +109,6 @@ Parts that integrate their own load caps are recognised and never flagged for
   ```
   [info] crystal_load_cap - Y1 (32.768KHz): board presents CL ~ 13.0 pF (C1=18p, C2=18p, +4p stray); crystal CL spec unknown from value, no judgement
   ```
-
-### Tool defects found and fixed (by chasing the corpus fires)
-
-1. **Split-keyboard mirror prefix.** Corne / Lily58 duplicate the right half with
-   a lowercase `r` prefix (`rY1`, `rC1`, `rC2`). The type classifiers rejected
-   them, hiding the load caps and manufacturing a false "no caps" finding on a
-   shipped board. Fixed: strip a single `r` mirror-prefix before classification.
-2. **Eagle double-pad count.** The Eagle `.brd` extractor lists each pad once per
-   signal contact, so a two-terminal cap shows four pin entries. The
-   pad-count test (`== 2`) rejected them, hiding the Pro Micro / Arduino load
-   caps. Fixed: count *distinct* pad numbers (the same class as the round-1 0201
-   four-pad-resistor bug).
-3. **Ceramic resonators** were not recognised as integrating their caps. Added.
-4. **PCF8563** (Watchy RTC) was not in the integrated-cap RTC table. Added.
 
 ---
 
@@ -250,7 +230,7 @@ otherwise. This is exactly what keeps it silent on the proven-good corpus buses.
 
 ### Calibration evidence
 
-Measured on the real layouts, with the routed term included:
+Computed from routed board layouts, with the routed term included:
 
 `Cbus` and `t_r` are given as the reported range (low bound first):
 
@@ -260,7 +240,7 @@ Measured on the real layouts, with the routed term included:
 | ZSWatch RTC SDA (PCA9306+RV-8263) | 3.3 kohm | 2 | 1 mm | 20 pF | 56 ns | ok |
 | ZSWatch Extension SDA | 1.8 kohm | 8 | 62 mm | 82-89 pF | 126-136 ns | ok |
 
-Routed copper is a real term without being the dominant one: on the Olimex UEXT
+Routed copper contributes without being the dominant term: on the Olimex UEXT
 bus, one device pin and 73 mm of track puts a fifth to a half of the capacitance
 in the trace, so a device-count-only model rates it ~19 ns instead of 24-39 ns.
 
@@ -298,29 +278,27 @@ are excluded. Severity is `high` when a *ground* net intrudes (detunes hardest),
 |--------|--------------------|----------|
 | ESP32-WROOM-32 / 32E / 32D / 32U | `x[-9, 9]`, `y[-20.3, -5.3]` | Espressif ESP32-WROOM-32 hardware design guidelines: 15 mm antenna keepout |
 
-The WROOM rectangle's origin convention was **verified empirically** against the
-real corpus footprint (OLIMEX `ESP-WROOM-32_MODULE`): its pads span local-y
+The WROOM rectangle's origin convention was **verified against** the corpus
+footprint (OLIMEX `ESP-WROOM-32_MODULE`): its pads span local-y
 `[-5.31, +12.30]`, so the antenna edge (the pad-free end) is at local
 `y ~ -5.3`, and the 15 mm keepout extends from there to `y = -20.3`, module-wide.
 
-### The honest reach (a dropped entry, recorded)
+### Supported module coverage
 
-Other integrated-antenna modules are **deliberately not in the table**. A guessed
-keepout rectangle for the u-blox NORA-B106 (ZSWatch) produced dozens of spurious
-intrusions - a textbook false positive - because neither its datasheet keepout
-rectangle nor the footprint-origin convention could be verified to the precision
-this check needs. Per the discipline (do not fabricate constants), it was
-dropped: an unverified module gets no keepout and never fires. Adding one back
-requires the cited datasheet rectangle plus a placement-verified corpus board.
+Other integrated-antenna modules are not in the table. The u-blox NORA-B106
+(ZSWatch) has no cited keepout rectangle and verified footprint-origin convention
+for this calculation, so the checker abstains for it. Adding coverage requires
+the cited datasheet rectangle plus a placement-verified corpus board.
 
 ### Calibration evidence, and the one unsettled question in `--si`
 
 The corpus's ESP32-WROOM-32 boards are the twelve Olimex ESP32-EVB revisions, and
-they are the only known-good boards where any `--si` check fires. Measured on
-REV-L: `U3` sits at `y = 79.883`, so its antenna edge is at `y ~ 74.57`, and the
-board outline starts at `y = 67.056`. Roughly 7.5 mm of Espressif's 15 mm band
-therefore hangs off the board in free space, and the other 7.5 mm lies over
-copper Olimex floods with ground.
+they are the only known-good boards where any `--si` check fires. Computed from
+the REV-L board file: `U3` sits at `y = 79.883`, so its antenna edge is at
+`y ~ 74.57`, and the board outline starts at `y = 67.056`. Roughly 7.5 mm of
+Espressif's 15 mm band therefore hangs off the board in free space, and the other
+7.5 mm lies over copper Olimex floods with ground. These are geometry results,
+not measurements of a physical board.
 
 Eleven of the twelve revisions report that ground copper:
 
@@ -482,7 +460,7 @@ not guess silently: it computes against a **stated default assumption** (1.51 mm
 FR4 core, `T` = 0.035 mm 1 oz copper, `Er` = 4.3) and reports the result as
 `info` only, with the word `ASSUMED` in the note, never a finding.
 
-Stripline is implemented and validated but not auto-applied: identifying which
+Stripline support is validated but not auto-applied: identifying which
 inner layer is a solid reference plane (needed for the plane-to-plane `H`) is not
 something the stackup block alone states, and the corpus controlled-impedance
 nets are outer-layer microstrip. (Documented reach, not a guess.)
@@ -537,7 +515,7 @@ impedance to report at all, only the span where the reference plane is absent.
    what would unlock a confident answer (solid reference-plane copper under the
    whole pair, a stackup that declares the plane layer it references) **instead of**
    printing a `Zdiff`. Where the reference cannot be established either way the
-   estimate is reported as before with its reference stated as `reference plane
+   estimate is reported with its reference stated as `reference plane
    unverified`, and the reason given. That happens when there is no pour on the
    adjacent layer, when zones carry no stored fill, when the board declares no
    `(layers)` block (so which layer is adjacent to which is unknown, and assuming
@@ -547,16 +525,12 @@ impedance to report at all, only the span where the reference plane is absent.
    be checked demotes the verdict to unverified rather than being absorbed into a
    clean one. The bias throughout is against inventing a void.
 
-   Three guards keep *designed* plane features from reading as defects. Each of
-   the first two closes a false positive that was actually observed, the first on a
-   real corpus board and the second in review:
+   Three guards keep *designed* plane features from reading as defects:
 
    - **Anti-pads are excused**, for pads as well as vias. Anti-pads are deliberate
      clearance so a hole can pass through. Because a pair's segments *terminate* at
      its layer-transition vias, endpoint samples land in one systematically: the
-     first cut of this check reported a 2.91 mm void on **Watchy** where all seven
-     uncovered samples were within 0.36 mm of a via centre and four sat exactly on
-     one, on an In2.Cu plane that is in fact continuous. Pads count because a
+     Pads count because a
      through-hole connector pad or a mounting hole clears far more copper than a
      signal via; a pad is recorded with the copper layers it occupies, so an SMD
      pad on the far side of the board is not credited with piercing an inner plane.
@@ -743,9 +717,9 @@ internal** copper: half the `k` and half the cross-section. Rating everything as
 is why a cited 1.0 A on that trace fires on `In1.Cu` and stays silent on `F.Cu`.
 
 When the board declares **no stackup**, the 1 oz external default still stands
-(the verdict on such boards is unchanged), but it is not printed as a fact about
-the board. The two assumed cases are kept apart, because saying "declares no
-stackup" about a board that declares one is itself a false claim:
+but it is not printed as a fact about the board. The two assumed cases are kept
+apart, because saying "declares no stackup" about a board that declares one is
+itself a false claim:
 
 | Case | `CopperSource` | Message |
 |------|----------------|---------|
@@ -787,7 +761,7 @@ a defaulted stackup is always informational.
 ### Attribution (the zero-false-positive boundary)
 
 A current is attributed only from an explicit, citeable operating-current
-source. Today that means a `[models.current_program]` equation tagged
+source. The current path uses a `[models.current_program]` equation tagged
 `semantics = "regulated_current"`, such as a linear charger's constant-current
 phase, evaluated from the parts actually fitted. The schema supports a simple
 `I = k_volts / R` law, a continuous two-branch inverse-resistance law, and a
@@ -926,7 +900,7 @@ The check fires **only when topology, an exact cap ripple rating, an attributabl
 `I_out`, and nominal duty are all known**. Duty is computed as `Vout/Vin` only
 when both directional rail names contain exactly one conventional voltage token
 (`12V`, `3V3`, or `3.3V`, for example `PWR_IN_12V` and `CORE_OUT_3V3`). Missing,
-ambiguous, zero, or non-step-down voltage pairs abstain; the old unconditional
+ambiguous, zero, or non-step-down voltage pairs abstain; an unconditional
 `D=0.5` assumption is not used for findings. When any input is absent the check
 emits an info note (the negative is on the record) and does not fire. It never
 invents a rating, current, duty, or decision threshold. `I_out` comes from the same operating-
@@ -937,7 +911,7 @@ part's frequency-dependent impedance, so assigning the full ripple to one
 arbitrarily selected capacitor would be a false positive.
 
 Topology itself is the first place the check can abstain, and that abstention is
-now visible. Synchronous switching connectivity is **reversible**: the same
+explicit. Synchronous switching connectivity is **reversible**: the same
 graph of FETs, inductor and caps is equally consistent with a buck and a boost,
 so a direction is accepted only from explicit rail names (`VIN` / `VOUT`, or a
 `*_IN` / `*_OUT` suffix). Numeric voltage ordering alone is not evidence. A stage
@@ -958,7 +932,7 @@ that classify normally emit no such note.
   the same exact rating and current but no voltage evidence, and must abstain. A
   second paired fixture adds a parallel input bulk cap and pins the impedance-
   sharing abstention.
-- On the real mppt-1210 board, `--si` recovers the buck stage (input rail
+- On the mppt-1210 board file, `--si` recovers the buck stage (input rail
   SOLAR+, switch node SW_NODE, inductor L1, and the input capacitor bank) and
   honestly records that its parallel-cap impedance sharing is unknown. The
   layout also does not establish `I_out` or nominal duty (the 10 A charge

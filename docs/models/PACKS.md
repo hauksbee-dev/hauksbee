@@ -52,9 +52,14 @@ A model drafted from a datasheet (either with `hauksbee models extract` or from
 the report page's "Draft a model from a datasheet", see
 [MODELS.md](MODELS.md)) lands in `~/.hauksbee/models/` carrying the provenance
 string `datasheet-extracted`. That is the same spelling `[pack] provenance`
-accepts, so packaging one needs no relabelling: copy the TOML into a pack's
-`models/` directory and set `provenance = "datasheet-extracted"` in
+accepts, so packaging one needs no relabelling: copy the model TOML into a
+pack's `models/` directory and set `provenance = "datasheet-extracted"` in
 `pack.toml`.
+
+`i2c_sensor` and `spi_sensor` extraction is separate: it writes a validated
+`[sensor]` spec as `<part>.sensor.toml`, not a model-library entry. Keep that
+spec as an explicit CI/browser attachment, or embed it in a model card's
+`[models.peripheral]` block when the behavior should attach on resolution.
 
 Do not relabel it `vendor` or `hand-written` to make it look better. The
 provenance is how anyone installing the pack knows which numbers were read off
@@ -80,12 +85,10 @@ Every model source has an explicit layer (`SourceLayer` in
 | `--models-dir <dir>` | `models-dir` | 30 |
 | user SPICE cards | `spice` | 40 |
 
-Six layers, not five: the two standing user directories are **distinct**.
-`~/.config/hauksbee/models` sits above `~/.hauksbee/models` on purpose, so a
-model you hand-corrected in your config directory deterministically wins over an
-auto-extracted one carrying the same id. Collapsing them into "user model dirs"
-would leave that ordering to load order, which is exactly the accident the
-layering exists to prevent.
+There are six layers. The two standing user directories are distinct:
+`~/.config/hauksbee/models` sits above `~/.hauksbee/models`, so a model you
+hand-corrected in the config directory deterministically wins over an
+auto-extracted one carrying the same id.
 
 Inside one semantic tier, the higher layer wins. The specificity score only
 breaks ties within a layer. Two packs shipping the same model id is a

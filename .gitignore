@@ -94,6 +94,10 @@ hauksbee-ci-junit/
 qc/.bin-cache/
 qc/results/
 
+# Local agent-orchestration runtime (transcripts, jobs, and board transactions).
+# This is machine state, not source, and may contain private working context.
+.wiley/
+
 # The ingest-robustness corpus is several GB of third-party board files
 # harvested from public repositories on demand; the harness that rebuilds it
 # lives in testdata/ingest-robustness/corpus-harness/ and its manifest records

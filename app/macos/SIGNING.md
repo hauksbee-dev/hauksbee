@@ -80,8 +80,26 @@ To make the warning disappear entirely the release pipeline needs:
 1. **An Apple Developer Program membership** (USD 99/year) for the org that
    ships hauksbee.
 2. **A Developer ID Application certificate** issued from that account and
-   installed in the CI keychain (as a base64 secret plus password, imported
-   with `security import` into a temporary keychain on the runner).
+   exported as a password-protected `.p12`. Configure these exact protected
+   GitHub repository/environment secrets for the release workflow:
+
+   | Secret | Value |
+   | ------ | ----- |
+   | `HAUKSBEE_SIGN_IDENTITY` | The complete identity shown by `security find-identity`, for example `Developer ID Application: Example Corp (ABCDE12345)`. |
+   | `HAUKSBEE_SIGNING_CERTIFICATE_BASE64` | The `.p12` bytes encoded with `base64` (line wrapping is acceptable). |
+   | `HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD` | The password used when exporting the `.p12`. |
+   | `HAUKSBEE_NOTARY_APPLE_ID` | Apple ID used by `notarytool`. |
+   | `HAUKSBEE_NOTARY_TEAM_ID` | Apple Developer team identifier. |
+   | `HAUKSBEE_NOTARY_PASSWORD` | An app-specific password for that Apple ID. |
+
+   The macOS release job fails before compiling if any of these six secrets is
+   missing. It imports the decoded certificate into a throw-away keychain,
+   adds that keychain to the runner's search list, and restores the original
+   list and deletes both the keychain and decoded `.p12` in an always-run
+   cleanup step. The certificate and passwords never enter `GITHUB_ENV` or an
+   artifact, and the workflow does not echo the import command or its values.
+   Ordinary local builds do not run this import step and remain unsigned unless
+   the local signing variables below are supplied.
 3. **Code signing** of every Mach-O in the bundle, inside-out, with hardened
    runtime:
 
@@ -111,24 +129,18 @@ To make the warning disappear entirely the release pipeline needs:
    entitlements plist is expected, but verify after the first signed build
    with `codesign --verify --deep --strict` and `spctl -a -vv`.
 
-Until those pieces exist, the README and the download page state the caveat
-plainly rather than pretending the app is blessed.
+Until those pieces are configured in the release environment, the workflow
+fails closed rather than publishing an unsigned macOS asset. Local unsigned
+builds remain supported and are documented above.
 
-## Verified 2026-07-28
+## Release acceptance
 
-The full chain works on this machine: build-app.sh signs inside-out
-(Resources/bin binaries first, then the launcher, then the bundle), and
-notarisation returns Accepted with the ticket stapled; `spctl` reports
-"accepted, source=Notarized Developer ID". Team 9D7HJAGQ8L, keychain profile
-`notary`.
-
-One trap for external signing wrappers: tools that walk only Contents/MacOS
-miss the CLI binaries under Contents/Resources/bin, and Apple rejects the
-submission with "binary is not signed" for each. Sign those two explicitly
-first (hardened runtime + timestamp) or drive signing through build-app.sh,
-which already orders this correctly.
-
-CI cannot sign yet: the release workflow would need the Developer ID
-certificate and notary key as repository secrets. Until that is set up, the
-launch-day app asset is built and notarised locally and uploaded to the
-release by hand or via make-public.sh.
+The release workflow signs the nested Mach-Os under
+`Contents/Resources/bin` before signing `Hauksbee.app`, then submits the app
+for notarisation and staples the accepted ticket. The app gate runs
+`codesign --verify --deep --strict`, `spctl`, and `xcrun stapler validate`; the
+tarball gate verifies every command-line binary with `codesign --verify
+--strict`. Any missing secret, signing failure, notarisation rejection, or
+stapling failure stops publication. External signing wrappers must include the
+three binaries under `Contents/Resources/bin`, not only the launcher under
+`Contents/MacOS`.
