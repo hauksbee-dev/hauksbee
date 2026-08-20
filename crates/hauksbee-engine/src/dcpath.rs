@@ -12,9 +12,11 @@
 //!   prints, the modeled board does not define this level. A voltage
 //!   assertion here must not pass numerically; the honest verdict is "the
 //!   net floats: add a pull or a model for the parts that would drive it".
-//! - [`NetDcDefinition::Defined`]: a chain of resistors/inductors reaches
-//!   ground or an independent source, so the level stands on modeled
-//!   elements even if every unmodelled (open) part is high-impedance. Open
+//! - [`NetDcDefinition::DefinedBySource`] or
+//!   [`NetDcDefinition::DefinedThroughBoard`]: a source directly defines the
+//!   node, or a chain of resistors/inductors reaches a reference, so the level
+//!   stands on modeled elements even if every unmodelled (open) part is
+//!   high-impedance. Open
 //!   parts on such a net downgrade from verdict-blocking to a stated caveat
 //!   ("holds unless an unmodelled part actively drives the net") via
 //!   [`hauksbee_ir::evidence::EvidenceMap::assuming_open_parts_high_impedance`].
