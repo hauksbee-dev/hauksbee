@@ -77,7 +77,6 @@ function session(report: WebReport): BoardSession {
 }
 
 test('the browser renders every structured timing qualification from a frontdoor report', async () => {
-  Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')
   const html = renderToStaticMarkup(<BoardView
     session={session(realFrontdoorReport())}
@@ -136,7 +135,6 @@ test('typed co-sim invalidity and faults cannot retain a green verdict card', ()
 })
 
 test('model coverage is a clickable human workflow, not an agent-only report', async () => {
-  Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')
   const report = realFrontdoorReport()
   report.model_coverage = {
@@ -312,7 +310,6 @@ test('live input sliders require an explicit engine source, not an input-looking
 })
 
 test('a report-only restored session does not offer model saves it cannot re-analyze', async () => {
-  Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')
   const restored = session(realFrontdoorReport())
   restored.restoredFrom = {
@@ -338,7 +335,6 @@ test('a report-only restored session does not offer model saves it cannot re-ana
 })
 
 test('import diagnostics expose recovered, partial, unplaced and split-net guidance without inventing coordinates', async () => {
-  Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')
   const report = realFrontdoorReport()
   report.import_diagnostics = {
@@ -388,7 +384,6 @@ test('import diagnostics expose recovered, partial, unplaced and split-net guida
 })
 
 test('a parser refusal renders only its localized excerpt and suggested fix', async () => {
-  Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')
   const failed: WebReport = {
     ok: false,
