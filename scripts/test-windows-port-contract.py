@@ -27,6 +27,11 @@ class WindowsPortContract(unittest.TestCase):
         installer = read("scripts/install-sims-windows.ps1")
         self.assertIn('$escapedVersion = [regex]::Escape($RenodeVersion)', installer)
         self.assertIn('${escapedVersion}(?:[.\\s]|$)', installer)
+        version_check = installer[
+            installer.index("function Assert-RenodeVersion") :
+            installer.index("function Assert-QemuVersion")
+        ]
+        self.assertNotIn("$LASTEXITCODE", version_check)
 
     def test_verified_simulator_snapshots_preserve_zip_extension(self) -> None:
         installer = read("scripts/install-sims-windows.ps1")
