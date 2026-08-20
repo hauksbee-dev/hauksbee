@@ -23,6 +23,11 @@ def read(path: str) -> str:
 
 
 class WindowsPortContract(unittest.TestCase):
+    def test_verified_simulator_snapshots_preserve_zip_extension(self) -> None:
+        installer = read("scripts/install-sims-windows.ps1")
+        self.assertIn('$Asset.Name.EndsWith(".zip"', installer)
+        self.assertIn('$snapshot = "$snapshot.zip"', installer)
+
     def test_ci_runs_native_engine_ci_and_mcu_tests_with_warnings_denied(self) -> None:
         ci = read(".github/workflows/ci.yml")
         self.assertRegex(ci, r"runs-on:\s*windows-latest")

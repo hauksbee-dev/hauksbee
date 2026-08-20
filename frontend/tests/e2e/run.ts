@@ -48,7 +48,10 @@ async function main(): Promise<void> {
     )
     console.log(`[e2e] shared fixture: ${base}`)
 
-    for (const flow of E2E_FLOWS) {
+    const flows = process.env.HB_SKIP_3D === '1'
+      ? E2E_FLOWS.filter(flow => flow !== 'viewer-3d-idle.ts')
+      : E2E_FLOWS
+    for (const flow of flows) {
       if (interrupted) throw new Error('end-to-end run interrupted')
       console.log(`\n[e2e] ${flow}`)
       running = Bun.spawn(['bun', 'run', join(here, flow)], {
