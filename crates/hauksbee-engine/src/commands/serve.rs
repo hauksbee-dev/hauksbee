@@ -55,7 +55,7 @@ fn write_app_url_receipt(bound: std::net::SocketAddr) {
         return;
     };
     use std::io::Write;
-    let _ = write!(file, "http://{bound}\n");
+    let _ = writeln!(file, "http://{bound}");
 }
 
 /// Sweep stale hauksbee temp files from TMPDIR at server start.
