@@ -947,8 +947,9 @@ impl CiResult {
     }
 
     /// GitHub Actions annotations: `::error` / `::warning` / `::notice`
-    /// workflow commands so failures surface inline in the Checks UI. Emitted
-    /// to stdout when `GITHUB_ACTIONS` is set.
+    /// workflow commands so failures surface inline in the Checks UI. The CLI
+    /// writes them to stderr when `GITHUB_ACTIONS` is set so `--json` stdout
+    /// remains pure NDJSON.
     ///
     /// The budget matters: GitHub shows at most 10 annotations per type per
     /// step and silently drops the rest, so this surface spends them on

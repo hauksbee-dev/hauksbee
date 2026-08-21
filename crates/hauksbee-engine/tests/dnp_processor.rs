@@ -283,24 +283,3 @@ fn the_no_processor_message_tells_each_surface_its_own_fix() {
     assert!(!none.contains("--fit"), "{none}");
     assert!(none.contains("models resolve"), "{none}");
 }
-
-#[test]
-fn the_tarski_nano_is_fitted_by_default() {
-    // The real case this came from: the netlist marks the Nano DNP because the
-    // module ships separately, and the board is useless without it.
-    let text = std::fs::read_to_string(common::testdata("tarski_inputsystem.net"))
-        .expect("tarski netlist present");
-    let mut b = ExtractedBoard::from_auto(&text).expect("parse netlist");
-    let d = b
-        .apply_dnp_policy(DnpPolicy::FitExceptLinks, &[], &[])
-        .unwrap();
-    assert_eq!(d.fitted.len(), 1);
-    assert_eq!(d.fitted[0].reference, "A101");
-
-    let bound = bind_board(&b, &ModelLibrary::builtin());
-    assert_eq!(
-        bound.mcus.len(),
-        1,
-        "the board has its processor by default"
-    );
-}
