@@ -3,6 +3,8 @@ import { useSimulation } from './hooks/useSimulation'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './components/BoardViewer'
 import { TransportBar } from './components/TransportBar'
 import { SelectionCard } from './components/SelectionCard'
+import { ConstraintModal } from './components/ConstraintModal'
+import type { ConstraintDraft } from './components/ConstraintEditor'
 import { NetPanel } from './components/NetPanel'
 import { SerialConsole } from './components/SerialConsole'
 import { SolverControlsPanel } from './components/SolverControlsPanel'
@@ -160,10 +162,12 @@ export interface SimShellStatus {
 // so the shell only mounts it once a live board is actually being served, and
 // keeps it mounted (hidden) so the session's fault log and scope survive
 // navigation.
-export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor, onQueueSupply, pendingLiveRegisterMaps = [], onLiveRegisterMapsConsumed, onLiveActionResult, onStatus, expectedBoard, sessionMatchesCurrent, onRelaunch, modelCoverage }: {
+export default function SimView({ onQueueCheck, onOpenChecks, onQueuePeripheral, onQueueSensor, onQueueSupply, pendingLiveRegisterMaps = [], onLiveRegisterMapsConsumed, onLiveActionResult, onStatus, expectedBoard, sessionMatchesCurrent, onRelaunch, modelCoverage, componentAssertions }: {
   /** Queue a check into the checks builder from a click on the live board.
    *  Absent on the standalone demo server. */
   onQueueCheck?: (check: { kind: string; net?: string; ref?: string }) => void
+  /** Open the shared full Checks view from the constraint modal. */
+  onOpenChecks?: () => void
   /** Queue a real scenario interaction (not an assertion) for a clicked net. */
   onQueuePeripheral?: (peripheral: { id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }) => void
   onQueueSensor?: (sensor: { id: string; ref?: string; modelId?: string | null }) => void
@@ -187,12 +191,15 @@ export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor
    *  wire can run standalone, so this is optional; when present the component
    *  card keeps the same model-honesty detail while the board is moving. */
   modelCoverage?: ModelCoverageSnapshot | null
+  /** Exact assertion support retained from the analysis that launched this session. */
+  componentAssertions?: Record<string, string[]> | null
 } = {}) {
   const { connected, boardInfo, frame: liveFrame, status, send, replay, backlog, serverError, actionResults = [] } = useSimulation()
   const reportedActionResults = useRef(0)
 
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
+  const [constraintDraft, setConstraintDraft] = useState<(Partial<ConstraintDraft> & Pick<ConstraintDraft, 'kind'>) | null>(null)
   // A 316 px instrument rail consumes the entire work surface on a phone.
   // Start it collapsed there so Drive it live still lands on the board; the
   // labelled 18 px toggle keeps every instrument one tap away.
@@ -794,6 +801,7 @@ export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor
                   : undefined}
                 component={selectedFp}
                 boundKind={selectedFp ? boardInfo?.component_kinds?.[selectedFp.ref] ?? null : null}
+                assertionCapabilities={selectedFp ? componentAssertions?.[selectedFp.ref] ?? [] : []}
                 modelCoverage={selectedFp
                   ? modelCoverage?.components.find(component => component.reference === selectedFp.ref) ?? null
                   : null}
@@ -802,7 +810,7 @@ export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor
                       component.pins.some(pin => pin.net === selectedNet),
                     )
                   : []}
-                onQueueCheck={onQueueCheck}
+                onQueueCheck={onQueueCheck ? check => setConstraintDraft(check) : undefined}
                 onQueuePeripheral={queueAndAttachPeripheral}
                 onQueueSensor={onQueueSensor}
                 onQueueSupply={queueAndSetSupply}
@@ -813,6 +821,22 @@ export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor
               />
               </div>
             </div>
+          )}
+
+          {constraintDraft && onQueueCheck && (
+            <ConstraintModal
+              initial={constraintDraft}
+              onSave={draft => onQueueCheck({
+                ...draft,
+                net: draft.net || undefined,
+                ref: draft.ref || undefined,
+              })}
+              onClose={() => setConstraintDraft(null)}
+              onOpenChecks={() => {
+                setConstraintDraft(null)
+                onOpenChecks?.()
+              }}
+            />
           )}
 
           {/* Board overlay hints. While an input has focus the keyboard

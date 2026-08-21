@@ -137,6 +137,7 @@ Every key the loader accepts, in one place. Unknown keys are rejected.
 | `bom`           | path     | none          | BOM read and fail-closed reconciled before binding through the same production reader as `hauksbee run --bom`. See [assembly inputs](#assembly-inputs-bom-placement-variant). |
 | `bom_columns`   | [string] | `[]`          | Explicit `role=Header` mappings for an ambiguous BOM, equivalent to repeatable `--bom-column`; requires `bom`. |
 | `placement`     | path     | none          | Pick-and-place file reconciled against layout identity, package, position, side and rotation before binding. |
+| `models_dir`    | path     | none          | Highest-priority model-library directory, resolved relative to the spec; used by the browser and CLI Checks paths alike. |
 | `variant`       | path     | none          | Assembly-variant TOML with `name`, `fit` and/or `no_fit`; exact bytes and population decisions are separate evidence. |
 | `firmware`      | path     | none          | Firmware to boot on the detected MCU: a compiled ELF/hex, a PlatformIO project directory, or a zip of either (same three input tiers as `run --firmware`, see [`../cosim/MCU.md`](../cosim/MCU.md)). |
 | `mcu`           | string   | none          | Informational note only, nothing reads it. The MCU comes from the BOARD's part value via `[[models]] kind = "mcu"` routing entries (builtin, user model dirs, `--models-dir`); this field cannot force a backend. Distinct from the `mcu` field inside a `uart` `[[assert]]`, which IS load-bearing (it selects which MCU's UART the assertion reads). |
@@ -599,8 +600,9 @@ feedback loop's phase margin (degrees) and `ac_gain` bounds a net's magnitude
 alongside the analysis it drives.
 
 **`rail_window`**: over a transient `[[scenario]]` window, a rail's min/max
-voltage stays within bounds and any dip below a floor recovers within a deadline
-(the brownout/inrush check). The scenario it judges over is a complete block of
+voltage stays within bounds; optional dip and recovery limits bound undervoltage,
+while `spike_above` / `spike_for_max_ms` and `settle_to` /
+`settle_within_ms` bound overvoltage. The scenario it judges over is a complete block of
 its own: `part` (required, the component drawing the load) plus a load
 `profile`, built-in or defined inline as a `[[profile]]`. Profiles and the rest
 of the scenario fields are documented in
@@ -623,6 +625,11 @@ dip_below = 3.1           # optionally: how long it may sit below a level
 for_max_ms = 5
 recover_to = 3.2
 recover_within_ms = 20
+# Optional overvoltage bounds (strict `>` spike, inclusive `<=` settle):
+# spike_above = 3.6
+# spike_for_max_ms = 2
+# settle_to = 3.4
+# settle_within_ms = 10
 ```
 
 **`protection_trip`**: a battery/e-fuse protection cutoff fired (or must NOT

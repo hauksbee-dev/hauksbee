@@ -140,6 +140,14 @@
         }
       ]
     },
+    "models_dir": {
+      "description": "Optional highest-priority model-library directory, resolved relative to\nthe spec. The browser stages selected model TOMLs here so Checks binds\nagainst the same model context as report analysis and Live Sim.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
     "name": {
       "description": "Human-readable name for the check (appears in reports).",
       "type": "string",
@@ -415,7 +423,7 @@
           "default": null
         },
         "kind": {
-          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery bounds over a scenario\nwindow. `protection_trip`: battery protection trips (or must not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset and held per `hold_ms` (the kebab-case\n`boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model.",
+          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery and spike/settling bounds\nover a scenario window. `protection_trip`: battery protection trips (or\nmust not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset and held per `hold_ms` (the kebab-case\n`boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model.",
           "type": "string",
           "enum": [
             "voltage",
@@ -560,6 +568,44 @@
             "null"
           ],
           "default": null
+        },
+        "settle_to": {
+          "description": "rail_window: the voltage the rail must return to (at or below) for\n\"settled\".",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "settle_within_ms": {
+          "description": "rail_window: the rail must settle (reach `settle_to`) within this many\nmilliseconds of first spiking above `spike_above`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null,
+          "minimum": 0.0
+        },
+        "spike_above": {
+          "description": "rail_window: the rail is considered \"spiking\" while it is strictly\nabove this voltage. Combine with `spike_for_max_ms` to bound total\novervoltage duration, and with `settle_to` / `settle_within_ms` to bound\nsettling.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "spike_for_max_ms": {
+          "description": "rail_window: the rail must not stay above `spike_above` for longer than\nthis many milliseconds (total, summed over the window).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null,
+          "minimum": 0.0
         },
         "supply_net": {
           "description": "protection_trip: the supply net whose battery protection is checked.",

@@ -17,8 +17,8 @@ use axum::routing::get;
 use axum::Router;
 use engine::Engine;
 use frontdoor::{
-    CheckRunner, FirmwareAnalyzer, LiveLauncher, SchematicAnalyzer, SchematicCheckRunner,
-    SchematicLiveLauncher, ToolHooks,
+    CheckRunner, DesignAnalyzer, DesignCheckRunner, DesignLiveLauncher, FirmwareAnalyzer,
+    LiveLauncher, SchematicAnalyzer, SchematicCheckRunner, SchematicLiveLauncher, ToolHooks,
 };
 use protocol::{ClientMessage, ServerMessage, SessionBacklog, SimFrame, Status};
 use std::path::Path;
@@ -364,6 +364,9 @@ impl Server {
             tools,
             launch,
             None,
+            None,
+            None,
+            None,
             startup_json,
         )
     }
@@ -447,6 +450,42 @@ impl Server {
             tools,
             None,
             launch,
+            None,
+            None,
+            None,
+            startup_json,
+        );
+        axum::serve(listener, router).await?;
+        Ok(())
+    }
+
+    /// Complete design-input counterpart used by the shipped app. The
+    /// preloaded session and subsequent browser uploads share one route set.
+    pub async fn serve_app_on_with_design(
+        &self,
+        listener: tokio::net::TcpListener,
+        static_dir: Option<&Path>,
+        board_file: Option<(String, String)>,
+        analyze: DesignAnalyzer,
+        check: Option<DesignCheckRunner>,
+        tools: Option<ToolHooks>,
+        launch: Option<DesignLiveLauncher>,
+        startup_json: String,
+    ) -> anyhow::Result<()> {
+        let router = unified_router(
+            Some(self.hub.clone()),
+            static_dir,
+            board_file,
+            None,
+            None,
+            None,
+            None,
+            tools,
+            None,
+            None,
+            Some(analyze),
+            check,
+            launch,
             startup_json,
         );
         axum::serve(listener, router).await?;
@@ -470,6 +509,9 @@ fn unified_router(
     tools: Option<ToolHooks>,
     launch: Option<LiveLauncher>,
     schematic_launch: Option<SchematicLiveLauncher>,
+    design_analyze: Option<DesignAnalyzer>,
+    design_check: Option<DesignCheckRunner>,
+    design_launch: Option<DesignLiveLauncher>,
     startup_json: String,
 ) -> Router {
     let mut router = Router::new();
@@ -500,11 +542,17 @@ fn unified_router(
     if let (Some(hub), Some(launch)) = (&hub, schematic_launch) {
         router = router.merge(frontdoor::live_routes_with_schematic(hub.clone(), launch));
     }
+    if let (Some(hub), Some(launch)) = (&hub, design_launch) {
+        router = router.merge(frontdoor::live_routes_with_design(hub.clone(), launch));
+    }
     if let Some(analyze) = analyze {
         router = router.merge(frontdoor::api_routes(analyze));
     }
     if let Some(analyze) = schematic_analyze {
         router = router.merge(frontdoor::api_routes_with_schematic(analyze));
+    }
+    if let Some(analyze) = design_analyze {
+        router = router.merge(frontdoor::api_routes_with_design(analyze));
     }
     // The web checks panel's backend (`POST /api/check`): present whenever the
     // embedding binary supplied a runner (the hauksbee-ci shell-out).
@@ -513,6 +561,9 @@ fn unified_router(
     }
     if let Some(check) = schematic_check {
         router = router.merge(frontdoor::check_route_with_schematic(check));
+    }
+    if let Some(check) = design_check {
+        router = router.merge(frontdoor::check_route_with_design(check));
     }
     // The dependency panel's backend (`GET /api/deps`, `POST
     // /api/deps/install/{id}`) and the datasheet-extraction backend
@@ -641,6 +692,9 @@ pub async fn serve_frontdoor_on(
         tools,
         launch,
         None,
+        None,
+        None,
+        None,
         startup_json,
     );
     axum::serve(listener, router).await?;
@@ -670,6 +724,41 @@ pub async fn serve_frontdoor_on_with_schematic(
         check,
         tools,
         None,
+        launch,
+        None,
+        None,
+        None,
+        startup_json,
+    );
+    axum::serve(listener, router).await?;
+    Ok(())
+}
+
+/// Standalone front door whose report, Checks, and Live Sim routes all accept
+/// the complete design-input bundle.
+pub async fn serve_frontdoor_on_with_design(
+    listener: tokio::net::TcpListener,
+    static_dir: Option<&Path>,
+    analyze: DesignAnalyzer,
+    check: Option<DesignCheckRunner>,
+    tools: Option<ToolHooks>,
+    launch: Option<DesignLiveLauncher>,
+    startup_json: String,
+) -> anyhow::Result<()> {
+    let hub = LiveHub::new();
+    let router = unified_router(
+        Some(hub),
+        static_dir,
+        None,
+        None,
+        None,
+        None,
+        None,
+        tools,
+        None,
+        None,
+        Some(analyze),
+        check,
         launch,
         startup_json,
     );

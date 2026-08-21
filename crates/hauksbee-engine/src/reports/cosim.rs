@@ -40,7 +40,7 @@ pub fn build_cosim_json(
 ) -> Result<Option<CosimJson>, hauksbee_ir::evidence::EvidenceError> {
     let sched = engine.scheduler();
     let identities = sched.mcu_identities();
-    // No live MCU => no co-sim ran (e.g. a renode/qemu board with no firmware).
+    // No live MCU => no co-sim ran (a board-only run has no firmware to boot).
     let Some((mcu_ref, backend, requested_part)) = identities.into_iter().next() else {
         return Ok(None);
     };

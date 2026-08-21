@@ -190,14 +190,22 @@ fn main() {
     // any distro without libelf1 (debian:bookworm-slim, ubuntu:24.04). Prefer
     // the static archives; fall back to dynamic with a printed note when the
     // build host carries no .a (the release builders must).
-    probe_static_preferred(
+    let libelf_needs_zstd = probe_static_preferred(
         "libelf",
         "hauksbee-mcu: the `avr` feature needs libelf, but pkg-config can't find it. \
          Install it with `scripts/install-sims.sh --avr` (installs libelf too), or by hand: \
-         `brew install libelf` (macOS) / `apt-get install libelf-dev` (Debian/Ubuntu) / \
-         `dnf install elfutils-libelf-devel` (Fedora). To build without AVR: \
+         `brew install libelf` (macOS) / `apt-get install libelf-dev libzstd-dev` \
+         (Debian/Ubuntu) / `dnf install elfutils-libelf-devel libzstd-devel` \
+         (Fedora). To build without AVR: \
          `cargo build -p hauksbee-engine --no-default-features --features renode,qemu`.",
     );
+    // Recent Linux libelf archives compile ELF compression support against
+    // libzstd, but their pkg-config metadata does not list zstd as a private
+    // dependency. Keep the archive link self-contained by adding the missing
+    // dependency after libelf (static archives must precede their users).
+    if libelf_needs_zstd {
+        link_zstd_after_libelf();
+    }
     probe_static_preferred(
         "zlib",
         "hauksbee-mcu: the `avr` feature needs zlib, but pkg-config can't find it. \
@@ -246,7 +254,7 @@ fn main() {
 /// Probe a pkg-config library preferring the STATIC archive; when no static
 /// archive exists on the build host, fall back to the dynamic probe and say
 /// so, rather than fail a dev build over a packaging concern.
-fn probe_static_preferred(name: &str, missing_msg: &str) {
+fn probe_static_preferred(name: &str, missing_msg: &str) -> bool {
     // Probe WITHOUT emitting cargo metadata first: static vs dynamic is
     // decided below, only after checking the archive really exists on disk.
     let probe = pkg_config::Config::new()
@@ -273,7 +281,13 @@ fn probe_static_preferred(name: &str, missing_msg: &str) {
             let lib = probe.libs.first().map(String::as_str).unwrap_or(name);
             print_dynamic_warning(name, lib);
         }
-        return;
+        return name == "libelf"
+            && probe.link_paths.iter().any(|dir| {
+                probe.libs.iter().any(|lib| {
+                    let archive = dir.join(format!("lib{lib}.a"));
+                    archive.exists() && archive_contains_zstd_symbols(&archive)
+                })
+            });
     }
 
     // Linux (and other non-mac hosts): pkg_config's statik(true) mode can
@@ -311,11 +325,15 @@ fn probe_static_preferred(name: &str, missing_msg: &str) {
         search_dirs.push(PathBuf::from(dir));
     }
 
+    let mut static_libelf_needs_zstd = false;
     for lib in &probe.libs {
         let archive = format!("lib{lib}.a");
         if let Some(dir) = search_dirs.iter().find(|d| d.join(&archive).exists()) {
             println!("cargo:rustc-link-search=native={}", dir.display());
             println!("cargo:rustc-link-lib=static={lib}");
+            if name == "libelf" && archive_contains_zstd_symbols(&dir.join(&archive)) {
+                static_libelf_needs_zstd = true;
+            }
         } else {
             // No archive anywhere on the ladder: link dynamically and SAY so.
             // Never print nothing here; a silent dynamic link is exactly the
@@ -326,6 +344,63 @@ fn probe_static_preferred(name: &str, missing_msg: &str) {
             println!("cargo:rustc-link-lib={lib}");
             print_dynamic_warning(name, lib);
         }
+    }
+    static_libelf_needs_zstd
+}
+
+fn archive_contains_zstd_symbols(archive: &Path) -> bool {
+    std::fs::read(archive)
+        .map(|bytes| {
+            bytes
+                .windows(b"ZSTD_".len())
+                .any(|window| window == b"ZSTD_")
+        })
+        .unwrap_or(false)
+}
+
+fn link_zstd_after_libelf() {
+    let mut search_dirs = Vec::new();
+    if let Ok(out) = std::process::Command::new(
+        env::var("PKG_CONFIG").unwrap_or_else(|_| "pkg-config".to_string()),
+    )
+    .args(["--variable=libdir", "libzstd"])
+    .output()
+    {
+        if out.status.success() {
+            let libdir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !libdir.is_empty() {
+                search_dirs.push(PathBuf::from(libdir));
+            }
+        }
+    }
+    search_dirs.extend([
+        PathBuf::from("/opt/homebrew/lib"),
+        PathBuf::from("/usr/lib/x86_64-linux-gnu"),
+        PathBuf::from("/usr/lib/aarch64-linux-gnu"),
+        PathBuf::from("/usr/lib64"),
+        PathBuf::from("/usr/lib"),
+        PathBuf::from("/usr/local/lib"),
+    ]);
+    search_dirs.dedup();
+
+    if let Some(dir) = search_dirs
+        .iter()
+        .find(|dir| dir.join("libzstd.a").exists())
+    {
+        println!("cargo:rustc-link-search=native={}", dir.display());
+        println!("cargo:rustc-link-lib=static=zstd");
+    } else {
+        // A shared zstd is sufficient for a development build when the static
+        // archive is not installed; keep the link explicit rather than letting
+        // libelf's incomplete pkg-config metadata fail at the final link.
+        for dir in &search_dirs {
+            if dir.join("libzstd.so").exists() || dir.join("libzstd.dylib").exists() {
+                println!("cargo:rustc-link-search=native={}", dir.display());
+                break;
+            }
+        }
+        println!("cargo:rustc-link-lib=zstd");
+        println!("cargo:warning=hauksbee-mcu: libelf uses zstd but no static libzstd.a was found; linking zstd dynamically");
     }
 }
 

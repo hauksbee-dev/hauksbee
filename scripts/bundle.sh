@@ -51,9 +51,11 @@
 # keeps the permissive shape honest.
 #
 # Web UI: on a build (not --no-build) this first builds frontend/dist and then
-# appends the `embed-web` feature, so the resulting binary embeds the web app
-# and `hauksbee serve` works from a bare install. embed-web only adds rust-embed
-# (permissive), so it has no bearing on the GPL guard. Needs bun or npm on PATH;
+# appends the `serve,embed-web` features, so the resulting binary includes the
+# web front door and embeds its UI; `hauksbee serve` works from a bare install
+# even for the permissive no-default-features shape. embed-web only adds
+# rust-embed (permissive), so it has no bearing on the GPL guard. Needs bun or
+# npm on PATH;
 # without a JS toolchain and no existing dist/, the bundle builds without a UI.
 #
 # macOS signing: on a Darwin host, when HAUKSBEE_SIGN_IDENTITY is set, each
@@ -189,8 +191,9 @@ if [ "$DO_BUILD" -eq 1 ]; then
   have "$CARGO" || die "cargo not found. Install Rust or pass --no-build."
 
   # Build the web front door so the release bundle self-contains the UI. The
-  # embed-web feature (appended below) compiles frontend/dist INTO the binary,
-  # so `hauksbee serve` works from a bare installed binary with no checkout.
+  # serve + embed-web (appended below) compile the front door and frontend/dist
+  # INTO the binary, so `hauksbee serve` works from a bare installed binary
+  # with no checkout.
   # Release bytes must come from the checked-in Bun lock. Gated on DO_BUILD
   # (the --no-build path ships the already-built binaries as-is and never
   # rebuilds the frontend).
@@ -201,15 +204,15 @@ if [ "$DO_BUILD" -eq 1 ]; then
     die "bun not found; a release bundle must rebuild frontend/dist from the checked-in bun.lock"
   fi
 
-  # Self-contain the web app: append embed-web so the built binary serves the UI
-  # without a checkout. A release bundle always wants this. rust-embed needs
+  # Self-contain the web app: append serve,embed-web so the built binary serves
+  # the UI without a checkout. A release bundle always wants this. rust-embed needs
   # frontend/dist to exist at COMPILE time, so only enable it when dist is
   # actually present; a missing dist would otherwise hard-fail the build. Append
   # (never replace) so it composes onto whatever features were requested, e.g.
-  # the release workflow's `renode,qemu` -> `renode,qemu,embed-web`.
+  # the permissive shape's `renode,qemu` -> `renode,qemu,serve,embed-web`.
   if [ -d "$HAUKSBEE_ROOT/frontend/dist" ]; then
-    if [ -n "$FEATURES" ]; then FEATURES="$FEATURES,embed-web"; else FEATURES="embed-web"; fi
-    log "Self-contained web UI: embed-web enabled (features: ${FEATURES})"
+    if [ -n "$FEATURES" ]; then FEATURES="$FEATURES,serve,embed-web"; else FEATURES="serve,embed-web"; fi
+    log "Self-contained web UI: serve + embed-web enabled (features: ${FEATURES})"
   else
     warn "frontend/dist not found; building WITHOUT embed-web."
     warn "The bare binary will have no web UI until it is built from a checkout."

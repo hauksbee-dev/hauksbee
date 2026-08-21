@@ -116,8 +116,8 @@ if [ "$DO_BUILD" -eq 1 ]; then
   "$HAUKSBEE_ROOT/scripts/simavr-payload-provenance.sh" verify "$_simavr_prefix" \
     || die "simavr payload bytes under $_simavr_prefix do not match their recorded provenance"
   export SIMAVR_COMMIT
-  EMBED_ARGS=(--features embed-web)
-  log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release, embed-web)"
+  EMBED_ARGS=(--features "serve,embed-web")
+  log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release, serve + embed-web)"
   # `${arr[@]+...}` guards empty-array expansion under `set -u` on bash 3.2
   # (the macOS default), where a bare `"${arr[@]}"` on an empty array errors.
   ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --locked --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp ${EMBED_ARGS[@]+"${EMBED_ARGS[@]}"} )

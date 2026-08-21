@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App'
 import DemoApp from './demo/DemoApp'
+import { AppErrorBoundary } from './components/AppErrorBoundary'
 
 // VITE_DEMO=1 builds the hauksbee.dev demo shell (recorded-session replays);
 // everything else is the live app. __DEMO__ is a build-time literal (see
@@ -13,6 +14,8 @@ const DEMO = __DEMO__
 const root = document.getElementById('root')!
 createRoot(root).render(
   <StrictMode>
-    {DEMO ? <DemoApp /> : <App />}
+    <AppErrorBoundary>
+      {DEMO ? <DemoApp /> : <App />}
+    </AppErrorBoundary>
   </StrictMode>
 )

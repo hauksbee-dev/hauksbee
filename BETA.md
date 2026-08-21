@@ -17,8 +17,9 @@ earlier MIT or Apache-2.0 delivery remain intact.
 1. Start with a board whose behaviour you understand. Keep your normal review
    and simulation flow in place.
 2. Drop the board, schematic, or fab archive into the local web app. Add the
-   BOM, placement, fitted variant, firmware, or assertion spec when they
-   determine the answer.
+   BOM, placement, fitted variant, as-built overlay, firmware, model files, or
+   assertion spec when they determine the answer. The same selected design
+   bundle is used by the report, Checks, and Live Sim.
 3. Check the input inventory and model-coverage sections before reading the
    verdict. A clean result with missing authority is not a clean board.
 4. Reproduce any important finding in the source CAD, an independent

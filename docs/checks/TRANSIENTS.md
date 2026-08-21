@@ -238,6 +238,10 @@ dip_below = 3.0                 # "dipped" while below this
 for_max_ms = 1.0                # must not stay dipped longer than this
 recover_to = 3.2                # ... and must climb back to here
 recover_within_ms = 200         # ... within this long of first dipping
+spike_above = 3.6                # optional overvoltage threshold (strict >)
+spike_for_max_ms = 2             # ... maximum total time above it
+settle_to = 3.4                  # settled at or below this level (<=)
+settle_within_ms = 10            # ... within this long of first spiking
 ```
 
 If `supply_net` is omitted, the runner infers it from the part's power pins
@@ -245,14 +249,16 @@ If `supply_net` is omitted, the runner infers it from the part's power pins
 `AssertResult` path, so they get JUnit XML, the human report, the process exit
 code, and GitHub annotations for free.
 
-The `rail_window` assertion measures over the scenario's window
-(`start_ms` to end of run): minimum / maximum voltage, total dip time below a
-threshold (rectangular integration on the sampled frame grid), and recovery
-time. Minimum and maximum include the solver's intra-frame extrema. Recovery is
-measured from the first sample below `dip_below` to the first sample at or above
-`recover_to` after the last below-threshold sample, and is infinite when the rail
-never recovers. `protection_trip` is run-wide when no scenario is supplied; with
-`scenario = ...`, it reports only trips inside that scenario window.
+The `rail_window` assertion measures over the scenario's window (`start_ms` to
+end of run): minimum / maximum voltage, total dip or spike time (rectangular
+integration on the sampled frame grid), and recovery or settling time. Minimum
+and maximum include the solver's intra-frame extrema. Dip duration uses strict
+`< dip_below`; spike duration uses strict `> spike_above`. Recovery settles at
+inclusive `>= recover_to`, while overvoltage settling reaches inclusive
+`<= settle_to` after the last sample above that level. Either recovery or
+settling is infinite when the rail never reaches its target. `protection_trip`
+is run-wide when no scenario is supplied; with `scenario = ...`, it reports only
+trips inside that scenario window.
 
 ---
 

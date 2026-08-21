@@ -12,7 +12,9 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { assumptionsForEvidence, describeModelSource } from '../lib/evidence'
 import { summarizeErrorBudget } from '../lib/error-budget'
 import { buildCheckUpload, buildPortableCheckSpec } from '../lib/board-upload'
+import type { SupplementalDesignFiles } from '../lib/board-upload'
 import { sessionIdFor } from '../lib/session-store'
+import { ConstraintEditor, constraintIssues, type ConstraintDraft, type ConstraintIssue } from './ConstraintEditor'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -112,38 +114,64 @@ function emptyPeripheral(rowId: number, kind: PeripheralRow['kind'], net = ''): 
 
 // One plain-language check. `kind` maps 1:1 onto the spec's [[assert]] kinds;
 // fields are kept as strings so the inputs stay honest about what was typed.
-interface CheckRow {
+interface CheckRow extends ConstraintDraft {
   id: number
-  kind: string
-  net: string
-  ref: string
-  min: string
-  max: string
-  after_ms: string
-  deadline_ms: string
-  contains: string
-  freq_hz: string
-  tolerance: string
-  min_toggles: string
-  amps: string
-  celsius: string
-  dip_below: string
-  for_max_ms: string
-  recover_to: string
-  recover_within_ms: string
+}
+
+function componentCapabilityIssues(
+  check: ConstraintDraft,
+  componentAssertions: Record<string, string[]> | undefined,
+): ConstraintIssue[] {
+  const componentRef = (check.ref ?? '').trim()
+  if (!['max_current', 'max_temp'].includes(check.kind) || !componentRef) return []
+  const supported = componentAssertions?.[componentRef] ?? []
+  if (supported.includes(check.kind)) return []
+  return [{
+    field: 'ref',
+    message: check.kind === 'max_current'
+      ? `${componentRef} has no measurable through-current; choose a resistor or diode in that path`
+      : `${componentRef} has no thermal model, so its junction temperature cannot be evaluated`,
+  }]
 }
 
 const emptyCheck = (id: number, kind: string, net = ''): CheckRow => ({
   id, kind, net,
   ref: '', min: '', max: '', after_ms: '', deadline_ms: '', contains: '',
   freq_hz: '', tolerance: '', min_toggles: '', amps: '', celsius: '',
-  dip_below: '', for_max_ms: '', recover_to: '', recover_within_ms: '',
+  rail_polarity: 'dip', dip_below: '', for_max_ms: '', recover_to: '', recover_within_ms: '',
+  spike_above: '', spike_for_max_ms: '', settle_to: '', settle_within_ms: '',
 })
+
+const CHECK_STRING_FIELDS = [
+  'kind', 'net', 'ref', 'min', 'max', 'after_ms', 'deadline_ms', 'contains',
+  'freq_hz', 'tolerance', 'min_toggles', 'amps', 'celsius', 'dip_below',
+  'for_max_ms', 'recover_to', 'recover_within_ms', 'spike_above',
+  'spike_for_max_ms', 'settle_to', 'settle_within_ms',
+] as const satisfies ReadonlyArray<keyof CheckRow>
+
+/** Upgrade browser-saved rows from earlier releases before any validator or
+ * editor sees them. Unknown/missing scalar values become empty inputs rather
+ * than an exception or an invented constraint. */
+function normalizeSavedCheck(value: unknown, fallbackId: number): CheckRow | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const saved = value as Partial<CheckRow>
+  const kind = typeof saved.kind === 'string' ? saved.kind : ''
+  if (!CHECK_KINDS.some(candidate => candidate.kind === kind)) return null
+  const id = typeof saved.id === 'number' && Number.isFinite(saved.id) ? saved.id : fallbackId
+  const row = { ...emptyCheck(id, kind), ...saved } as CheckRow
+  for (const field of CHECK_STRING_FIELDS) {
+    if (typeof row[field] !== 'string') (row[field] as string) = ''
+  }
+  row.rail_polarity = saved.rail_polarity === 'spike' || (row.spike_above ?? '').trim()
+    ? 'spike'
+    : 'dip'
+  return row
+}
 
 // The check-kind vocabulary: plain words first, the TOML kind in small print.
 const CHECK_KINDS: { kind: string; label: string; group: string; hint: string }[] = [
   { kind: 'voltage', label: 'A net must sit at a voltage', group: 'Voltages', hint: 'min/max volts, optionally after a settle time' },
-  { kind: 'rail_window', label: 'A rail may only dip briefly', group: 'Voltages', hint: 'bound brownout depth, duration and recovery' },
+  { kind: 'rail_window', label: 'A rail excursion must stay within bounds', group: 'Voltages', hint: 'choose dip-below or spike-above, then set duration and recovery' },
   { kind: 'no_faults', label: 'Nothing over-stressed', group: 'Stress', hint: 'no component beyond its ratings at any point' },
   { kind: 'max_current', label: 'A part must stay under a current', group: 'Currents', hint: 'ceiling in amps for one component' },
   { kind: 'max_temp', label: 'A part must stay cool', group: 'Temperatures', hint: 'junction temperature ceiling (or the part’s own rating)' },
@@ -217,6 +245,20 @@ function numOr(v: string): string | null {
   return Number.isFinite(Number(t)) ? t : null
 }
 
+/** Stable enough identity for a staged browser File during one session. A
+ * same-name replacement must stale a previous run even when the user keeps
+ * the board/firmware slot filled; bytes are authenticated by the upload path
+ * when the new run is sent. */
+function fileIdentity(file: File | null): string | null {
+  return file ? `${file.name}\u0000${file.size}\u0000${file.lastModified}` : null
+}
+
+function supplementalIdentity(files: SupplementalDesignFiles): string {
+  return [files.bom, files.placement, files.variant, files.asbuilt, ...files.models]
+    .map(fileIdentity)
+    .join('\u0001')
+}
+
 /** Compose the spec BODY (no board/firmware keys; the server injects those
  *  from the uploaded files). */
 export function buildToml(
@@ -282,10 +324,20 @@ export function buildToml(
     put('min_toggles', c.min_toggles)
     put('amps', c.amps)
     put('celsius', c.celsius)
-    put('dip_below', c.dip_below)
-    put('for_max_ms', c.for_max_ms)
-    put('recover_to', c.recover_to)
-    put('recover_within_ms', c.recover_within_ms)
+    // A rail window is explicitly one-sided. The polarity selector only
+    // affects which schema keys are emitted; stale opposite-side fields are
+    // cleared by the shared editor and are never sent to the engine.
+    if (c.rail_polarity === 'spike' || (!c.rail_polarity && c.spike_above)) {
+      put('spike_above', c.spike_above)
+      put('spike_for_max_ms', c.spike_for_max_ms)
+      put('settle_to', c.settle_to)
+      put('settle_within_ms', c.settle_within_ms)
+    } else {
+      put('dip_below', c.dip_below)
+      put('for_max_ms', c.for_max_ms)
+      put('recover_to', c.recover_to)
+      put('recover_within_ms', c.recover_within_ms)
+    }
   }
   return out
 }
@@ -304,7 +356,8 @@ const SENSOR_FIELDS = new Set(['id', 'spec', 'controller', 'cs_net', 'inputs'])
 const ASSERT_FIELDS = new Set([
   'kind', 'net', 'ref', 'min', 'max', 'after_ms', 'deadline_ms', 'contains',
   'freq_hz', 'tolerance', 'min_toggles', 'amps', 'celsius', 'dip_below',
-  'for_max_ms', 'recover_to', 'recover_within_ms',
+  'for_max_ms', 'recover_to', 'recover_within_ms', 'spike_above',
+  'spike_for_max_ms', 'settle_to', 'settle_within_ms',
 ])
 
 /** Best-effort: load a raw TOML back into builder rows. Returns null when the
@@ -378,6 +431,18 @@ export function tomlToBuilder(raw: string): { name: string; duration: string; su
       if (key === 'ref' && !REF_KINDS.includes(kind)) return null
       if (key === 'contains' && kind !== 'uart') return null
     }
+    if (kind === 'rail_window') {
+      // A visual row has one polarity and therefore one set of keys. Keep a
+      // raw spec in raw mode when both sides are present (or a spike duration
+      // appears without its threshold) instead of silently dropping fields on
+      // a builder round-trip.
+      const hasDip = ['dip_below', 'for_max_ms', 'recover_to', 'recover_within_ms']
+        .some(key => a[key] !== undefined)
+      const hasSpike = ['spike_above', 'spike_for_max_ms', 'settle_to', 'settle_within_ms']
+        .some(key => a[key] !== undefined)
+      if (hasDip && hasSpike) return null
+      if (hasSpike && a.spike_above === undefined) return null
+    }
     const row = emptyCheck(id++, kind)
     const grab = (key: keyof CheckRow, tomlKey?: string) => {
       const v = a[tomlKey ?? key]
@@ -386,6 +451,8 @@ export function tomlToBuilder(raw: string): { name: string; duration: string; su
     grab('net'); grab('ref'); grab('min'); grab('max'); grab('after_ms'); grab('deadline_ms')
     grab('contains'); grab('freq_hz'); grab('tolerance'); grab('min_toggles'); grab('amps')
     grab('celsius'); grab('dip_below'); grab('for_max_ms'); grab('recover_to'); grab('recover_within_ms')
+    grab('spike_above'); grab('spike_for_max_ms'); grab('settle_to'); grab('settle_within_ms')
+    if (kind === 'rail_window' && row.spike_above.trim()) row.rail_polarity = 'spike'
     checks.push(row)
   }
   return {
@@ -465,6 +532,52 @@ function RawModeSummary({ rawText }: { rawText: string }) {
   )
 }
 
+/** The firmware decision is part of the run contract, not a builder-only
+ * setting. Keep it visible while raw TOML owns the pane too, so a non-AVR
+ * build can always choose the static-only path before pressing Run. */
+function FirmwareRunChoice({
+  firmware,
+  include,
+  avrAvailable,
+  running,
+  onChange,
+}: {
+  firmware: File
+  include: boolean
+  avrAvailable: boolean
+  running: boolean
+  onChange: (include: boolean) => void
+}) {
+  return (
+    <section
+      className="hb-card px-4 py-3.5 mb-4"
+      data-testid="firmware-run-choice"
+      style={{ borderColor: !avrAvailable && include ? 'var(--warn-border)' : 'var(--hairline)' }}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="inline-flex items-center gap-2 text-[12px] cursor-pointer" style={{ color: 'var(--silk)' }}>
+          <input
+            data-testid="include-staged-firmware"
+            type="checkbox"
+            checked={include}
+            disabled={running}
+            onChange={event => onChange(event.currentTarget.checked)}
+          />
+          <span>{include ? 'Include staged firmware in this run' : 'Run checks without firmware'}</span>
+        </label>
+        <span className="text-[11px]" style={{ color: include ? 'var(--copper-hi)' : 'var(--silk-faint)' }}>
+          {include ? 'firmware co-simulation requested' : 'static board checks only'}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-relaxed" style={{ color: !avrAvailable ? 'var(--warn-strong)' : 'var(--silk-dim)' }}>
+        <span style={{ fontFamily: 'var(--font-mono)' }}>{firmware.name}</span> is staged. Supply, voltage, and button checks do not need an MCU backend. UART, blink,
+        boot, and any combined firmware co-simulation do; this build reports that backend as {!avrAvailable ? 'unavailable' : 'available'}.
+        {!avrAvailable && include && ' Turn the choice off to run the static checks without firmware.'}
+      </p>
+    </section>
+  )
+}
+
 function Field({ label, value, onChange, width = 90, placeholder, invalid }: {
   label: string
   value: string
@@ -489,67 +602,6 @@ function Field({ label, value, onChange, width = 90, placeholder, invalid }: {
       />
     </label>
   )
-}
-
-/** One builder-row validation problem: which UI field, said in the UI's own
- *  words (never TOML key names; the raw pane owns that vocabulary). */
-interface RowIssue {
-  /** CheckRow field whose input gets the highlight. */
-  field: keyof CheckRow
-  message: string
-}
-
-/** Builder-mode preflight, mirroring hauksbee-ci's per-assertion requirements
- *  but speaking in the builder's field labels. Only fields actually missing
- *  are named, so "ref present, amps empty" says just "max A is empty". */
-function rowIssues(c: CheckRow): RowIssue[] {
-  const blank = (v: string) => v.trim() === ''
-  const issues: RowIssue[] = []
-  const needNet = () => { if (blank(c.net)) issues.push({ field: 'net', message: 'net is empty' }) }
-  switch (c.kind) {
-    case 'voltage':
-      needNet()
-      if (blank(c.min) && blank(c.max)) {
-        issues.push({ field: 'min', message: 'needs a min V and/or a max V' })
-      }
-      break
-    case 'uart':
-      if (blank(c.contains)) issues.push({ field: 'contains', message: '"must print" is empty' })
-      break
-    case 'toggle':
-      needNet()
-      if (blank(c.freq_hz) && blank(c.min_toggles)) {
-        issues.push({ field: 'freq_hz', message: 'needs a freq Hz or a min toggles' })
-      }
-      break
-    case 'boot-coverage':
-      needNet()
-      if (blank(c.min)) issues.push({ field: 'min', message: 'reach V is empty' })
-      if (blank(c.deadline_ms)) issues.push({ field: 'deadline_ms', message: 'within ms is empty' })
-      break
-    case 'max_current':
-      if (blank(c.ref)) issues.push({ field: 'ref', message: 'part (ref) is empty' })
-      if (blank(c.amps)) issues.push({ field: 'amps', message: 'max A is empty' })
-      break
-    case 'max_temp':
-      // max °C may stay blank (falls back to the part's own rating).
-      if (blank(c.ref)) issues.push({ field: 'ref', message: 'part (ref) is empty' })
-      break
-    case 'rail_window':
-      needNet()
-      if (blank(c.dip_below)) {
-        issues.push({ field: 'dip_below', message: 'dip below V is empty' })
-      } else if (blank(c.for_max_ms) && blank(c.recover_within_ms)) {
-        issues.push({ field: 'for_max_ms', message: 'needs a for max ms or a recovery window (within ms)' })
-      }
-      if (!blank(c.recover_within_ms) && blank(c.recover_to)) {
-        issues.push({ field: 'recover_to', message: 'recover to V is empty (needed with within ms)' })
-      }
-      break
-    default:
-      break
-  }
-  return issues
 }
 
 /** Inline PASS / FAIL / INVALID chip riding on a check row after a run. */
@@ -648,6 +700,7 @@ interface SavedChecksState {
   checks?: CheckRow[]
   rawMode?: boolean
   rawText?: string
+  includeFirmware?: boolean
 }
 
 /** Storage key for a board's saved checks. The file name alone collides for
@@ -664,6 +717,8 @@ export function ChecksView({
   boardFile,
   firmwareFile,
   schematicFile,
+  supplementalFiles,
+  avrAvailable = true,
   selectedNet,
   selectedComponent,
   pendingChecks,
@@ -684,6 +739,9 @@ export function ChecksView({
   boardFile: File | null
   firmwareFile: File | null
   schematicFile: File | null
+  supplementalFiles: SupplementalDesignFiles
+  /** Whether this build has the MCU backend needed for firmware co-simulation. */
+  avrAvailable?: boolean
   /** Net last clicked on the board render, offered as a one-click check. */
   selectedNet: string | null
   /** Component last clicked on the board render, offered as ref checks. */
@@ -744,8 +802,11 @@ export function ChecksView({
   const savedChecks = saved?.checks
   const savedPeripherals = saved?.peripherals
   const savedSensors = saved?.sensors
-  const initialChecks = Array.isArray(savedChecks) && savedChecks.length
-    ? savedChecks
+  const normalizedSavedChecks = Array.isArray(savedChecks)
+    ? savedChecks.map((check, index) => normalizeSavedCheck(check, index + 1)).filter((check): check is CheckRow => check !== null)
+    : []
+  const initialChecks = normalizedSavedChecks.length
+    ? normalizedSavedChecks
     : [emptyCheck(1, 'no_faults')]
   const [specName, setSpecName] = useState(saved?.specName || `${report.board_name || report.file_name} checks`)
   const [duration, setDuration] = useState(saved?.duration || '100')
@@ -761,13 +822,27 @@ export function ChecksView({
     () => (Array.isArray(savedSensors) ? savedSensors : []),
   )
   const [checks, setChecks] = useState<CheckRow[]>(initialChecks)
+  // Firmware is staged on the board session, but including it in a check run
+  // is an explicit choice. Preserve the old default on AVR-capable builds;
+  // permissive/non-AVR builds start with the static-only path selected.
+  const [includeFirmware, setIncludeFirmware] = useState(
+    () => !!firmwareFile && avrAvailable && (saved?.includeFirmware ?? true),
+  )
+  const previousFirmware = useRef<File | null>(firmwareFile)
   const [rawMode, setRawMode] = useState(!!(saved?.rawMode && typeof saved.rawText === 'string'))
   const [rawText, setRawText] = useState(typeof saved?.rawText === 'string' ? saved.rawText : '')
   const [addOpen, setAddOpen] = useState(false)
   const [running, setRunning] = useState(false)
   // The last run's response, plus the exact spec text it ran, so results can
   // be flagged stale the moment the spec diverges.
-  const [run, setRun] = useState<{ response: RunResponse; toml: string } | null>(null)
+  const [run, setRun] = useState<{
+    response: RunResponse
+    toml: string
+    firmwareIdentity: string | null
+    boardIdentity: string | null
+    schematicIdentity: string | null
+    supplementalIdentity: string
+  } | null>(null)
   const [ciOpen, setCiOpen] = useState(false)
   const [peripheralValidation, setPeripheralValidation] = useState<Map<number, string[]>>(new Map())
   const [sensorValidation, setSensorValidation] = useState<Map<number, string[]>>(new Map())
@@ -810,14 +885,32 @@ export function ChecksView({
     [specName, duration, supplies, peripherals, checks, sensors],
   )
   const effectiveToml = rawMode ? rawText : builtToml
-  const stale = run !== null && run.toml !== effectiveToml
+  const firmwareForRun = includeFirmware ? firmwareFile : null
+  const stale = run !== null && (
+    run.toml !== effectiveToml
+      || run.firmwareIdentity !== fileIdentity(firmwareForRun)
+      || run.boardIdentity !== fileIdentity(boardFile)
+      || run.schematicIdentity !== fileIdentity(schematicFile)
+      || run.supplementalIdentity !== supplementalIdentity(supplementalFiles)
+  )
+
+  // A newly staged image gets the build's safe default. Removing it always
+  // turns the choice off, so an old firmware-backed result cannot look current.
+  useEffect(() => {
+    if (previousFirmware.current !== firmwareFile) {
+      previousFirmware.current = firmwareFile
+      setIncludeFirmware(!!firmwareFile && avrAvailable)
+    } else if (!firmwareFile) {
+      setIncludeFirmware(false)
+    }
+  }, [firmwareFile, avrAvailable])
 
   // ── Auto-save (the "things auto load in future" contract). ──
   useEffect(() => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText }))
+      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText, includeFirmware }))
     } catch { /* storage full/blocked: the session still works */ }
-  }, [storageKey, specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText])
+  }, [storageKey, specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText, includeFirmware])
 
   // Report the run summary to the shell's chips; a stale or failed run
   // reports nothing rather than a number that no longer matches the spec.
@@ -925,6 +1018,12 @@ export function ChecksView({
         let s = `\n[[assert]]\nkind = ${tomlString(c.kind)}\n`
         if (c.net) s += `net = ${tomlString(c.net)}\n`
         if (c.ref) s += `ref = ${tomlString(c.ref)}\n`
+        const rawFields = ['min', 'max', 'after_ms', 'deadline_ms', 'freq_hz', 'tolerance', 'min_toggles', 'amps', 'celsius', 'dip_below', 'for_max_ms', 'recover_to', 'recover_within_ms', 'spike_above', 'spike_for_max_ms', 'settle_to', 'settle_within_ms'] as const
+        for (const field of rawFields) {
+          const value = c[field]
+          if (value) s += `${field} = ${value}\n`
+        }
+        if (c.contains) s += `contains = ${tomlString(c.contains)}\n`
         return s
       }).join(''))
     } else {
@@ -933,6 +1032,12 @@ export function ChecksView({
         ...pendingChecks.map(c => {
           const row = emptyCheck(nextId.current++, c.kind, c.net ?? '')
           if (c.ref) row.ref = c.ref
+          const fields = ['min', 'max', 'after_ms', 'deadline_ms', 'contains', 'freq_hz', 'tolerance', 'min_toggles', 'amps', 'celsius', 'dip_below', 'for_max_ms', 'recover_to', 'recover_within_ms', 'spike_above', 'spike_for_max_ms', 'settle_to', 'settle_within_ms'] as const
+          for (const field of fields) {
+            const value = c[field]
+            if (value !== undefined) row[field] = value
+          }
+          if (c.kind === 'rail_window' && c.spike_above) row.rail_polarity = 'spike'
           return row
         }),
       ])
@@ -1009,7 +1114,7 @@ export function ChecksView({
   // Builder-mode preflight results: row id -> its missing-field issues.
   // Set when a run is attempted with holes; a row's entry clears the moment
   // that row is edited so the highlight never nags about fixed input.
-  const [validation, setValidation] = useState<Map<number, RowIssue[]>>(new Map())
+  const [validation, setValidation] = useState<Map<number, ConstraintIssue[]>>(new Map())
 
   const update = (id: number, patch: Partial<CheckRow>) => {
     setChecks(cs => cs.map(c => (c.id === id ? { ...c, ...patch } : c)))
@@ -1048,37 +1153,69 @@ export function ChecksView({
         if (issues.length > 0) sensorProblems.set(sensor.rowId, issues)
       }
       setSensorValidation(sensorProblems)
-      const problems = new Map<number, RowIssue[]>()
+      const problems = new Map<number, ConstraintIssue[]>()
       for (const c of checks) {
-        const issues = rowIssues(c)
+        const issues = [
+          ...constraintIssues(c),
+          ...componentCapabilityIssues(c, report.component_assertions),
+        ]
         if (issues.length > 0) problems.set(c.id, issues)
       }
       setValidation(problems)
-      if (problems.size > 0 || peripheralProblems.size > 0 || sensorProblems.size > 0) return
+      if (problems.size > 0 || peripheralProblems.size > 0 || sensorProblems.size > 0) {
+        // A local preflight result supersedes a stale server error. Put the
+        // explanation on the actual row, then move focus to the first field
+        // that needs attention so the user does not have to translate a TOML
+        // key from a banner at the other side of the page.
+        setRun(null)
+        onSummary(null)
+        requestAnimationFrame(() => {
+          const firstInvalid = document.querySelector<HTMLElement>('.checks-flush [aria-invalid="true"]')
+          firstInvalid?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          firstInvalid?.focus({ preventScroll: true })
+        })
+        return
+      }
     }
     setRunning(true)
     const tomlAtRun = effectiveToml
+    const firmwareAtRun = firmwareForRun
     try {
-      const fd = buildCheckUpload(boardFile, firmwareFile, schematicFile, tomlAtRun)
+      const fd = buildCheckUpload(boardFile, firmwareAtRun, schematicFile, tomlAtRun, supplementalFiles)
       const res = await fetch('/api/check', { method: 'POST', body: fd })
       const text = await res.text()
       try {
-        setRun({ response: JSON.parse(text) as RunResponse, toml: tomlAtRun })
+        setRun({
+          response: JSON.parse(text) as RunResponse,
+          toml: tomlAtRun,
+          firmwareIdentity: fileIdentity(firmwareAtRun),
+          boardIdentity: fileIdentity(boardFile),
+          schematicIdentity: fileIdentity(schematicFile),
+          supplementalIdentity: supplementalIdentity(supplementalFiles),
+        })
       } catch {
         setRun({
           response: { ok: false, error: text.trim().slice(0, 400) || `${res.status} ${res.statusText}` },
           toml: tomlAtRun,
+          firmwareIdentity: fileIdentity(firmwareAtRun),
+          boardIdentity: fileIdentity(boardFile),
+          schematicIdentity: fileIdentity(schematicFile),
+          supplementalIdentity: supplementalIdentity(supplementalFiles),
         })
       }
     } catch (e) {
       setRun({
         response: { ok: false, error: e instanceof Error ? e.message : String(e) },
         toml: tomlAtRun,
+        firmwareIdentity: fileIdentity(firmwareAtRun),
+        boardIdentity: fileIdentity(boardFile),
+        schematicIdentity: fileIdentity(schematicFile),
+        supplementalIdentity: supplementalIdentity(supplementalFiles),
       })
     } finally {
       setRunning(false)
     }
-  }, [boardFile, firmwareFile, schematicFile, effectiveToml, rawMode, checks, peripherals, sensors])
+  }, [boardFile, firmwareForRun, schematicFile, supplementalFiles, effectiveToml, rawMode, checks, peripherals, sensors, onSummary, report.component_assertions])
 
   const specStem = specStemFor(report.file_name)
   // The runnable spec: the composed body with the board/firmware paths the
@@ -1094,11 +1231,13 @@ export function ChecksView({
   const specText = useMemo(() => {
     return buildPortableCheckSpec(
       report.file_name,
-      firmwareFile,
+      firmwareForRun,
       schematicFile,
       effectiveToml,
+      includeFirmware,
+      supplementalFiles,
     )
-  }, [effectiveToml, firmwareFile, schematicFile, report.file_name])
+  }, [effectiveToml, firmwareForRun, schematicFile, supplementalFiles, report.file_name, includeFirmware])
 
   const specFileName = `${specStem}.toml`
 
@@ -1215,22 +1354,26 @@ export function ChecksView({
             )}
             {selectedComponent && !rawMode && (
               <div className="mb-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  data-testid="quick-add-ref-current"
-                  onClick={() => addCheck('max_current', '', selectedComponent.ref)}
-                  className="hb-chip hb-press px-3 py-1.5 text-[12px]"
-                >
-                  + “{selectedComponent.ref}” must stay under a current (clicked on the map)
-                </button>
-                <button
-                  type="button"
-                  data-testid="quick-add-ref-temp"
-                  onClick={() => addCheck('max_temp', '', selectedComponent.ref)}
-                  className="hb-chip hb-press px-3 py-1.5 text-[12px]"
-                >
-                  + “{selectedComponent.ref}” must stay cool
-                </button>
+                {(report.component_assertions?.[selectedComponent.ref] ?? []).includes('max_current') && (
+                  <button
+                    type="button"
+                    data-testid="quick-add-ref-current"
+                    onClick={() => addCheck('max_current', '', selectedComponent.ref)}
+                    className="hb-chip hb-press px-3 py-1.5 text-[12px]"
+                  >
+                    + “{selectedComponent.ref}” must stay under a current (clicked on the map)
+                  </button>
+                )}
+                {(report.component_assertions?.[selectedComponent.ref] ?? []).includes('max_temp') && (
+                  <button
+                    type="button"
+                    data-testid="quick-add-ref-temp"
+                    onClick={() => addCheck('max_temp', '', selectedComponent.ref)}
+                    className="hb-chip hb-press px-3 py-1.5 text-[12px]"
+                  >
+                    + “{selectedComponent.ref}” must stay cool
+                  </button>
+                )}
                 <button
                   type="button"
                   data-testid="quick-add-ref-sensor"
@@ -1240,6 +1383,16 @@ export function ChecksView({
                   + Attach register-map behavior to “{selectedComponent.ref}”
                 </button>
               </div>
+            )}
+
+            {firmwareFile && (
+              <FirmwareRunChoice
+                firmware={firmwareFile}
+                include={includeFirmware}
+                avrAvailable={avrAvailable}
+                running={running}
+                onChange={setIncludeFirmware}
+              />
             )}
 
             {rawMode ? (
@@ -1260,7 +1413,8 @@ export function ChecksView({
                   <Field label="run length (ms)" value={duration} width={70} onChange={setDuration} />
                   <span className="text-[12px]" style={{ color: 'var(--silk-faint)' }}>
                     {firmwareFile
-                      ? <>firmware: <span style={{ color: 'var(--ok)', fontFamily: 'var(--font-mono)' }}>{firmwareFile.name}</span> (co-simulated)</>
+                      ? <>firmware: <span style={{ color: includeFirmware ? 'var(--ok)' : 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}>{firmwareFile.name}</span>{' '}
+                        ({includeFirmware ? 'included in this run' : 'staged, excluded from this run'})</>
                       : 'no firmware loaded: add it on the Board view to check UART/blink/boot'}
                   </span>
                 </div>
@@ -1699,9 +1853,6 @@ export function ChecksView({
                       const meta = CHECK_KINDS.find(k => k.kind === c.kind)
                       const rowResult = resultForRow(c.id)
                       const issues = validation.get(c.id) ?? []
-                      // Combined either/or requirements highlight every input
-                      // that could satisfy them (min OR max, freq OR toggles).
-                      const bad = (field: keyof CheckRow) => issues.some(i => i.field === field)
                       return (
                         <motion.div
                           key={c.id}
@@ -1711,7 +1862,14 @@ export function ChecksView({
                           exit={reduced ? { opacity: 0 } : { opacity: 0, height: 0, transition: LEAVE }}
                           transition={reduced ? { duration: 0 } : ARRIVE}
                           className="check-row py-2.5"
-                          style={{ overflow: 'hidden' }}
+                          style={{
+                            overflow: 'hidden',
+                            ...(issues.length > 0 ? {
+                              background: 'var(--err-bg)',
+                              boxShadow: 'inset 3px 0 0 var(--err)',
+                              paddingLeft: 10,
+                            } : {}),
+                          }}
                         >
                           <div className="flex items-center justify-between gap-2">
                             <div className="text-[13px] min-w-0 flex flex-wrap items-center gap-x-2" style={{ color: 'var(--silk)' }}>
@@ -1728,58 +1886,11 @@ export function ChecksView({
                               onClick={() => setChecks(cs => cs.filter(x => x.id !== c.id))}>remove</button>
                           </div>
                           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
-                            {NET_KINDS.includes(c.kind) && (
-                              <label className="inline-flex items-center gap-1.5 text-[12px] min-w-0 max-w-full" style={{ color: bad('net') ? 'var(--err)' : 'var(--silk-faint)' }}>
-                                net
-                                <input className="hb-input min-w-0 flex-1" aria-invalid={bad('net') || undefined}
-                                  style={{ maxWidth: 170, ...(bad('net') ? { borderColor: 'var(--err)', background: 'var(--err-bg)' } : {}) }}
-                                  list="net-options" value={c.net}
-                                  onChange={e => update(c.id, { net: e.target.value })} />
-                              </label>
-                            )}
-                            {REF_KINDS.includes(c.kind) && (
-                              <Field label="part (ref)" value={c.ref} width={90} placeholder="U1" invalid={bad('ref')}
-                                onChange={v => update(c.id, { ref: v })} />
-                            )}
-                            {c.kind === 'voltage' && (
-                              <>
-                                <Field label="min V" value={c.min} width={64} invalid={bad('min')} onChange={v => update(c.id, { min: v })} />
-                                <Field label="max V" value={c.max} width={64} invalid={bad('min')} onChange={v => update(c.id, { max: v })} />
-                                <Field label="after ms" value={c.after_ms} width={64} onChange={v => update(c.id, { after_ms: v })} />
-                              </>
-                            )}
-                            {c.kind === 'uart' && (
-                              <Field label="must print" value={c.contains} width={220} placeholder="hello" invalid={bad('contains')}
-                                onChange={v => update(c.id, { contains: v })} />
-                            )}
-                            {c.kind === 'toggle' && (
-                              <>
-                                <Field label="freq Hz" value={c.freq_hz} width={64} invalid={bad('freq_hz')} onChange={v => update(c.id, { freq_hz: v })} />
-                                <Field label="±tol" value={c.tolerance} width={56} onChange={v => update(c.id, { tolerance: v })} />
-                                <Field label="or min toggles" value={c.min_toggles} width={64} invalid={bad('freq_hz')} onChange={v => update(c.id, { min_toggles: v })} />
-                              </>
-                            )}
-                            {c.kind === 'boot-coverage' && (
-                              <>
-                                <Field label="reach V" value={c.min} width={64} invalid={bad('min')} onChange={v => update(c.id, { min: v })} />
-                                <Field label="within ms" value={c.deadline_ms} width={64} invalid={bad('deadline_ms')} onChange={v => update(c.id, { deadline_ms: v })} />
-                              </>
-                            )}
-                            {c.kind === 'max_current' && (
-                              <Field label="max A" value={c.amps} width={64} invalid={bad('amps')} onChange={v => update(c.id, { amps: v })} />
-                            )}
-                            {c.kind === 'max_temp' && (
-                              <Field label="max °C (blank = part rating)" value={c.celsius} width={70}
-                                onChange={v => update(c.id, { celsius: v })} />
-                            )}
-                            {c.kind === 'rail_window' && (
-                              <>
-                                <Field label="dip below V" value={c.dip_below} width={64} invalid={bad('dip_below')} onChange={v => update(c.id, { dip_below: v })} />
-                                <Field label="for max ms" value={c.for_max_ms} width={64} invalid={bad('for_max_ms')} onChange={v => update(c.id, { for_max_ms: v })} />
-                                <Field label="recover to V" value={c.recover_to} width={64} invalid={bad('recover_to')} onChange={v => update(c.id, { recover_to: v })} />
-                                <Field label="within ms" value={c.recover_within_ms} width={64} invalid={bad('for_max_ms')} onChange={v => update(c.id, { recover_within_ms: v })} />
-                              </>
-                            )}
+                            <ConstraintEditor
+                              draft={c}
+                              issues={issues}
+                              onChange={patch => update(c.id, patch)}
+                            />
                           </div>
                           {/* The missing-values verdict, on the row it judges,
                               in the builder's own field names. */}
