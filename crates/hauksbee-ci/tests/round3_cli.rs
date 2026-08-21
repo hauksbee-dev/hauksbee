@@ -15,6 +15,10 @@ fn blinky_board() -> PathBuf {
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(bin())
         .args(args)
+        // These tests exercise the ordinary CLI stream. A GitHub runner sets
+        // this globally, which adds a workflow-command line to stderr and
+        // would make the terminal-width assertion environment-dependent.
+        .env_remove("GITHUB_ACTIONS")
         .output()
         .expect("binary runs")
 }
