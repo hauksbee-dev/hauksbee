@@ -1,4 +1,4 @@
-//! Every example spec we ship must actually run.
+//! Every example spec we ship must validate, and self-contained examples run.
 //!
 //! The examples are the first thing a new user copies, and they are referenced
 //! from the README, the install script's closing lines, the bundle's VERIFY
@@ -10,9 +10,10 @@
 //! "hauksbee could not make sense of this file". RED is a legitimate outcome
 //! for an example that exists to demonstrate a caught fault, and several do.
 //!
-//! Specs whose board or firmware lives outside the tree (the fetched corpus,
-//! the large testdata firmware) skip, and say which and why. A silent skip is
-//! how the corpus gate managed never to run for anyone.
+//! Specs whose board or firmware lives outside the tree, or whose optional
+//! emulator is not installed on this runner, skip the runtime phase and say
+//! which and why. They still pass the board-aware `check` phase first. A silent
+//! skip is how a gate manages never to run for anyone.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -41,6 +42,10 @@ fn referenced_files(spec: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn missing_optional_backend(stderr: &str) -> bool {
+    stderr.contains("Renode not found.") || stderr.contains("Espressif QEMU (")
+}
+
 #[test]
 fn every_shipped_example_spec_is_one_hauksbee_understands() {
     let mut ran = 0;
@@ -64,17 +69,34 @@ fn every_shipped_example_spec_is_one_hauksbee_understands() {
             skipped.push(format!("{name} (needs {})", missing.display()));
             continue;
         }
+
+        let checked = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
+            .arg("check")
+            .arg(spec)
+            .output()
+            .expect("check hauksbee-ci spec");
+        assert!(
+            checked.status.success(),
+            "{name} is not a valid shipped spec:\n{}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+
         let out = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
             .arg("run")
             .arg(spec)
             .output()
             .expect("run hauksbee-ci");
         let code = out.status.code();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if code == Some(2) && missing_optional_backend(&stderr) {
+            skipped.push(format!("{name} (optional emulator is not installed)"));
+            continue;
+        }
         assert_ne!(
             code,
             Some(2),
             "{name} is a spec hauksbee cannot make sense of, and we ship it as an example:\n{}",
-            String::from_utf8_lossy(&out.stderr)
+            stderr
         );
         ran += 1;
     }
