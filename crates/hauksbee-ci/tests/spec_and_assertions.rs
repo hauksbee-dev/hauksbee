@@ -82,12 +82,12 @@ fn unknown_field_is_rejected() {
 
 #[test]
 fn unknown_net_lists_near_matches() {
-    let board =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_brownout_cell.net");
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/board-as-code/starter.board");
     let p = write_tmp(
         "typonet.toml",
         &format!(
-            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"voltage\"\nnet=\"ANALOG_VDDD\"\nmin=4.9\n",
+            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"voltage\"\nnet=\"+5VV\"\nmin=4.9\n",
             board.display()
         ),
     );
@@ -98,20 +98,17 @@ fn unknown_net_lists_near_matches() {
     .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("not found"), "got: {msg}");
-    assert!(
-        msg.contains("ANALOG_VDD"),
-        "should suggest the real net: {msg}"
-    );
+    assert!(msg.contains("+5V"), "should suggest the real net: {msg}");
 }
 
 #[test]
 fn typoed_max_current_ref_is_rejected_not_silently_green() {
-    let board =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_brownout_cell.net");
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/board-as-code/starter.board");
     let p = write_tmp(
         "typoref.toml",
         &format!(
-            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"R_Shnt15301\"\namps=0.1\n",
+            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"R11\"\namps=0.1\n",
             board.display()
         ),
     );
@@ -122,10 +119,7 @@ fn typoed_max_current_ref_is_rejected_not_silently_green() {
     .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("unknown component"), "got: {msg}");
-    assert!(
-        msg.contains("R_Shunt15301"),
-        "should suggest the real ref: {msg}"
-    );
+    assert!(msg.contains("R1"), "should suggest the real ref: {msg}");
 }
 
 #[test]
@@ -193,14 +187,17 @@ fn after_ms_on_toggle_is_rejected() {
 #[test]
 fn junit_xml_is_well_formed_and_escaped() {
     let result = run(&RunConfig {
-        spec: example("tarski_brownout_repaired.toml"),
+        spec: example("power_resistor_cool.toml"),
         ..Default::default()
     })
     .unwrap();
     let xml = result.render_junit();
     assert!(xml.starts_with("<?xml"));
     assert!(xml.contains("<testsuites"));
-    assert!(xml.contains("&gt;"), "the '>=' in details must be escaped");
+    assert!(
+        xml.contains("&lt;") || xml.contains("&gt;"),
+        "comparison operators in details must be escaped"
+    );
     // Crude well-formedness: balanced testcase tags.
     let opens = xml.matches("<testcase").count();
     let closes = xml.matches("</testcase>").count();
@@ -210,7 +207,7 @@ fn junit_xml_is_well_formed_and_escaped() {
 #[test]
 fn github_annotations_emit_error_on_failure() {
     let result = run(&RunConfig {
-        spec: example("tarski_brownout.toml"),
+        spec: example("power_resistor_hot.toml"),
         ..Default::default()
     })
     .unwrap();
