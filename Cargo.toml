@@ -20,6 +20,13 @@ members = [
 # dependencies below. See vendor/kicad-forge/VENDORED.md.
 exclude = ["vendor/kicad-forge"]
 
+[workspace.metadata.ci]
+# Increment only when the retained target-cache shape changes. This value is
+# part of rust-cache's manifest hash but not its restore prefix, so a new cache
+# generation can reuse the previous dependency build before saving the richer
+# workspace-crate cache.
+workspace-cache-epoch = 1
+
 [workspace.package]
 version = "0.1.0-beta.1"
 edition = "2021"

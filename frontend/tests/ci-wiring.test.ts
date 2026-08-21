@@ -40,6 +40,40 @@ describe('frontend release gates', () => {
     expect(workflow).toContain("needs.plan.outputs.full == 'true'")
     expect(workflow).toContain('python3 scripts/test_ci_change_plan.py')
     expect(workflow).toContain('cache-on-failure: true')
+    const rustCaches = workflow.split(
+      'uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6',
+    ).slice(1)
+    expect(rustCaches.length).toBeGreaterThan(0)
+    for (const cache of rustCaches) {
+      const inputs = cache.slice(0, cache.indexOf('\n      - '))
+      expect(inputs).toContain('cache-workspace-crates: true')
+      expect(inputs).toContain('shared-key:')
+    }
+    const cargoManifest = readFileSync(join(repository, 'Cargo.toml'), 'utf8')
+    expect(cargoManifest).toContain('[workspace.metadata.ci]')
+    expect(cargoManifest).toContain('workspace-cache-epoch = 1')
+
+    const lastFailure = workflow.indexOf(
+      'cargo test --locked -p hauksbee-ci --test spec_and_assertions -- --nocapture',
+    )
+    const broadClippy = workflow.indexOf(
+      'cargo clippy --workspace --all-targets -- -D warnings',
+    )
+    expect(lastFailure).toBeGreaterThan(-1)
+    expect(lastFailure).toBeLessThan(broadClippy)
+
+    const noDefaultStart = workflow.indexOf('  no-default-engine:')
+    const testsStart = workflow.indexOf('  test:', noDefaultStart)
+    const noDefault = workflow.slice(noDefaultStart, testsStart)
+    expect(noDefault).not.toContain(
+      'cargo check -p hauksbee-engine --no-default-features',
+    )
+    expect(noDefault).toContain(
+      'cargo clippy -p hauksbee-engine --no-default-features --all-targets -- -D warnings',
+    )
+    expect(noDefault).toContain(
+      'cargo test -p hauksbee-engine --no-default-features --all-targets',
+    )
     for (const job of ['macos', 'windows']) {
       const start = workflow.indexOf(`  ${job}:`)
       expect(start).toBeGreaterThan(-1)
