@@ -34,6 +34,24 @@ describe('frontend release gates', () => {
     expect(workflow).toContain('run: bun run test:e2e')
   })
 
+  test('ordinary pushes stay cheap while exact candidates keep native gates', () => {
+    expect(workflow).toContain('workflow_dispatch:')
+    expect(workflow).not.toContain('schedule:')
+    expect(workflow).toContain("needs.plan.outputs.full == 'true'")
+    expect(workflow).toContain('python3 scripts/test_ci_change_plan.py')
+    expect(workflow).toContain('cache-on-failure: true')
+    for (const job of ['macos', 'windows']) {
+      const start = workflow.indexOf(`  ${job}:`)
+      expect(start).toBeGreaterThan(-1)
+      const rest = workflow.slice(start + 3)
+      const nextJob = rest.search(/^ {2}[a-z][a-z0-9-]*:\n/m)
+      const block = nextJob === -1 ? rest : rest.slice(0, nextJob)
+      expect(block).toContain('needs: [plan, test]')
+      expect(block).toContain("needs.plan.outputs.full == 'true'")
+      expect(block).toContain("needs.test.result == 'success'")
+    }
+  })
+
   test('every CI frontend build binds generated workflows to its exact source commit', () => {
     const frontendBuildSteps = workflow.match(
       /- name: (?:build the embedded browser front door|build the frontend)[\s\S]*?run: (?:\|\n[\s\S]*?)?\s*bun run build/g,
@@ -96,7 +114,7 @@ describe('frontend release gates', () => {
     expect(installer).toContain('Version: $SIMAVR_TAG')
     expect(installer).toContain('refusing to overwrite or trust an unidentified library')
     expect(installer).not.toContain('git clone --depth 1 --branch "$SIMAVR_TAG"')
-    for (const job of ['clippy', 'test', 'docs', 'scenario-qc']) {
+    for (const job of ['clippy', 'test', 'macos', 'docs', 'scenario-qc']) {
       const start = workflow.indexOf(`  ${job}:`)
       expect(start).toBeGreaterThan(-1)
       const rest = workflow.slice(start + 3)
