@@ -8,7 +8,8 @@
 //! usage/spec error, and 3 when the run is invalid for analysis (an analog chunk
 //! failed to converge under an assertion's window, or the strict abort tripped;
 //! 05 §3b). When `GITHUB_ACTIONS` is set in the environment, GitHub workflow
-//! annotations are emitted to stdout so failures surface inline.
+//! annotations are emitted to stderr so failures surface inline without
+//! contaminating machine-readable stdout.
 //!
 //! The argument surface is defined with `clap` (derive API): `--help`/`-h`,
 //! usage-on-error, and did-you-mean suggestions all come for free.
@@ -353,7 +354,11 @@ fn main() -> ExitCode {
                     suites.push(result.junit_suite());
                 }
                 if github {
-                    print!("{}", result.render_github_annotations());
+                    // Keep the published `--json` stdout contract as pure
+                    // NDJSON. GitHub processes workflow commands from stderr
+                    // too, so annotations remain visible without becoming a
+                    // second, non-JSON output line.
+                    eprint!("{}", result.render_github_annotations());
                 }
                 let code = result.exit_code() as u8;
                 verdicts.push((spec.display().to_string(), code));
@@ -393,7 +398,7 @@ fn main() -> ExitCode {
                         .replace('%', "%25")
                         .replace('\r', "%0D")
                         .replace('\n', "%0A");
-                    println!("::error title=hauksbee-ci spec error::{msg}");
+                    eprintln!("::error title=hauksbee-ci spec error::{msg}");
                 }
                 let code = e.exit_code() as u8;
                 verdicts.push((spec.display().to_string(), code));

@@ -78,7 +78,7 @@ jobs:
       - run: cargo test -p hauksbee-engine --no-default-features --all-targets
 
   test:
-    name: cargo test (${{ matrix.os }})
+    name: cargo test (${{ matrix.os }} / ${{ matrix.suite }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -87,7 +87,25 @@ jobs:
         # developed there and several paths (dynamic library discovery for the
         # emulator backends, Gatekeeper) differ enough to break in one place
         # while passing in the other.
-        os: [ubuntu-latest, macos-latest]
+        include:
+          # A single Linux workspace build exhausts the standard runner while
+          # linking every integration-test binary. Split those binaries across
+          # two fresh runners; dependencies are still compiled from the same
+          # lockfile and each public package remains covered.
+          - os: ubuntu-latest
+            suite: foundations
+            packages: >-
+              -p hauksbee-ir -p hauksbee-solve -p hauksbee-extract
+              -p hauksbee-models -p hauksbee-testkit -p hauksbee-mcu
+              -p hauksbee-ci
+          - os: ubuntu-latest
+            suite: application
+            packages: >-
+              -p hauksbee-frontdoor-api -p hauksbee-server
+              -p hauksbee-engine -p hauksbee-mcp
+          - os: macos-latest
+            suite: workspace
+            packages: --workspace
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -101,8 +119,16 @@ jobs:
       # No corpus here: these are the tests that run from the fixtures bundled
       # in testdata/. Corpus-dependent tests report as ignored, and the nightly
       # gate runs them for real with HAUKSBEE_REQUIRE_CORPUS=1.
-      - name: cargo test --workspace
-        run: cargo test --workspace
+      - name: cargo test (${{ matrix.suite }})
+        shell: bash
+        run: |
+          packages="${{ matrix.packages }}"
+          if [[ "${{ matrix.suite }}" == "foundations" ]] && \
+             cargo metadata --no-deps --format-version 1 | \
+               jq -e '.packages | any(.name == "hauksbee-tarski")' >/dev/null; then
+            packages="$packages -p hauksbee-tarski"
+          fi
+          cargo test $packages
 
   windows:
     name: native Windows tests, release binary, and drag-and-drop front door
