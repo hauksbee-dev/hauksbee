@@ -122,10 +122,11 @@ function Field({ label, value, onChange, width = 74, placeholder, invalid }: {
   const style: CSSProperties = {
     width,
     maxWidth: '100%',
+    boxSizing: 'border-box',
     ...(invalid ? { borderColor: 'var(--err)', background: 'var(--err-bg)' } : {}),
   }
   return (
-    <label className="inline-flex items-center gap-1.5 text-[12px] min-w-0 max-w-full" style={{ color: invalid ? 'var(--err)' : 'var(--silk-faint)' }}>
+    <label className="flex w-full flex-wrap items-center gap-1.5 text-[12px] min-w-0 max-w-full sm:w-auto" style={{ color: invalid ? 'var(--err)' : 'var(--silk-faint)' }}>
       {label}
       <input
         className="hb-input tnum min-w-0"
@@ -157,11 +158,11 @@ export function ConstraintEditor({
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-2" data-testid="constraint-editor">
       {NET_KINDS.includes(draft.kind) && (
-        <label className="inline-flex items-center gap-1.5 text-[12px] min-w-0 max-w-full" style={{ color: bad('net') ? 'var(--err)' : 'var(--silk-faint)' }}>
+        <label className="flex w-full flex-wrap items-center gap-1.5 text-[12px] min-w-0 max-w-full sm:w-auto" style={{ color: bad('net') ? 'var(--err)' : 'var(--silk-faint)' }}>
           net
           <input
-            className="hb-input min-w-0 flex-1"
-            style={{ maxWidth: 190, ...(bad('net') ? { borderColor: 'var(--err)', background: 'var(--err-bg)' } : {}) }}
+            className="hb-input min-w-0"
+            style={{ width: 190, maxWidth: 'calc(100% - 12px)', boxSizing: 'border-box', ...(bad('net') ? { borderColor: 'var(--err)', background: 'var(--err-bg)' } : {}) }}
             list="net-options"
             value={draft.net}
             aria-invalid={bad('net') || undefined}
