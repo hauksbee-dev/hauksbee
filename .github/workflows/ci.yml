@@ -10,8 +10,18 @@ on:
   push:
     branches: ["main"]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run the native macOS and Windows candidate gates
+        required: true
+        type: boolean
+        default: true
 
 concurrency:
+  # A full candidate dispatch supersedes the automatic push run for the same
+  # ref. That validates Linux once before native runners instead of paying for
+  # two complete prerequisite passes.
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
@@ -24,6 +34,36 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  plan:
+    name: choose required validation tier
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.plan.outputs.rust }}
+      frontend: ${{ steps.plan.outputs.frontend }}
+      vscode: ${{ steps.plan.outputs.vscode }}
+      speed: ${{ steps.plan.outputs.speed }}
+      full: ${{ steps.plan.outputs.full }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2
+      - id: plan
+        name: classify the exact diff conservatively
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FULL: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
+        run: |
+          if [[ "$FULL" == "true" ]]; then
+            python3 scripts/ci_change_plan.py --full --github-output "$GITHUB_OUTPUT"
+          else
+            if [[ -n "$BASE_SHA" ]] && ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$BASE_SHA" || true
+            fi
+            python3 scripts/ci_change_plan.py \
+              --base "$BASE_SHA" --head "$GITHUB_SHA" \
+              --github-output "$GITHUB_OUTPUT"
+          fi
+
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
@@ -46,13 +86,22 @@ jobs:
       # authoritative copies by each crate's tests/packaged_asset_sync.rs.
       - name: enforce publish-set includes stay inside their crates
         run: python3 scripts/check-package-includes.py
+      - name: prove change-aware CI remains fail-closed
+        run: python3 scripts/test_ci_change_plan.py
 
   clippy:
     name: cargo clippy
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
       - name: cache the immutable simavr build prerequisite
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -66,10 +115,17 @@ jobs:
 
   no-default-engine:
     name: engine without default features
+    needs: [plan, clippy]
+    if: always() && needs.plan.outputs.rust == 'true' && needs.clippy.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
       # Keep the core static-analysis build honest. This catches accidental
       # simulator-only dependencies and runs the same behavioral tests, including
       # the real watch-loop contract, in the smallest supported feature shape.
@@ -79,14 +135,13 @@ jobs:
 
   test:
     name: cargo test (${{ matrix.os }} / ${{ matrix.suite }})
+    needs: [plan, no-default-engine]
+    if: always() && needs.plan.outputs.rust == 'true' && needs.no-default-engine.result == 'success'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        # Linux is the CI workhorse; macOS is included because the project is
-        # developed there and several paths (dynamic library discovery for the
-        # emulator backends, Gatekeeper) differ enough to break in one place
-        # while passing in the other.
         include:
           # A single Linux workspace build exhausts the standard runner while
           # linking every integration-test binary. Split those binaries across
@@ -103,12 +158,13 @@ jobs:
             packages: >-
               -p hauksbee-frontdoor-api -p hauksbee-server
               -p hauksbee-engine -p hauksbee-mcp
-          - os: macos-latest
-            suite: workspace
-            packages: --workspace
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
       - name: cache the immutable simavr build prerequisite
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -130,9 +186,35 @@ jobs:
           fi
           cargo test $packages
 
+  macos:
+    name: native macOS workspace candidate gate
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: macos-ci
+          add-job-id-key: false
+          cache-on-failure: true
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
+      - name: cargo test (native macOS workspace)
+        run: cargo test --workspace
+
   windows:
     name: native Windows tests, release binary, and drag-and-drop front door
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
     runs-on: windows-latest
+    timeout-minutes: 60
     env:
       # A Windows-only unused variable or cfg arm is a portability defect, not
       # a warning to scroll past. The local GNU cross-check runs with this too.
@@ -144,6 +226,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows-ci
+          add-job-id-key: false
+          cache-on-failure: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: offline Windows release-contract tests
         run: python scripts/test-windows-port-contract.py
@@ -277,10 +363,17 @@ jobs:
 
   defect-regressions:
     name: pinned upstream defect regressions
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
       # The harness is deliberately stdlib-only. Its unit suite attacks hash
       # drift, path escape, symlinks, duplicate cases, vacuous coverage, and
       # commands that mutate their own supposedly pinned input bytes.
@@ -297,12 +390,19 @@ jobs:
 
   docs:
     name: cargo doc (rendered module docs stay valid)
+    needs: [plan, clippy]
+    if: always() && needs.plan.outputs.rust == 'true' && needs.clippy.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
       - name: cache the immutable simavr build prerequisite
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -328,7 +428,10 @@ jobs:
 
   frontend-quality:
     name: frontend quality (lint, tests, browser flows, visual fit)
+    needs: plan
+    if: needs.plan.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       HAUKSBEE_RELEASE_COMMIT: ${{ github.sha }}
     steps:
@@ -389,9 +492,17 @@ jobs:
 
   vscode-extension:
     name: VS Code extension (build and tests)
+    needs: [plan, no-default-engine]
+    if: always() && needs.plan.outputs.vscode == 'true' && (needs.no-default-engine.result == 'success' || needs.no-default-engine.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # The parity suite deliberately skips when no checkout-local loader is
       # available; build the permissive loader here so CI exercises that gate.
@@ -409,10 +520,17 @@ jobs:
 
   scenario-qc:
     name: scenario QC (ten real-user sessions, end to end)
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
       - name: cache the immutable simavr build prerequisite
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -445,7 +563,10 @@ jobs:
 
   gpl-free-check:
     name: cargo check (GPL-free renode+qemu shape)
+    needs: [plan, clippy]
+    if: always() && needs.plan.outputs.rust == 'true' && needs.clippy.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # GPL-freeness guard: a clean shape ignores these; a leaky shape panics.
       SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
@@ -453,6 +574,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
       # This is a licensing ASSERTION, not a compile check. simavr discovery is
       # pointed at a nonexistent path: if the renode+qemu shape is truly
       # avr-free, hauksbee-mcu/build.rs early-returns and ignores it. If `avr`
@@ -473,10 +598,17 @@ jobs:
 
   speed-gate:
     name: speed gate (faster-than-ngspice claim)
+    needs: plan
+    if: needs.plan.outputs.speed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
       # The oracle. Without it the gate SKIPS, and a skipped gate defends
       # nothing, so HAUKSBEE_REQUIRE_NGSPICE below turns a missing or broken
       # install into a red build rather than a quiet green.
