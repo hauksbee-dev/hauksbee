@@ -900,6 +900,16 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         tag = bundle.index('export HAUKSBEE_RELEASE_TAG="v$VERSION"')
         self.assertLess(version, tag)
 
+    def test_binary_bundle_drops_every_private_flagship_example(self) -> None:
+        bundle = (ROOT / "scripts/bundle.sh").read_text()
+        for name in (
+            "tarski_brownout.toml",
+            "tarski_brownout_repaired.toml",
+            "tarski_stage0_powerup.toml",
+        ):
+            self.assertIn(f'examples/ci-specs/{name}', bundle)
+        self.assertIn("BOARD_LEAK", bundle)
+
     def test_trusted_workflow_run_report_can_read_its_artifact(self) -> None:
         readme = (ROOT / "integrations/github-action/README.md").read_text()
         report = readme[readme.index("# hauksbee-ci-report.yml") :]
