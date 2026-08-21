@@ -49,6 +49,40 @@ fn write_test_pdf(path: &std::path::Path) {
     std::fs::write(path, pdf).expect("write valid test PDF");
 }
 
+/// Put a deterministic `pdftotext` stand-in ahead of the host PATH. The test
+/// is about Hauksbee's API request, not which tools happen to be installed on
+/// a particular CI image.
+fn install_pdftotext_stub(dir: &std::path::Path) -> std::ffi::OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tool = dir.join("pdftotext");
+        std::fs::write(
+            &tool,
+            "#!/usr/bin/env sh\nprintf '%s\\n' 'IF 200mA VRRM 100V test datasheet body Tj'\n",
+        )
+        .expect("write pdftotext stub");
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755))
+            .expect("make pdftotext stub executable");
+    }
+    #[cfg(windows)]
+    std::fs::write(
+        dir.join("pdftotext.cmd"),
+        "@echo IF 200mA VRRM 100V test datasheet body Tj\r\n",
+    )
+    .expect("write pdftotext stub");
+
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![dir.to_path_buf()];
+    paths.extend(std::env::split_paths(&old_path));
+    let path = std::env::join_paths(paths).expect("join test PATH");
+    // SAFETY: this integration-test binary has exactly one test that invokes
+    // datasheet extraction, and child processes inherit this value only.
+    unsafe { std::env::set_var("PATH", path) };
+    old_path
+}
+
 /// A syntactically and physically valid diode card for the stub to answer
 /// with, so the full parse + validate + write path runs.
 const DIODE_TOML: &str = r#"[[models]]
@@ -124,6 +158,7 @@ fn api_backend_sends_the_documented_request_shape() {
     // old local-path fallback.
     let pdf = dir.path().join("1n914test.pdf");
     write_test_pdf(&pdf);
+    let old_path = install_pdftotext_stub(dir.path());
 
     let key_env = "HAUKSBEE_API_BACKEND_TEST_KEY";
     // SAFETY: this variable is unique to this test; nothing else reads it.
@@ -139,6 +174,8 @@ fn api_backend_sends_the_documented_request_shape() {
 
     hauksbee_models::datasheet::run(args).expect("extraction against the stub endpoint");
     unsafe { std::env::remove_var(key_env) };
+    // SAFETY: restore the process environment before making assertions.
+    unsafe { std::env::set_var("PATH", old_path) };
 
     let request = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
 
