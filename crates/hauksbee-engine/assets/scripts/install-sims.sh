@@ -1182,7 +1182,7 @@ install_avr() {
     linux)
       info "  simavr needs libelf, zlib and a C toolchain. If the build below"
       info "  fails on a missing header, install them:"
-      info "    Debian/Ubuntu: sudo apt-get install libelf-dev zlib1g-dev build-essential"
+      info "    Debian/Ubuntu: sudo apt-get install libelf-dev libzstd-dev zlib1g-dev build-essential"
       info "    Fedora:        sudo dnf install elfutils-libelf-devel zlib-devel make gcc"
       have cc || have gcc || warn "no C compiler on PATH; the simavr build will fail without one."
       ;;
