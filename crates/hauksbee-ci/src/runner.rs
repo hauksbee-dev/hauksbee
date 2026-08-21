@@ -3688,8 +3688,22 @@ fn main {
                 w.write_all(&std::fs::read(&p).unwrap()).unwrap();
             }
         }
+        // A fabrication archive needs a part list before CI can bind or
+        // simulate it. Keep this loader test aligned with that fail-closed
+        // contract instead of relying on copper alone.
+        w.start_file(
+            "gerbers/positions.csv",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        w.write_all(
+            b"Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n\
+              U1,TEST,TEST,0,0,0,Top\n",
+        )
+        .unwrap();
         w.finish().unwrap();
         let board = load_board(&zip_path).expect("a gerber fab zip must load in CI");
+        assert_eq!(board.components.len(), 1, "placement part list survives");
         assert!(!board.nets.is_empty(), "nets recovered from copper");
         let _ = std::fs::remove_dir_all(&dir);
     }
