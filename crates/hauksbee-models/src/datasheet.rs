@@ -3102,11 +3102,13 @@ mod tests {
     fn relevance_selection_finds_txb0101_tables_and_always_keeps_page_one() {
         let pdf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../qc/extraction_bench/datasheets/TXB0101.pdf");
-        assert!(
-            pdf.is_file(),
-            "missing real TXB0101 fixture: {}",
-            pdf.display()
-        );
+        if !pdf.is_file() {
+            eprintln!(
+                "skipping private-fixture coverage: {} is not part of this distribution",
+                pdf.display()
+            );
+            return;
+        }
 
         let page_text = extract_pdf_pages_text(&pdf).expect("extract TXB0101 page text");
         let selected = select_relevant_pages(&page_text, MAX_RENDERED_PAGES);
@@ -3168,11 +3170,13 @@ mod tests {
 
         let pdf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../qc/extraction_bench/datasheets/BQ24075.pdf");
-        assert!(
-            pdf.is_file(),
-            "missing real BQ24075 fixture: {}",
-            pdf.display()
-        );
+        if !pdf.is_file() {
+            eprintln!(
+                "skipping private-fixture coverage: {} is not part of this distribution",
+                pdf.display()
+            );
+            return;
+        }
         let page_text = extract_pdf_pages_text(&pdf).expect("extract BQ24075 page text");
         let selected = select_relevant_pages(&page_text, MAX_RENDERED_PAGES);
         eprintln!("BQ24075 selected pages: {selected:?}");
