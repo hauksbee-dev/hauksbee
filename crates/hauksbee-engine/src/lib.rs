@@ -53,6 +53,7 @@ pub mod stress;
 pub mod thermal;
 pub mod tui;
 pub mod waiver;
+pub mod web_design;
 pub mod web_dist;
 pub mod webcheck;
 pub mod webextract;

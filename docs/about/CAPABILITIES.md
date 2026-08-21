@@ -507,7 +507,7 @@ All fourteen kinds, validated by the kind list in
 | `max_current` | Peak current through a named component (`ref`) stays below `amps` |
 | `max_temp` | Steady-state junction temperature of a named component stays below `celsius` (or the device's own max if omitted) |
 | `peripheral` | A simulated peripheral's state: EEPROM byte sequence, sensor field in a range |
-| `rail_window` | Voltage bounds within a named scenario's load window, dip duration, and recovery time |
+| `rail_window` | Voltage bounds within a named scenario's load window, dip/spike duration, and recovery/settling time |
 | `protection_trip` | Whether a battery BMS protection circuit trips (or must not trip) |
 | `boot-coverage` | A control net is driven to at least `min` volts within `deadline_ms` of reset, with no fault during the boot window. Answers whether firmware drives a Hi-Z control input in time |
 | `phase_margin` | Loop phase margin from the AC sweep is within `[min, max]` degrees |

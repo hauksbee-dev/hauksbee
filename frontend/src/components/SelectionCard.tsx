@@ -8,8 +8,9 @@ import type { ModelCoverageComponent } from '../types/report'
 // the same card language on the report map and the live sim. A net shows its
 // name (and live volts when a sim frame is in hand); a component shows refdes,
 // value, its BOUND model (what the engine actually simulates; honesty first),
-// and the nets on its pads. Both offer one-click assertions that land in the
-// checks builder as ordinary prefilled rows.
+// and the nets on its pads. Both offer assertion starters through the same
+// shared in-place editor; the selection card never decides to navigate or
+// silently append a check itself.
 
 /** A component picked on the board map (the viewer's footprint hit-test). */
 export interface SelectedComponent {
@@ -22,11 +23,39 @@ export interface SelectedComponent {
   padNets?: string[]
 }
 
-interface AssertOffer {
+export interface AssertOffer {
   kind: string
   label: string
   net?: string
   ref?: string
+}
+
+export function assertionOffers(
+  net: string | null,
+  component: SelectedComponent | null,
+  assertionCapabilities: string[] = [],
+): AssertOffer[] {
+  if (net) {
+    return [
+      { kind: 'voltage', label: 'must sit at a voltage', net },
+      { kind: 'rail_window', label: 'must stay inside a voltage window', net },
+      { kind: 'toggle', label: 'must blink', net },
+      { kind: 'boot-coverage', label: 'firmware must drive it by a deadline', net },
+    ]
+  }
+  if (!component) return []
+  const supported = new Set(assertionCapabilities)
+  return [
+    ...(supported.has('max_current')
+      ? [{ kind: 'max_current', label: 'must stay under a current', ref: component.ref }]
+      : []),
+    ...(supported.has('max_temp')
+      ? [{ kind: 'max_temp', label: 'must stay cool', ref: component.ref }]
+      : []),
+    ...(component.padNet
+      ? [{ kind: 'voltage', label: `net ${displayNet(component.padNet)} must sit at a voltage`, net: component.padNet }]
+      : []),
+  ]
 }
 
 function OfferButton({ offer, onQueue }: {
@@ -51,13 +80,13 @@ function OfferButton({ offer, onQueue }: {
       }}
       className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
     >
-      {queued ? 'Added to the checks builder ✓' : `+ ${offer.label}`}
+      {queued ? 'Constraint editor open ✓' : `+ ${offer.label}`}
     </button>
   )
 }
 
 export function SelectionCard({
-  net, liveVolts, reading, component, boundKind, modelCoverage, netModels = [],
+  net, liveVolts, reading, component, boundKind, modelCoverage, netModels = [], assertionCapabilities = [],
   onQueueCheck, onQueuePeripheral, onQueueSensor, onQueueSupply, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet,
 }: {
   /** Selected net, when the click landed on copper. */
@@ -76,6 +105,9 @@ export function SelectionCard({
   /** Winning model plus its declared executable scope. Unlike `boundKind`,
    *  this distinguishes an identity card from a complete behavioural model. */
   modelCoverage?: ModelCoverageComponent | null
+  /** Exact component assertion kinds emitted by the bound circuit. Missing
+   *  data fails closed: unsupported current/temperature checks are not shown. */
+  assertionCapabilities?: string[]
   /** Modelled devices touching a selected trace/net. */
   netModels?: ModelCoverageComponent[]
   onQueueCheck?: (check: { kind: string; net?: string; ref?: string }) => void
@@ -101,22 +133,7 @@ export function SelectionCard({
 }) {
   if (!net && !component) return null
 
-  const offers: AssertOffer[] = net
-    ? [
-        { kind: 'voltage', label: 'must sit at a voltage', net },
-        { kind: 'rail_window', label: 'must stay inside a voltage window', net },
-        { kind: 'toggle', label: 'must blink', net },
-        { kind: 'boot-coverage', label: 'firmware must drive it by a deadline', net },
-      ]
-    : component
-      ? [
-          { kind: 'max_current', label: 'must stay under a current', ref: component.ref },
-          { kind: 'max_temp', label: 'must stay cool', ref: component.ref },
-          ...(component.padNet
-            ? [{ kind: 'voltage', label: `net ${displayNet(component.padNet)} must sit at a voltage`, net: component.padNet }]
-            : []),
-        ]
-      : []
+  const offers = assertionOffers(net, component, assertionCapabilities)
   const needsRegisterMapWork = modelCoverage?.missing?.some(item => /i2c|spi|register|bus/i.test(item)) ?? false
   const modelOwnsRegisterMap = modelCoverage?.implements?.some(item => /register[_-]map/i.test(item)) ?? false
 
@@ -386,7 +403,7 @@ export function SelectionCard({
         <div className="flex flex-col gap-1.5 mt-0.5">
           {offers.map(o => <OfferButton key={o.kind + (o.net ?? '')} offer={o} onQueue={onQueueCheck} />)}
           <div className="text-[10px]" style={{ color: 'var(--silk-faint)' }}>
-            lands in the checks builder
+            opens the shared constraint editor
           </div>
         </div>
       )}

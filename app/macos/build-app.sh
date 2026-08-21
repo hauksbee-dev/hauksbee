@@ -159,6 +159,11 @@ log "Staging binaries"
 install -m 0755 "$SRC/hauksbee"     "$APP/Contents/Resources/bin/hauksbee"
 install -m 0755 "$SRC/hauksbee-ci"  "$APP/Contents/Resources/bin/hauksbee-ci"
 install -m 0755 "$SRC/hauksbee-mcp" "$APP/Contents/Resources/bin/hauksbee-mcp"
+log "Staging CLI installer"
+install -m 0755 "$HAUKSBEE_ROOT/app/macos/install-cli.sh" \
+  "$APP/Contents/Resources/install-cli.sh"
+install -m 0644 "$HAUKSBEE_ROOT/app/macos/CLI.md" \
+  "$APP/Contents/Resources/CLI.md"
 
 # Licence terms travel inside the app, same as inside the tarball. The default
 # app statically links GPL-3.0 libsimavr; the distinctly named local permissive

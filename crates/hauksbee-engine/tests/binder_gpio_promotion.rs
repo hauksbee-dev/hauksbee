@@ -158,8 +158,8 @@ fn binder_analog_pin_promoted_when_driven() {
         drv.set_volts(&mut bound.circuit, 5.0);
     }
 
-    // Run the real scheduler solve (no firmware: the idle AVR core produces no
-    // edges of its own, so the only drive on OE_S is the promotion above).
+    // Run the real scheduler solve as a board-only analysis. The manually
+    // promoted driver remains in the bound circuit; no MCU backend is needed.
     let mut engine = HauksbeeEngine::from_bound(bound, None, "/boards/promote.kicad_pcb")
         .expect("build engine from bound board");
     engine.scheduler_mut().step(1e-3);

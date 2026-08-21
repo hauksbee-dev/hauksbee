@@ -181,7 +181,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
           aria-live="polite"
           style={{ color: 'var(--silk-dim)' }}
         >
-          <span className="slot-spin" /> Probing the co-sim backends and oracles on this machine ...
+          <span className="slot-spin" /> Checking local dependency paths ...
         </div>
       )}
 
@@ -288,7 +288,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                     {d.path}
                   </div>
                 )}
-                {!d.present && d.detail && (
+                {d.detail && (
                   <div className="text-[11px] mt-0.5 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
                     {d.detail}
                   </div>

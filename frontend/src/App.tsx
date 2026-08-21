@@ -173,7 +173,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   const [queuedLiveRegisterMaps, setQueuedLiveRegisterMaps] = useState<QueuedLiveRegisterMap[]>([])
   const [liveActionResult, setLiveActionResult] = useState<ActionResultMsg | null>(null)
   const seqRef = useRef(0)
-  const queueCheck = useCallback((check: { kind: string; net?: string; ref?: string }) => {
+  const queueCheck = useCallback((check: Omit<QueuedCheck, 'seq'>) => {
     seqRef.current += 1
     setQueuedChecks(prev => [...prev, { ...check, seq: seqRef.current }])
   }, [])
@@ -732,6 +732,8 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
                 boardFile={session.boardFile}
                 firmwareFile={session.firmwareFile}
                 schematicFile={session.schematicFile}
+                supplementalFiles={session.supplementalFiles}
+                avrAvailable={avrAvailable}
                 selectedNet={session.selectedNet}
                 selectedComponent={session.selectedComponent}
                 pendingChecks={queuedChecks}
@@ -755,6 +757,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
             <div style={{ display: view === 'sim' ? 'block' : 'none', height: '100%' }}>
               <SimView
                 onQueueCheck={queueCheck}
+                onOpenChecks={() => setView('checks')}
                 onQueuePeripheral={queuePeripheral}
                 onQueueSensor={queueSensor}
                 onQueueSupply={queueSupply}
@@ -765,6 +768,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
                 expectedBoard={session.boardLabel}
                 sessionMatchesCurrent={sessionMatchesCurrent}
                 modelCoverage={report?.model_coverage ?? null}
+                componentAssertions={report?.component_assertions ?? null}
                 onRelaunch={reportOk && session.liveMode !== 'none' ? relaunchWithCurrent : undefined}
               />
             </div>

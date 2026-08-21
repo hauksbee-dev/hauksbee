@@ -4,8 +4,7 @@ import type { SessionsState } from '../hooks/useSessions'
 import { BoardTargetIcon, HistoryIcon } from './Icons'
 import { relTime } from '../lib/rel-time'
 import { hasDefaultName } from '../lib/session-store'
-import { FirmwareJack } from './FirmwareJack'
-import { SchematicJack } from './SchematicJack'
+import { AdditionalEvidencePanel } from './AdditionalEvidencePanel'
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
 import { motion, useReducedMotion } from 'motion/react'
 import { CELL, INSTANT } from '../motion/tokens'
@@ -93,8 +92,9 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
   avrAvailable?: boolean
 }) {
   const {
-    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, schematicFile,
-    handleBoard, handleFirmware, clearFirmware, handleSchematic, clearSchematic, runSample,
+    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, schematicFile, supplementalFiles,
+    handleBoard, handleFirmware, clearFirmware, handleSchematic, clearSchematic,
+    handleBom, handlePlacement, handleVariant, handleAsbuilt, handleModels, runSample,
   } = session
   const reduced = useReducedMotion()
 
@@ -346,27 +346,27 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
             </div>
           )}
 
-          {/* Companions come after the one-click first success. They stay
-              visible (rather than living behind a disclosure) so drag/drop
-              and keyboard automation can stage firmware before the board. */}
-          <div className="mt-5">
-            <div className="mb-1 text-center text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-              Optional: add firmware or a companion schematic before checking
-            </div>
-            <FirmwareJack
-              firmware={firmwareFile}
-              placement="intake"
-              onFile={handleFirmware}
-              onClear={clearFirmware}
-              locked={!!busy}
-            />
-            <SchematicJack
-              schematic={schematicFile}
-              onFile={handleSchematic}
-              onClear={clearSchematic}
-              locked={!!busy}
-            />
-          </div>
+          {/* One companion-input contract feeds report, Checks and Live Sim. */}
+          <AdditionalEvidencePanel
+            placement="intake"
+            firmware={firmwareFile}
+            schematic={schematicFile}
+            bom={supplementalFiles.bom}
+            placementFile={supplementalFiles.placement}
+            variant={supplementalFiles.variant}
+            asbuilt={supplementalFiles.asbuilt}
+            models={supplementalFiles.models}
+            onFirmware={handleFirmware}
+            onClearFirmware={clearFirmware}
+            onSchematic={handleSchematic}
+            onClearSchematic={clearSchematic}
+            onBom={handleBom}
+            onPlacement={handlePlacement}
+            onVariant={handleVariant}
+            onAsbuilt={handleAsbuilt}
+            onModels={handleModels}
+            locked={!!busy}
+          />
 
           {/* Prepare your own project, one line per ECAD, no jargon */}
           {!busy && (

@@ -37,6 +37,27 @@ pub(crate) fn open_browser(url: &str) {
     }
 }
 
+/// Publish the exact loopback URL for the native app launcher. The launcher
+/// creates the receipt first and passes its path together with its parent PID;
+/// an ordinary terminal invocation never writes a file.
+fn write_app_url_receipt(bound: std::net::SocketAddr) {
+    if std::env::var_os("HAUKSBEE_EXIT_WITH_PARENT").is_none() {
+        return;
+    }
+    let Some(path) = std::env::var_os("HAUKSBEE_APP_URL_FILE") else {
+        return;
+    };
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+    else {
+        return;
+    };
+    use std::io::Write;
+    let _ = write!(file, "http://{bound}\n");
+}
+
 /// Sweep stale hauksbee temp files from TMPDIR at server start.
 ///
 /// The live-sim firmware file (`hauksbee-live-fw-*`) and the merged ESP flash
@@ -117,15 +138,11 @@ pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
         // server crate needs no dependency on the engine/extract crates. The
         // firmware-aware callback handles both the board-only path (firmware ==
         // None -> analyze_json) and the firmware co-sim path.
-        let analyze = crate::commands::common::schematic_analyzer();
+        let analyze = crate::commands::common::design_analyzer();
         // The web checks panel's backend: stage the uploads, inject the path
         // keys, and run the sibling hauksbee-ci binary (--json).
-        let check: hauksbee_frontdoor_api::frontdoor::SchematicCheckRunner =
-            Arc::new(|name, contents, fw, schematic, spec| {
-                crate::webcheck::run_web_check_with_schematic(
-                    name, contents, fw, schematic, spec,
-                )
-            });
+        let check: hauksbee_frontdoor_api::frontdoor::DesignCheckRunner =
+            Arc::new(crate::webcheck::run_web_check_design);
         // The dependency panel's backend: status from the engine's own
         // discovery, installs through the engine's streaming installer.
         let deps = crate::commands::common::deps_hooks();
@@ -141,6 +158,7 @@ pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
         // the bind falls back to another port; printing `addr` before binding
         // advertised a URL the server was not actually listening on.
         let (listener, bound) = hauksbee_server::bind_frontdoor(&addr).await?;
+        write_app_url_receipt(bound);
 
         // Browser auto-open. Two triggers: the explicit --open flag, and a
         // launch by the desktop .app launcher (it sets HAUKSBEE_EXIT_WITH_PARENT),
@@ -198,13 +216,13 @@ pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
             "version": env!("CARGO_PKG_VERSION"),
         })
         .to_string();
-        hauksbee_server::serve_frontdoor_on_with_schematic(
+        hauksbee_server::serve_frontdoor_on_with_design(
             listener,
             dir.as_deref(),
             analyze,
             Some(check),
             Some(deps),
-            Some(crate::commands::common::schematic_live_launcher()),
+            Some(crate::commands::common::design_live_launcher()),
             startup_json,
         )
         .await

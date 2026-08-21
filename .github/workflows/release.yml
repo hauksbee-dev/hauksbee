@@ -305,7 +305,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential git pkg-config libelf-dev zlib1g-dev clang libclang-dev
+            build-essential git pkg-config libelf-dev libzstd-dev zlib1g-dev clang libclang-dev
 
       - name: Install AVR build dependencies (macOS)
         if: runner.os == 'macOS'
@@ -608,7 +608,7 @@ jobs:
           exit "$fail"
 
       # The default shape links libelf STATICALLY (hauksbee-mcu/build.rs; the
-      # archives come from libelf-dev/zlib1g-dev installed above). A NEEDED
+      # archives come from libelf-dev/libzstd-dev/zlib1g-dev installed above). A NEEDED
       # libelf.so.1 entry means that static link silently regressed, and the
       # shipped binary exits 127 on any distro without libelf1
       # (debian:bookworm-slim, ubuntu:24.04 minimal). Ask the ELF headers of
@@ -811,7 +811,7 @@ jobs:
         env:
           HAUKSBEE_SOURCE_COMMIT: ${{ steps.ver.outputs.source_sha }}
           HAUKSBEE_RELEASE_TAG: v${{ steps.ver.outputs.version }}
-        run: cargo build --locked --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
+        run: cargo build --locked --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,serve,embed-web
       - name: Package and verify permissive Windows zip
         shell: pwsh
         working-directory: hauksbee
@@ -862,6 +862,33 @@ jobs:
           if (-not (Test-Path (Join-Path $root "LICENSE-BINARY.txt"))) { throw "LICENSE-BINARY.txt missing" }
           $doctor = & (Join-Path $root "bin\hauksbee.exe") doctor | Out-String
           if ($doctor -notmatch '(?m)^avr\s+disabled\b') { throw "packaged Windows binary is not permissive" }
+          # The packaged binary must carry both the `serve` command and the
+          # compiled frontend. A release that passes static solver checks but
+          # cannot start its front door is launch-dead for every bare install.
+          $servePort = 8418
+          $serveStdout = Join-Path $env:RUNNER_TEMP "hauksbee-windows-serve.stdout.log"
+          $serveStderr = Join-Path $env:RUNNER_TEMP "hauksbee-windows-serve.stderr.log"
+          $server = Start-Process -FilePath (Join-Path $root "bin\hauksbee.exe") `
+            -ArgumentList @("serve", "--port", "$servePort", "--no-open") `
+            -PassThru -RedirectStandardOutput $serveStdout -RedirectStandardError $serveStderr
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$servePort/"
+                if ($response.StatusCode -eq 200) { $ready = $true; break }
+              } catch { }
+              if ($server.HasExited) { break }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $ready) {
+              $stderrText = if (Test-Path $serveStderr) { Get-Content $serveStderr -Raw } else { "" }
+              throw "packaged Windows hauksbee serve never became ready: $stderrText"
+            }
+          } finally {
+            if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+            $server.WaitForExit()
+          }
           $runOutput = & (Join-Path $root "bin\hauksbee.exe") run `
             (Join-Path $root "examples\ci-specs\boards\power_resistor.kicad_pcb") `
             --headless --plain 2>&1 | Out-String
@@ -984,7 +1011,7 @@ jobs:
       - name: Install release-quality prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libelf-dev ngspice pkg-config zlib1g-dev shellcheck
+          sudo apt-get install -y clang libclang-dev libelf-dev libzstd-dev ngspice pkg-config zlib1g-dev shellcheck
           bash scripts/setup-ci-simavr.sh
       - name: Rust format, licence, lint, tests, docs, and both feature shapes
         run: |

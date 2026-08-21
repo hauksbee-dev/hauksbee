@@ -747,7 +747,17 @@ impl Drop for DescriptorDirGuard {
 /// does interactively. For an explicit extra layer (the `--models-dir` flag)
 /// use [`run_spec_with_lib`].
 pub fn run_spec_seeded(spec: &Spec, only_seed: Option<u32>) -> Result<Vec<RunOutcome>, SpecError> {
-    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
+    let models_dir = spec.models_dir_path();
+    if let Some(path) = &models_dir {
+        if !path.is_dir() {
+            return Err(SpecError::Invalid(format!(
+                "models_dir '{}' is not a readable directory",
+                path.display()
+            )));
+        }
+    }
+    let extra: Vec<&std::path::Path> = models_dir.as_deref().into_iter().collect();
+    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
     run_spec_with_lib(spec, only_seed, &lib)
 }
 
@@ -3566,9 +3576,10 @@ min_toggles = 2
         let spec = spec_with_descriptor_dir(Some("socs"));
         {
             let _guard = DescriptorDirGuard::apply(&spec);
+            let expected = std::path::PathBuf::from("/repo/ci").join("socs");
             assert_eq!(
-                std::env::var("HAUKSBEE_MCU_DIR").as_deref(),
-                Ok("/repo/ci/socs"),
+                std::env::var_os("HAUKSBEE_MCU_DIR").map(std::path::PathBuf::from),
+                Some(expected),
                 "the spec's descriptor_dir (resolved against the spec dir) is published"
             );
         }
@@ -4024,7 +4035,11 @@ esr_ohms = 0.5
 
         // Build the spec TOML: board path first (required field), then the
         // caller-supplied body. Use a unique file name per test.
-        let full_spec = format!("board = \"{}\"\n{}", board_path.display(), spec_toml);
+        // TOML basic strings treat backslashes as escapes.  Escape the native
+        // Windows path before embedding it so the fixture loads on both
+        // Windows (`C:\\...`) and Unix (`/...`) without changing its meaning.
+        let board_path_toml = board_path.to_string_lossy().replace('\\', "\\\\");
+        let full_spec = format!("board = \"{board_path_toml}\"\n{spec_toml}");
         let spec_path = dir.join(format!("{test_name}.toml"));
         std::fs::write(&spec_path, &full_spec).unwrap();
 

@@ -1147,15 +1147,13 @@ impl Scheduler {
             let evidence_subject = mcu_subjects
                 .next()
                 .unwrap_or_else(|| binding.reference.trim().to_string());
-            // External emulator backends (renode/qemu) boot from a program
-            // image; with no firmware given there is nothing to run, so the
-            // MCU sits out and the board solves as a passive circuit (its pins
-            // stay high-impedance). This keeps firmware-less analyses (lint,
-            // DRC, stress, transient scenarios) working on boards whose MCU
-            // happens to have an external backend mapping. The in-process AVR
-            // core keeps its historical always-instantiated behaviour.
-            let external = backend_is_external(&binding.backend);
-            if external && firmware.is_none() {
+            // A firmware-less run is a board analysis, not a co-simulation.
+            // Leave every MCU backend out of the live scheduler (including
+            // in-process AVR), so a board can be analysed as a passive circuit
+            // even when this binary was built without the optional AVR
+            // backend. Firmware-backed runs still instantiate the selected
+            // backend below and retain their fail-closed feature checks.
+            if firmware.is_none() {
                 continue;
             }
             // Detect (and warn about) a chip substitution before the core is
@@ -6675,6 +6673,24 @@ fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
 mod tests {
     use super::*;
 
+    /// A small valid AVR image for tests that exercise firmware-coupled pin
+    /// replay. Firmware-less scheduler construction is deliberately passive;
+    /// these tests need a live core, so they opt into an actual image instead
+    /// of relying on the old implicit idle-core behaviour.
+    #[cfg(feature = "avr")]
+    fn avr_test_firmware() -> tempfile::NamedTempFile {
+        use std::io::Write as _;
+
+        let mut firmware = tempfile::Builder::new()
+            .suffix(".hex")
+            .tempfile()
+            .expect("temporary AVR firmware");
+        firmware
+            .write_all(include_bytes!("../../hauksbee-ci/assets/firmware/demo.hex"))
+            .expect("write AVR firmware");
+        firmware
+    }
+
     const POWERED_EEPROM_BOARD: &str = r#"(kicad_pcb (version 20240108) (generator pcbnew)
   (general (thickness 1.6))
   (paper "A4")
@@ -6957,7 +6973,9 @@ missing = ["measurement_registers"]
         let board = hauksbee_extract::ExtractedBoard::from_auto(&board_text).expect("parse board");
         let library = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &library);
-        let scheduler = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let firmware = avr_test_firmware();
+        let scheduler = Scheduler::new(bound, Some(firmware.path()), SolverOptions::default())
+            .expect("scheduler");
 
         assert_eq!(
             scheduler.parallel_memory_chips.len(),
@@ -7295,7 +7313,8 @@ missing = ["measurement_registers"]
             .expect("A2 driver");
         drv.set_enabled(&mut bound.circuit, true);
         drv.set_volts(&mut bound.circuit, 0.0);
-        Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler")
+        let firmware = avr_test_firmware();
+        Scheduler::new(bound, Some(firmware.path()), SolverOptions::default()).expect("scheduler")
     }
 
     /// The W4 acceptance gate (08 section 2): a
@@ -7355,10 +7374,9 @@ missing = ["measurement_registers"]
 )
 "#;
 
-    // The Nano board binds `simavr:atmega328p`, whose in-process core is
-    // always instantiated (even with no firmware), so this test needs the
-    // GPL-gated `avr` feature and cannot run on the GPL-free renode/qemu
-    // build.
+    // The Nano board binds `simavr:atmega328p`; this firmware-coupled replay
+    // test supplies an image explicitly and therefore needs the GPL-gated
+    // `avr` feature.
     #[cfg(feature = "avr")]
     #[test]
     fn cosim_bitbang_595_latches_through_bound_nets() {
@@ -7378,7 +7396,9 @@ missing = ["measurement_registers"]
             drv.set_volts(&mut bound.circuit, 0.0);
         }
 
-        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let firmware = avr_test_firmware();
+        let mut sched = Scheduler::new(bound, Some(firmware.path()), SolverOptions::default())
+            .expect("scheduler");
 
         // The exact edge shape of shiftOut(SER, SRCLK, MSBFIRST, 0xA6) then an
         // RCLK latch pulse, cycle-stamped like the simavr hook would: set SER,
@@ -7467,9 +7487,8 @@ missing = ["measurement_registers"]
     /// to roughly the 50%-duty average. This is the analog half of sub-chunk
     /// fidelity, the digital half being the cycle-ordered replay.
     ///
-    /// `rc_scheduler` binds an `simavr:atmega328p` Nano, whose in-process
-    /// core is always instantiated, so this test needs the GPL-gated `avr`
-    /// feature and cannot run on the GPL-free renode/qemu build.
+    /// `rc_scheduler` binds an `simavr:atmega328p` Nano and supplies an
+    /// explicit test image, so this test needs the GPL-gated `avr` feature.
     #[cfg(feature = "avr")]
     #[test]
     fn pwl_drive_integrates_a_pulse_train_the_dc_path_collapses() {
@@ -7573,7 +7592,9 @@ missing = ["measurement_registers"]
         let board = hauksbee_extract::ExtractedBoard::from_auto(RELEASE_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let firmware = avr_test_firmware();
+        let mut sched = Scheduler::new(bound, Some(firmware.path()), SolverOptions::default())
+            .expect("scheduler");
 
         // Chunk 1: the core reports PC2 configured as an output, last driven
         // HIGH (the DDR-write-no-toggle promotion path). The driver enables

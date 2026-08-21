@@ -1727,6 +1727,8 @@ pub enum ArtifactRole {
     Placement,
     /// An explicit assembly-variant decision (which references are fitted).
     Variant,
+    /// A unit-specific as-built overlay applied after model binding.
+    AsBuilt,
     /// A CI spec / assertion file.
     Spec,
     /// A waiver file.
