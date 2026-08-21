@@ -353,22 +353,17 @@ impl Server {
         launch: Option<LiveLauncher>,
         startup_json: String,
     ) -> Router {
-        unified_router(
-            Some(self.hub.clone()),
+        unified_router(UnifiedRouterParts {
+            hub: Some(self.hub.clone()),
             static_dir,
             board_file,
-            Some(analyze),
-            None,
+            analyze: Some(analyze),
             check,
-            None,
             tools,
             launch,
-            None,
-            None,
-            None,
-            None,
             startup_json,
-        )
+            ..Default::default()
+        })
     }
 
     /// Serve the unified app router (WebSocket sim included). Used by
@@ -439,22 +434,17 @@ impl Server {
         launch: Option<SchematicLiveLauncher>,
         startup_json: String,
     ) -> anyhow::Result<()> {
-        let router = unified_router(
-            Some(self.hub.clone()),
+        let router = unified_router(UnifiedRouterParts {
+            hub: Some(self.hub.clone()),
             static_dir,
             board_file,
-            None,
-            Some(analyze),
-            None,
-            check,
+            schematic_analyze: Some(analyze),
+            schematic_check: check,
             tools,
-            None,
-            launch,
-            None,
-            None,
-            None,
+            schematic_launch: launch,
             startup_json,
-        );
+            ..Default::default()
+        });
         axum::serve(listener, router).await?;
         Ok(())
     }
@@ -472,22 +462,17 @@ impl Server {
         launch: Option<DesignLiveLauncher>,
         startup_json: String,
     ) -> anyhow::Result<()> {
-        let router = unified_router(
-            Some(self.hub.clone()),
+        let router = unified_router(UnifiedRouterParts {
+            hub: Some(self.hub.clone()),
             static_dir,
             board_file,
-            None,
-            None,
-            None,
-            None,
+            design_analyze: Some(analyze),
+            design_check: check,
             tools,
-            None,
-            None,
-            Some(analyze),
-            check,
-            launch,
+            design_launch: launch,
             startup_json,
-        );
+            ..Default::default()
+        });
         axum::serve(listener, router).await?;
         Ok(())
     }
@@ -498,9 +483,10 @@ impl Server {
 /// user launches an uploaded board. `launch` mounts the `/api/live/*` routes
 /// that fill (or replace) the hub's session server-side; a deployment without
 /// the callback keeps the CLI-hint fallback in the frontend.
-fn unified_router(
+#[derive(Default)]
+struct UnifiedRouterParts<'a> {
     hub: Option<Arc<LiveHub>>,
-    static_dir: Option<&Path>,
+    static_dir: Option<&'a Path>,
     board_file: Option<(String, String)>,
     analyze: Option<FirmwareAnalyzer>,
     schematic_analyze: Option<SchematicAnalyzer>,
@@ -513,7 +499,25 @@ fn unified_router(
     design_check: Option<DesignCheckRunner>,
     design_launch: Option<DesignLiveLauncher>,
     startup_json: String,
-) -> Router {
+}
+
+fn unified_router(parts: UnifiedRouterParts<'_>) -> Router {
+    let UnifiedRouterParts {
+        hub,
+        static_dir,
+        board_file,
+        analyze,
+        schematic_analyze,
+        check,
+        schematic_check,
+        tools,
+        launch,
+        schematic_launch,
+        design_analyze,
+        design_check,
+        design_launch,
+        startup_json,
+    } = parts;
     let mut router = Router::new();
     if let Some(hub) = &hub {
         router = router.merge(
@@ -681,22 +685,16 @@ pub async fn serve_frontdoor_on(
     // The hub starts empty: `/ws` answers 409 until a board is launched. It is
     // mounted even without a launcher so the route surface stays stable.
     let hub = LiveHub::new();
-    let router = unified_router(
-        Some(hub),
+    let router = unified_router(UnifiedRouterParts {
+        hub: Some(hub),
         static_dir,
-        None,
-        Some(analyze),
-        None,
+        analyze: Some(analyze),
         check,
-        None,
         tools,
         launch,
-        None,
-        None,
-        None,
-        None,
         startup_json,
-    );
+        ..Default::default()
+    });
     axum::serve(listener, router).await?;
     Ok(())
 }
@@ -714,22 +712,16 @@ pub async fn serve_frontdoor_on_with_schematic(
     startup_json: String,
 ) -> anyhow::Result<()> {
     let hub = LiveHub::new();
-    let router = unified_router(
-        Some(hub),
+    let router = unified_router(UnifiedRouterParts {
+        hub: Some(hub),
         static_dir,
-        None,
-        None,
-        Some(analyze),
-        None,
-        check,
+        schematic_analyze: Some(analyze),
+        schematic_check: check,
         tools,
-        None,
-        launch,
-        None,
-        None,
-        None,
+        schematic_launch: launch,
         startup_json,
-    );
+        ..Default::default()
+    });
     axum::serve(listener, router).await?;
     Ok(())
 }
@@ -746,22 +738,16 @@ pub async fn serve_frontdoor_on_with_design(
     startup_json: String,
 ) -> anyhow::Result<()> {
     let hub = LiveHub::new();
-    let router = unified_router(
-        Some(hub),
+    let router = unified_router(UnifiedRouterParts {
+        hub: Some(hub),
         static_dir,
-        None,
-        None,
-        None,
-        None,
-        None,
+        design_analyze: Some(analyze),
+        design_check: check,
         tools,
-        None,
-        None,
-        Some(analyze),
-        check,
-        launch,
+        design_launch: launch,
         startup_json,
-    );
+        ..Default::default()
+    });
     axum::serve(listener, router).await?;
     Ok(())
 }
