@@ -393,13 +393,14 @@ find "$ROOTDIR" -name '*.pyc' -delete 2>/dev/null || true
 # The flagship board is private (see scripts/build-public-mirror.sh, whose
 # BOARD_EXCLUDE / BOARD_GLOB lists this mirrors). Its hauksbee-ci example specs
 # live in crates/hauksbee-ci/examples/ and would otherwise ride into every
-# bundle with the rest of the examples. The two known specs are dropped by
+# bundle with the rest of the examples. The three known specs are dropped by
 # name; anything ELSE named after the board, anywhere in the staged tree, is a
 # hard failure rather than a silent drop, because a new board-named file
 # appearing in the staging set means the enumeration is stale and a human has
 # to look.
 rm -f "$ROOTDIR/examples/ci-specs/tarski_brownout.toml" \
-      "$ROOTDIR/examples/ci-specs/tarski_brownout_repaired.toml"
+      "$ROOTDIR/examples/ci-specs/tarski_brownout_repaired.toml" \
+      "$ROOTDIR/examples/ci-specs/tarski_stage0_powerup.toml"
 
 # ── corpus-dependent example specs ───────────────────────────────────────────
 # These three specs point their `board =` at ../../../../board-corpus/, which
