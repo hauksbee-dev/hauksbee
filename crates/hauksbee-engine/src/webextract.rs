@@ -812,11 +812,11 @@ fn model_coverage_note(db: &hauksbee_models::schema::DbFile) -> Option<String> {
     if without_scope > 0 {
         if without_scope == db.models.len() {
             Some(
-                "valid but incomplete: no model declares [models.coverage]; saving this file will not change executable scope. Add source-backed implements/missing capabilities before trusting a broader claim".to_string(),
+                "valid but incomplete: no model declares [models.coverage]; saving this file will leave executable scope unchanged. Add source-backed implements/missing capabilities before trusting a broader claim".to_string(),
             )
         } else {
             Some(format!(
-                "valid but incomplete: {without_scope} model entr{} lack [models.coverage]; saving this file will not change executable scope for those entries",
+                "valid but incomplete: {without_scope} model entr{} lack [models.coverage]; saving this file will leave executable scope unchanged for those entries",
                 if without_scope == 1 { "y" } else { "ies" }
             ))
         }
