@@ -487,6 +487,16 @@ impl HostSerial {
                         libc::write(*master, front.as_ptr() as *const libc::c_void, front.len())
                     };
                     if n > 0 {
+                        // A slave can close between the liveness probe above
+                        // and this write. Linux may still accept the bytes
+                        // while propagating the hangup, so a positive write
+                        // alone is not evidence that an external peer owned
+                        // them. Re-probe before draining or crediting output;
+                        // retaining the backlog is the conservative outcome.
+                        if !pty_peer_attached(*master) {
+                            self.mark_detached();
+                            break;
+                        }
                         n as usize
                     } else {
                         if n == 0 {
