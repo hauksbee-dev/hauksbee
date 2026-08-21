@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { buildBoardUpload } from '../lib/board-upload'
+import { buildBoardUpload, type SupplementalDesignFiles } from '../lib/board-upload'
 import type { LiveLaunchResponse, LiveStatus, WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
@@ -66,6 +66,7 @@ export interface BoardSession {
   dismissNotice: () => void
   firmwareFile: File | null
   schematicFile: File | null
+  supplementalFiles: SupplementalDesignFiles
   /** The uploaded board File (null when the server preloaded the board). */
   boardFile: File | null
   /** Best display name for the current board. */
@@ -96,6 +97,11 @@ export interface BoardSession {
   handleBoard: (f: File) => void
   handleFirmware: (f: File) => void
   handleSchematic: (f: File) => void
+  handleBom: (f: File | null) => void
+  handlePlacement: (f: File | null) => void
+  handleVariant: (f: File | null) => void
+  handleAsbuilt: (f: File | null) => void
+  handleModels: (files: File[]) => void
   /** Unstage the firmware WITHOUT touching the board, and re-analyse the board
    *  on its own so the report stops describing a co-sim that is no longer
    *  loaded. No-op when nothing is staged. */
@@ -134,6 +140,14 @@ export function useBoardSession(opts: {
   const [uploadNotice, setUploadNotice] = useState<string | null>(null)
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null)
   const [schematicFile, setSchematicFile] = useState<File | null>(null)
+  const [supplementalFiles, setSupplementalFiles] = useState<SupplementalDesignFiles>({
+    bom: null,
+    placement: null,
+    variant: null,
+    asbuilt: null,
+    models: [],
+  })
+  const supplementalRef = useRef<SupplementalDesignFiles>(supplementalFiles)
   const [boardFile, setBoardFile] = useState<File | null>(null)
   const [analyzedAt, setAnalyzedAt] = useState<number | null>(preloadedReport ? Date.now() : null)
   const lastBoardFile = useRef<File | null>(null)
@@ -260,8 +274,10 @@ export function useBoardSession(opts: {
     let status: number | undefined
     try {
       let res: Response
-      if (firmware || schematic) {
-        const fd = buildBoardUpload(board, firmware, schematic)
+      if (firmware || schematic || supplementalRef.current.bom
+        || supplementalRef.current.placement || supplementalRef.current.variant || supplementalRef.current.asbuilt
+        || supplementalRef.current.models.length > 0) {
+        const fd = buildBoardUpload(board, firmware, schematic, supplementalRef.current)
         res = await fetch('/api/analyze-with-firmware', { method: 'POST', body: fd, signal })
       } else {
         res = await fetch('/api/analyze', {
@@ -325,6 +341,31 @@ export function useBoardSession(opts: {
     if (lastBoardFile.current) void analyze(lastBoardFile.current, firmwareFile, file)
   }, [analyze, busy, firmwareFile])
 
+  const updateSupplemental = useCallback((next: SupplementalDesignFiles) => {
+    if (busy) return
+    supplementalRef.current = next
+    setSupplementalFiles(next)
+    if (lastBoardFile.current) {
+      void analyze(lastBoardFile.current, firmwareFile, schematicFile)
+    }
+  }, [analyze, busy, firmwareFile, schematicFile])
+
+  const handleBom = useCallback((file: File | null) => {
+    updateSupplemental({ ...supplementalRef.current, bom: file })
+  }, [updateSupplemental])
+  const handlePlacement = useCallback((file: File | null) => {
+    updateSupplemental({ ...supplementalRef.current, placement: file })
+  }, [updateSupplemental])
+  const handleVariant = useCallback((file: File | null) => {
+    updateSupplemental({ ...supplementalRef.current, variant: file })
+  }, [updateSupplemental])
+  const handleAsbuilt = useCallback((file: File | null) => {
+    updateSupplemental({ ...supplementalRef.current, asbuilt: file })
+  }, [updateSupplemental])
+  const handleModels = useCallback((files: File[]) => {
+    updateSupplemental({ ...supplementalRef.current, models: files })
+  }, [updateSupplemental])
+
   const reanalyzeCurrent = useCallback(() => {
     if (busy || !lastBoardFile.current) return
     void analyze(lastBoardFile.current, firmwareFile, schematicFile)
@@ -364,6 +405,9 @@ export function useBoardSession(opts: {
     if (switchingBoards) {
       setFirmwareFile(null)
       setSchematicFile(null)
+      const empty = { bom: null, placement: null, variant: null, asbuilt: null, models: [] }
+      supplementalRef.current = empty
+      setSupplementalFiles(empty)
       setSelectedNet(null)
       setSelectedComponentRaw(null)
       void analyze(f, null, null)
@@ -430,6 +474,9 @@ export function useBoardSession(opts: {
     setBusy(null)
     setFirmwareFile(null)
     setSchematicFile(null)
+    const empty = { bom: null, placement: null, variant: null, asbuilt: null, models: [] }
+    supplementalRef.current = empty
+    setSupplementalFiles(empty)
     setBoardUrl(prev => {
       if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
       return null
@@ -450,6 +497,9 @@ export function useBoardSession(opts: {
     setBusy(null)
     setFirmwareFile(null)
     setSchematicFile(null)
+    const empty = { bom: null, placement: null, variant: null, asbuilt: null, models: [] }
+    supplementalRef.current = empty
+    setSupplementalFiles(empty)
     setBoardUrl(prev => {
       if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
       return null
@@ -473,6 +523,9 @@ export function useBoardSession(opts: {
     // first, and a fetch that fails must not leave the previous board's report
     // on screen under the new error.
     clearRunState()
+    const empty = { bom: null, placement: null, variant: null, asbuilt: null, models: [] }
+    supplementalRef.current = empty
+    setSupplementalFiles(empty)
     setSelectedNet(null)
     setSelectedComponentRaw(null)
     setBusy({
@@ -512,7 +565,7 @@ export function useBoardSession(opts: {
   const performLaunch = useCallback(async (board: File, onReady: () => void) => {
     setLaunch({ phase: 'launching' })
     try {
-      const fd = buildBoardUpload(board, firmwareFile, schematicFile)
+      const fd = buildBoardUpload(board, firmwareFile, schematicFile, supplementalRef.current)
       const res = await fetch('/api/live/launch', { method: 'POST', body: fd })
       const text = await res.text()
       let parsed: LiveLaunchResponse
@@ -621,6 +674,7 @@ export function useBoardSession(opts: {
     dismissNotice: () => setUploadNotice(null),
     firmwareFile,
     schematicFile,
+    supplementalFiles,
     boardFile,
     // A failed analysis must not crown its (possibly garbage) filename as the
     // header's board title: the title names a board this app can speak about,
@@ -651,6 +705,11 @@ export function useBoardSession(opts: {
     handleBoard,
     handleFirmware,
     handleSchematic,
+    handleBom,
+    handlePlacement,
+    handleVariant,
+    handleAsbuilt,
+    handleModels,
     clearFirmware,
     clearSchematic,
     reanalyzeCurrent,

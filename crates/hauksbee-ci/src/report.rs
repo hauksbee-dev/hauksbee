@@ -1278,7 +1278,7 @@ fn failure_hint(kind: &str) -> Option<String> {
             and the load pulling it down ({url}, \"voltage\")."
         ),
         "rail_window" => format!(
-            "the rail dipped/recovered outside the window; check the \
+            "the rail dipped/spiked or recovered/settled outside the window; check the \
             scenario's load step and the decoupling on this net ({url}, \
             \"rail_window\")."
         ),

@@ -24,6 +24,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// One probed dependency, serialized verbatim as the `/api/deps` JSON.
@@ -33,13 +34,19 @@ pub struct DepStatus {
     pub id: &'static str,
     /// Human display name.
     pub name: &'static str,
-    /// True only when the engine's own resolver accepted it.
+    /// True when the engine's own resolver found the local dependency.
+    ///
+    /// For the optional LLM CLIs this is deliberately a discovery result, not
+    /// an authentication claim. Their sign-in state is checked only when the
+    /// user requests datasheet extraction (the Environment page must not run
+    /// login/version commands just to paint a status row).
     pub present: bool,
     /// Resolved binary path(s) when present.
     pub path: Option<String>,
-    /// Version string when present and cheap to read (qemu / ngspice /
-    /// kicad-cli answer `--version` instantly; Renode's .NET startup takes
-    /// seconds, so its version is deliberately not probed here).
+    /// A version string when the resolver already had one without an extra
+    /// status-only subprocess. Most rows intentionally leave this empty: a
+    /// dependency status page should answer "is it here?", not launch every
+    /// simulator's version command.
     pub version: Option<String>,
     /// What having it unlocks, in plain language.
     pub unlocks: &'static str,
@@ -64,25 +71,71 @@ pub struct DepStatus {
 }
 
 /// Probe every dependency. Each probe runs the engine's own discovery; none of
-/// this is a plain `which` that could disagree with a real run.
+/// this is a plain `which` that could disagree with a real run. Independent
+/// resolvers run in parallel so a slow local tool cannot hold up all the other
+/// rows. Version and authentication commands are intentionally deferred to the
+/// operation that needs them.
 pub fn probe_all() -> Vec<DepStatus> {
-    vec![
-        probe_renode(),
-        probe_esp_qemu(),
-        probe_ngspice(),
-        probe_kicad_cli(),
-        probe_avr(),
-        probe_codex(),
-        probe_claude_code(),
-    ]
+    std::thread::scope(|scope| {
+        let renode = scope.spawn(probe_renode);
+        let esp_qemu = scope.spawn(probe_esp_qemu);
+        let ngspice = scope.spawn(probe_ngspice);
+        let kicad_cli = scope.spawn(probe_kicad_cli);
+        let avr = scope.spawn(probe_avr);
+        let codex = scope.spawn(probe_codex);
+        let claude_code = scope.spawn(probe_claude_code);
+        vec![
+            renode.join().expect("Renode dependency probe panicked"),
+            esp_qemu
+                .join()
+                .expect("Espressif QEMU dependency probe panicked"),
+            ngspice.join().expect("ngspice dependency probe panicked"),
+            kicad_cli
+                .join()
+                .expect("kicad-cli dependency probe panicked"),
+            avr.join().expect("AVR dependency probe panicked"),
+            codex.join().expect("Codex dependency probe panicked"),
+            claude_code
+                .join()
+                .expect("Claude Code dependency probe panicked"),
+        ]
+    })
+}
+
+/// Probe only the two extractors for `/api/models/extract/ready`.
+///
+/// The Environment page uses [`probe_all`] and intentionally does not run an
+/// authentication command. Readiness is different: before offering consent,
+/// it must fail closed if the Codex CLI is installed but not signed in. Keeping
+/// this narrow avoids making a model-readiness request wait for KiCad/QEMU.
+pub(crate) fn probe_extractors() -> Vec<DepStatus> {
+    let mut codex = probe_codex();
+    if let Some(path) = codex.path.clone() {
+        match codex_login_state(std::path::Path::new(&path)) {
+            CodexLogin::LoggedIn(how) => {
+                codex.detail = how;
+            }
+            CodexLogin::NotLoggedIn => {
+                codex.present = false;
+                codex.manual = "codex login".to_string();
+                codex.detail = Some(
+                    "codex is installed but not signed in, so an extraction would fail once \
+                     you had already asked for it. Run `codex login`. It signs in with a \
+                     ChatGPT account, so if you have one there is nothing else to pay."
+                        .to_string(),
+                );
+            }
+        }
+    }
+    vec![codex, probe_claude_code()]
 }
 
 /// Claude Code, the second datasheet-to-model extractor backend. Same shape
 /// and same privacy honesty as the codex probe: using it sends datasheet
 /// text to Anthropic, nothing runs unless the user asks, and it is never
-/// auto-installed. Presence = the `claude` CLI resolves on PATH and answers
-/// `--version`; sign-in state is the CLI's own business and failures surface
-/// as the extraction's typed error rather than a silent hang.
+/// auto-installed. Presence means the `claude` CLI resolves on PATH. Its
+/// version and sign-in state are deliberately deferred until extraction, so a
+/// status page never starts the CLI just to display a row.
 fn probe_claude_code() -> DepStatus {
     let unlocks = "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI";
     let cost = "free if you already pay for Claude: the CLI signs in with that account".to_string();
@@ -110,13 +163,16 @@ fn probe_claude_code() -> DepStatus {
         id: "claude-code",
         name: "Claude Code (datasheet extraction)",
         present: true,
-        version: codex_version(&bin),
+        version: None,
         path: Some(bin.display().to_string()),
         unlocks,
         installable: false,
         cost,
         manual,
-        detail: None,
+        detail: Some(
+            "claude CLI found; sign-in is checked only when datasheet extraction is requested."
+                .to_string(),
+        ),
         sends_data_offhost: Some(privacy),
     }
 }
@@ -167,44 +223,24 @@ fn probe_codex() -> DepStatus {
         };
     };
 
-    // Installed is not the same as usable. An installed-but-unauthenticated
-    // codex fails at the worst possible moment: after the user has picked a
-    // part, read the privacy notice, and said yes. Report which of the two
-    // states they are in, and the one command that fixes it.
-    match codex_login_state(&bin) {
-        CodexLogin::LoggedIn(how) => DepStatus {
-            id: "codex",
-            name: "Codex (datasheet extraction)",
-            present: true,
-            version: codex_version(&bin),
-            path: Some(bin.display().to_string()),
-            unlocks,
-            installable: false,
-            cost,
-            manual,
-            detail: how,
-            sends_data_offhost: Some(privacy),
-        },
-        CodexLogin::NotLoggedIn => DepStatus {
-            id: "codex",
-            name: "Codex (datasheet extraction)",
-            // Present means usable, and this is not: saying otherwise would
-            // send someone into an extraction that cannot run.
-            present: false,
-            path: Some(bin.display().to_string()),
-            version: codex_version(&bin),
-            unlocks,
-            installable: false,
-            cost,
-            manual: "codex login".to_string(),
-            detail: Some(
-                "codex is installed but not signed in, so an extraction would fail once \
-                 you had already asked for it. Run `codex login`. It signs in with a \
-                 ChatGPT account, so if you have one there is nothing else to pay."
-                    .to_string(),
-            ),
-            sends_data_offhost: Some(privacy),
-        },
+    DepStatus {
+        id: "codex",
+        name: "Codex (datasheet extraction)",
+        // The status page answers the cheap, local question. The readiness
+        // endpoint calls `probe_extractors` to turn this into a fail-closed
+        // authenticated status before consent is offered.
+        present: true,
+        version: None,
+        path: Some(bin.display().to_string()),
+        unlocks,
+        installable: false,
+        cost,
+        manual,
+        detail: Some(
+            "codex CLI found; login status is checked only when datasheet extraction is requested."
+                .to_string(),
+        ),
+        sends_data_offhost: Some(privacy),
     }
 }
 
@@ -269,22 +305,35 @@ fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-fn codex_version(bin: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new(bin)
-        .arg("--version")
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout);
-    s.lines()
-        .next()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
+/// Keep the status response briefly so a page mount, a retry, and a post-install
+/// refresh do not all relaunch local resolver subprocesses. The cache is short
+/// enough that a manual install becomes visible without restarting the server;
+/// successful in-app installs invalidate it immediately.
+const DEPS_CACHE_TTL: Duration = Duration::from_secs(2);
+static DEPS_JSON_CACHE: OnceLock<Mutex<Option<(Instant, String)>>> = OnceLock::new();
+
+fn deps_cache() -> &'static Mutex<Option<(Instant, String)>> {
+    DEPS_JSON_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Discard the status snapshot after an installer changes the filesystem.
+pub fn invalidate_deps_cache() {
+    let mut cache = deps_cache().lock().unwrap_or_else(|e| e.into_inner());
+    *cache = None;
 }
 
 /// The `/api/deps` response body: `{"deps":[...]}`.
 pub fn deps_json() -> String {
-    serde_json::to_string(&serde_json::json!({ "deps": probe_all() }))
-        .unwrap_or_else(|_| "{\"deps\":[]}".to_string())
+    let mut cache = deps_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, json)) = cache.as_ref() {
+        if at.elapsed() < DEPS_CACHE_TTL {
+            return json.clone();
+        }
+    }
+    let json = serde_json::to_string(&serde_json::json!({ "deps": probe_all() }))
+        .unwrap_or_else(|_| "{\"deps\":[]}".to_string());
+    *cache = Some((Instant::now(), json.clone()));
+    json
 }
 
 // ── individual probes ────────────────────────────────────────────────────────
@@ -400,7 +449,10 @@ fn probe_esp_qemu() -> DepStatus {
                 name: "Espressif QEMU",
                 present: true,
                 path: Some(format!("{}; {}", x.display(), r.display())),
-                version: qemu_version(x),
+                // The machine-help invocation in the resolver is enough to
+                // reject mainline QEMU. A second `--version` subprocess adds
+                // no readiness information, so leave cosmetic version blank.
+                version: None,
                 unlocks,
                 installable: false,
                 cost,
@@ -519,7 +571,7 @@ fn probe_ngspice() -> DepStatus {
             id: "ngspice",
             name: "ngspice",
             present: true,
-            version: ngspice_version(&p),
+            version: None,
             path: Some(p.display().to_string()),
             unlocks,
             installable: false,
@@ -546,35 +598,6 @@ fn probe_ngspice() -> DepStatus {
             ),
         },
     }
-}
-
-/// The `ngspice-NN` token from `ngspice --version` output, if it answers.
-fn ngspice_version(bin: &PathBuf) -> Option<String> {
-    let out = Command::new(bin).arg("--version").output().ok()?;
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    for line in text.lines() {
-        if let Some(pos) = line.find("ngspice-") {
-            let tok: String = line[pos..]
-                .chars()
-                .take_while(|c| !c.is_whitespace() && *c != ':')
-                .collect();
-            return Some(tok);
-        }
-    }
-    None
-}
-
-/// First line of `<qemu binary> --version`, e.g.
-/// `QEMU emulator version 9.2.2 ...`.
-#[cfg(feature = "qemu")]
-fn qemu_version(bin: &std::path::Path) -> Option<String> {
-    let out = Command::new(bin).arg("--version").output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.lines().next().map(|l| l.trim().to_string())
 }
 
 /// Locate a usable `kicad-cli`. Delegates to the DRC oracle's own finder so
@@ -909,7 +932,7 @@ pub fn install_dep(id: &str, progress: &mut dyn FnMut(&str)) -> Result<(), Strin
         "another install is already running; wait for it to finish and try again".to_string()
     })?;
 
-    match id {
+    let result = match id {
         "esp-qemu" => install_esp_qemu(progress),
         "renode" => install_renode(progress),
         "ngspice" => Err(format!(
@@ -928,7 +951,11 @@ pub fn install_dep(id: &str, progress: &mut dyn FnMut(&str)) -> Result<(), Strin
                 .to_string(),
         ),
         other => Err(format!("unknown dependency id '{other}'")),
+    };
+    if result.is_ok() {
+        invalidate_deps_cache();
     }
+    result
 }
 
 /// Espressif QEMU: use the native checksum-pinned PowerShell installer on
@@ -1240,6 +1267,67 @@ mod tests {
         std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
+    }
+
+    #[cfg(unix)]
+    struct PathGuard(Option<std::ffi::OsString>);
+
+    #[cfg(unix)]
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            if let Some(path) = self.0.take() {
+                std::env::set_var("PATH", path);
+            } else {
+                std::env::remove_var("PATH");
+            }
+        }
+    }
+
+    /// The Environment page must not execute either LLM CLI. A version/login
+    /// command is both slower and a surprising side effect for a read-only
+    /// status request; readiness owns the one Codex auth check instead.
+    #[cfg(unix)]
+    #[test]
+    fn fast_extractor_rows_do_not_spawn_cli_status_commands() {
+        let _serial = serial_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("called");
+        let marker_literal = marker.to_string_lossy().replace('\'', "'\\''");
+        let script = format!("#!/bin/sh\ntouch '{marker_literal}'\n");
+        use std::os::unix::fs::PermissionsExt;
+        for name in ["codex", "claude"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, &script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let _path_guard = PathGuard(std::env::var_os("PATH"));
+        std::env::set_var("PATH", dir.path());
+        let started = Instant::now();
+        let codex = probe_codex();
+        let claude = probe_claude_code();
+        let elapsed = started.elapsed();
+
+        assert!(codex.present);
+        assert!(claude.present);
+        assert!(codex.version.is_none());
+        assert!(claude.version.is_none());
+        assert!(codex
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("only when")));
+        assert!(claude
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("only when")));
+        assert!(
+            !marker.exists(),
+            "status probes must not execute either CLI"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "discovery-only LLM probes took {elapsed:?}"
+        );
     }
 
     #[cfg(unix)]

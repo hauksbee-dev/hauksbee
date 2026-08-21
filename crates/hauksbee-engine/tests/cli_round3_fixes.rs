@@ -275,9 +275,13 @@ fn ampacity_and_thermal_accept_plain() {
     assert_eq!(ampacity.status.code(), Some(0), "{}", stderr(&ampacity));
     assert!(stdout(&ampacity).contains("Plain-language ampacity"));
 
+    // Thermal is a report-surface contract test, not an AVR integration test.
+    // Keep it on a passive board so the permissive (`--no-default-features`)
+    // build exercises the plain renderer without requiring the GPL AVR backend.
+    let thermal_board = clean_board();
     let thermal = run(&[
         "run",
-        b.to_str().unwrap(),
+        thermal_board.to_str().unwrap(),
         "--thermal",
         "--plain",
         "--seconds",

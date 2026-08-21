@@ -45,6 +45,7 @@ function session(report: WebReport): BoardSession {
     dismissNotice: noop,
     firmwareFile: null,
     schematicFile: null,
+    supplementalFiles: { bom: null, placement: null, variant: null, asbuilt: null, models: [] },
     boardFile: null,
     boardLabel: report.file_name,
     boardUrl: null,
@@ -63,6 +64,11 @@ function session(report: WebReport): BoardSession {
     handleBoard: noop,
     handleFirmware: noop,
     handleSchematic: noop,
+    handleBom: noop,
+    handlePlacement: noop,
+    handleVariant: noop,
+    handleAsbuilt: noop,
+    handleModels: noop,
     clearFirmware: noop,
     clearSchematic: noop,
     reanalyzeCurrent: noop,
@@ -207,6 +213,18 @@ test('a live trace click offers a scope probe and repeatable checks together', a
   expect(liveHtml).toContain('Drive this trace now and save the interaction')
   expect(liveHtml).toContain('Attach a pushbutton now and save it')
   expect(liveHtml).toContain('Power this trace now at 3.3 V and save the supply')
+})
+
+test('component constraint offers fail closed against engine capabilities', async () => {
+  const { assertionOffers } = await import('../src/components/SelectionCard')
+  const component = { ref: 'U2', value: '74HC595', lib_id: '74xx:74HC595' }
+  expect(assertionOffers(null, component, []).map(offer => offer.kind)).toEqual([])
+  expect(assertionOffers(null, component, ['max_temp']).map(offer => offer.kind)).toEqual(['max_temp'])
+
+  const resistor = { ref: 'R1', value: '10k', lib_id: 'Device:R', padNet: '+5V' }
+  expect(assertionOffers(null, resistor, ['max_current', 'max_temp']).map(offer => offer.kind)).toEqual([
+    'max_current', 'max_temp', 'voltage',
+  ])
 })
 
 test('visual interaction builder round-trips a real stimulus and timeline', async () => {

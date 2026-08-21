@@ -169,6 +169,28 @@ async fn spawn_schematic() -> std::net::SocketAddr {
     addr
 }
 
+async fn spawn_design() -> std::net::SocketAddr {
+    let analyze: frontdoor::DesignAnalyzer = Arc::new(|upload| {
+        serde_json::json!({
+            "ok": true,
+            "board": upload.board.name,
+            "bom": upload.bom.map(|file| file.name),
+            "placement": upload.placement.map(|file| file.name),
+            "variant": upload.variant.map(|file| file.name),
+            "asbuilt": upload.asbuilt.map(|file| file.name),
+            "models": upload.models.into_iter().map(|file| file.name).collect::<Vec<_>>(),
+        })
+        .to_string()
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = frontdoor::api_routes_with_design(analyze);
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    addr
+}
+
 /// Build a minimal multipart/form-data body for the given parts.
 /// Each part is (field_name, filename, raw_bytes).
 fn multipart_body(boundary: &str, parts: &[(&str, &str, &[u8])]) -> Vec<u8> {
@@ -187,6 +209,47 @@ fn multipart_body(boundary: &str, parts: &[(&str, &str, &[u8])]) -> Vec<u8> {
     }
     body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
     body
+}
+
+#[tokio::test]
+async fn design_router_threads_every_supplemental_input_and_repeated_models() {
+    let addr = spawn_design().await;
+    let boundary = "----hauksbeedesignboundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("board", "design.kicad_pcb", b"board"),
+            ("bom", "bom.csv", b"bom"),
+            ("placement", "board.pos", b"placement"),
+            ("variant", "production.variant.toml", b"variant"),
+            ("asbuilt", "unit.asbuilt.toml", b"overlay"),
+            ("model_file", "a.toml", b"a"),
+            ("model_file", "b.toml", b"b"),
+        ],
+    );
+    let req = format!(
+        "POST /api/analyze-with-firmware HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let response = http(addr, &req, &body).await;
+    assert!(response.contains("\"bom\":\"bom.csv\""), "{response}");
+    assert!(
+        response.contains("\"placement\":\"board.pos\""),
+        "{response}"
+    );
+    assert!(
+        response.contains("\"variant\":\"production.variant.toml\""),
+        "{response}"
+    );
+    assert!(
+        response.contains("\"asbuilt\":\"unit.asbuilt.toml\""),
+        "{response}"
+    );
+    assert!(
+        response.contains("\"models\":[\"a.toml\",\"b.toml\"]"),
+        "{response}"
+    );
 }
 
 #[tokio::test]

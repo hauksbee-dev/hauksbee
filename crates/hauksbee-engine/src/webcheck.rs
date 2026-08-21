@@ -65,14 +65,19 @@ fn err_json(msg: &str) -> String {
 
 /// Every spec key that names a file on disk. `board`/`firmware` are filled in
 /// server-side from the uploads; the rest would let a raw fragment read
-/// (`asbuilt`, an hwtrace `trace` and the data files it references, a sensor's
-/// `spec_file`) or overwrite (a vcd_sink's `vcd_path` reaches `File::create`)
+/// (`bom`, `placement`, `variant`, `models_dir`, `asbuilt`, an hwtrace `trace`
+/// and the data files it references, a sensor's `spec_file`) or overwrite (a
+/// vcd_sink's `vcd_path` reaches `File::create`)
 /// paths outside the staging dir, because the CI resolver accepts absolute
 /// paths and `..` traversal.
-const PATH_KEYS: [&str; 7] = [
+const PATH_KEYS: [&str; 11] = [
     "board",
     "firmware",
     "schematic",
+    "bom",
+    "placement",
+    "variant",
+    "models_dir",
     "asbuilt",
     "trace",
     "spec_file",
@@ -364,6 +369,36 @@ pub fn run_web_check_with_schematic(
     schematic: Option<(&str, &[u8])>,
     spec_fragment: &str,
 ) -> String {
+    use hauksbee_frontdoor_api::frontdoor::{DesignUpload, NamedUpload};
+    let named = |(name, bytes): (&str, &[u8])| NamedUpload {
+        name: name.to_string(),
+        bytes: bytes.to_vec(),
+    };
+    run_web_check_design(
+        DesignUpload {
+            board: NamedUpload {
+                name: board_name.to_string(),
+                bytes: board_bytes.to_vec(),
+            },
+            firmware: firmware.map(named),
+            schematic: schematic.map(named),
+            bom: None,
+            placement: None,
+            variant: None,
+            asbuilt: None,
+            models: Vec::new(),
+        },
+        spec_fragment,
+    )
+}
+
+/// Complete browser Checks path. The uploaded companions are staged inside the
+/// same confined working directory and injected into the portable spec using
+/// the canonical CLI keys.
+pub fn run_web_check_design(
+    upload: hauksbee_frontdoor_api::frontdoor::DesignUpload,
+    spec_fragment: &str,
+) -> String {
     // Reserve a concurrency slot on entry. At the cap, refuse fast rather than
     // pile another emulator-spawning child onto a loaded box. `_slot` lives to
     // the end of the function, and its `Drop` releases the slot on every exit
@@ -406,24 +441,58 @@ pub fn run_web_check_with_schematic(
     };
     let dir = staging.path();
 
-    let board_file = sanitize_name(board_name, "board.kicad_pcb");
-    if let Err(e) = std::fs::write(dir.join(&board_file), board_bytes) {
+    let board_file = sanitize_name(&upload.board.name, "board.kicad_pcb");
+    if let Err(e) = std::fs::write(dir.join(&board_file), &upload.board.bytes) {
         return err_json(&format!("could not stage the board: {e}"));
     }
     let mut spec = format!("board = \"{board_file}\"\n");
-    if let Some((fw_name, fw_bytes)) = firmware {
-        let fw_file = sanitize_name(fw_name, "firmware.elf");
-        if let Err(e) = std::fs::write(dir.join(&fw_file), fw_bytes) {
+    if let Some(firmware) = &upload.firmware {
+        let fw_file = sanitize_name(&firmware.name, "firmware.elf");
+        if let Err(e) = std::fs::write(dir.join(&fw_file), &firmware.bytes) {
             return err_json(&format!("could not stage the firmware: {e}"));
         }
         spec.push_str(&format!("firmware = \"{fw_file}\"\n"));
     }
-    if let Some((schematic_name, schematic_bytes)) = schematic {
-        let schematic_file = sanitize_name(schematic_name, "board.sch");
-        if let Err(e) = std::fs::write(dir.join(&schematic_file), schematic_bytes) {
+    if let Some(schematic) = &upload.schematic {
+        let schematic_file = sanitize_name(&schematic.name, "board.sch");
+        if let Err(e) = std::fs::write(dir.join(&schematic_file), &schematic.bytes) {
             return err_json(&format!("could not stage the schematic: {e}"));
         }
         spec.push_str(&format!("schematic = \"{schematic_file}\"\n"));
+    }
+    for (key, fallback, file) in [
+        ("bom", "bom.csv", upload.bom.as_ref()),
+        ("placement", "placement.csv", upload.placement.as_ref()),
+        ("variant", "variant.toml", upload.variant.as_ref()),
+        ("asbuilt", "asbuilt.toml", upload.asbuilt.as_ref()),
+    ] {
+        if let Some(file) = file {
+            let leaf = sanitize_name(&file.name, fallback);
+            if let Err(error) = std::fs::write(dir.join(&leaf), &file.bytes) {
+                return err_json(&format!("could not stage {key}: {error}"));
+            }
+            spec.push_str(&format!("{key} = \"{leaf}\"\n"));
+        }
+    }
+    if !upload.models.is_empty() {
+        let model_dir = dir.join("models");
+        if let Err(error) = std::fs::create_dir(&model_dir) {
+            return err_json(&format!("could not stage model directory: {error}"));
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for (index, model) in upload.models.iter().enumerate() {
+            let leaf = sanitize_name(&model.name, &format!("model-{index}.toml"));
+            if !leaf.to_ascii_lowercase().ends_with(".toml") {
+                return err_json(&format!("model file '{}' is not TOML", model.name));
+            }
+            if !names.insert(leaf.to_ascii_lowercase()) {
+                return err_json(&format!("duplicate model filename '{leaf}'"));
+            }
+            if let Err(error) = std::fs::write(model_dir.join(&leaf), &model.bytes) {
+                return err_json(&format!("could not stage model '{leaf}': {error}"));
+            }
+        }
+        spec.push_str("models_dir = \"models\"\n");
     }
     spec.push('\n');
     spec.push_str(spec_fragment);
@@ -886,6 +955,54 @@ kind = "no_faults"
             started.elapsed() < CHECK_TIMEOUT / 2,
             "the run returned promptly instead of riding the timeout ({}s)",
             started.elapsed().as_secs()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn complete_design_bundle_is_staged_into_the_checks_spec() {
+        use hauksbee_frontdoor_api::frontdoor::{DesignUpload, NamedUpload};
+        use std::os::unix::fs::PermissionsExt;
+
+        let _serial = serial_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = dir.path().join("hauksbee-ci");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\nset -eu\nspec=$2\nbase=$(dirname \"$spec\")\n\
+             grep -q '^bom = \"bom.csv\"' \"$spec\"\n\
+             grep -q '^placement = \"board.pos\"' \"$spec\"\n\
+             grep -q '^variant = \"production.variant.toml\"' \"$spec\"\n\
+             grep -q '^asbuilt = \"unit.asbuilt.toml\"' \"$spec\"\n\
+             grep -q '^models_dir = \"models\"' \"$spec\"\n\
+             test -f \"$base/models/custom.toml\"\n\
+             echo '{\"ok\":true}'\n",
+        )
+        .expect("write stub");
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("HAUKSBEE_CI_BIN", &stub);
+        let named = |name: &str, bytes: &[u8]| NamedUpload {
+            name: name.into(),
+            bytes: bytes.to_vec(),
+        };
+        let json = run_web_check_design(
+            DesignUpload {
+                board: named("board.kicad_pcb", b"board"),
+                firmware: None,
+                schematic: None,
+                bom: Some(named("bom.csv", b"bom")),
+                placement: Some(named("board.pos", b"placement")),
+                variant: Some(named("production.variant.toml", b"variant")),
+                asbuilt: Some(named("unit.asbuilt.toml", b"overlay")),
+                models: vec![named("custom.toml", b"model")],
+            },
+            spec_fragment(),
+        );
+        std::env::remove_var("HAUKSBEE_CI_BIN");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json).unwrap()["ok"],
+            true,
+            "{json}"
         );
     }
 }

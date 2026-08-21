@@ -149,8 +149,8 @@ pub struct RailWindow {
     pub min_v: f64,
     /// Maximum voltage seen in the window (V).
     pub max_v: f64,
-    /// Total time the rail was below the dip threshold (s), for the last
-    /// `dip_threshold` queried (the runner tracks one threshold per assertion).
+    /// Settled per-frame timeseries used to calculate dip/spike duration and
+    /// recovery/settling time; threshold calculations are performed on demand.
     pub samples: Vec<(f64, f64)>, // (t_s, v) timeseries within the window
 }
 
@@ -177,7 +177,8 @@ impl RailWindow {
     /// would then false-pass the very sag it exists to catch. The scheduler's
     /// per-frame min/max is folded here so the min/max bounds match what the plain
     /// `voltage` assertion path already sees. (The `samples` timeseries, and hence
-    /// dip_duration/recovery, still reflect settled per-frame values.)
+    /// dip_duration/recovery and spike_duration/settling still reflect settled
+    /// per-frame values.)
     pub fn fold(&mut self, v: f64) {
         self.min_v = self.min_v.min(v);
         self.max_v = self.max_v.max(v);
@@ -203,6 +204,31 @@ impl RailWindow {
         // that runs to the last frame is reported one frame short).
         if let Some(&(_, vlast)) = self.samples.last() {
             if vlast < threshold {
+                total += last_dt;
+            }
+        }
+        total
+    }
+
+    /// Total time (s) the rail spent strictly above `threshold` volts, summed
+    /// over the sampled window (rectangular integration on the sample grid).
+    pub fn spike_duration_s(&self, threshold: f64) -> f64 {
+        let mut total = 0.0;
+        let mut last_dt = 0.0;
+        for w in self.samples.windows(2) {
+            let (t0, v0) = w[0];
+            let (t1, _v1) = w[1];
+            // Count the interval as "spiking" when its leading sample is above.
+            let dt = (t1 - t0).max(0.0);
+            last_dt = dt;
+            if v0 > threshold {
+                total += dt;
+            }
+        }
+        // Match dip_duration_s: the trailing sample owns one more frame interval
+        // when it is still above the threshold at the window end.
+        if let Some(&(_, vlast)) = self.samples.last() {
+            if vlast > threshold {
                 total += last_dt;
             }
         }
@@ -254,6 +280,43 @@ impl RailWindow {
             .map(|(t, _)| *t)
             .fold(f64::INFINITY, f64::min);
         (recover_at - t_dip).max(0.0)
+    }
+
+    /// Settling time (s): from the first sample above `threshold` to the first
+    /// sample at or below `settle_to` after the last sample above `settle_to`.
+    /// Returns 0 if the rail never spiked, and `+∞` if it spiked but the final
+    /// sample is still above `settle_to`.
+    pub fn settling_s(&self, threshold: f64, settle_to: f64) -> f64 {
+        let first_spike = self
+            .samples
+            .iter()
+            .find(|(_, v)| *v > threshold)
+            .map(|(t, _)| *t);
+        let Some(t_spike) = first_spike else {
+            return 0.0;
+        };
+        // Never settled: a final sample above settle_to means there is no
+        // sustained return to the settled band within the window.
+        if let Some(&(_, vlast)) = self.samples.last() {
+            if vlast > settle_to {
+                return f64::INFINITY;
+            }
+        }
+        // Any later sample above settle_to (including a spike sample that is
+        // below the spike threshold) postpones the settling instant.
+        let last_above = self
+            .samples
+            .iter()
+            .filter(|(t, v)| *t >= t_spike && *v > settle_to)
+            .map(|(t, _)| *t)
+            .fold(t_spike, f64::max);
+        let settle_at = self
+            .samples
+            .iter()
+            .filter(|(t, v)| *t > last_above && *v <= settle_to)
+            .map(|(t, _)| *t)
+            .fold(f64::INFINITY, f64::min);
+        (settle_at - t_spike).max(0.0)
     }
 }
 
@@ -371,6 +434,72 @@ mod tests {
             (dip - 0.003).abs() < 1e-9,
             "trailing-dwell dip duration {dip}"
         );
+    }
+
+    #[test]
+    fn window_stats_spike_and_settling() {
+        let mut w = RailWindow::new();
+        // A rail that sits at 3.3, spikes to 3.8 for 3 ms, then settles to 3.3.
+        let pts = [
+            (0.000, 3.30),
+            (0.001, 3.30),
+            (0.002, 3.80), // spike starts
+            (0.003, 3.80),
+            (0.004, 3.80),
+            (0.005, 3.30), // settled
+            (0.006, 3.30),
+        ];
+        for (t, v) in pts {
+            w.observe(t, v);
+        }
+        let spike = w.spike_duration_s(3.5);
+        assert!((spike - 0.003).abs() < 1e-9, "spike duration {spike}");
+        let settle = w.settling_s(3.5, 3.4);
+        assert!((settle - 0.003).abs() < 1e-9, "settling time {settle}");
+    }
+
+    #[test]
+    fn spike_never_settles_is_infinite() {
+        let mut w = RailWindow::new();
+        for (t, v) in [
+            (0.000, 3.30),
+            (0.005, 3.80), // spikes near the window end
+            (0.010, 3.60), // remains above settle_to at the final sample
+        ] {
+            w.observe(t, v);
+        }
+        let settle = w.settling_s(3.5, 3.4);
+        assert!(
+            settle.is_infinite(),
+            "a rail that never settles to settle_to must report +inf, got {settle}"
+        );
+    }
+
+    #[test]
+    fn spike_and_settle_threshold_boundaries_are_strict_then_inclusive() {
+        let mut w = RailWindow::new();
+        // Exactly the spike threshold is not a spike; exactly settle_to counts
+        // as settled once the rail has spiked.
+        for (t, v) in [
+            (0.000, 3.30),
+            (0.001, 3.50), // equal to spike threshold: not above
+            (0.002, 3.60), // actual spike
+            (0.003, 3.40), // equal to settle_to: settled
+        ] {
+            w.observe(t, v);
+        }
+        assert_eq!(w.spike_duration_s(3.5), 0.001);
+        assert!((w.settling_s(3.5, 3.4) - 0.001).abs() < 1e-9);
+    }
+
+    #[test]
+    fn folded_intraframe_spike_updates_max_but_not_spike_duration() {
+        let mut w = RailWindow::new();
+        w.observe(0.000, 3.30);
+        w.observe(0.001, 3.30);
+        w.fold(4.20); // intra-frame spike, recovered by the settled sample
+        assert_eq!(w.max_v, 4.20);
+        assert_eq!(w.spike_duration_s(3.5), 0.0);
     }
 
     #[test]

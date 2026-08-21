@@ -2,8 +2,7 @@ use hauksbee_extract::{
     clearance_rules_from_kicad_pro, parse_kicad_dru, ExtractedBoard, KicadDruConstraintKind,
 };
 
-const DOORBELL_DRU: &str =
-    include_str!("../../../qc/blind_trials/work/doorbell/kicad/doorbell.kicad_dru");
+const DOORBELL_DRU: &str = include_str!("fixtures/kicad_dru_doorbell.kicad_dru");
 const PRECEDENCE_BOARD: &str = include_str!("fixtures/kicad_dru_precedence.kicad_pcb");
 const PRECEDENCE_PROJECT: &str = include_str!("fixtures/kicad_dru_precedence.kicad_pro");
 const PRECEDENCE_DRU: &str = include_str!("fixtures/kicad_dru_precedence.kicad_dru");

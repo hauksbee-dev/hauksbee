@@ -283,6 +283,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "docs/dev-plans/public-release-cleanup-plan.md",
             "docs/dev-plans/tasks.md",
             "frontend/capture/cards.ts",
+            "scripts/build-private-beta-snapshot.sh",
             "scripts/make-public.sh",
         }
         for entry in manifest["surfaces"]:

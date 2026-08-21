@@ -242,10 +242,12 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ part: part.trim() || 'model', kind: '', toml: body }),
       })
-      const j = (await res.json()) as { ok?: boolean; path?: string; error?: string }
+      const j = (await res.json()) as { ok?: boolean; path?: string; error?: string; coverage_note?: string | null; note?: string }
       if (j.ok === false) setSaveMsg(j.error ?? 'the save failed and did not say why')
       else {
-        setSaveMsg(`Saved to ${j.path ?? 'your model directory'}. Re-analyzing this board now.`)
+        setSaveMsg(j.coverage_note
+          ? `Saved to ${j.path ?? 'your model directory'}. Coverage unchanged: ${j.coverage_note} Re-analyzing this board now.`
+          : `Saved to ${j.path ?? 'your model directory'}. Re-analyzing this board now.`)
         onSaved?.()
       }
     } catch (e) {

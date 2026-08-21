@@ -160,6 +160,10 @@ pub fn schematic_analyzer() -> hauksbee_frontdoor_api::frontdoor::SchematicAnaly
     })
 }
 
+pub fn design_analyzer() -> hauksbee_frontdoor_api::frontdoor::DesignAnalyzer {
+    std::sync::Arc::new(crate::frontdoor::analyze_design_json)
+}
+
 /// The web live-launch callback: turn an uploaded board (and optional
 /// firmware) into a running [`HauksbeeEngine`] the server hub can install
 /// behind `/ws`. Shared by `hauksbee serve` and `run --serve` so an uploaded
@@ -295,6 +299,78 @@ pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::Schematic
     )
 }
 
+/// Complete browser live-launch path: the same BOM/placement/as-built/model
+/// bundle used by the report is applied before the engine is constructed.
+pub fn design_live_launcher() -> hauksbee_frontdoor_api::frontdoor::DesignLiveLauncher {
+    use hauksbee_frontdoor_api::frontdoor::LiveLaunch;
+    use std::io::Write as _;
+    use std::sync::Arc;
+
+    Arc::new(|upload| -> Result<LiveLaunch, String> {
+        let prepared = crate::web_design::prepare(upload)?;
+        let name = prepared.upload.board.name.clone();
+        let board_file =
+            resumable_board_file(&name, &prepared.upload.board.bytes, prepared.norm.kind);
+        let drc = if prepared.norm.is_binary() {
+            hauksbee_extract::ExtractedBoard::altium_drc(&prepared.norm.raw).unwrap_or_default()
+        } else if prepared.norm.is_gerber() {
+            Default::default()
+        } else {
+            hauksbee_extract::ExtractedBoard::drc(
+                prepared.norm.layout_text.as_deref().unwrap_or_default(),
+            )
+            .unwrap_or_default()
+        };
+        let qualification = prepared.ties.as_ref().map(|ties| ties.qualify(&drc));
+        let bound = prepared.bind()?;
+
+        let mut firmware_temp = None;
+        let mut firmware_path = None;
+        if let Some(firmware) = &prepared.upload.firmware {
+            if bound.mcus.is_empty() {
+                return Err(crate::binder::no_processor_message(
+                    &bound.dnp_mcus,
+                    crate::binder::FitRemedy::Cli,
+                ));
+            }
+            let resolved =
+                crate::firmware_input::resolve_firmware_bytes(&firmware.name, &firmware.bytes)?;
+            let suffix = if resolved.name.to_ascii_lowercase().ends_with(".hex") {
+                ".hex"
+            } else {
+                ".elf"
+            };
+            let mut temp = tempfile::Builder::new()
+                .prefix("hauksbee-live-fw-")
+                .suffix(suffix)
+                .tempfile()
+                .map_err(|error| format!("could not stage the firmware: {error}"))?;
+            temp.write_all(&resolved.bytes)
+                .and_then(|_| temp.flush())
+                .map_err(|error| format!("could not write the firmware: {error}"))?;
+            firmware_path = Some(temp.path().to_path_buf());
+            firmware_temp = Some(temp);
+        }
+
+        let board_url = format!("/boards/{name}");
+        let mut engine = HauksbeeEngine::from_bound(bound, firmware_path.as_deref(), &board_url)
+            .map_err(|error| error.to_string())?;
+        engine.arm_live_abort();
+        engine.apply_and_disclose_drc_shorts_with_qualification(&drc, qualification.as_ref());
+        let keepalive = if prepared.keepalive.is_some() || firmware_temp.is_some() {
+            Some(Box::new((prepared.keepalive, firmware_temp)) as Box<dyn std::any::Any + Send>)
+        } else {
+            None
+        };
+        Ok(LiveLaunch {
+            engine: Box::new(engine),
+            board_name: name,
+            board_file,
+            keepalive,
+        })
+    })
+}
+
 #[cfg(feature = "serve")]
 pub fn serve(
     mut engine: HauksbeeEngine,
@@ -328,13 +404,11 @@ pub fn serve(
         // The analysis API the React landing calls (the report and the live sim
         // are one app). Same callback `hauksbee serve` uses, so the two
         // commands converge on one server path with a preload difference only.
-        let analyze = schematic_analyzer();
+        let analyze = design_analyzer();
         // Same checks backend as `hauksbee serve`, so the web checks panel works
         // in the preloaded (`run --serve`) flow too.
-        let check: hauksbee_frontdoor_api::frontdoor::SchematicCheckRunner =
-            Arc::new(|name, contents, fw, schematic, spec| {
-                crate::webcheck::run_web_check_with_schematic(name, contents, fw, schematic, spec)
-            });
+        let check: hauksbee_frontdoor_api::frontdoor::DesignCheckRunner =
+            Arc::new(crate::webcheck::run_web_check_design);
 
         // Bind FIRST, then print. The requested port may be busy, in which case
         // the bind falls back to another port; printing `addr` before binding
@@ -372,14 +446,14 @@ pub fn serve(
             println!("      hauksbee run <board> --headless     # co-sim summary\n");
         }
         server
-            .serve_app_on_with_schematic(
+            .serve_app_on_with_design(
                 listener,
                 dir.as_deref(),
                 board_file,
                 analyze,
                 Some(check),
                 Some(deps_hooks()),
-                Some(schematic_live_launcher()),
+                Some(design_live_launcher()),
                 startup_json,
             )
             .await

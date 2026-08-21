@@ -28,9 +28,9 @@ use axum::{Json, Router};
 
 pub use hauksbee_frontdoor_api::frontdoor::{
     Analyzer, CheckRunner, DatasheetChecker, DatasheetExtractor, DatasheetHooks, DatasheetJob,
-    DatasheetReady, DatasheetSaver, DepInstaller, DepsStatus, FirmwareAnalyzer, LiveLaunch,
-    LiveLauncher, ModelDrafter, SchematicAnalyzer, SchematicCheckRunner, SchematicLiveLauncher,
-    ToolHooks,
+    DatasheetReady, DatasheetSaver, DepInstaller, DepsStatus, DesignAnalyzer, DesignCheckRunner,
+    DesignLiveLauncher, DesignUpload, FirmwareAnalyzer, LiveLaunch, LiveLauncher, ModelDrafter,
+    NamedUpload, SchematicAnalyzer, SchematicCheckRunner, SchematicLiveLauncher, ToolHooks,
 };
 
 /// Reject a request that a *website* in the user's browser made cross-origin to
@@ -112,6 +112,10 @@ struct SchematicState {
     analyze: SchematicAnalyzer,
 }
 
+struct DesignState {
+    analyze: DesignAnalyzer,
+}
+
 /// Build the analysis API routes the React landing page calls: board-only
 /// analysis at `/api/analyze` and the firmware co-sim at
 /// `/api/analyze-with-firmware` (multipart: `board` + optional `firmware`).
@@ -145,6 +149,18 @@ pub fn api_routes_with_schematic(analyze: SchematicAnalyzer) -> Router {
         .with_state(state)
 }
 
+/// Complete browser analysis contract. Supplemental design/manufacturing files
+/// use the same multipart endpoint as firmware and schematic companions.
+pub fn api_routes_with_design(analyze: DesignAnalyzer) -> Router {
+    let state = Arc::new(DesignState { analyze });
+    Router::new()
+        .route("/api/analyze", post(analyze_handler_design_raw))
+        .route("/api/analyze-with-firmware", post(analyze_design_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
+        .with_state(state)
+}
+
 /// Back-compat alias for [`api_routes`] (the firmware-aware analysis routes).
 /// No server-rendered page: the React bundle owns `/`.
 pub fn router_with_firmware(analyze: FirmwareAnalyzer) -> Router {
@@ -154,6 +170,7 @@ pub fn router_with_firmware(analyze: FirmwareAnalyzer) -> Router {
 enum CheckCallback {
     Legacy(CheckRunner),
     Schematic(SchematicCheckRunner),
+    Design(DesignCheckRunner),
 }
 
 struct CheckState {
@@ -188,6 +205,17 @@ pub fn check_route_with_schematic(check: SchematicCheckRunner) -> Router {
         .with_state(state)
 }
 
+pub fn check_route_with_design(check: DesignCheckRunner) -> Router {
+    let state = Arc::new(CheckState {
+        check: CheckCallback::Design(check),
+    });
+    Router::new()
+        .route("/api/check", post(check_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
+        .with_state(state)
+}
+
 struct LiveState {
     hub: Arc<crate::LiveHub>,
     launch: LiveLauncher,
@@ -196,6 +224,11 @@ struct LiveState {
 struct SchematicLiveState {
     hub: Arc<crate::LiveHub>,
     launch: SchematicLiveLauncher,
+}
+
+struct DesignLiveState {
+    hub: Arc<crate::LiveHub>,
+    launch: DesignLiveLauncher,
 }
 
 /// The live-launch API: `POST /api/live/launch` (multipart `board` + optional
@@ -227,6 +260,63 @@ pub fn live_routes_with_schematic(
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(axum::middleware::map_response(name_upload_limit_413))
         .with_state(state)
+}
+
+pub fn live_routes_with_design(hub: Arc<crate::LiveHub>, launch: DesignLiveLauncher) -> Router {
+    let state = Arc::new(DesignLiveState { hub, launch });
+    Router::new()
+        .route("/api/live/launch", post(live_launch_design_handler))
+        .route("/api/live/status", get(live_status_design_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
+        .with_state(state)
+}
+
+async fn live_status_design_handler(
+    State(state): State<Arc<DesignLiveState>>,
+) -> impl IntoResponse {
+    let body = match state.hub.active_board() {
+        Some(name) => serde_json::json!({ "active": true, "board_name": name }),
+        None => serde_json::json!({ "active": false }),
+    };
+    json_body(StatusCode::OK, body)
+}
+
+async fn live_launch_design_handler(
+    State(state): State<Arc<DesignLiveState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    if let Some(response) = reject_cross_site(&headers) {
+        return response;
+    }
+    let parts = match parse_upload(&mut multipart).await {
+        Ok(parts) => parts,
+        Err(message) => return json_error(&message),
+    };
+    let upload = match parts.into_design_upload() {
+        Ok(upload) => upload,
+        Err(message) => return json_error(message),
+    };
+    let launch = state.launch.clone();
+    let built = tokio::task::spawn_blocking(move || (launch)(upload)).await;
+    match built {
+        Ok(Ok(live)) => {
+            let board_name = live.board_name.clone();
+            let replaced = state.hub.launch(
+                live.engine,
+                live.board_name,
+                live.board_file,
+                live.keepalive,
+            );
+            json_body(
+                StatusCode::OK,
+                serde_json::json!({ "ok": true, "board_name": board_name, "replaced": replaced }),
+            )
+        }
+        Ok(Err(message)) => json_error(&message),
+        Err(_) => json_error("the live launch task panicked; see the server log"),
+    }
 }
 
 async fn live_status_schematic_handler(
@@ -360,9 +450,10 @@ pub fn deps_routes(status: DepsStatus, install: DepInstaller) -> Router {
         .with_state(state)
 }
 
-/// GET `/api/deps`: relay the engine's dependency JSON. The probe shells a few
-/// `--version` checks, so it runs on the blocking pool rather than stalling the
-/// async runtime.
+/// GET `/api/deps`: relay the engine's dependency JSON. Discovery is bounded
+/// and cached by the engine; it still runs on the blocking pool so a resolver
+/// cannot stall the async runtime. Authentication/version checks are lazy and
+/// belong to the operation that needs them.
 async fn deps_status_handler(State(state): State<Arc<DepsState>>) -> impl IntoResponse {
     let status = state.status.clone();
     let json = tokio::task::spawn_blocking(move || (status)())
@@ -861,6 +952,15 @@ struct UploadedParts {
     fw_bytes: Option<Vec<u8>>,
     schematic_name: String,
     schematic_bytes: Option<Vec<u8>>,
+    bom_name: String,
+    bom_bytes: Option<Vec<u8>>,
+    placement_name: String,
+    placement_bytes: Option<Vec<u8>>,
+    variant_name: String,
+    variant_bytes: Option<Vec<u8>>,
+    asbuilt_name: String,
+    asbuilt_bytes: Option<Vec<u8>>,
+    models: Vec<NamedUpload>,
     spec: Option<String>,
     /// The datasheet PDF and what to extract from it (`/api/models/extract`).
     datasheet_name: String,
@@ -869,6 +969,29 @@ struct UploadedParts {
     kind: Option<String>,
     reference: Option<String>,
     model: Option<String>,
+}
+
+impl UploadedParts {
+    fn into_design_upload(self) -> Result<DesignUpload, &'static str> {
+        let Some(board_bytes) = self.board_bytes else {
+            return Err("no board file in the upload (expected a 'board' or 'file' part)");
+        };
+        let named =
+            |name: String, bytes: Option<Vec<u8>>| bytes.map(|bytes| NamedUpload { name, bytes });
+        Ok(DesignUpload {
+            board: NamedUpload {
+                name: self.board_name,
+                bytes: board_bytes,
+            },
+            firmware: named(self.fw_name, self.fw_bytes),
+            schematic: named(self.schematic_name, self.schematic_bytes),
+            bom: named(self.bom_name, self.bom_bytes),
+            placement: named(self.placement_name, self.placement_bytes),
+            variant: named(self.variant_name, self.variant_bytes),
+            asbuilt: named(self.asbuilt_name, self.asbuilt_bytes),
+            models: self.models,
+        })
+    }
 }
 
 /// Drain a multipart body into [`UploadedParts`], or return the user-facing
@@ -885,6 +1008,10 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
     let mut parts = UploadedParts {
         board_name: "board".to_string(),
         datasheet_name: "datasheet.pdf".to_string(),
+        bom_name: "bom.csv".to_string(),
+        placement_name: "placement.csv".to_string(),
+        variant_name: "variant.toml".to_string(),
+        asbuilt_name: "asbuilt.toml".to_string(),
         ..Default::default()
     };
     loop {
@@ -922,6 +1049,46 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
                     parts.schematic_bytes = Some(data.to_vec());
                 }
             }
+            "bom" => {
+                if let Some(f) = filename {
+                    parts.bom_name = f;
+                }
+                if !data.is_empty() {
+                    parts.bom_bytes = Some(data.to_vec());
+                }
+            }
+            "placement" => {
+                if let Some(f) = filename {
+                    parts.placement_name = f;
+                }
+                if !data.is_empty() {
+                    parts.placement_bytes = Some(data.to_vec());
+                }
+            }
+            "variant" => {
+                if let Some(f) = filename {
+                    parts.variant_name = f;
+                }
+                if !data.is_empty() {
+                    parts.variant_bytes = Some(data.to_vec());
+                }
+            }
+            "asbuilt" => {
+                if let Some(f) = filename {
+                    parts.asbuilt_name = f;
+                }
+                if !data.is_empty() {
+                    parts.asbuilt_bytes = Some(data.to_vec());
+                }
+            }
+            "model_file" => {
+                if !data.is_empty() {
+                    parts.models.push(NamedUpload {
+                        name: filename.unwrap_or_else(|| "model.toml".to_string()),
+                        bytes: data.to_vec(),
+                    });
+                }
+            }
             "spec" => parts.spec = Some(String::from_utf8_lossy(&data).into_owned()),
             "datasheet" => {
                 if let Some(f) = filename {
@@ -954,15 +1121,13 @@ async fn check_handler(
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
-    let parts = match parse_upload(&mut multipart).await {
+    let mut parts = match parse_upload(&mut multipart).await {
         Ok(p) => p,
         Err(msg) => return json_error(&msg),
     };
-    let (Some(board_bytes), Some(spec)) = (parts.board_bytes, parts.spec) else {
+    let Some(spec) = parts.spec.take() else {
         return json_error("the check request needs a 'board' part and a 'spec' part");
     };
-    let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
-    let (schematic_name, schematic_bytes) = (parts.schematic_name, parts.schematic_bytes);
 
     // The runner returns a ready JSON string (its own {ok:...} shape); relay
     // it verbatim with the content-type header. It BLOCKS for the whole child
@@ -974,16 +1139,28 @@ async fn check_handler(
     let check = match &state.check {
         CheckCallback::Legacy(check) => CheckCallback::Legacy(check.clone()),
         CheckCallback::Schematic(check) => CheckCallback::Schematic(check.clone()),
+        CheckCallback::Design(check) => CheckCallback::Design(check.clone()),
     };
     let json = match tokio::task::spawn_blocking(move || {
-        let firmware = fw_bytes.as_deref().map(|bytes| (fw_name.as_str(), bytes));
-        let schematic = schematic_bytes
-            .as_deref()
-            .map(|bytes| (schematic_name.as_str(), bytes));
         match check {
-            CheckCallback::Legacy(check) => check(&board_name, &board_bytes, firmware, &spec),
+            CheckCallback::Design(check) => match parts.into_design_upload() {
+                Ok(upload) => check(upload, &spec),
+                Err(message) => serde_json::json!({ "ok": false, "error": message }).to_string(),
+            },
+            CheckCallback::Legacy(check) => {
+                let Some(board_bytes) = parts.board_bytes.as_deref() else {
+                    return serde_json::json!({ "ok": false, "error": "the check request needs a 'board' part and a 'spec' part" }).to_string();
+                };
+                let firmware = parts.fw_bytes.as_deref().map(|bytes| (parts.fw_name.as_str(), bytes));
+                check(&parts.board_name, board_bytes, firmware, &spec)
+            }
             CheckCallback::Schematic(check) => {
-                check(&board_name, &board_bytes, firmware, schematic, &spec)
+                let Some(board_bytes) = parts.board_bytes.as_deref() else {
+                    return serde_json::json!({ "ok": false, "error": "the check request needs a 'board' part and a 'spec' part" }).to_string();
+                };
+                let firmware = parts.fw_bytes.as_deref().map(|bytes| (parts.fw_name.as_str(), bytes));
+                let schematic = parts.schematic_bytes.as_deref().map(|bytes| (parts.schematic_name.as_str(), bytes));
+                check(&parts.board_name, board_bytes, firmware, schematic, &spec)
             }
         }
     })
@@ -1138,6 +1315,67 @@ async fn analyze_schematic_handler(
         .as_deref()
         .map(|bytes| (parts.schematic_name.as_str(), bytes));
     let json = (state.analyze)(&parts.board_name, &board_bytes, firmware, schematic);
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+}
+
+async fn analyze_handler_design_raw(
+    State(state): State<Arc<DesignState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let file_name = headers
+        .get("x-board-filename")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("board")
+        .to_string();
+    let json = (state.analyze)(DesignUpload {
+        board: NamedUpload {
+            name: file_name,
+            bytes: body.to_vec(),
+        },
+        firmware: None,
+        schematic: None,
+        bom: None,
+        placement: None,
+        variant: None,
+        asbuilt: None,
+        models: Vec::new(),
+    });
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+}
+
+async fn analyze_design_handler(
+    State(state): State<Arc<DesignState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let parts = match parse_upload(&mut multipart).await {
+        Ok(parts) => parts,
+        Err(message) => return json_error(&message),
+    };
+    let upload = match parts.into_design_upload() {
+        Ok(upload) => upload,
+        Err(message) => return json_error(message),
+    };
+    let analyze = state.analyze.clone();
+    let json = match tokio::task::spawn_blocking(move || (analyze)(upload)).await {
+        Ok(json) => json,
+        Err(_) => return json_error("the analysis task panicked; see the server log"),
+    };
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],

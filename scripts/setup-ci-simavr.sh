@@ -11,7 +11,7 @@ case "$(uname -s)" in
   Linux)
     sudo apt-get update
     sudo apt-get install -y --no-install-recommends \
-      build-essential git pkg-config libelf-dev zlib1g-dev clang libclang-dev
+      build-essential git pkg-config libelf-dev libzstd-dev zlib1g-dev clang libclang-dev
     ;;
   Darwin)
     brew list pkg-config >/dev/null 2>&1 || brew install pkg-config

@@ -334,6 +334,8 @@ export interface WebReport {
   /** reference -> bound model kind ("mcu", "bjt_npn", ...); what a component
    *  click on the board map reports as the part's bound model. */
   component_kinds?: Record<string, string>
+  /** Component-scoped assertion kinds the bound circuit can evaluate. */
+  component_assertions?: Record<string, string[]>
   /** Binder-detected supplies (rail net → nominal volts) for the checks
    *  builder's prefill. */
   supplies?: WebSupply[]
@@ -428,6 +430,7 @@ export interface ModelSaveResult {
   error?: string
   path?: string
   note?: string
+  coverage_note?: string | null
 }
 
 /** One check queued from a board surface (a net or component click on the
@@ -438,6 +441,26 @@ export interface QueuedCheck {
   kind: string
   net?: string
   ref?: string
+  /** Optional edited assertion values from the board-side constraint modal. */
+  min?: string
+  max?: string
+  after_ms?: string
+  deadline_ms?: string
+  contains?: string
+  freq_hz?: string
+  tolerance?: string
+  min_toggles?: string
+  amps?: string
+  celsius?: string
+  rail_polarity?: 'dip' | 'spike'
+  dip_below?: string
+  for_max_ms?: string
+  recover_to?: string
+  recover_within_ms?: string
+  spike_above?: string
+  spike_for_max_ms?: string
+  settle_to?: string
+  settle_within_ms?: string
 }
 
 /** One interaction queued from a board trace/component into the visual co-sim

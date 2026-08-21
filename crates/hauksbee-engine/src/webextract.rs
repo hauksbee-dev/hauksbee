@@ -179,12 +179,11 @@ enum Backend {
     Blocked { reason: String, fix: String },
 }
 
-/// Pick the backend, asking the SAME probe the Environment page renders.
-///
-/// Duplicating the codex discovery here is exactly the drift this codebase
-/// keeps burning: the panel would say "installed" while the extraction said
-/// "not found". `deps::probe_all` costs a handful of `--version` calls, which is
-/// nothing against a run measured in minutes.
+/// Pick the backend, asking the same extractor probe the Environment page's
+/// rows are built from. The status page uses a fast discovery-only snapshot;
+/// this readiness path additionally checks Codex authentication and therefore
+/// remains fail-closed before consent is offered. It does not probe unrelated
+/// simulators or oracles.
 fn backend() -> Backend {
     if std::env::var_os("HAUKSBEE_EXTRACT_MOCK_REPLY").is_some() {
         return Backend::Mock;
@@ -192,7 +191,7 @@ fn backend() -> Backend {
     if std::env::var_os("HAUKSBEE_LLM_API_KEY").is_some() {
         return Backend::Api;
     }
-    let probe = crate::deps::probe_all();
+    let probe = crate::deps::probe_extractors();
     let codex = probe.iter().find(|d| d.id == "codex");
     let claude = probe.iter().find(|d| d.id == "claude-code");
     // Preference order mirrors the CLI: an explicit API key won above; codex
@@ -796,6 +795,41 @@ fn validate_model_db(db: &hauksbee_models::schema::DbFile) -> Result<Vec<String>
     Ok(summaries)
 }
 
+/// A model can be schema-valid and still make no stronger executable-scope
+/// claim than the legacy default. Keep that distinction in the check/save
+/// receipt so the browser never turns "saved" into "coverage improved".
+fn model_coverage_note(db: &hauksbee_models::schema::DbFile) -> Option<String> {
+    let without_scope = db
+        .models
+        .iter()
+        .filter(|entry| entry.coverage.is_empty())
+        .count();
+    let partial = db
+        .models
+        .iter()
+        .filter(|entry| !entry.coverage.missing.is_empty())
+        .count();
+    if without_scope > 0 {
+        if without_scope == db.models.len() {
+            Some(
+                "valid but incomplete: no model declares [models.coverage]; saving this file will not change executable scope. Add source-backed implements/missing capabilities before trusting a broader claim".to_string(),
+            )
+        } else {
+            Some(format!(
+                "valid but incomplete: {without_scope} model entr{} lack [models.coverage]; saving this file will not change executable scope for those entries",
+                if without_scope == 1 { "y" } else { "ies" }
+            ))
+        }
+    } else if partial > 0 {
+        Some(format!(
+            "valid but partial: {partial} model entr{} declare missing capabilities in [models.coverage]",
+            if partial == 1 { "y" } else { "ies" }
+        ))
+    } else {
+        None
+    }
+}
+
 pub fn check(toml_text: &str) -> Result<String, String> {
     if toml_text.trim().is_empty() {
         return Err("nothing to check yet".to_string());
@@ -811,15 +845,19 @@ pub fn check(toml_text: &str) -> Result<String, String> {
     let db: hauksbee_models::schema::DbFile =
         toml::from_str(toml_text).map_err(|e| format!("this is not valid model TOML: {e}"))?;
     let summaries = validate_model_db(&db)?;
-    if summaries.len() == 1 {
-        Ok(format!("valid: {}", summaries[0]))
+    let summary = if summaries.len() == 1 {
+        format!("valid: {}", summaries[0])
     } else {
-        Ok(format!(
+        format!(
             "valid: {} model entries: {}",
             summaries.len(),
             summaries.join("; ")
-        ))
-    }
+        )
+    };
+    Ok(match model_coverage_note(&db) {
+        Some(note) => format!("{summary} · {note}"),
+        None => summary,
+    })
 }
 
 fn existing_model_error(path: &Path) -> String {
@@ -857,14 +895,28 @@ fn save_to_dir(
         Err(e) => return Err(format!("could not publish {}: {}", path.display(), e.error)),
     }
 
+    let coverage_note = if sensor {
+        None
+    } else {
+        toml::from_str::<hauksbee_models::schema::DbFile>(toml_text)
+            .ok()
+            .and_then(|db| model_coverage_note(&db))
+    };
+    let note = match &coverage_note {
+        Some(coverage) => format!(
+            "Saved as a draft with provenance \"{PROVENANCE}\", but {coverage}. Re-analyzing the board will leave executable scope unchanged until the coverage declaration is completed.",
+        ),
+        None => format!(
+            "Saved as a draft with provenance \"{PROVENANCE}\". It binds on the next analysis. Check any assumed value before you trust a result that depends on it."
+        ),
+    };
     serde_json::to_string(&serde_json::json!({
         "ok": true,
         "path": path.display().to_string(),
         "provenance": PROVENANCE,
         "kind": kind,
-        "note": format!(
-            "Saved as a draft with provenance \"{PROVENANCE}\". It binds on the next analysis. Check any assumed value before you trust a result that depends on it."
-        ),
+        "coverage_note": coverage_note,
+        "note": note,
     }))
     .map_err(|e| format!("could not serialise the save result: {e}"))
 }
@@ -921,6 +973,27 @@ iq_a = 0.00015      # Source: Figure 3
 [models.ratings]
 max_current_a = 0.5 # Source: absolute maximum ratings
 "#;
+
+    #[test]
+    fn model_check_and_save_call_out_missing_executable_scope() {
+        let summary = check(DRAFT).expect("the existing draft remains schema-valid");
+        assert!(summary.contains("valid but incomplete"));
+        assert!(summary.contains("[models.coverage]"));
+
+        let complete = format!("{DRAFT}\n[models.coverage]\nimplements = [\"regulated_output\"]\n");
+        let complete_summary = check(&complete).expect("coverage declaration remains valid");
+        assert!(!complete_summary.contains("valid but incomplete"));
+
+        let dir = tempfile::tempdir().expect("model save tempdir");
+        let receipt =
+            save_to_dir(dir.path(), "tp4054", "vreg", DRAFT, false).expect("valid draft saves");
+        let json: serde_json::Value = serde_json::from_str(&receipt).expect("JSON receipt");
+        assert!(json["coverage_note"]
+            .as_str()
+            .unwrap()
+            .contains("unchanged"));
+        assert!(json["note"].as_str().unwrap().contains("executable scope"));
+    }
 
     /// The citation beside each number is the whole point of the review card: a
     /// reviewer with the number but not its source cannot check anything.

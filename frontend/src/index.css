@@ -348,19 +348,18 @@ code.hb-inline {
 
 /* ── Checks builder: box discipline ─────────────────────────────────────── */
 
-/* One border per section card, none inside it. The rows that make up a section
-   are separated by a hairline rule rather than each being its own box, and the
-   inputs sit flush in the row until you reach for them. The focus ring, and the
-   red highlight on an input a validation message names, are untouched: both are
-   set inline on the element and outrank these rules. */
+/* One border per section card. Rows use hairline separators, while inputs keep
+   a quiet well and border so empty fields remain discoverable before hover.
+   The focus ring and red validation highlight are set inline and remain
+   stronger than these neutral defaults. */
 
 .checks-flush .check-row {
   border-top: 1px solid var(--rule);
 }
 
 .checks-flush .hb-input {
-  background: transparent;
-  border-color: transparent;
+  background: var(--input-bg);
+  border-color: var(--rule);
   transition-property: border-color, background-color, box-shadow;
 }
 .checks-flush .hb-input:hover {
