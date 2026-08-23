@@ -142,6 +142,13 @@ pub struct RenodeProcess {
     child: Child,
     _tree_guard: crate::children::ProcessTreeGuard,
     pub monitor_port: u16,
+    /// Where this instance's stderr is captured, if the file could be created.
+    /// Renode has no clean shutdown path in our lifecycle, so the only
+    /// first-hand account of a mid-run death (an unhandled .NET exception, a
+    /// missing runtime dependency) is what it wrote to stderr. Discarding that
+    /// once made a Windows CI failure undiagnosable: both TCP sockets reset
+    /// mid-chunk and nothing anywhere said why. The file is removed on drop.
+    stderr_log: Option<PathBuf>,
 }
 
 impl RenodeProcess {
@@ -157,6 +164,21 @@ impl RenodeProcess {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
 
+        // Capture stderr to a per-instance file (pid + port make the name
+        // unique) rather than discarding it: when Renode dies mid-run its
+        // stderr is the only evidence of why, and `exit_reason` folds the tail
+        // of this file into the error the caller sees. Fall back to discarding
+        // only if the file cannot be created; a diagnostics file must never be
+        // the reason a spawn fails.
+        let stderr_path = std::env::temp_dir().join(format!(
+            "hauksbee-renode-stderr-{}-{monitor_port}.log",
+            std::process::id()
+        ));
+        let (stderr_sink, stderr_log) = match std::fs::File::create(&stderr_path) {
+            Ok(f) => (Stdio::from(f), Some(stderr_path)),
+            Err(_) => (Stdio::null(), None),
+        };
+
         let mut cmd = Command::new(&bin);
         cmd.current_dir(&workdir)
             .arg("--disable-xwt")
@@ -166,7 +188,7 @@ impl RenodeProcess {
             .arg(monitor_port.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(stderr_sink);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -185,6 +207,7 @@ impl RenodeProcess {
             child,
             _tree_guard: tree_guard,
             monitor_port,
+            stderr_log,
         })
     }
 
@@ -208,12 +231,30 @@ impl RenodeProcess {
     /// port reports that fact immediately instead of after the full timeout.
     pub fn exit_reason(&mut self) -> Option<String> {
         match self.child.try_wait() {
-            Ok(Some(status)) => Some(format!("exit status {status}")),
+            Ok(Some(status)) => match self.stderr_tail() {
+                Some(tail) => Some(format!("exit status {status}; stderr tail: {tail}")),
+                None => Some(format!("exit status {status}")),
+            },
             Ok(None) => None,
             // A child we can no longer wait on is gone as far as we are
             // concerned; treating it as alive would hang the caller.
             Err(e) => Some(format!("wait failed: {e}")),
         }
+    }
+
+    /// The last few hundred bytes of the captured stderr, newlines collapsed,
+    /// or `None` when nothing was captured. Only meaningful once the process
+    /// has exited (the file may still be growing before that).
+    fn stderr_tail(&self) -> Option<String> {
+        let raw = std::fs::read(self.stderr_log.as_deref()?).ok()?;
+        let tail = &raw[raw.len().saturating_sub(600)..];
+        let text = String::from_utf8_lossy(tail)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        (!text.is_empty()).then_some(text)
     }
 }
 
@@ -229,6 +270,9 @@ impl Drop for RenodeProcess {
         let _ = self._tree_guard.terminate();
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(log) = &self.stderr_log {
+            let _ = std::fs::remove_file(log);
+        }
     }
 }
 

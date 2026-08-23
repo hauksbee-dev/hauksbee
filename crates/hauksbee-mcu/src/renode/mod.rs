@@ -974,7 +974,7 @@ pub struct RenodeBackend {
     uart_rx_failed: u64,
     /// Host bytes handed to the socket since the last successful RunFor.
     uart_rx_inflight: usize,
-    _process: RenodeProcess,
+    process: RenodeProcess,
 
     /// Last-read ODR per port letter, for edge synthesis. For a port with a
     /// dir map this stores the *output-masked* value (ODR & dir), so the diff
@@ -1131,7 +1131,7 @@ impl RenodeBackend {
             uart,
             uart_rx_failed: 0,
             uart_rx_inflight: 0,
-            _process: process,
+            process,
             last_odr,
             last_dir: HashMap::new(),
             active_ports: None,
@@ -1903,12 +1903,14 @@ impl Mcu for RenodeBackend {
 
     fn run_cycles(&mut self, n: u64) -> Result<u64> {
         let seconds = n as f64 / self.config.frequency_hz as f64;
-        self.run_seconds(seconds)?;
+        let run = self.run_seconds(seconds);
+        run.map_err(|e| self.with_death_reason(e))?;
         Ok(n)
     }
 
     fn run_micros(&mut self, us: u64) -> Result<()> {
-        self.run_seconds(us as f64 / 1_000_000.0)
+        let run = self.run_seconds(us as f64 / 1_000_000.0);
+        run.map_err(|e| self.with_death_reason(e))
     }
 
     fn frequency(&self) -> u64 {
@@ -2151,6 +2153,18 @@ impl Mcu for RenodeBackend {
 }
 
 impl RenodeBackend {
+    /// If the Renode process has exited, wrap `e` with that fact (exit status
+    /// plus the tail of its captured stderr). A dead emulator surfaces to the
+    /// chunk loop as a socket error on whichever bridge was touched first
+    /// ("connection reset", "connection forcibly closed"), which names the
+    /// symptom and hides the cause; this names the cause.
+    fn with_death_reason(&mut self, e: anyhow::Error) -> anyhow::Error {
+        match self.process.exit_reason() {
+            Some(reason) => e.context(format!("Renode process died: {reason}")),
+            None => e,
+        }
+    }
+
     /// Advance virtual time by `seconds`, then exchange GPIO/UART state.
     fn run_seconds(&mut self, seconds: f64) -> Result<()> {
         if !self.firmware_loaded {
