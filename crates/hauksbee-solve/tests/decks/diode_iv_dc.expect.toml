@@ -3,7 +3,7 @@ description = "Diode forward V-I DC sweep (Vin 0..1 V): junction voltage V(d) an
 full_scale = 1.0
 [[probe]]
 expr = "V(d)"
-reltol = 5.0e-03
+reltol = 2.5e-03
 abstol = 1e-3
 [[probe]]
 expr = "V(a,d)"
