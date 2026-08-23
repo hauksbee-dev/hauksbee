@@ -156,8 +156,14 @@ try {
     # bound to the verified Authenticode payloads.
     Sign-And-VerifyBinaries $binDir $work
 
-    foreach ($item in @("db", "examples", "integrations")) {
-        Copy-Item -LiteralPath (Join-Path $repoRoot $item) -Destination (Join-Path $rootDir $item) -Recurse
+    # Same payload layout as scripts/bundle.sh: the model database lives under
+    # crates/hauksbee-models/db in the tree and ships as db/ in the bundle.
+    foreach ($item in @(
+        @{ Source = "crates\hauksbee-models\db"; Name = "db" },
+        @{ Source = "examples"; Name = "examples" },
+        @{ Source = "integrations"; Name = "integrations" }
+    )) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot $item.Source) -Destination (Join-Path $rootDir $item.Name) -Recurse
     }
     $ciSpecs = Join-Path $rootDir "examples\ci-specs"
     New-Item -ItemType Directory -Path $ciSpecs -Force | Out-Null
