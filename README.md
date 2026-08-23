@@ -321,7 +321,7 @@ README headline numbers must come from machine-readable, source-bound output. Ma
 - `crates/hauksbee-ci`: CI spec loader, assertions, reports, and integrations.
 - `crates/hauksbee-server`, `frontend/`: local web front door and live board UI.
 - `crates/hauksbee-mcp`: structured agent tools over stdio.
-- `qc/`: release, unseen-board, and evidence-quality gates.
+- - `qc/`: unseen-board sampling and value-grading scripts..
 
 The KiCad parser/producer layer is vendored under [`vendor/kicad-forge`](vendor/kicad-forge); provenance and update rules are in [VENDORED](vendor/kicad-forge/VENDORED.md).
 

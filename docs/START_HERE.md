@@ -54,7 +54,7 @@ bun install --frozen-lockfile
 bun run build
 Pop-Location
 cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp `
-  --no-default-features --features renode,qemu,embed-web
+  --no-default-features --features renode,qemu,serve,embed-web
 .\target\release\hauksbee.exe doctor --json
 .\target\release\hauksbee.exe run --example blinky --check --plain
 .\target\release\hauksbee.exe serve

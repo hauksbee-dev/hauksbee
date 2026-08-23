@@ -380,9 +380,9 @@ runs:
     #    GITHUB_ACTIONS is passed through so the binary still emits inline
     #    annotations.
     #
-    #    The published images are public, so a registry login only happens when
-    #    a dedicated token was provided (private mirror / GHE); an anonymous
-    #    pull is the default.
+    #    The repository and its packages are private, so hauksbee-token is
+    #    mandatory and the registry login always runs; there is no anonymous
+    #    pull path.
     - name: Authenticate to the image registry
       id: registry-auth
       if: ${{ inputs.use-image == 'true' && inputs.hauksbee-token != '' }}
