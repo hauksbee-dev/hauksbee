@@ -389,7 +389,14 @@ find_qemu_bin() {
 is_esp_qemu_fork() {
   local bin="$1"
   [ -x "$bin" ] || return 1
-  "$bin" -machine help 2>/dev/null | grep -qi 'esp32'
+  if "$bin" -machine help 2>/dev/null | grep -qi 'esp32'; then
+    return 0
+  fi
+  # The quiet probe above eats the usual real cause: a missing runtime
+  # library (dyld/ld.so refusing to load the binary). Say what the binary
+  # actually reported so the caller's "not the fork" names the culprit.
+  "$bin" -machine help 2>&1 | head -n 3 | while IFS= read -r l; do warn "  $l"; done
+  return 1
 }
 
 # Prove the live machine exposes Hauksbee's stateful GPIO capability. A string
