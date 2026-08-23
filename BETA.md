@@ -74,7 +74,7 @@ Use the repository's **Beta experience**, **Bug report**, or **False positive** 
 - **macOS:** publish the `Hauksbee.app` zip only after same-source signing and notarisation pass.
 - **Windows:** use only a release that includes the Windows asset and its retained native Windows gate evidence.
 - **Linux:** use the architecture-matched tarball. The app-like entry point is `hauksbee serve`; desktop packaging remains platform-specific.
-- **CI:** use a release-pinned binary or container digest. Do not pin a moving branch or mutable tag for a hardware gate.
+- **CI:** use a release-pinned binary. Do not pin a moving branch or mutable tag for a hardware gate.
 
 Every downloadable asset has a neighbouring SHA-256 manifest. A beta release is accepted only when the downloaded bytes match that manifest and the binary reports the source commit named by the release.
 

@@ -8,7 +8,10 @@
 #                                 ~/.hauksbee/models override mechanism and docs)
 #   integrations/                 the GitHub Action, KiCad plugin, pre-commit hook
 #   examples/                     the hauksbee-ci specs + boards (runnable demos)
-#   scripts/                      install.sh / doctor.sh / ci.sh
+#   scripts/                      install.sh / doctor.sh / ci.sh /
+#                                 install-sims.sh / common.sh /
+#                                 simavr-payload-provenance.sh /
+#                                 simulator-provenance.py
 #   LICENSE, NOTICE               hauksbee's own Apache-2.0 terms + attribution
 #   LICENSE-BINARY.txt            what THIS binary is licensed under, and why
 #   VERSION, README-BUNDLE.txt    provenance + how to install
@@ -100,7 +103,7 @@ while [ $# -gt 0 ]; do
 done
 
 # ── shape -> feature flags + asset name suffix ───────────────────────────────
-# Two shapes ship on every release. `default` includes the avr backend and is
+# The beta ships one shape: `permissive`. `default` adds the avr backend and is
 # therefore a GPL-3.0 binary; `permissive` drops it and stays Apache-2.0.
 case "$SHAPE" in
   default)
@@ -375,23 +378,34 @@ install -m 0644 \
 mkdir -p "$ROOTDIR/examples"
 cp -R "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/." "$ROOTDIR/examples/ci-specs"
 [ -d "$HAUKSBEE_ROOT/examples" ] && cp -R "$HAUKSBEE_ROOT/examples/." "$ROOTDIR/examples/"
-mkdir -p "$ROOTDIR/examples/firmware"
-install -m 0644 "$HAUKSBEE_ROOT/testdata/firmware/boot_gate_a/boot_gate.hex" \
-  "$ROOTDIR/examples/firmware/boot_gate.hex"
-# The checkout-relative tracked spec points at testdata/. The bundle retains a
-# package-local copy so its documented example and runtime gate are self-contained.
-sed 's#firmware = "../../../testdata/firmware/boot_gate_a/boot_gate.hex"#firmware = "../firmware/boot_gate.hex"#' \
-  "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boot_gate_pass.toml" \
-  > "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
-perl -pi -e 's#hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass\.toml#hauksbee-ci run examples/ci-specs/boot_gate_pass.toml#' \
-  "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
+# The AVR boot-gate demo belongs only in a bundle whose binary carries the avr
+# backend. The permissive shape has none, so staging the fixture and rewriting
+# the spec there would ship a headline example that cannot run. Leave both out
+# instead; scripts/bundle-windows.ps1 already drops the spec from its zip.
+if [ "$SHAPE" = default ]; then
+  mkdir -p "$ROOTDIR/examples/firmware"
+  install -m 0644 "$HAUKSBEE_ROOT/testdata/firmware/boot_gate_a/boot_gate.hex" \
+    "$ROOTDIR/examples/firmware/boot_gate.hex"
+  # The checkout-relative tracked spec points at testdata/. The bundle retains a
+  # package-local copy so its documented example and runtime gate are self-contained.
+  sed 's#firmware = "../../../testdata/firmware/boot_gate_a/boot_gate.hex"#firmware = "../firmware/boot_gate.hex"#' \
+    "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boot_gate_pass.toml" \
+    > "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
+  perl -pi -e 's#hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass\.toml#hauksbee-ci run examples/ci-specs/boot_gate_pass.toml#' \
+    "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
+else
+  # The checkout-relative spec rode in with the `cp -R` of the whole examples
+  # directory above. Its firmware path escapes the tarball and no avr backend
+  # exists to run it, so drop it rather than ship a spec that fails on arrival.
+  rm -f "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
+fi
 # Drop python bytecode caches so the bundle is reproducible.
 find "$ROOTDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$ROOTDIR" -name '*.pyc' -delete 2>/dev/null || true
 
 # ── flagship-board gate ──────────────────────────────────────────────────────
-# The flagship board is private (see scripts/build-public-mirror.sh, whose
-# BOARD_EXCLUDE / BOARD_GLOB lists this mirrors). Its hauksbee-ci example specs
+# The flagship board is private and never enters a distributed source tree,
+# but its hauksbee-ci example specs
 # live in crates/hauksbee-ci/examples/ and would otherwise ride into every
 # bundle with the rest of the examples. The three known specs are dropped by
 # name; anything ELSE named after the board, anywhere in the staged tree, is a
@@ -545,6 +559,23 @@ is Apache-2.0 and carries no GPL code. Read LICENSE-BINARY.txt;
 the download without the -permissive suffix adds AVR co-sim and is GPL-3.0."
 fi
 
+# The examples note has to match what was actually staged: the permissive shape
+# packages no AVR fixture and no boot_gate_pass.toml, so promising a runnable
+# self-contained example there would be a lie the user discovers on first run.
+if [ "$SHAPE" = default ]; then
+  EXAMPLES_NOTE="NOTE: boot_gate_pass.toml and its tiny AVR fixture are package-local and
+self-contained. Other firmware-bearing specs (blinky, boot_gate_fail, and the
+lm75 thermostat variants) still reference firmware in the repository's large
+testdata tree; run those from a checkout. They remain canonical examples to copy."
+else
+  EXAMPLES_NOTE="NOTE: this download has no avr backend, so its AVR examples are absent rather
+than broken: boot_gate_pass.toml and its fixture are not packaged here. To run
+the AVR specs (boot_gate_pass, boot_gate_fail, blinky, and the lm75 thermostat
+variants), take a repository checkout, build simavr with
+scripts/install-sims.sh --avr, and build hauksbee from source. They remain
+canonical examples to copy."
+fi
+
 cat > "$ROOTDIR/README-BUNDLE.txt" <<EOF
 hauksbee ${VERSION} (${TARGET})
 built from git ${GIT_SHA_SHORT}
@@ -579,10 +610,7 @@ The binaries are self-contained (model db compiled in). Optional firmware
 backends (qemu, renode) are detected at runtime; run scripts/doctor.sh to see
 what is present.
 
-NOTE: boot_gate_pass.toml and its tiny AVR fixture are package-local and
-self-contained. Other firmware-bearing specs (blinky, boot_gate_fail, and the
-lm75 thermostat variants) still reference firmware in the repository's large
-testdata tree; run those from a checkout. They remain canonical examples to copy.
+${EXAMPLES_NOTE}
 EOF
 
 log "Writing tarball"

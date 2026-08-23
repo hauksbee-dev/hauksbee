@@ -51,7 +51,7 @@
     {"path": "integrations/kicad-plugin/metadata.json", "classification": "package-metadata", "occurrences": 3, "required_fragments": ["\"repository\": \"https://github.com/hauksbee-dev/hauksbee\""]},
     {"path": "integrations/pre-commit/README.md", "classification": "integration-documentation", "occurrences": 2},
     {"path": "scripts/bundle.sh", "classification": "release-artifact-metadata", "occurrences": 2, "required_fragments": ["Source: https://github.com/hauksbee-dev/hauksbee  commit ${GIT_SHA}"]},
-    {"path": "scripts/build-private-beta-snapshot.sh", "classification": "private-beta-snapshot-builder", "occurrences": 2, "scopes": ["development"]},
+    {"path": "scripts/build-private-beta-snapshot.sh", "classification": "private-beta-snapshot-builder", "occurrences": 6, "scopes": ["development"]},
     {"path": "scripts/check-private-container-publication.sh", "classification": "private-container-publication-guard", "occurrences": 1, "required_fragments": ["orgs/hauksbee-dev/packages/container/hauksbee"]},
     {"path": "scripts/get-hauksbee.ps1", "classification": "public-installer", "occurrences": 3, "required_fragments": ["$Repo = \"hauksbee-dev/hauksbee\""]},
     {"path": "scripts/get-hauksbee.sh", "classification": "public-installer", "occurrences": 5, "required_fragments": ["REPO=\"hauksbee-dev/hauksbee\""]},

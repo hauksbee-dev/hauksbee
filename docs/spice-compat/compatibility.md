@@ -16,11 +16,13 @@ Two mechanisms back this promise:
    [`results.md`](results.md) holds the living results table.
 
    Read that mechanism's reach precisely, because it is narrower than "every
-   supported card, in CI". It is **not in CI**: no workflow installs ngspice or
-   runs the check, so `ngspice_corpus` (`crates/hauksbee-solve/tests/ngspice.rs`)
-   executes on a developer machine that happens to have ngspice on `PATH` and
-   prints a skip notice otherwise. The published numbers in `results.md` come
-   from such a local run, not from a gate. Setting
+   supported card, on every push". It gates releases, not pushes: the
+   `release-quality` job in `.github/workflows/release.yml` installs ngspice and
+   runs `cargo test --workspace`, which executes `ngspice_corpus`
+   (`crates/hauksbee-solve/tests/ngspice.rs`). Anywhere without ngspice on
+   `PATH`, including an ordinary developer machine, that test prints a skip
+   notice instead, and the published numbers in `results.md` are transcribed
+   from a local run rather than emitted by the gate. Setting
    `HAUKSBEE_REQUIRE_NGSPICE=1` turns a missing oracle into a hard failure,
    which is what a runner that intends to gate on it should do.
 

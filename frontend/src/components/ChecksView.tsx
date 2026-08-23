@@ -2240,6 +2240,12 @@ export function ChecksView({
                         onClick={() => download('hauksbee-ci.yml', workflowYml)}>
                         Download hauksbee-ci.yml
                       </button>
+                      <div className="text-[12px] mt-2 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+                        The workflow reads one repository secret. Add{' '}
+                        <code className="hb-inline">HAUKSBEE_BETA_TOKEN</code> in Settings, a GitHub token
+                        with read access to the Hauksbee beta repository; the action stops on its first
+                        step without it.
+                      </div>
                     </>
                   ) : (
                     <div className="text-[12px] leading-relaxed" style={{ color: 'var(--warn)' }}>

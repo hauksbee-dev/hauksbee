@@ -39,9 +39,9 @@ Two entries in that table need reading carefully:
 
 Renode is MIT-licensed and Espressif QEMU is GPL-2.0. The normal tarballs and
 macOS app keep both as separately installed
-programs so the everyday download stays small. The optional private `:full`
-container deliberately bundles them for turnkey CI; it retains their exact
-license texts and a corresponding-source offer under
+programs so the everyday download stays small. The `:full` container image,
+which this beta does not publish, bundles them for turnkey CI; it retains
+their exact license texts and a corresponding-source offer under
 `/usr/share/doc/hauksbee/third-party/`. Outside that image, the same "detect,
 don't bundle" pattern used for the KiCad and ngspice oracles (see
 [`docs/cosim/ORACLES.md`](ORACLES.md)) applies. Tests skip cleanly when a
@@ -229,7 +229,7 @@ on the host; the output shape is:
 $ hauksbee doctor --backends
 hauksbee co-sim backends (resolved by the engine's own discovery)
     avr           ATmega / ATtiny firmware co-sim
-avr	builtin	simavr linked into this binary
+avr	disabled	not in this build (the permissive download drops the GPL simavr backend)
     qemu-xtensa   ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)
 qemu-xtensa	ok	<path-to-qemu-system-xtensa>
     qemu-riscv32  ESP32-C3 firmware co-sim (Espressif QEMU fork)
@@ -237,6 +237,8 @@ qemu-riscv32	ok	<path-to-qemu-system-riscv32>
     renode        STM32 / nRF52840 / RISC-V firmware co-sim
 renode	ok	<path-to-renode>
 ```
+
+That `avr` line is the permissive shape's; a source build with `scripts/install-sims.sh --avr` reports `avr	builtin	simavr linked into this binary` instead.
 
 The indented lines are the human header on stderr; the flush lines are the
 machine-readable report on stdout. A backend that resolves to mainline QEMU is

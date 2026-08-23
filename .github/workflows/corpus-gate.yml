@@ -124,6 +124,18 @@ jobs:
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
 
+      # The gate below runs under HAUKSBEE_REQUIRE_CORPUS=1, and the Gerber
+      # closed-loop floors in hauksbee-extract treat a missing kicad-cli as a
+      # failure under that flag rather than a skip. A bare runner ships no
+      # KiCad, so install the calibrated major from the KiCad PPA (the floors
+      # record the kicad-cli release they were measured against).
+      - name: Install KiCad for the Gerber closed-loop floors
+        run: |
+          sudo add-apt-repository -y ppa:kicad/kicad-9.0-releases
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends kicad
+          kicad-cli version
+
       # One test at a time, for the emulators only.
       #
       # The scratch-directory races that made this suite fail in a different

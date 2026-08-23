@@ -69,7 +69,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
   if ! have clang; then
     die "clang not found, and the default build needs it (bindgen over the simavr headers).
     Install it (Xcode CLT on macOS: xcode-select --install; Debian/Ubuntu: apt install clang libclang-dev),
-    or build without the avr backend: cargo build --release --no-default-features --features renode,qemu"
+    or build without the avr backend: cargo build --release --no-default-features --features renode,qemu,serve,embed-web"
   fi
   _simavr_prefix="/usr/local"
   [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && _simavr_prefix="/opt/homebrew"
@@ -78,7 +78,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
     die "libsimavr.a not found (looked for $_simavr_lib), and the default build links it.
     Either install it first:   scripts/install-sims.sh --avr
     or point at an existing install:   SIMAVR_INCLUDE_DIR=<prefix>/include SIMAVR_LIB_DIR=<prefix>/lib scripts/install.sh
-    or build without the avr backend:  cargo build --release --no-default-features --features renode,qemu"
+    or build without the avr backend:  cargo build --release --no-default-features --features renode,qemu,serve,embed-web"
   fi
 
   # Build the web front door bundle first. `hauksbee serve` serves
