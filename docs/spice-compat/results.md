@@ -30,8 +30,8 @@ deck here at all.
 | bjt_sgp_high_injection | op | `I(VC)` | 7.445e-6 | 2.0e-4 | 27x | op | PASS |
 |  |  | `I(VB)` | 7.212e-6 | 2.0e-4 | 28x | op | PASS |
 | bjt_switch_tail | tran | `V(c)` | 3.362e-5 | 1.0e-3 | 30x | t=2.045e-6s | PASS |
-| bsource_clamp | tran | `V(out)` | 1.037e-4 | 5.0e-3 | 48x | t=6.614e-4s | PASS |
-| bsource_opamp_subckt | tran | `V(out)` | 1.016e-4 | 5.0e-3 | 49x | t=1.436e-3s | PASS |
+| bsource_clamp | tran | `V(out)` | 1.037e-4 | 2.5e-3 | 24x | t=6.614e-4s | PASS |
+| bsource_opamp_subckt | tran | `V(out)` | 1.016e-4 | 2.0e-3 | 20x | t=1.436e-3s | PASS |
 | bsource_time | tran | `V(out)` | 2.334e-4 | 1.0e-2 | 43x | t=3.654e-6s | PASS |
 | cap_ic_uic_decay | tran | `V(out)` | 2.000e-4 | 1.0e-3 | 5x | t=0.000e0s | PASS |
 |  |  | `V(out) vs closed form` | 0.000e0 | 1.0e-9 | exact | t=0.000e0 | PASS |
@@ -42,7 +42,7 @@ deck here at all.
 | cccs_subckt | tran | `V(out)` | 1.873e-4 | 5.0e-3 | 27x | t=1.644e-6s | PASS |
 | ccvs_transres | tran | `V(out)` | 8.614e-3 | 1.0e-2 | 1x | t=9.225e-6s | PASS |
 | cj2301_rdson | op | `V(d)` | 9.710e-8 | 2.0e-6 | 21x | op | PASS |
-| diode_iv_dc | dc | `V(d)` | 1.094e-4 | 5.0e-3 | 46x | sweep=8.500e-1 | PASS |
+| diode_iv_dc | dc | `V(d)` | 1.094e-4 | 2.5e-3 | 23x | sweep=8.500e-1 | PASS |
 |  |  | `V(a,d)` | 9.617e-4 | 2.0e-2 | 21x | sweep=6.500e-1 | PASS |
 | diode_op | op | `V(d)` | 4.556e-6 | 1.0e-4 | 22x | op | PASS |
 |  |  | `I(V1)` | 5.018e-7 | 2.0e-5 | 40x | op | PASS |
@@ -71,7 +71,7 @@ deck here at all.
 |  |  | `V(g)` | 7.108e-2 | 1.5e-1 | 2x | t=5.110e-6s | PASS |
 | rc_ac_bode | ac | `V(out) mag` | 2.760e-7 | 1.0e-5 | 36x | f=1.259e4Hz | PASS |
 |  |  | `V(out) phase(deg)` | 2.706e-4 | 1.0e-2 | 37x | f=2.512e5Hz | PASS |
-| rc_ic_decay | tran | `V(out)` | 1.000e-4 | 5.0e-3 | 50x | t=0.000e0s | PASS |
+| rc_ic_decay | tran | `V(out)` | 1.000e-4 | 2.0e-3 | 20x | t=0.000e0s | PASS |
 | rc_ladder | tran | `V(n8)` | 7.200e-4 | 1.0e-2 | 14x | t=3.118e-5s | PASS |
 | rc_lowpass | tran | `V(out)` | 8.912e-4 | 1.0e-2 | 11x | t=1.396e-6s | PASS |
 | resistor_divider | op | `V(out)` | 7.500e-10 | 1.0e-6 | 1333x | op | PASS |
