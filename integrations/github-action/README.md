@@ -94,14 +94,15 @@ found, rather than silently changing which gate runs.
 | `registry-user`    | no       | derived                  | GHCR username for `use-image`; App installation tokens derive `x-access-token`, PATs derive `github.actor`. Set it when a PAT belongs to another user. |
 | `hauksbee-version` | with `use-image`; otherwise no | (empty) | Release version for a prebuilt binary or image. Image mode uses its immutable Docker digest record; non-image mode can auto-detect. |
 | `prefer-prebuilt` | no       | `true`                   | Download a prebuilt release binary when available, else build from source.  |
-| `use-image`       | no       | `false`                  | Run from the published Docker image instead of a binary; skips the download and build paths entirely. |
-| `image`           | no | `ghcr.io/hauksbee-dev/hauksbee:slim` | `slim`/`full` selector or immutable canonical digest. The Action resolves selectors through the selected release's immutable Docker manifest and verifies its OCI revision. |
+| `use-image`       | no       | `false`                  | Run from a published Docker image instead of a binary; skips the download and build paths entirely. Not usable in the beta: no image is published. |
+| `image`           | no | `ghcr.io/hauksbee-dev/hauksbee:slim` | `slim`/`full` selector or immutable canonical digest. The Action resolves selectors through the selected release's immutable Docker manifest and verifies its OCI revision. Unused in the beta, which publishes no image. |
 
 The source fallback deliberately builds `--no-default-features --features
 renode,qemu`, because stock hosted runners do not carry the GPL system
-libsimavr dependency. AVR co-simulation therefore requires a prebuilt bundle
-or image; selecting AVR after a source fallback fails explicitly rather than
-pretending that backend is present.
+libsimavr dependency. AVR co-simulation is not available through the Action in
+the beta: it publishes neither a prebuilt AVR bundle nor an image, so selecting
+AVR fails explicitly rather than pretending that backend is present. Build from
+source and run `scripts/install-sims.sh --avr` if you need it.
 
 ## Outputs
 
@@ -190,6 +191,7 @@ All third-party actions used internally are pinned to full commit SHAs.
 
 To make the prebuilt path available, push a `vX.Y.Z` tag so the release
 workflow attaches binaries. Before a release exists the Action can still build
-the Renode/QEMU or static-check paths from source. AVR co-simulation needs the
-prebuilt bundle or image described above; it fails explicitly rather than
-presenting a source-only run as equivalent.
+the Renode/QEMU or static-check paths from source. AVR co-simulation is not
+available through the Action in the beta, which publishes neither a prebuilt
+AVR bundle nor an image; it fails explicitly rather than presenting a
+source-only run as equivalent.

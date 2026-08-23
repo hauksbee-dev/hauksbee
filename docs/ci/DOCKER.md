@@ -1,5 +1,9 @@
 # Docker
 
+**The private beta publishes no container images.** `docker.yml` runs only by
+manual dispatch, so every tag and digest on this page describes a candidate
+build you produce yourself, not an asset attached to a beta release.
+
 hauksbee ships two container images. Both are multi-arch (`linux/amd64` and
 `linux/arm64`) and both carry the prebuilt `hauksbee` and `hauksbee-ci`
 binaries plus the reference model database, so nothing is compiled at run time.
@@ -14,9 +18,9 @@ gain). Run that from a normal checkout when you want the live viewer.
 | slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, the linked-in simavr (the AVR microcontroller emulator) | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim (running firmware on the emulated MCU against the live analog solve). The everyday CI image. |
 | full | `ghcr.io/hauksbee-dev/hauksbee:full` | Everything in slim, plus Renode, the Espressif QEMU fork, and freerouting (with a JRE) | STM32 / nRF52840 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU), and production autorouting of recompiled boards (freerouting). |
 
-Release images use versioned tags such as `:slim-0.1.0-beta.1` and
-`:full-0.1.0-beta.1`. Use the immutable digest from the matching release for
-reproducible CI; floating tags are not release evidence.
+A published release would use versioned tags such as `:slim-0.1.0-beta.1` and
+`:full-0.1.0-beta.1`. The beta attaches none, so pin the immutable digest of
+the candidate build you pushed; floating tags are never evidence.
 
 ### Why two
 
@@ -55,16 +59,16 @@ CI runner). The bundled example boards live inside the image, under the
 binaries' embedded data. The boards and specs you check usually come from
 your own repo, mounted in.
 
-The images are public only after the owner publishes the GHCR package. During
-beta, or when using a private mirror or GitHub Enterprise registry, authenticate
-with a package-read token before pulling (`docker login ghcr.io`):
+No beta release publishes these images, so there is nothing to pull
+anonymously. Authenticate against the registry holding your own candidate
+build before pulling (`docker login ghcr.io`):
 
 ```bash
 docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee run path/to/board.kicad_pcb --report
 ```
 
-(For reproducible CI, use the immutable digest from the matching release rather
+(For reproducible CI, pin the immutable digest of the build you pushed rather
 than a moving tag.)
 
 Report a board (the bind report table):
@@ -140,8 +144,9 @@ back to `cargo build`.
 
 ## How the images are built
 
-`.github/workflows/docker.yml` builds and pushes the images on a release tag
-(the same `v*` tag that drives `release.yml`). It uses the standard
+`.github/workflows/docker.yml` builds and pushes the images. In this beta the
+tag-push trigger is removed and the workflow runs only by manual dispatch. It
+uses the standard
 `docker/setup-qemu-action` + `docker/setup-buildx-action` +
 `docker/login-action` + `docker/build-push-action` chain and pushes multi-arch
 manifests to GHCR.

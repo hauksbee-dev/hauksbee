@@ -132,8 +132,9 @@ foreach ($binary in $requiredBinaries) {
 # Ask the binary that will be packaged. A filename is not evidence that the
 # GPL AVR backend stayed out of the Windows artifact.
 $doctor = & (Join-Path $targetPath "hauksbee.exe") doctor 2>&1 | Out-String
-# `doctor` exits nonzero when an external backend is absent, which is normal on
-# a bare release runner. The compile-time AVR line is the shape assertion.
+# `doctor` exits zero even when an external backend is absent (normal on a
+# bare release runner) and prints one tab-separated `name status detail` row
+# per backend. The compile-time AVR row is the shape assertion.
 if ($doctor -notmatch '(?m)^avr\s+disabled\b') {
     throw "Windows releases are permissive-only, but hauksbee doctor did not report 'avr disabled':`n$doctor"
 }

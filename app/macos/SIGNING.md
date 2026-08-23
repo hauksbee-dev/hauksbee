@@ -106,8 +106,9 @@ To make the warning disappear entirely the release pipeline needs:
    ```sh
    codesign --force --options runtime --timestamp \
      --sign "Developer ID Application: <NAME> (<TEAMID>)" \
-     Hauksbee.app/Contents/MacOS/hauksbee \
-     Hauksbee.app/Contents/MacOS/hauksbee-ci
+     Hauksbee.app/Contents/Resources/bin/hauksbee \
+     Hauksbee.app/Contents/Resources/bin/hauksbee-ci \
+     Hauksbee.app/Contents/Resources/bin/hauksbee-mcp
    codesign --force --options runtime --timestamp \
      --sign "Developer ID Application: <NAME> (<TEAMID>)" Hauksbee.app
    ```
