@@ -3661,17 +3661,29 @@ fn main {
     #[test]
     fn load_board_accepts_a_gerber_zip() {
         // B5: a spec may point straight at the fab archive. Corpus-gated like
-        // the engine's gerber tests: skips when board-corpus is absent.
-        let src = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-            .unwrap_or_default()
-            .join("famous/uconsole_cm4_adapter_gerber");
-        if !src.exists() {
-            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-                panic!("corpus required but uconsole_cm4_adapter_gerber missing");
-            }
-            eprintln!("skipping CI gerber-zip test (corpus absent)");
+        // the engine's gerber tests, including their licence rule: ClockworkPi
+        // publishes this adapter with no licence statement, so corpus.toml
+        // marks it `license_confirmed = false` and scripts/fetch-corpus.sh
+        // skips it by default. HAUKSBEE_REQUIRE_CORPUS therefore must not
+        // demand it (the nightly gate sets that flag and fetches the default
+        // set); only the explicit uConsole opt-in makes its absence a failure,
+        // exactly as in crates/hauksbee-extract/tests/gerber_uconsole.rs.
+        let Some(src) = hauksbee_testkit::corpus_board(
+            env!("CARGO_MANIFEST_DIR"),
+            "famous/uconsole_cm4_adapter_gerber",
+        ) else {
+            assert!(
+                std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_err(),
+                "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
+            );
+            eprintln!(
+                "NOT RUN  CI gerber-zip test: uconsole_cm4_adapter_gerber is not in \
+                 the default fetch (licence unconfirmed). Fetch with \
+                 --include-unconfirmed and set HAUKSBEE_REQUIRE_UCONSOLE_CORPUS=1 \
+                 to make this mandatory."
+            );
             return;
-        }
+        };
         use std::io::Write;
         let dir = std::env::temp_dir().join(format!("hauksbee-ci-gerb-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

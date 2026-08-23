@@ -229,7 +229,7 @@ on the host; the output shape is:
 $ hauksbee doctor --backends
 hauksbee co-sim backends (resolved by the engine's own discovery)
     avr           ATmega / ATtiny firmware co-sim
-avr	disabled	not in this build (the permissive download drops the GPL simavr backend)
+avr	disabled	not in this build (the permissive, BETA-LICENSE.txt download drops the GPL simavr backend). For AVR co-sim, build from source with libsimavr (scripts/install-sims.sh --avr)
     qemu-xtensa   ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)
 qemu-xtensa	ok	<path-to-qemu-system-xtensa>
     qemu-riscv32  ESP32-C3 firmware co-sim (Espressif QEMU fork)
