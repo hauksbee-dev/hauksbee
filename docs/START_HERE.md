@@ -31,7 +31,9 @@ curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/
 Windows x64 uses the PowerShell twin
 (`irm .../scripts/get-hauksbee.ps1 | iex`), and CI can pull
 the public GHCR package after it is published; see
-[DOCKER](ci/DOCKER.md).
+[DOCKER](ci/DOCKER.md). During the private beta those raw URLs need
+credentials, so use the authenticated installer commands in the
+[README](../README.md) instead.
 
 From a macOS/Linux checkout, check simulator prerequisites, then build and
 install the web front door and binaries:
