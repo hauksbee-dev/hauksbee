@@ -885,10 +885,11 @@ fn write_results_md(results: &[DeckResult], ng_version: &str) {
          ngspice `-b` and the hauksbee solver, then compares the worst-case error per\n\
          probe against the per-quantity tolerance declared in that deck's\n\
          `expect.toml`.\n\n\
-         This check is not part of CI: it runs where ngspice is installed and skips\n\
-         otherwise, so the numbers below are from whichever machine last regenerated\n\
-         the file. The oracle version is that run's ngspice, not a pinned\n\
-         requirement, and a different ngspice may move the worst-case columns.\n\
+         This differential corpus runs wherever ngspice is installed, including the\n\
+         release-quality job, and skips otherwise, so the numbers below are from\n\
+         whichever machine last regenerated the file. The oracle version is that run's\n\
+         ngspice, not a pinned requirement, and a different ngspice may move the\n\
+         worst-case columns.\n\
          `docs/spice-compat/compatibility.md` lists the supported cards that have no\n\
          deck here at all.\n\n",
     );
