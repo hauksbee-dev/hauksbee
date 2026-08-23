@@ -33,7 +33,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 PORT=8091
 BUILD_FLAG=""          # passed through to bundle.sh (e.g. --no-build)
-TAG="v0.1.0"
+# Default to the workspace version so the mock tracks Cargo.toml; --version overrides.
+TAG="v$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -n 1)"
 
 SHAPE="default"
 while [ $# -gt 0 ]; do

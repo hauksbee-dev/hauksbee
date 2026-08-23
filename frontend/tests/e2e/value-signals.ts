@@ -7,6 +7,8 @@
  * imports these rather than carrying second copies.
  */
 
+import { isAbsolute } from 'node:path'
+
 /** What the gate pairs with one board, or null where it paired nothing. */
 export interface FirmwarePlan {
   path: string
@@ -80,7 +82,7 @@ export function parseFirmwarePlan(raw: string, boardCount: number): (FirmwarePla
     const item = entry as Record<string, unknown>
     const path = item.path
     const expect = item.expect ?? 'cosim'
-    if (typeof path !== 'string' || !path.startsWith('/')) {
+    if (typeof path !== 'string' || !isAbsolute(path)) {
       throw new Error(`HB_FIRMWARE_FILES[${index}] needs an absolute path`)
     }
     if (expect !== 'cosim' && expect !== 'load-only') {

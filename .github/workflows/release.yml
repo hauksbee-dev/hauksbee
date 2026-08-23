@@ -944,6 +944,16 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-03
 
+      # The pinned Espressif QEMU binaries are dynamically linked against
+      # pixman, SDL2 and libslirp, none of which a bare ubuntu-24.04 runner
+      # carries; without them install-sims.sh cannot even run `-machine help`
+      # to verify the fork.
+      - name: Install Linux simulator runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libglib2.0-0t64 libpixman-1-0 libsdl2-2.0-0 libslirp0
+
       - name: Install macOS simulator runtime dependencies
         if: runner.os == 'macOS'
         run: brew install glib pixman libslirp libgcrypt
