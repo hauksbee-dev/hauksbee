@@ -262,8 +262,16 @@ jobs:
       - name: refuse modified installed simulator payloads
         shell: powershell
         run: .\scripts\test-windows-simulator-integrity.ps1
+      # `--test-threads=1` is Windows-runner load management, not a smaller
+      # test set: every test still runs, one at a time. Several of these tests
+      # spawn a whole emulator (Renode's .NET host, QEMU) as a child process,
+      # and on this 4-core runner two Renode instances running concurrently is
+      # exactly the configuration that killed one of them mid-run (both TCP
+      # bridges reset with os error 10054, sensor_attach's cold leg in the
+      # v0.1.0-beta.1 release run) while the same co-sims pass one at a time.
+      # corpus-gate.yml serializes its emulator suites for the same reason.
       - name: native engine, CI, and emulator-lifecycle tests
-        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
+        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu -- --test-threads=1
       - name: require three real firmware-through-emulator flows
         shell: pwsh
         run: |
