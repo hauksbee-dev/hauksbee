@@ -113,6 +113,17 @@ jobs:
       - name: Run release-required firmware integrations
         run: python3 scripts/run_required_integrations.py
 
+      # The gate below builds with --features avr, which links libsimavr;
+      # provision it the same way ci.yml does or hauksbee-mcu's build script
+      # fails closed before a single board is simulated.
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
+
       # One test at a time, for the emulators only.
       #
       # The scratch-directory races that made this suite fail in a different
