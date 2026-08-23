@@ -62,8 +62,12 @@ fn relative_path_arguments_are_made_independent_of_the_replay_cwd() {
         std::path::PathBuf::from("models"),
     ];
     let got = absolutize_argv_paths(argv, base, &paths);
-    assert_eq!(got[2], "/project/boards/main.kicad_pcb");
-    assert_eq!(got[3], "--models-dir=/project/models");
+    // The joined form carries the host separator, so the expectation is
+    // built the same way rather than spelled as a POSIX literal.
+    let board = base.join("boards/main.kicad_pcb").display().to_string();
+    let models = base.join("models").display().to_string();
+    assert_eq!(got[2], board);
+    assert_eq!(got[3], format!("--models-dir={models}"));
     assert_eq!(got[4], "--report");
 }
 
