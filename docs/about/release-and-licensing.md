@@ -60,7 +60,7 @@ So the check asks the binary what it can do. `hauksbee doctor` reports the co-si
 | Shape      | `hauksbee doctor` avr line                                                                                                                                                                                                                   |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | default    | `avr` `builtin` "simavr linked into this binary; source commit <immutable 40-hex revision>"                                                                                                                                                  |
-| permissive | `avr` `disabled` "not in this build (the permissive, Apache-2.0 download drops the GPL simavr backend). For AVR co-sim, install the default (GPL-3.0) download instead, or build from source with libsimavr (scripts/install-sims.sh --avr)" |
+| permissive | `avr` `disabled` "not in this build (the permissive, Apache-2.0 download drops the GPL simavr backend). For AVR co-sim, build from source with libsimavr (scripts/install-sims.sh --avr)" |
 
 
 `scripts/bundle.sh` runs that check on every build and **refuses to package** a bundle whose answer does not match its `--shape`, in either direction. It lives in `bundle.sh` rather than only in the workflow so a local build gets the same guarantee as a release build, and so no tarball can exist without having passed.

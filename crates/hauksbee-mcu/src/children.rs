@@ -459,6 +459,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_kill_all_uses_registered_job_handles() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut command = std::process::Command::new("cmd");
         command.args(["/C", "ping -n 30 127.0.0.1 > NUL"]);
         let (mut child, guard) = spawn_owned(&mut command).expect("spawn in kill-on-close job");
@@ -471,6 +472,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_reaped_child_teardown_uses_owned_job() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut command = std::process::Command::new("cmd");
         command.args(["/C", "exit 0"]);
         let (mut child, guard) = spawn_owned(&mut command).expect("spawn in owned job");
