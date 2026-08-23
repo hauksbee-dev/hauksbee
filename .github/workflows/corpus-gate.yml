@@ -102,13 +102,15 @@ jobs:
           key: required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/required-simulator-versions.env', 'scripts/renode-checksums.txt', 'scripts/espressif-qemu-checksums.txt') }}
 
       # The pinned Espressif QEMU binaries are dynamically linked against
-      # pixman, SDL2 and libslirp, none of which a bare ubuntu-24.04 runner
-      # carries; without them install-sims.sh cannot run `-machine help` to
-      # verify the fork and reports a genuine archive as "not the fork".
+      # pixman, SDL2, libslirp and libgcrypt. The first three are missing from
+      # a bare ubuntu-24.04 runner; libgcrypt is usually present only because apt
+      # itself depends on it, so declare it rather than ride on that accident.
+      # Without them install-sims.sh cannot run `-machine help` to verify the
+      # fork and reports a genuine archive as "not the fork".
       - name: Install simulator runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libglib2.0-0t64 libpixman-1-0 libsdl2-2.0-0 libslirp0
+          sudo apt-get install -y --no-install-recommends libglib2.0-0t64 libpixman-1-0 libsdl2-2.0-0 libslirp0 libgcrypt20
 
       - name: Run release-required firmware integrations
         run: python3 scripts/run_required_integrations.py
