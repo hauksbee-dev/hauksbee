@@ -1070,7 +1070,13 @@ fn run_streaming(
             use std::io::BufRead;
             let reader = std::io::BufReader::new(pipe);
             for line in reader.lines() {
-                let Ok(line) = line else { break };
+                let Ok(mut line) = line else { break };
+                // BufRead::lines strips the \n but keeps a Windows child's
+                // \r; without this every relayed line and error tail carries
+                // a stray carriage return on Windows.
+                if line.ends_with('\r') {
+                    line.pop();
+                }
                 if tx.send(line).is_err() {
                     break;
                 }
@@ -1403,7 +1409,10 @@ echo "codex-cli 0.0.0""#,
         for id in ["ngspice", "kicad-cli"] {
             let err = install_dep(id, &mut |_| {}).expect_err("manual-only id");
             assert!(
-                err.contains("brew") || err.contains("apt") || err.contains("kicad.org"),
+                err.contains("brew")
+                    || err.contains("apt")
+                    || err.contains("kicad.org")
+                    || err.contains("ngspice.sourceforge.io"),
                 "{id} refusal must carry the manual command: {err}"
             );
         }
@@ -1424,7 +1433,14 @@ echo "codex-cli 0.0.0""#,
     /// is the regression here).
     #[test]
     fn failure_carries_the_output_tail() {
+        // One POSIX and one PowerShell script: shell_command picks the
+        // matching interpreter, and PowerShell parses neither `>&2` nor a
+        // bare `&`.
+        #[cfg(not(windows))]
         let cmd = shell_command("echo starting; echo 'the disk is full' >&2; exit 3");
+        #[cfg(windows)]
+        let cmd =
+            shell_command("echo starting; [Console]::Error.WriteLine('the disk is full'); exit 3");
         let mut lines = Vec::new();
         let err = run_streaming(
             cmd,
@@ -1515,7 +1531,10 @@ echo "codex-cli 0.0.0""#,
 
     #[test]
     fn success_streams_and_returns_ok() {
+        #[cfg(not(windows))]
         let cmd = shell_command("echo one; echo two >&2; exit 0");
+        #[cfg(windows)]
+        let cmd = shell_command("echo one; [Console]::Error.WriteLine('two'); exit 0");
         let mut lines = Vec::new();
         run_streaming(
             cmd,
