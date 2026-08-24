@@ -27,3 +27,11 @@ ae8170fe46bcdfa54a7c0d7afcdb7a066711991be680f72ff7bbc6c4ae3ad88f  qemu-xtensa-so
 a47c38c6e2eb9f5028eda9585dce999ce02b8983a2cdf71c48cfb10a14ae25fe  qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-x86_64-apple-darwin.tar.xz
 a9f7b98636008edcf7a11c96f10b3a3ec83c2a890fc54c3e3ceb3ec9edace427  qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-aarch64-linux-gnu.tar.xz
 547f03e04701a92cbb699f7f7d015adc1f5b5ef93cbb94c0dd9b7107e2d84e77  qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz
+
+# Espressif's 20260417 x86_64-apple-darwin archives above are mislabeled
+# upstream (arm64 binaries inside), so Intel macOS pins the 20250817 release
+# of the same QEMU 9.2.2 fork; see required-simulator-versions.env. Measured
+# 2026-08-24 by downloading both assets from that release and hashing with
+# `shasum -a 256`.
+00b9dbc2124cf7633cb86f264fbc524226ad4001bce68bbdba43c9bdc4eb026e  qemu-xtensa-softmmu-esp_develop_9.2.2_20250817-x86_64-apple-darwin.tar.xz
+820028ee7cd2dd8fe8cd8ca5519ab6e792d15fea9367c4525cf63c0f707c0b1f  qemu-riscv32-softmmu-esp_develop_9.2.2_20250817-x86_64-apple-darwin.tar.xz

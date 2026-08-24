@@ -56,6 +56,19 @@ pub const ESP_QEMU_REPO: &str = "espressif/qemu";
 /// reached to resolve `releases/latest`. Verified live on 2026-07-10.
 pub const FALLBACK_TAG: &str = "esp-develop-9.2.2-20260417";
 
+/// What Intel macOS installs instead of `BROKEN_INTEL_MAC_TAG` (a private
+/// sibling constant naming the mislabeled release): the
+/// previous release of the same QEMU 9.2.2 fork, whose `x86_64-apple-darwin`
+/// archives contain genuine x86_64 binaries.
+pub const INTEL_MAC_FALLBACK_TAG: &str = "esp-develop-9.2.2-20250817";
+
+/// This release's `x86_64-apple-darwin` archives are mislabeled upstream:
+/// both the xtensa and riscv32 tarballs contain arm64 binaries (verified
+/// with `file(1)`; a real Intel Mac refuses to exec them with "Bad CPU type
+/// in executable"). scripts/required-simulator-versions.env carries the same
+/// override for the pinned-CI installer.
+const BROKEN_INTEL_MAC_TAG: &str = "esp-develop-9.2.2-20260417";
+
 /// Where the installer unpacks: `~/.hauksbee-qemu-esp`. The binaries land in
 /// `<root>/qemu/bin/`, which is the first conventional location `find_qemu`
 /// checks.
@@ -287,6 +300,18 @@ pub fn plan(arches: &[QemuArch], progress: &mut dyn FnMut(&str)) -> Result<Insta
             ));
             (FALLBACK_TAG.to_string(), None)
         }
+    };
+    // Reroute Intel Macs off the release whose x86_64 archives are mislabeled
+    // (see BROKEN_INTEL_MAC_TAG); asset names for the replacement release are
+    // constructed, and its own published checksum manifest is fetched below.
+    let (tag, listed_names) = if triple == "x86_64-apple-darwin" && tag == BROKEN_INTEL_MAC_TAG {
+        progress(&format!(
+            "release {tag} ships arm64 binaries in its x86_64-apple-darwin archives; \
+             installing {INTEL_MAC_FALLBACK_TAG} instead"
+        ));
+        (INTEL_MAC_FALLBACK_TAG.to_string(), None)
+    } else {
+        (tag, listed_names)
     };
     progress(&format!("release: {tag}"));
 
