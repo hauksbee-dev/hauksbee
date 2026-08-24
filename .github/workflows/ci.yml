@@ -30,6 +30,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Keep compiler warnings fatal in the test pass now that Clippy no longer
+  # recompiles test-only targets merely to enforce their warning boundary.
+  RUSTFLAGS: -D warnings
   # A failing test should print its assertion, not spend a minute on backtraces.
   RUST_BACKTRACE: 1
 
@@ -95,6 +98,8 @@ jobs:
         run: python3 scripts/check-package-includes.py
       - name: prove change-aware CI remains fail-closed
         run: python3 scripts/test_ci_change_plan.py
+      - name: prove bundled integration tests retain every source file
+        run: python3 scripts/test-integration-test-bundles.py
 
   clippy:
     name: cargo clippy
@@ -117,15 +122,20 @@ jobs:
           key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
-      # The preceding full run failed in this public-fixture integration test.
-      # Keep the exact regression first until another failure replaces it: this
-      # catches a recurrence before the broad workspace build, while the full
-      # foundations shard below still reruns it as part of release coverage.
-      - name: rerun the last failed test first
-        run: cargo test --locked -p hauksbee-ci --test spec_and_assertions -- --nocapture
+      # Run recent failures before the broad workspace lint. The full shards
+      # below still rerun them as part of release coverage.
+      - name: rerun recent failed tests first
+        run: |
+          cargo test --locked -p hauksbee-models --lib relevance_selection_ -- --nocapture
+          cargo test --locked -p hauksbee-mcu --lib hostserial::tests::pty_peer_close_after_probe_cannot_deliver_output_to_the_guard -- --exact --nocapture
+          cargo test --locked -p hauksbee-ci --test spec_and_assertions -- --nocapture
       # The allow-list of known findings lives in Cargo.toml's
       # [workspace.lints.clippy]. Anything outside it fails here.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Tests are compiled and executed by the test jobs with warnings denied;
+      # asking Clippy to compile hundreds of integration executables here made
+      # the same test graph pay a second compiler/link pass. Clippy owns shipped
+      # targets; cargo test owns test targets.
+      - run: cargo clippy --workspace --lib --bins --examples -- -D warnings
 
   no-default-engine:
     name: engine without default features
@@ -144,10 +154,11 @@ jobs:
       # Keep the core static-analysis build honest. This catches accidental
       # simulator-only dependencies and runs the same behavioral tests, including
       # the real watch-loop contract, in the smallest supported feature shape.
-      # `cargo clippy --all-targets` performs the compile-only check as well as
-      # the lint pass. Running `cargo check` immediately before it compiled the
+      # Clippy checks the no-default production cfg arms, while cargo test below
+      # compiles and executes every test target with compiler warnings denied.
+      # Running `cargo check` immediately before these compiled the
       # identical feature graph twice without adding a distinct assertion.
-      - run: cargo clippy -p hauksbee-engine --no-default-features --all-targets -- -D warnings
+      - run: cargo clippy -p hauksbee-engine --no-default-features --lib --bins --examples -- -D warnings
       - run: cargo test -p hauksbee-engine --no-default-features --all-targets
 
   test:
@@ -233,11 +244,13 @@ jobs:
     needs: [plan, test]
     if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
     runs-on: windows-latest
-    timeout-minutes: 60
+    # Measured on warm caches: ~45 min of serialized native tests, then the
+    # firmware flows, front-door build, release-profile binaries (~35 min,
+    # not covered by the dev-profile cache), and the drag-and-drop proof.
+    # 60 minutes could never fit the full step list; 150 guards hangs
+    # without killing an honest pass.
+    timeout-minutes: 150
     env:
-      # A Windows-only unused variable or cfg arm is a portability defect, not
-      # a warning to scroll past. The local GNU cross-check runs with this too.
-      RUSTFLAGS: -D warnings
       # The Windows artifact is permissive-only. If avr leaks into the feature
       # graph, build.rs must fail rather than finding an accidental runner copy.
       SIMAVR_INCLUDE_DIR: C:\nonexistent\simavr-must-not-be-linked
