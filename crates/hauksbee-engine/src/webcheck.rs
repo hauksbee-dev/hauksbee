@@ -927,21 +927,38 @@ kind = "no_faults"
     fn chatty_child_output_is_drained_not_deadlocked() {
         let _serial = serial_guard();
         let dir = tempfile::tempdir().expect("tempdir");
-        let stub = dir.path().join("hauksbee-ci");
         // 4000 lines x 50 bytes ~ 200 KiB per stream, far past the pipe buffer.
-        std::fs::write(
-            &stub,
-            "#!/bin/sh\n\
-             i=0; while [ $i -lt 4000 ]; do echo \"stderr filler line $i ................................\" >&2; i=$((i+1)); done\n\
-             i=0; while [ $i -lt 4000 ]; do echo \"stdout filler line $i ................................\"; i=$((i+1)); done\n\
-             echo '{\"ok\":true,\"passed\":true,\"results\":[{\"kind\":\"no_faults\"}]}'\n",
-        )
-        .expect("write stub");
+        // A shell script on unix; a batch file on Windows, because
+        // CreateProcess execs only real executables and cmd batch files are
+        // the one script form std::process spawns directly.
         #[cfg(unix)]
-        {
+        let stub = {
+            let stub = dir.path().join("hauksbee-ci");
+            std::fs::write(
+                &stub,
+                "#!/bin/sh\n\
+                 i=0; while [ $i -lt 4000 ]; do echo \"stderr filler line $i ................................\" >&2; i=$((i+1)); done\n\
+                 i=0; while [ $i -lt 4000 ]; do echo \"stdout filler line $i ................................\"; i=$((i+1)); done\n\
+                 echo '{\"ok\":true,\"passed\":true,\"results\":[{\"kind\":\"no_faults\"}]}'\n",
+            )
+            .expect("write stub");
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+            stub
+        };
+        #[cfg(windows)]
+        let stub = {
+            let stub = dir.path().join("hauksbee-ci.bat");
+            std::fs::write(
+                &stub,
+                "@echo off\r\n\
+                 for /L %%i in (1,1,4000) do echo stderr filler line %%i ................................ 1>&2\r\n\
+                 for /L %%i in (1,1,4000) do echo stdout filler line %%i ................................\r\n\
+                 echo {\"ok\":true,\"passed\":true,\"results\":[{\"kind\":\"no_faults\"}]}\r\n",
+            )
+            .expect("write stub");
+            stub
+        };
         std::env::set_var("HAUKSBEE_CI_BIN", &stub);
         let started = std::time::Instant::now();
         let json = run_web_check("b.kicad_pcb", b"(kicad_pcb)", None, spec_fragment());
