@@ -393,6 +393,14 @@ pub fn install_signal_reaper() {
     }
 }
 
+/// Tests that arrange a pty hangup and tests that spawn a process must not
+/// overlap: every spawn clones the fd table, and until exec applies
+/// FD_CLOEXEC the clone transiently holds every pty slave open, which hides
+/// a hangup another test just arranged and fails its liveness assertions.
+/// Shared by this module's spawning test and hostserial's pty tests.
+#[cfg(all(test, unix))]
+pub(crate) static SPAWN_PTY_EXCLUSION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +436,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn kill_all_kills_a_live_child() {
+        // See SPAWN_PTY_EXCLUSION: the spawn below transiently clones every
+        // fd in the process, including any pty slave a concurrent test holds.
+        let _quiesce = SPAWN_PTY_EXCLUSION
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         use std::os::unix::process::CommandExt;
         let mut cmd = std::process::Command::new("sleep");
@@ -448,11 +461,17 @@ mod tests {
         let mut command = std::process::Command::new("cmd");
         command.args(["/C", "ping -n 30 127.0.0.1 > NUL"]);
         let (mut child, guard) = spawn_owned(&mut command).expect("spawn in kill-on-close job");
+        let closed_at = std::time::Instant::now();
         drop(guard);
         let status = child.wait().expect("job-owned child is waitable");
+        // KILL_ON_JOB_CLOSE terminates the tree but reports exit code 0 on
+        // real runners, so the status carries nothing to assert on. The
+        // property under test is that the ~29s ping dies with the job
+        // instead of running its course; explicit nonzero-code termination
+        // is covered by windows_kill_all_uses_registered_job_handles.
         assert!(
-            !status.success(),
-            "closing the job must terminate the child"
+            closed_at.elapsed() < std::time::Duration::from_secs(20),
+            "child outlived the closed job ({status})"
         );
     }
 
