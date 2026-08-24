@@ -141,6 +141,17 @@ case "$ARCH" in
     ;;
 esac
 
+# Espressif's esp-develop-9.2.2-20260417 "x86_64-apple-darwin" archives contain
+# arm64 binaries (mislabeled upstream; a real Intel Mac fails to exec them with
+# "Bad CPU type in executable"), so Intel macOS installs the pinned previous
+# release of the same QEMU 9.2.2 fork instead. The override lives in
+# required-simulator-versions.env next to the primary pins; every other
+# platform keeps QEMU_VERSION as sourced above.
+if [ "$PLATFORM" = darwin ] && [ "$ARCH_NORM" = x86_64 ]; then
+  QEMU_VERSION="${QEMU_VERSION_DARWIN_X86_64:?QEMU_VERSION_DARWIN_X86_64 missing from $VERSIONS_FILE}"
+  QEMU_COMMIT="${QEMU_COMMIT_DARWIN_X86_64:?QEMU_COMMIT_DARWIN_X86_64 missing from $VERSIONS_FILE}"
+fi
+
 # ── pinned versions ──────────────────────────────────────────────────────────
 # Renode and Espressif QEMU come from required-simulator-versions.env above.
 # Bumping QEMU_VERSION also requires replacing the checksum manifest and keeping
@@ -389,7 +400,14 @@ find_qemu_bin() {
 is_esp_qemu_fork() {
   local bin="$1"
   [ -x "$bin" ] || return 1
-  "$bin" -machine help 2>/dev/null | grep -qi 'esp32'
+  if "$bin" -machine help 2>/dev/null | grep -qi 'esp32'; then
+    return 0
+  fi
+  # The quiet probe above eats the usual real cause: a missing runtime
+  # library (dyld/ld.so refusing to load the binary). Say what the binary
+  # actually reported so the caller's "not the fork" names the culprit.
+  "$bin" -machine help 2>&1 | head -n 3 | while IFS= read -r l; do warn "  $l"; done
+  return 1
 }
 
 # Prove the live machine exposes Hauksbee's stateful GPIO capability. A string
