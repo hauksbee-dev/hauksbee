@@ -21,6 +21,17 @@ import run_required_integrations as required_integrations
 from run_required_integrations import GATES, Gate, evaluate_result, run_command
 
 
+# Intel macOS pins a different Espressif QEMU release than every other host
+# (the 20260417 x86_64-apple-darwin archives are mislabeled upstream; see
+# required-simulator-versions.env). Tests that drive the real installer must
+# fabricate assets under the tag it will actually request on this host.
+_INTEL_MAC = sys.platform == "darwin" and os.uname().machine == "x86_64"
+HOST_QEMU_TAG = (
+    "esp-develop-9.2.2-20250817" if _INTEL_MAC else "esp-develop-9.2.2-20260417"
+)
+HOST_QEMU_DIR_VERSION = HOST_QEMU_TAG.replace("-", "_")
+
+
 class RequiredIntegrationEvidenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.gate = Gate(
@@ -752,12 +763,12 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             xtensa = self._fake_backend(
                 tmp,
                 "qemu-system-xtensa",
-                "QEMU emulator version 9.2.2 (esp_develop_9.2.2_20260417)",
+                f"QEMU emulator version 9.2.2 ({HOST_QEMU_DIR_VERSION})",
             )
             riscv = self._fake_backend(
                 tmp,
                 "qemu-system-riscv32",
-                "QEMU emulator version 9.2.2 (esp_develop_9.2.2_20260417)",
+                f"QEMU emulator version 9.2.2 ({HOST_QEMU_DIR_VERSION})",
             )
 
             result = self._run_sim_check(
@@ -794,12 +805,12 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             xtensa = self._fake_backend(
                 tmp,
                 "qemu-system-xtensa",
-                "QEMU emulator version 9.2.2 (esp_develop_9.2.2_20260417)",
+                f"QEMU emulator version 9.2.2 ({HOST_QEMU_DIR_VERSION})",
             )
             riscv = self._fake_backend(
                 tmp,
                 "qemu-system-riscv32",
-                "QEMU emulator version 9.2.2 (esp_develop_9.2.2_20260417)",
+                f"QEMU emulator version 9.2.2 ({HOST_QEMU_DIR_VERSION})",
             )
             self._verified_receipt(
                 renode, "renode", "1.16.1", renode_sums, "renode-test.asset"
@@ -807,14 +818,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             self._verified_receipt(
                 xtensa,
                 "qemu-system-xtensa",
-                "esp-develop-9.2.2-20260417",
+                HOST_QEMU_TAG,
                 qemu_sums,
                 "qemu-xtensa-test.asset",
             )
             self._verified_receipt(
                 riscv,
                 "qemu-system-riscv32",
-                "esp-develop-9.2.2-20260417",
+                HOST_QEMU_TAG,
                 qemu_sums,
                 "qemu-riscv32-test.asset",
             )
@@ -843,7 +854,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         }
         host = ("darwin" if sys.platform == "darwin" else "linux", os.uname().machine)
         suffix = suffix_by_host[host]
-        version = "esp_develop_9.2.2_20260417"
+        version = HOST_QEMU_DIR_VERSION
 
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)

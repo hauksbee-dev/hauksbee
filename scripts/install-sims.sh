@@ -141,6 +141,17 @@ case "$ARCH" in
     ;;
 esac
 
+# Espressif's esp-develop-9.2.2-20260417 "x86_64-apple-darwin" archives contain
+# arm64 binaries (mislabeled upstream; a real Intel Mac fails to exec them with
+# "Bad CPU type in executable"), so Intel macOS installs the pinned previous
+# release of the same QEMU 9.2.2 fork instead. The override lives in
+# required-simulator-versions.env next to the primary pins; every other
+# platform keeps QEMU_VERSION as sourced above.
+if [ "$PLATFORM" = darwin ] && [ "$ARCH_NORM" = x86_64 ]; then
+  QEMU_VERSION="${QEMU_VERSION_DARWIN_X86_64:?QEMU_VERSION_DARWIN_X86_64 missing from $VERSIONS_FILE}"
+  QEMU_COMMIT="${QEMU_COMMIT_DARWIN_X86_64:?QEMU_COMMIT_DARWIN_X86_64 missing from $VERSIONS_FILE}"
+fi
+
 # ── pinned versions ──────────────────────────────────────────────────────────
 # Renode and Espressif QEMU come from required-simulator-versions.env above.
 # Bumping QEMU_VERSION also requires replacing the checksum manifest and keeping
