@@ -244,12 +244,13 @@ jobs:
     needs: [plan, test]
     if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
     runs-on: windows-latest
-    # Measured on warm caches: ~45 min of serialized native tests, then the
-    # firmware flows, front-door build, release-profile binaries (~35 min,
-    # not covered by the dev-profile cache), and the drag-and-drop proof.
-    # 60 minutes could never fit the full step list; 150 guards hangs
+    # Measured end-to-end: ~30 min of setup and pinned-simulator installs,
+    # ~43 min of serialized native tests, then the firmware-flow gates with
+    # their warmup builds, the front-door build, the release-profile
+    # binaries (~35 min, not covered by the dev-profile cache), and the
+    # drag-and-drop proof land near 140 minutes cold. 180 guards hangs
     # without killing an honest pass.
-    timeout-minutes: 150
+    timeout-minutes: 180
     env:
       # The Windows artifact is permissive-only. If avr leaks into the feature
       # graph, build.rs must fail rather than finding an accidental runner copy.

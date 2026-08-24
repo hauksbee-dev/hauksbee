@@ -545,7 +545,7 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
   const armed = await zone.getAttribute('data-active')
   const armedText = await zone.innerText()
   if (armed !== 'true') failures.push(`drag target did not arm (data-active=${armed})`)
-  if (!armedText.includes('Drop to analyze')) failures.push('drag target gave no drop feedback')
+  if (!armedText.includes('Drop to check')) failures.push('drag target gave no drop feedback')
 
   // A board carrying firmware goes through the multipart endpoint instead.
   const analyzeEndpoint = plan === null ? '/api/analyze' : '/api/analyze-with-firmware'
