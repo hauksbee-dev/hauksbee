@@ -99,10 +99,23 @@ foreach ($gate in $gates) {
     $stdout = Join-Path ([IO.Path]::GetTempPath()) "required-$($gate.Name)-$PID.stdout"
     $stderr = Join-Path ([IO.Path]::GetTempPath()) "required-$($gate.Name)-$PID.stderr"
     try {
+        # A cold cargo build of a gate's feature set can alone outlast the
+        # emulator watchdog below (measured: the first qemu-feature engine
+        # build on the CI runner exceeds ten minutes), so compile the test
+        # binary first, bounded only by the job-level timeout, and let the
+        # 600-second budget time nothing but the firmware-through-emulator
+        # flow itself.
+        $filterIndex = [Array]::IndexOf([string[]]$gate.Args, [string]$gate.Test)
+        if ($filterIndex -lt 1) { throw "$($gate.Name) gate args do not name test $($gate.Test)" }
+        $warmupArgs = @($gate.Args[0..($filterIndex - 1)]) + "--no-run"
+        & cargo @warmupArgs
+        if ($LASTEXITCODE -ne 0) { throw "$($gate.Name) failed to compile its test binary" }
         $process = Invoke-HauksbeeJobProcess -FilePath "cargo" -ArgumentList $gate.Args `
             -WorkingDirectory (Get-Location).Path -StandardOutput $stdout -StandardError $stderr `
             -TimeoutMilliseconds 600000
         if ($process.TimedOut) {
+            Write-Host ((Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue) +
+                (Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue))
             throw "$($gate.Name) exceeded 600 seconds"
         }
         $output = ((Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue) +
