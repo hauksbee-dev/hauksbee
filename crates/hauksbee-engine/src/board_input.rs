@@ -1500,7 +1500,10 @@ fn main {
         // The directory form (from_path only).
         let err = from_path(&dir).expect_err("a fab job with no part list is refused");
         let msg = err.to_string();
-        assert!(msg.contains("reconstructed"), "copper was read first: {msg}");
+        assert!(
+            msg.contains("reconstructed"),
+            "copper was read first: {msg}"
+        );
         assert!(
             msg.contains("pick-and-place"),
             "the refusal names the unlocking input: {msg}"
