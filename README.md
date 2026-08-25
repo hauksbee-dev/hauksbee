@@ -1,14 +1,8 @@
 # Hauksbee
 
-**Your design files already contain a running system. Hauksbee executes it.**
+**Your design files already contain a running system, with Hauksbee you execute it.**
 
 Hand Hauksbee the artifacts you already produce: the layout, schematic, fab archive, BOM and placement data, fitted variant, compiled firmware, or even the faulty and fixed revisions in a git history. It reconstructs the circuit the copper implements, binds device models, solves it, and boots firmware against the solved board. Findings arrive with the exact evidence that caused them.
-
-The refusal is part of the product. If an input is partial, an active component
-has no adequate model, a simulator cannot exercise the requested path, or two
-manufacturing records contradict one another, Hauksbee reports the valid
-partial result and declines the stronger claim. It does not turn missing
-evidence into a green board.
 
 A design-rule checker checks geometry against rules. A schematic simulator executes the circuit it was given. Hauksbee's different job is to execute and cross-check the evidence that will become the product: native design files, manufacturing output, assembled-part identity, and firmware.
 
@@ -78,7 +72,7 @@ The development suite converts documented upstream hardware fixes into
 hash-pinned parent/fixed regressions. Each pair runs through the same binary
 with a declared machine field expected to distinguish it.
 
-Passing this comparison shows that the detector responds differently to the two revisions. It does not, by itself, prove the root cause or demonstrate a full red-to-green board fix. The first C64-Saver case is therefore labelled `qualified_detector_pair`, because the fixed revision is still coverage-invalid.
+Passing this comparison shows that the detector responds differently to the two revisions. It does not, by itself, prove the root cause or demonstrate a full red-to-green board fix.
 
 ## Ninety seconds, no board file required
 
@@ -92,7 +86,7 @@ hauksbee serve
 
 The second command runs the analysis surface. `hauksbee serve` opens the same engine through the local browser UI (the same page the app opens), with sample boards, a checks composer, live 2D copper, probes, and report export. Captured first-run transcripts are retained under [`examples/sessions/`](examples/sessions/).
 
-## Every input is an authority, not a hint
+## Every input an authority
 
 ![Board, assembly, and firmware inputs flow through the input authority and SHA-256 inventory into the extracted board IR, fan out to static checks, analog/AC/thermal analysis, and MCU co-sim, and converge on terminal, JSON, JUnit, SARIF, web, and MCP output](docs/assets/diagrams/authority-chain.svg)
 
@@ -108,7 +102,7 @@ These are source-bound software, simulation, or emulator results. They are not m
 
 ### Raspberry Pi 4 USB-C faulty/repaired pair
 
-Reproduce with `cargo test -p hauksbee-engine --test usb_c_rpi4 -- --nocapture`. The generic classifier reports the reconstructed faulty topology as `AudioAccessory`/VBUS withheld and the repaired topology as healthy. The files are labelled reconstructions. Hand voltage arithmetic is an independent oracle, not the product proof.
+Reproduce with `cargo test -p hauksbee-engine --test usb_c_rpi4 -- --nocapture`. The generic classifier reports the reconstructed faulty topology as `AudioAccessory`/VBUS withheld and the repaired topology as healthy. The files are labelled reconstructions.
 
 ### Fab-only connectivity recovery
 
@@ -116,7 +110,7 @@ Run the required-corpus `gerber_closedloop` test documented in [GERBER](docs/ing
 
 ### As-built assembly gate
 
-`cargo test -p hauksbee-ci --test assembly_inputs_ci -- --nocapture` runs seven production tests for BOM, placement, fitted/no-fit variant, exact input hashes, and contradiction or empty-assembly refusal. This validates the software contract, not the correctness of a supplier's source data.
+`cargo test -p hauksbee-ci --test assembly_inputs_ci -- --nocapture` runs seven production tests for BOM, placement, fitted/no-fit variant, exact input hashes, and contradiction or empty-assembly refusal.
 
 ### Solver performance gate
 
@@ -129,8 +123,7 @@ host-dependent; use the generated table from the candidate you are evaluating.
 
 The development suite runs exact parent/fixed revisions through the same
 binary and distinguishes full red-to-green results from cases where the target
-defect disappears but unrelated failures or missing coverage remain. These are
-source-bound regressions, not fabricated-hardware measurements.
+defect disappears but unrelated failures or missing coverage remain.
 
 ## What ships in the engine
 
@@ -149,7 +142,7 @@ Pre-Eagle-6 binary layouts and legacy KiCad 5 `.sch` are intentionally refused. 
 - Copper shorts and clearances, lint, USB-C CC classification, boot straps, internal resource conflicts, I2C loading, device configuration decoding, and DNP policy.
 - Trace ampacity, quasi-static controlled-impedance estimates, topology-aware ripple checks, back-power paths, behavioural power ICs, and transient brownout scenarios.
 - Small-signal AC analysis with gain/phase assertions and a steady-state, per-device thermal estimator.
-- Typed model coverage and import diagnostics: recovered, partial, unplaced, refused, confidence basis, parser stage, and next action. Unplaced objects are not drawn at invented coordinates.
+- Typed model coverage and import diagnostics: recovered, partial, unplaced, refused, confidence basis, parser stage, and next action.
 
 Hauksbee's SI checks are closed-form estimates, not a 3D field solver. Thermal analysis estimates junction temperature per device, not a board thermal field. AC analysis is linearised about the operating point. Those boundaries are part of the output, not footnotes added later.
 
@@ -177,7 +170,7 @@ The browser is the primary, easier workbench for the same flow. Open `hauksbee s
 
 Clicking copper is equally direct: watch the trace live, add a voltage, rail, toggle, or boot assertion, or attach a waveform, pushbutton, or toggle. A live attachment stamps a real source/contact into the solver and queues the same ID into ordinary replayable `[[peripheral]]` TOML. Hauksbee never turns a net into a control merely because it is named `A0` or `INPUT`; the engine must declare a source or the user must attach one explicitly. See [Capabilities](docs/about/CAPABILITIES.md) for the supported browser, CLI, MCP, approval, and board-analysis surfaces.
 
-Clicked I²C/SPI parts have the same treatment. Pick or paste a local register-map spec (or choose a checked-in behavior subset from the browser's bundled local catalog), set physical inputs, and attach those exact bytes to the running bus; the browser retains the identical self-contained `[[sensor]]` entry for replay. The row shows the engine's correlated accept/refuse receipt; it does not call a queued request successful. Once that behavior is stored in an exact model card it auto-attaches on future boards. Model cards can require bus-mode straps and derive a selectable I²C address from exact board supply/ground ties. Bad spec bytes, typoed inputs, ambiguous straps, unknown CS nets, and duplicate ids refuse instead of falling back to plausible zeros. This path is fully local and does not require an LLM.
+Clicked I²C/SPI parts have the same treatment. Pick or paste a local register-map spec (or choose a checked-in behavior subset from the browser's bundled local catalog), set physical inputs, and attach those exact bytes to the running bus; the browser retains the identical self-contained `[[sensor]]` entry for replay. Once that behavior is stored in an exact model card it auto-attaches on future boards. Model cards can require bus-mode straps and derive a selectable I²C address from exact board supply/ground ties. Bad spec bytes, typoed inputs, ambiguous straps, unknown CS nets, and duplicate ids refuse instead of falling back to plausible zeros.
 
 ## Firmware against solved copper
 
@@ -262,8 +255,6 @@ Integration surfaces include:
 claude mcp add --transport stdio hauksbee -- hauksbee-mcp
 ```
 
-The same causal evidence object is intended to reach every output surface. A consumer should not receive a greener story merely because it asked through a browser, an annotation, or an agent tool.
-
 ![The web checks builder](frontend/screenshots/beauty/web-checks.png)
 
 ## Verdicts are evidence states
@@ -292,24 +283,6 @@ Evidence labels should be read literally:
 
 Hauksbee is a pre-fab evidence engine, not a substitute for design review, vendor limits, KiCad/Altium DRC, signal-integrity field simulation, compliance testing, or the bench.
 
-## Corpus and claim hygiene
-
-The corpus manifest pins 53 upstream entries. A retained clean-fetch receipt records 50 directories containing 305 layouts, 514 schematics, 41 netlists, and 615 Gerber films. Those are inventory counts, not 305 independent board-health trials. Known-good silence gates use narrower denominators and keep excluded, refused, unsupported, and unadjudicated inputs visible.
-
-Reproduce the inventory instead of editing README arithmetic:
-
-```bash
-scripts/fetch-corpus.sh --dir /tmp/hauksbee-corpus
-python3 scripts/check-corpus.py --dir /tmp/hauksbee-corpus
-HAUKSBEE_CORPUS_DIR=/tmp/hauksbee-corpus \
-HAUKSBEE_REQUIRE_CORPUS=1 \
-  cargo test --workspace -- --nocapture
-```
-
-The retained inventory, each gate's actual denominator, and the eight not-known-good exclusions are documented in [CORPUS](docs/evidence/CORPUS.md).
-
-README headline numbers must come from machine-readable, source-bound output. Manual calculations belong beside the result as independent oracles. Historical release-candidate observations belong in dated evidence files. A number whose input, command, denominator, or current revision cannot be reconstructed is not a current product metric.
-
 ## Repository map
 
 - `crates/hauksbee-extract`: CAD, fab, schematic, BOM, and placement ingestion.
@@ -321,13 +294,13 @@ README headline numbers must come from machine-readable, source-bound output. Ma
 - `crates/hauksbee-ci`: CI spec loader, assertions, reports, and integrations.
 - `crates/hauksbee-server`, `frontend/`: local web front door and live board UI.
 - `crates/hauksbee-mcp`: structured agent tools over stdio.
-- - `qc/`: unseen-board sampling and value-grading scripts..
+- `qc/`: unseen-board sampling and value-grading scripts.
 
 The KiCad parser/producer layer is vendored under [`vendor/kicad-forge`](vendor/kicad-forge); provenance and update rules are in [VENDORED](vendor/kicad-forge/VENDORED.md).
 
 ## Origin, licence, and acknowledgements
 
-Hauksbee grew out of the need to validate a large private analogue board whose bespoke emulator could only execute the intended circuit. The private board is not redistributed here, and private-suite evidence is not presented as a publicly rerunnable result. [PRIVATE_SUITE](docs/about/PRIVATE_SUITE.md) records that boundary.
+Hauksbee grew out of the need to validate a large private analogue board whose bespoke emulator could only execute the intended circuit. The private board is not redistributed here, and private-suite evidence is not presented as a publicly rerunnable result. However, the emulator was able to diagnose several major failures on the board, and has been exceedingly useful in pursuing that project. [PRIVATE_SUITE](docs/about/PRIVATE_SUITE.md) records that boundary.
 
 Hauksbee source is Apache-2.0; retain [NOTICE](NOTICE) when redistributing it. The optional in-process AVR backend links GPL-3.0 libsimavr, so a binary built with that feature is GPL-3.0. Builds without AVR use Renode and Espressif QEMU as separate processes and retain the permissive Hauksbee licence. Artifact-by- artifact obligations are in [COMPLIANCE](COMPLIANCE.md).
 
