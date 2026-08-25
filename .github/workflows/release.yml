@@ -100,9 +100,15 @@ jobs:
   resolve-source:
     name: capture exact release source
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reading ci run/job conclusions for the same-SHA reuse check below.
+      actions: read
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
       version: ${{ steps.source.outputs.version }}
+      ci_reuse: ${{ steps.reuse.outputs.ci_reuse }}
+      ci_run_id: ${{ steps.reuse.outputs.ci_run_id }}
     steps:
       - name: Refuse tag publication from a non-canonical repository
         if: ${{ github.event_name != 'workflow_dispatch' }}
@@ -143,6 +149,44 @@ jobs:
           [ "$version" = "$workspace_version" ]
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Same-SHA deduplication: when a fully green candidate ci run has
+      # already validated this exact commit, re-running the identical checks
+      # in release-quality buys nothing. Reuse is claimed ONLY when a
+      # successful ci run at source_sha has every job green (an incremental
+      # run reports its scoped-out jobs as skipped, so it can never qualify)
+      # and includes both native candidate gates by name. Anything less and
+      # release-quality runs in full exactly as before; either way the
+      # release-only contracts ci does not run still execute (in
+      # release-quality-residue or release-quality). No check is lost on
+      # either path.
+      - name: Detect a fully green candidate ci run at the release source
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          reuse=""
+          run_id=""
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SOURCE_SHA&status=success&per_page=10" --jq '.workflow_runs[].id'); do
+            jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100")"
+            bad="$(printf '%s' "$jobs" | jq '[.jobs[] | select(.conclusion != "success")] | length')"
+            mac="$(printf '%s' "$jobs" | jq '[.jobs[] | select(.name == "native macOS workspace candidate gate")] | length')"
+            win="$(printf '%s' "$jobs" | jq '[.jobs[] | select(.name == "native Windows tests, release binary, and drag-and-drop front door")] | length')"
+            if [ "$bad" = 0 ] && [ "$mac" = 1 ] && [ "$win" = 1 ]; then
+              reuse=true
+              run_id="$id"
+              break
+            fi
+          done
+          echo "ci_reuse=$reuse" >> "$GITHUB_OUTPUT"
+          echo "ci_run_id=$run_id" >> "$GITHUB_OUTPUT"
+          if [ -n "$reuse" ]; then
+            echo "release-quality is covered by fully green ci run $run_id at $SOURCE_SHA; only the release-only residue contracts will run"
+          else
+            echo "no fully green candidate ci run found at $SOURCE_SHA; release-quality runs in full"
+          fi
 
   build:
     name: build ${{ matrix.label }}
@@ -998,6 +1042,11 @@ jobs:
   release-quality:
     name: exact-SHA release quality gate
     needs: resolve-source
+    # Skipped only when resolve-source proved a fully green candidate ci run
+    # already executed these same checks at this exact commit;
+    # release-quality-residue then runs the release-only contracts ci does
+    # not cover. The publish job requires exactly one of the two paths.
+    if: needs.resolve-source.outputs.ci_reuse != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact release source
@@ -1082,15 +1131,62 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  release-quality-residue:
+    name: release-only contracts not covered by the reused ci run
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: needs.resolve-source.outputs.ci_reuse == 'true'
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          persist-credentials: false
+      - name: Bind residue gate to the immutable release event
+        env:
+          EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          head="$(git rev-parse HEAD)"
+          [ "$head" = "$EXPECTED_SHA" ]
+      # Everything else in release-quality is executed, command for command,
+      # by the fully green candidate ci run that resolve-source verified:
+      # fmt, runtime-dependency licences, clippy, the sharded workspace tests
+      # plus the native macOS workspace pass (the avr shape is in default
+      # features, so both quality-gate test invocations resolve to the
+      # default graph), engine no-default clippy+tests, the poisoned
+      # GPL-free check, docs with -D warnings, the ngspice-required speed
+      # gate, diagram lint, the integrations suites, the Windows port
+      # contract, and the full frontend gate. What remains here is the
+      # release-only residue ci does not run, plus a --locked resolution
+      # proof the ci jobs (which build unlocked) cannot give.
+      - name: Release-only contracts
+        run: |
+          cargo metadata --locked --format-version 1 >/dev/null
+          python3 scripts/check-private-release-surfaces.py .
+          python3 scripts/test_required_integrations.py
+          python3 scripts/test-simavr-provenance.py
+          shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh scripts/get-hauksbee.sh
+
   release:
     name: publish release
-    needs: [build, build-windows, required-integrations, release-quality]
+    needs: [build, build-windows, required-integrations, release-quality, release-quality-residue]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     # Only publish a Release for an actual tag push; workflow_dispatch just
-    # produces downloadable build artifacts (above).
-    if: startsWith(github.ref, 'refs/tags/')
+    # produces downloadable build artifacts (above). always() is required so
+    # the one deliberately skipped quality job cannot cascade a skip into
+    # publication; every needed result is therefore checked explicitly, and
+    # exactly one of the two quality paths must have succeeded (the full
+    # gate, or the ci-reuse residue).
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/') &&
+      needs.build.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      needs.required-integrations.result == 'success' &&
+      ((needs.release-quality.result == 'success' && needs.release-quality-residue.result == 'skipped') ||
+       (needs.release-quality.result == 'skipped' && needs.release-quality-residue.result == 'success'))
     steps:
       - name: Checkout (for the slug preflight)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
