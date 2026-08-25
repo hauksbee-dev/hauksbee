@@ -816,6 +816,44 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
           "source_sha=$sourceSha" >> $env:GITHUB_OUTPUT
+      - name: Prove installer contract against a stub bundle
+        shell: pwsh
+        working-directory: hauksbee
+        env:
+          STUB_VERSION: ${{ steps.ver.outputs.version }}
+          STUB_COMMIT: ${{ steps.ver.outputs.source_sha }}
+        run: |
+          # The contract suite needs only binaries that answer --version with
+          # the release identity, so it can prove the whole installer flow in
+          # about a minute, before the expensive build spends hours. A real
+          # regression in these scripts fails here, not after the build.
+          $work = Join-Path $env:RUNNER_TEMP "stub-bundle"
+          $base = "hauksbee-$env:STUB_VERSION-windows-x86_64-permissive"
+          $bin = Join-Path (Join-Path $work $base) "bin"
+          New-Item -ItemType Directory -Path $bin -Force | Out-Null
+          $src = Join-Path $work "probe.rs"
+          $probe = @(
+            'use std::env;',
+            'fn main() {',
+            '    let path = env::current_exe().expect("current executable");',
+            '    let name = path.file_stem().expect("stem").to_string_lossy().into_owned();',
+            '    let args: Vec<_> = env::args_os().skip(1).collect();',
+            '    if args != ["--version"] { std::process::exit(2); }',
+            ('    println!("{} ' + $env:STUB_VERSION + ' (git ' + $env:STUB_COMMIT + ')", name);'),
+            '}'
+          )
+          Set-Content -Path $src -Value ($probe -join "`n")
+          & rustc -O $src -o (Join-Path $work "probe.exe")
+          if ($LASTEXITCODE -ne 0) { throw "stub probe compile failed" }
+          foreach ($b in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
+            Copy-Item (Join-Path $work "probe.exe") (Join-Path $bin $b)
+          }
+          $zip = Join-Path $work "$base.zip"
+          Compress-Archive -LiteralPath (Join-Path $work $base) -DestinationPath $zip
+          $sum = "$zip.sha256"
+          $digest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText($sum, "$digest  $base.zip`r`n")
+          .\scripts\test-windows-installer.ps1 -Zip $zip -Checksum $sum -Version $env:STUB_VERSION -ExpectedCommit $env:STUB_COMMIT
       - name: Install checksum-pinned Windows simulator backends
         shell: pwsh
         working-directory: hauksbee
