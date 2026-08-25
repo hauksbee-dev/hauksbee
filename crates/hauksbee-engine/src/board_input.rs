@@ -1428,6 +1428,49 @@ fn main {
         );
     }
 
+    /// Gerber job with a placement file through both entry points. Keep this
+    /// on a checked-in fixture so a sibling developer corpus cannot change the
+    /// unit test's input or make clean-room CI skip the coverage entirely.
+    #[test]
+    fn gerber_zip_and_dir_normalize_as_gerber() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/ingest-robustness/gerber_kicad_pos");
+        assert!(dir.is_dir(), "checked-in Gerber fixture is missing");
+        // The directory form (from_path only).
+        let norm = from_path(&dir).expect("gerber directory normalizes");
+        assert_eq!(norm.kind, InputKind::Gerber);
+        assert!(
+            norm.layout_text.is_none(),
+            "a gerber archive has no layout text"
+        );
+        assert!(
+            norm.raw.is_empty(),
+            "no single file to keep for a directory"
+        );
+
+        // The zipped form through the bytes path.
+        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_file() {
+                entries.push((
+                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
+                    std::fs::read(&p).unwrap(),
+                ));
+            }
+        }
+        let refs: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        let bytes = zip_of(&refs);
+        let norm = from_bytes("cm4_adapter_gerbers.zip", &bytes).expect("gerber zip normalizes");
+        assert_eq!(norm.kind, InputKind::Gerber);
+        assert!(norm.is_gerber());
+        assert!(norm.layout_text.is_none());
+        assert!(!norm.board.nets.is_empty(), "nets recovered from copper");
+    }
+
     /// Real fab archive through both entry points, which deliberately differ.
     /// The CM4 adapter ships no pick-and-place, so the local directory form
     /// refuses: the user is standing next to the folder and can add the part
