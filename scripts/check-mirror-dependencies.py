@@ -10,7 +10,7 @@ import sys
 
 
 SCRIPT_REFERENCE = re.compile(
-    r"(?:\$\{?[A-Z_]*ROOT\}?/)?(scripts/[A-Za-z0-9_.@/+:-]+\.(?:sh|py))"
+    r"(?:\$\{?[A-Z_]*ROOT\}?/)?(scripts/[A-Za-z0-9_.@/+-]+\.(?:sh|py))"
 )
 
 

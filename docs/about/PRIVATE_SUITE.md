@@ -9,7 +9,7 @@ This page makes that omitted coverage explicit.
 
 ## What is missing
 
-**75 tests: 65 in the 17 absent files below, plus 10 removed from files that
+**69 tests: 65 in the 17 absent files below, plus 4 removed from files that
 otherwise ship. Also absent: 11 engine examples.**
 
 | Suite | Tests | What it covers |
@@ -32,9 +32,9 @@ otherwise ship. Also absent: 11 engine examples.**
 | `tarski_decomposition_analysis` | 1 | Tearing choices on a mesh that does not converge fused |
 | `nep_private_acceptance` | 2 | Cycle-exact AT28C256 page-program rejection and corrected-firmware positive control for a second private board, both driven by the board owner's real host tool |
 
-The ten tests missing from files that otherwise ship are in
-`spec_and_assertions`, `cli_boardcode`, `dnp_processor`, `diode_fallback` and
-`extract`. Those files keep the rest of their coverage.
+The four tests missing from files that otherwise ship are in
+`spec_and_assertions`, `cli_boardcode` and `extract`. Those files keep the
+rest of their coverage.
 
 Two engine modules leave with the data, because they encode the board's
 topology and its validated rework instead of merely referring to it.
