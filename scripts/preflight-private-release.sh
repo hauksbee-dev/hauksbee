@@ -33,10 +33,25 @@ esac
 [ "$visibility" = "$expected_visibility" ] \
   || fail "$repo reports visibility '$visibility', not $expected_visibility; refusing to publish release assets"
 
-if ! immutable_releases="$(gh api "repos/$repo/immutable-releases" --jq .enabled)"; then
-  fail "$repo does not enforce immutable releases; enable release immutability before publishing"
+# Reading the repository immutable-release setting needs administration
+# read, which GitHub never grants a workflow's integration token on a
+# private repository. The publish job proves immutability on the release
+# itself afterwards (`gh release verify` and `verify-asset` fail on
+# anything mutable, and the reconcile step refuses a mutable existing
+# release), so that one specific 403 defers to those checks instead of
+# failing a gate this credential can never satisfy. Every readable answer
+# still enforces here, and any other error still fails closed.
+immutable_status=0
+immutable_probe="$(gh api "repos/$repo/immutable-releases" --jq .enabled 2>&1)" || immutable_status=$?
+if [ "$immutable_status" -eq 0 ]; then
+  [ "$immutable_probe" = true ] \
+    || fail "$repo does not enforce immutable releases; refusing replaceable release assets"
+  immutable_note="enforces immutable releases"
+elif printf '%s' "$immutable_probe" | grep -qi "Resource not accessible by integration"; then
+  echo "release preflight: the integration token cannot read the immutable-release setting; deferring to post-publish immutable attestation verification"
+  immutable_note="defers immutable-release proof to post-publish attestation"
+else
+  fail "$repo immutable-release setting could not be read: $immutable_probe"
 fi
-[ "$immutable_releases" = true ] \
-  || fail "$repo does not enforce immutable releases; refusing replaceable release assets"
 
-echo "release preflight: $repo is $expected_visibility, enforces immutable releases, and all baked repository surfaces match"
+echo "release preflight: $repo is $expected_visibility, $immutable_note, and all baked repository surfaces match"
