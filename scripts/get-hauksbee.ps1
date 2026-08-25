@@ -224,7 +224,7 @@ function Invoke-TokenFreeVersionProbe([string]$Path) {
 
 function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVersion) {
     $probe = Invoke-TokenFreeVersionProbe $Path
-    $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
+    $escapedName = [regex]::Escape(($Name -replace '\.exe$', ''))
     $escapedVersion = [regex]::Escape($ExpectedVersion)
     $escapedCommit = [regex]::Escape($ResolvedCommit)
     if ($probe.ExitCode -ne 0 -or $probe.Output -notmatch "(?m)^$escapedName $escapedVersion \(git $escapedCommit\)$") {

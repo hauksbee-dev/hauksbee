@@ -114,7 +114,7 @@ function Sign-And-VerifyBinaries([string]$BinDir, [string]$WorkDir) {
 function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVersion) {
     $output = (& $Path --version 2>&1 | Out-String).Trim()
     $exitCode = $LASTEXITCODE
-    $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
+    $escapedName = [regex]::Escape(($Name -replace '\.exe$', ''))
     $escapedVersion = [regex]::Escape($ExpectedVersion)
     $escapedCommit = [regex]::Escape($ExpectedCommit)
     if ($exitCode -ne 0 -or $output -notmatch "(?m)^$escapedName $escapedVersion \(git $escapedCommit\)$") {
