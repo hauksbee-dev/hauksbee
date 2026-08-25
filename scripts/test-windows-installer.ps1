@@ -109,6 +109,12 @@ function Invoke-InstallerCase(
         $child = Start-Process -FilePath $PowerShell -ArgumentList @(
             "-NoProfile", "-File", $installer, "-Version", "v$Version", "-ExpectedCommit", $ExpectedCommit, "-Prefix", $Prefix
         ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        if ($child.ExitCode -ne 0) {
+            Write-Host "--- installer child ($PowerShell) exited $($child.ExitCode); stdout:"
+            if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout | ForEach-Object { Write-Host "    $_" } }
+            Write-Host "--- installer child ($PowerShell) stderr:"
+            if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr | ForEach-Object { Write-Host "    $_" } }
+        }
         return $child.ExitCode
     } finally {
         Remove-Item Env:HAUKSBEE_API_BASE -ErrorAction SilentlyContinue
