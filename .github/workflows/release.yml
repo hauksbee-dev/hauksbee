@@ -1212,6 +1212,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # The post-publish step proves GitHub attested the immutable release.
+      # Listing attestations on a private repository requires this read grant,
+      # and an explicit permissions block zeroes every permission it omits.
+      attestations: read
     # Only publish a Release for an actual tag push; workflow_dispatch just
     # produces downloadable build artifacts (above). always() is required so
     # the one deliberately skipped quality job cannot cascade a skip into
