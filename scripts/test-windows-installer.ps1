@@ -48,11 +48,18 @@ function Start-MockRelease(
             # aborted connection must not kill the rest of the flow: http.sys
             # throws from the response write or close when a client tears the
             # connection down right after receiving a release-sized body.
+            $consecutiveFailures = 0
             while ($listener.IsListening) {
                 try {
                     $context = $listener.GetContext()
                     $request = $context.Request
                     $response = $context.Response
+                    if ($request.Url.AbsolutePath -eq "/__shutdown") {
+                        $response.StatusCode = 204
+                        $response.ContentLength64 = 0
+                        $response.Close()
+                        break
+                    }
                     if ($request.Headers["Authorization"] -ne "Bearer installer-contract-token") {
                         $response.StatusCode = 401
                         $response.Close()
@@ -85,8 +92,18 @@ function Start-MockRelease(
                     $response.OutputStream.Write($body, 0, $body.Length)
                     $response.Close()
                     Write-Output "mock: served $($request.Url.AbsolutePath)"
+                    $consecutiveFailures = 0
                 } catch {
+                    # One aborted connection is expected teardown noise, but a
+                    # listener that can no longer acquire contexts must not
+                    # hot-spin a core for the rest of a multi-hour job.
                     Write-Output "mock: request handling failed: $_"
+                    $consecutiveFailures++
+                    if ($consecutiveFailures -ge 50) {
+                        Write-Output "mock: giving up after $consecutiveFailures consecutive failures"
+                        break
+                    }
+                    Start-Sleep -Milliseconds 100
                 }
             }
         } finally {
@@ -105,11 +122,26 @@ function Start-MockRelease(
             break
         } catch {
             $ready.Dispose()
+            if ($job.State -in @("Failed", "Completed", "Stopped")) {
+                throw "the mock release server job stopped before listening: $($job.State)"
+            }
             if ([DateTime]::UtcNow -gt $deadline) { throw "the mock release server never started listening on port $port" }
             Start-Sleep -Milliseconds 100
         }
     }
-    return @{ Job = $job; ApiBase = $apiBase }
+    return @{ Job = $job; ApiBase = $apiBase; Prefix = $prefix }
+}
+
+function Stop-MockRelease($Server) {
+    # Ask the serving loop to exit so the job can complete on its own:
+    # Stop-Job against a job blocked inside a synchronous GetContext is not a
+    # bounded operation, and this teardown runs inside a paid multi-hour gate.
+    try {
+        $null = Invoke-WebRequest -Uri "$($Server.Prefix)__shutdown" -UseBasicParsing -TimeoutSec 5
+    } catch {
+    }
+    $null = Wait-Job $Server.Job -Timeout 10 -ErrorAction SilentlyContinue
+    Stop-Job $Server.Job -ErrorAction SilentlyContinue
 }
 
 function Invoke-InstallerCase(
@@ -139,7 +171,7 @@ function Invoke-InstallerCase(
             Write-Host "--- installer child ($PowerShell) stderr:"
             if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr | ForEach-Object { Write-Host "    $_" } }
             Write-Host "--- mock release server output:"
-            Stop-Job $server.Job -ErrorAction SilentlyContinue
+            Stop-MockRelease $server
             Receive-Job $server.Job -ErrorAction Continue 2>&1 | ForEach-Object { Write-Host "    $_" }
         }
         return $child.ExitCode
@@ -149,7 +181,7 @@ function Invoke-InstallerCase(
         Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
         Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
         Remove-Item Env:HAUKSBEE_TEST_FAIL_INSTALL_SWAP -ErrorAction SilentlyContinue
-        Stop-Job $server.Job -ErrorAction SilentlyContinue
+        Stop-MockRelease $server
         Remove-Job $server.Job -Force -ErrorAction SilentlyContinue
     }
 }
