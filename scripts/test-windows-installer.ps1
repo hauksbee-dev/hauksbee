@@ -43,48 +43,72 @@ function Start-MockRelease(
         $listener.Prefixes.Add($Prefix)
         $listener.Start()
         try {
-            for ($served = 0; $served -lt 4; $served++) {
-                $context = $listener.GetContext()
-                $request = $context.Request
-                $response = $context.Response
-                if ($request.Headers["Authorization"] -ne "Bearer installer-contract-token") {
-                    $response.StatusCode = 401
+            # Serve until Invoke-InstallerCase stops this job. An exact request
+            # budget turns any extra request into a dead listener, and one
+            # aborted connection must not kill the rest of the flow: http.sys
+            # throws from the response write or close when a client tears the
+            # connection down right after receiving a release-sized body.
+            while ($listener.IsListening) {
+                try {
+                    $context = $listener.GetContext()
+                    $request = $context.Request
+                    $response = $context.Response
+                    if ($request.Headers["Authorization"] -ne "Bearer installer-contract-token") {
+                        $response.StatusCode = 401
+                        $response.Close()
+                        continue
+                    }
+                    switch -Regex ($request.Url.AbsolutePath) {
+                        "/releases/tags/" {
+                            $body = [Text.Encoding]::UTF8.GetBytes((@{
+                                tag_name = $Tag
+                                immutable = $true
+                                assets = @(
+                                    @{ name = $ZipName; url = "$ApiBase/releases/assets/1"; digest = "sha256:$ZipDigest" },
+                                    @{ name = $SumName; url = "$ApiBase/releases/assets/2"; digest = "sha256:$SumDigest" }
+                                )
+                            } | ConvertTo-Json -Depth 4 -Compress))
+                            $response.ContentType = "application/json"
+                        }
+                        "/releases/assets/1$" { $body = [IO.File]::ReadAllBytes($ZipPath) }
+                        "/releases/assets/2$" { $body = [IO.File]::ReadAllBytes($SumPath) }
+                        "/commits/" {
+                            $body = [Text.Encoding]::UTF8.GetBytes((@{ sha = $Commit } | ConvertTo-Json -Compress))
+                            $response.ContentType = "application/json"
+                        }
+                        default {
+                            $response.StatusCode = 404
+                            $body = [byte[]]::new(0)
+                        }
+                    }
+                    $response.ContentLength64 = $body.Length
+                    $response.OutputStream.Write($body, 0, $body.Length)
                     $response.Close()
-                    continue
+                    Write-Output "mock: served $($request.Url.AbsolutePath)"
+                } catch {
+                    Write-Output "mock: request handling failed: $_"
                 }
-                switch -Regex ($request.Url.AbsolutePath) {
-                    "/releases/tags/" {
-                        $body = [Text.Encoding]::UTF8.GetBytes((@{
-                            tag_name = $Tag
-                            immutable = $true
-                            assets = @(
-                                @{ name = $ZipName; url = "$ApiBase/releases/assets/1"; digest = "sha256:$ZipDigest" },
-                                @{ name = $SumName; url = "$ApiBase/releases/assets/2"; digest = "sha256:$SumDigest" }
-                            )
-                        } | ConvertTo-Json -Depth 4 -Compress))
-                        $response.ContentType = "application/json"
-                    }
-                    "/releases/assets/1$" { $body = [IO.File]::ReadAllBytes($ZipPath) }
-                    "/releases/assets/2$" { $body = [IO.File]::ReadAllBytes($SumPath) }
-                    "/commits/" {
-                        $body = [Text.Encoding]::UTF8.GetBytes((@{ sha = $Commit } | ConvertTo-Json -Compress))
-                        $response.ContentType = "application/json"
-                    }
-                    default {
-                        $response.StatusCode = 404
-                        $body = [byte[]]::new(0)
-                    }
-                }
-                $response.ContentLength64 = $body.Length
-                $response.OutputStream.Write($body, 0, $body.Length)
-                $response.Close()
             }
         } finally {
             $listener.Stop()
             $listener.Close()
         }
     } -ArgumentList $prefix, $apiBase, "v$Version", $ServedCommit, $ZipFile, $ChecksumFile, $zipName, $checksumName, $zipDigest, $sumDigest
-    Start-Sleep -Milliseconds 300
+    # Wait until the listener actually accepts, not a fixed grace period: on a
+    # loaded runner Start-Job can take longer than any constant to come up.
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ($true) {
+        $ready = [Net.Sockets.TcpClient]::new()
+        try {
+            $ready.Connect([Net.IPAddress]::Loopback, $port)
+            $ready.Dispose()
+            break
+        } catch {
+            $ready.Dispose()
+            if ([DateTime]::UtcNow -gt $deadline) { throw "the mock release server never started listening on port $port" }
+            Start-Sleep -Milliseconds 100
+        }
+    }
     return @{ Job = $job; ApiBase = $apiBase }
 }
 
@@ -114,6 +138,9 @@ function Invoke-InstallerCase(
             if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout | ForEach-Object { Write-Host "    $_" } }
             Write-Host "--- installer child ($PowerShell) stderr:"
             if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr | ForEach-Object { Write-Host "    $_" } }
+            Write-Host "--- mock release server output:"
+            Stop-Job $server.Job -ErrorAction SilentlyContinue
+            Receive-Job $server.Job -ErrorAction Continue 2>&1 | ForEach-Object { Write-Host "    $_" }
         }
         return $child.ExitCode
     } finally {
