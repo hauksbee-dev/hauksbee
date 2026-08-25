@@ -1428,30 +1428,39 @@ fn main {
         );
     }
 
-    /// Real gerber archive through both entry points. Corpus-gated like the
-    /// frontdoor test: skips when board-corpus is absent.
+    /// Real fab archive through both entry points, which deliberately differ.
+    /// The CM4 adapter ships no pick-and-place, so the local directory form
+    /// refuses: the user is standing next to the folder and can add the part
+    /// list, and the error names it after proving the copper was read. The
+    /// zipped form is the upload surface behind the web drop-zone and B5
+    /// specs, and it normalizes, carrying the reconstructed nets into the
+    /// analysis that then reports the missing parts honestly. Corpus-gated
+    /// like the hauksbee-ci gerber-zip test, including its licence rule: the
+    /// board is outside the default fetch, so only the explicit uConsole
+    /// opt-in makes absence a failure.
     #[test]
-    fn gerber_zip_and_dir_normalize_as_gerber() {
-        let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-            .unwrap_or_default()
-            .join("famous/uconsole_cm4_adapter_gerber");
-        if !dir.exists() {
-            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-                panic!("corpus required but uconsole_cm4_adapter_gerber missing");
-            }
-            eprintln!("skipping gerber normalizer test (corpus absent)");
+    fn gerber_dir_refuses_without_parts_and_the_zip_normalizes() {
+        let Some(dir) = hauksbee_testkit::corpus_board(
+            env!("CARGO_MANIFEST_DIR"),
+            "famous/uconsole_cm4_adapter_gerber",
+        ) else {
+            assert!(
+                std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_err(),
+                "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
+            );
+            eprintln!(
+                "NOT RUN  gerber normalizer test: uconsole_cm4_adapter_gerber is \
+                 not in the default fetch (licence unconfirmed)"
+            );
             return;
-        }
+        };
         // The directory form (from_path only).
-        let norm = from_path(&dir).expect("gerber directory normalizes");
-        assert_eq!(norm.kind, InputKind::Gerber);
+        let err = from_path(&dir).expect_err("a fab job with no part list is refused");
+        let msg = err.to_string();
+        assert!(msg.contains("reconstructed"), "copper was read first: {msg}");
         assert!(
-            norm.layout_text.is_none(),
-            "a gerber archive has no layout text"
-        );
-        assert!(
-            norm.raw.is_empty(),
-            "no single file to keep for a directory"
+            msg.contains("pick-and-place"),
+            "the refusal names the unlocking input: {msg}"
         );
 
         // The zipped form through the bytes path.

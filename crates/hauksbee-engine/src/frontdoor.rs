@@ -3600,20 +3600,26 @@ fn main {
     /// drop-zone claim "gerber zip" true: the reader registry knows no zips on
     /// its own, so without it an upload dies with "unrecognized board format".
     /// Corpus-gated like the
-    /// extract crate's gerber tests: skips when board-corpus is absent.
+    /// extract crate's gerber tests, including their licence rule: the board
+    /// is outside the default fetch, so only the explicit uConsole opt-in
+    /// makes absence a failure.
     #[test]
     fn analyze_gerber_zip_reverse_extracts() {
         use std::io::Write;
-        let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-            .unwrap_or_default()
-            .join("famous/uconsole_cm4_adapter_gerber");
-        if !dir.exists() {
-            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-                panic!("corpus required but uconsole_cm4_adapter_gerber missing");
-            }
-            eprintln!("skipping gerber-zip web test (corpus absent)");
+        let Some(dir) = hauksbee_testkit::corpus_board(
+            env!("CARGO_MANIFEST_DIR"),
+            "famous/uconsole_cm4_adapter_gerber",
+        ) else {
+            assert!(
+                std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_err(),
+                "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
+            );
+            eprintln!(
+                "NOT RUN  gerber-zip web test: uconsole_cm4_adapter_gerber is \
+                 not in the default fetch (licence unconfirmed)"
+            );
             return;
-        }
+        };
         // Zip the fab dir the way a user would.
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for entry in std::fs::read_dir(&dir).unwrap() {
@@ -3763,16 +3769,20 @@ fn main {
     #[test]
     fn gerber_zip_with_firmware_reaches_cosim() {
         use std::io::Write;
-        let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-            .unwrap_or_default()
-            .join("famous/uconsole_cm4_adapter_gerber");
-        if !dir.exists() {
-            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-                panic!("corpus required but uconsole_cm4_adapter_gerber missing");
-            }
-            eprintln!("skipping gerber-zip cosim test (corpus absent)");
+        let Some(dir) = hauksbee_testkit::corpus_board(
+            env!("CARGO_MANIFEST_DIR"),
+            "famous/uconsole_cm4_adapter_gerber",
+        ) else {
+            assert!(
+                std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_err(),
+                "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
+            );
+            eprintln!(
+                "NOT RUN  gerber-zip cosim test: uconsole_cm4_adapter_gerber is \
+                 not in the default fetch (licence unconfirmed)"
+            );
             return;
-        }
+        };
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for entry in std::fs::read_dir(&dir).unwrap() {
             let p = entry.unwrap().path();
