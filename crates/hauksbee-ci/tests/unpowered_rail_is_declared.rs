@@ -20,6 +20,8 @@
 //! of parts is powered by nothing, every surface says so, and says so before
 //! the results it undermines.
 
+mod support;
+
 use hauksbee_ci::{report::CiResult, RunConfig};
 use std::path::{Path, PathBuf};
 
@@ -63,7 +65,7 @@ fn spec_for(dir: &Path, board: &Path, extra: &str) -> PathBuf {
         &spec,
         format!(
             "name = \"rail check\"\n\
-             board = \"{}\"\n\
+             board = {}\n\
              duration_ms = 2\n\
              [[supply]]\n\
              net = \"VCC\"\n\
@@ -71,7 +73,7 @@ fn spec_for(dir: &Path, board: &Path, extra: &str) -> PathBuf {
              volts = 5.0\n\
              [[assert]]\n\
              kind = \"no_faults\"\n{extra}",
-            board.display()
+            support::toml_path(board)
         ),
     )
     .expect("write spec");

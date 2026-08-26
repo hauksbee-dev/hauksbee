@@ -153,8 +153,9 @@ jobs:
 
       # A package does not exist until its first push. Probe the repository and
       # any existing package first; when the package is absent or unreadable,
-      # push only a zero-layer, non-runnable marker. The strict check after it
-      # must observe private visibility before a Hauksbee image can be built.
+      # push only a zero-layer, non-runnable marker. The strict check after the
+      # push then verifies the package ends up public: consumers pull these
+      # images anonymously, so a private package is an unusable publication.
       - name: Probe private container publication
         id: private-package
         shell: bash

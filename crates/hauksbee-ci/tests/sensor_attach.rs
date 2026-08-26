@@ -20,6 +20,8 @@
 //! ```
 //! Requires Renode at `~/renode-portable`.
 
+mod support;
+
 use std::path::PathBuf;
 
 use hauksbee_ci::{run, RunConfig};
@@ -176,7 +178,7 @@ fn sensor_spec_missing_source_is_rejected() {
 
     let spec_src = format!(
         r#"name = "sensor test"
-board = "{board}"
+board = {board}
 duration_ms = 10
 
 [[sensor]]
@@ -187,7 +189,7 @@ kind = "voltage"
 net = "+3V3"
 min = 3.0
 "#,
-        board = board_path.display()
+        board = support::toml_path(&board_path)
     );
     let spec_path = dir.join("bad_sensor.toml");
     std::fs::write(&spec_path, &spec_src).unwrap();
@@ -225,7 +227,7 @@ fn sensor_spec_both_sources_is_rejected() {
 
     let spec_src = format!(
         r#"name = "sensor test"
-board = "{board}"
+board = {board}
 duration_ms = 10
 
 [[sensor]]
@@ -238,7 +240,7 @@ kind = "voltage"
 net = "+3V3"
 min = 3.0
 "#,
-        board = board_path.display()
+        board = support::toml_path(&board_path)
     );
     let spec_path = dir.join("both_sources.toml");
     std::fs::write(&spec_path, &spec_src).unwrap();
@@ -259,7 +261,7 @@ fn unknown_sensor_input_is_refused_before_simulation() {
         .join("examples/boards/tolerance_divider.kicad_pcb");
     let spec = format!(
         r#"name = "bad sensor input"
-board = "{}"
+board = {}
 duration_ms = 1
 
 [[sensor]]
@@ -286,7 +288,7 @@ tempereture_c = 40.0
 [[assert]]
 kind = "no_faults"
 "#,
-        board.display()
+        support::toml_path(&board)
     );
     let path = dir.path().join("unknown-input.toml");
     std::fs::write(&path, spec).expect("write test spec");
