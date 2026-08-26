@@ -250,6 +250,25 @@ pub fn private_asset(env_var: &str, rel: &str, what: &str) -> Option<PathBuf> {
     )
 }
 
+/// A corpus asset that is deliberately absent from `corpus.toml`: not ours to
+/// redistribute, with no fetchable, pinnable upstream (the manifest's
+/// "Local-only boards" section). `HAUKSBEE_REQUIRE_CORPUS=1` promises that
+/// everything the manifest can supply is present; it cannot conjure these, so
+/// absence is always a loud skip, never a panic. In a maintainer's corpus that
+/// carries the asset, the test runs as normal.
+pub fn local_only_asset(manifest_dir: &str, rel: &str, what: &str) -> Option<PathBuf> {
+    let root = corpus_dir(manifest_dir)?;
+    let p = root.join(rel);
+    if p.is_file() {
+        return Some(p);
+    }
+    eprintln!(
+        "NOT RUN  {what}: {rel} is a local-only corpus asset (see corpus.toml) \
+         and this corpus does not carry it"
+    );
+    None
+}
+
 /// The marker `scripts/fetch-corpus.sh` writes into a board directory that
 /// `corpus.toml` declares `known_good = false`.
 pub const NOT_KNOWN_GOOD_MARKER: &str = ".hauksbee-not-known-good";

@@ -14,9 +14,11 @@ use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
 
 /// The stormduino board, if this machine has the corpus. It is a private
-/// board, so it is absent from corpus.toml and from any public checkout.
+/// board, deliberately absent from corpus.toml and from any public checkout
+/// (the manifest's local-only list), so a required fetch corpus is complete
+/// without it: absence skips, even under HAUKSBEE_REQUIRE_CORPUS=1.
 fn board_path(what: &str) -> Option<std::path::PathBuf> {
-    hauksbee_testkit::corpus_or_skip(
+    hauksbee_testkit::local_only_asset(
         env!("CARGO_MANIFEST_DIR"),
         "stormduino/stormduino Rev2.kicad_pcb",
         what,

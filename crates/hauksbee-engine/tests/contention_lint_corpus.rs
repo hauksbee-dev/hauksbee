@@ -185,8 +185,17 @@ fn contention_lint_fires_on_a_real_board_with_an_injected_fight() {
     let Some(root) = corpus_root() else { return };
     let lib = ModelLibrary::builtin();
 
-    let path = root.join("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_sch");
-    if !path.is_file() {
+    // The demos collection has two delivered names: `kicad-demos-src` in the
+    // hand-built tree, `kicad_demos` from scripts/fetch-corpus.sh (the same
+    // split schematic_ci.rs handles).
+    let path = ["kicad-demos-src", "kicad_demos"]
+        .iter()
+        .map(|d| {
+            root.join(d)
+                .join("demos/pic_programmer/pic_programmer.kicad_sch")
+        })
+        .find(|p| p.is_file());
+    let Some(path) = path else {
         // board-corpus exists but this board is not in it. A partial fetch is
         // the normal outcome (kicad_demos' upstream pin moved), and panicking
         // on a missing fixture tells a contributor their tree is broken when
@@ -199,7 +208,7 @@ fn contention_lint_fires_on_a_real_board_with_an_injected_fight() {
         );
         eprintln!("skipping the injected-fight case: {msg}");
         return;
-    }
+    };
     let mut board =
         ExtractedBoard::from_kicad_schematic_path(&path).expect("pic_programmer schematic loads");
     assert!(
