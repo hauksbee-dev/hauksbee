@@ -127,7 +127,7 @@ contains = [
   "visible here, not gating the build",
   "GREEN",
 ]
-matches = ["GREEN \\(1 failure\\(s\\) waived, visible above\\)"]
+matches = ["^GREEN - 0/1 assertions passed in [0-9.]+s \\(1 failure\\(s\\) waived, visible above\\)$"]
 
 [[step]]
 name = "the JUnit surface reports a waived failure as skipped, not as a pass"

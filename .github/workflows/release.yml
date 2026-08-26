@@ -1038,7 +1038,21 @@ jobs:
 
       - name: Install macOS simulator runtime dependencies
         if: runner.os == 'macOS'
-        run: brew install glib pixman libslirp libgcrypt
+        # otool -L on all four pinned Espressif QEMU binaries shows exactly
+        # three Homebrew dylibs: pixman, libgcrypt and SDL2. SDL2 was missing
+        # here, and the quiet fork probe turned dyld's failure into "not the
+        # fork". The binaries also hard-code /opt/homebrew paths (Espressif
+        # builds them on arm64), so on the Intel runner, whose Homebrew prefix
+        # is /usr/local, link the expected keg paths to the real ones. glib
+        # and libslirp stay for Renode's runtime.
+        run: |
+          brew install glib pixman libslirp libgcrypt sdl2
+          if [ "$(brew --prefix)" != "/opt/homebrew" ]; then
+            sudo mkdir -p /opt/homebrew/opt
+            for keg in pixman libgcrypt sdl2; do
+              sudo ln -sfn "$(brew --prefix)/opt/$keg" "/opt/homebrew/opt/$keg"
+            done
+          fi
 
       # Renode's pinned Intel DMG is the real 1.16.1 Mono build; unlike the
       # Apple-Silicon portable-dotnet asset it deliberately uses system Mono.

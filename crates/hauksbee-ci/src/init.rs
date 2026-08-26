@@ -165,6 +165,12 @@ fn board_reference(board: &Path, spec_dir: &Path) -> String {
     }
 }
 
+/// Encode a path as a TOML string. Hand-written basic-string quoting turns a
+/// native Windows path such as `..\hardware` into an invalid escape (`\h`).
+fn toml_path(path: String) -> String {
+    toml::Value::String(path).to_string()
+}
+
 /// `to` expressed relative to the directory `from` (both absolute), walking up
 /// with `..` where needed. `None` when they share no root (different drives).
 fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
@@ -295,7 +301,7 @@ fn render_spec_at_with_run_hint(
     );
 
     let stem = board_stem(board);
-    let board_file = board_reference(board, spec_dir);
+    let board_file = toml_path(board_reference(board, spec_dir));
 
     let mut s = String::new();
     let _ = writeln!(
@@ -325,7 +331,7 @@ fn render_spec_at_with_run_hint(
     );
     let _ = writeln!(
         s,
-        "board = \"{board_file}\"          # the design file this spec checks"
+        "board = {board_file}          # the design file this spec checks"
     );
     let _ = writeln!(
         s,
@@ -770,7 +776,7 @@ fn render_spec_at_with_run_hint(
 
 #[cfg(test)]
 mod relative_path_tests {
-    use super::relative_path;
+    use super::{relative_path, toml_path};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -792,6 +798,16 @@ mod relative_path_tests {
         assert_eq!(
             rel("/repo", "/repo/board.kicad_pcb"),
             Some(PathBuf::from("board.kicad_pcb"))
+        );
+    }
+
+    #[test]
+    fn windows_separators_are_escaped_for_toml() {
+        let encoded = toml_path(r"..\hardware\blinky.kicad_pcb".to_string());
+        let parsed: toml::Value = format!("board = {encoded}").parse().unwrap();
+        assert_eq!(
+            parsed["board"].as_str(),
+            Some(r"..\hardware\blinky.kicad_pcb")
         );
     }
 }
