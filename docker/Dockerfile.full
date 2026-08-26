@@ -62,7 +62,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Runtime libraries the prebuilt backends need:
 #   Renode (-dotnet portable)  libicu72, libgssapi-krb5-2 (bundles its runtime)
-#   Espressif QEMU             libglib2.0-0, libpixman-1-0, libgcrypt20, libslirp0
+#   Espressif QEMU             libglib2.0-0, libpixman-1-0, libgcrypt20, libslirp0, libsdl2-2.0-0
 #   freerouting                default-jre-headless (OpenJDK 17)
 #   curl + xz-utils            fetch + unpack the release tarballs
 # hadolint ignore=DL3008
@@ -76,6 +76,7 @@ RUN apt-get update \
         libgssapi-krb5-2 \
         libicu72 \
         libpixman-1-0 \
+        libsdl2-2.0-0 \
         libslirp0 \
         xz-utils \
     && resolve_tag() { \
