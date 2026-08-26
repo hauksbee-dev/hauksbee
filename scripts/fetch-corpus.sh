@@ -260,6 +260,28 @@ fetch_zip() {
   mv "$dest.partial" "$dest"
 }
 
+# A cold-cache run is one unreachable upstream away from failing the whole
+# gate: the coverage floors downstream were designed to tolerate a briefly
+# unreachable host, but a single failed fetch used to exit 1 before they got a
+# say. Give each network fetch three attempts with a growing pause; a host
+# that stays down through all three is a real failure and is still reported,
+# loudly, by id. The partial directory is cleared between attempts because
+# both fetchers assume they start into an empty one.
+try_fetch() {
+  local fn="$1"; shift
+  local id="$1" dest="$4"
+  local attempt
+  for attempt in 1 2 3; do
+    "$fn" "$@" && return 0
+    rm -rf "$dest.partial"
+    if [ "$attempt" -lt 3 ]; then
+      warn "$id: attempt $attempt failed; retrying in $((attempt * 30))s"
+      sleep $((attempt * 30))
+    fi
+  done
+  return 1
+}
+
 total=0; fetched=0; skipped=0; failed=0
 declare -a FAILED_IDS=()
 
@@ -307,8 +329,8 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel 
   [ "$dest_rel" = "$id" ] || where=" -> $dest_rel"
   info "$id$where  <- $url${rev:+ @ $rev}${sha256:+ @ sha256:${sha256:0:12}}"
   case "$kind" in
-    git) fetch_git "$id" "$url" "$rev" "$dest"          || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
-    zip) fetch_zip "$id" "$url" "$sha256" "$dest"       || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
+    git) try_fetch fetch_git "$id" "$url" "$rev" "$dest"    || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
+    zip) try_fetch fetch_zip "$id" "$url" "$sha256" "$dest" || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
     *) warn "$id: unknown kind '$kind'"; failed=$((failed+1)); FAILED_IDS+=("$id"); continue ;;
   esac
 

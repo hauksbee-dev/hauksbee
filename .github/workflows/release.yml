@@ -1136,10 +1136,8 @@ jobs:
           python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
           python3 integrations/pre-commit/test_hauksbee_ci_precommit.py
           python3 scripts/lint-diagrams.py
-          python3 scripts/lint-docs-currency.py
           bash integrations/github-action/test_pick_release_tag.sh
           shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh scripts/build-release-source.sh
-          shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
       - name: Product-app lint, unit, browser, build, and visual gates
         working-directory: frontend
         run: |

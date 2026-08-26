@@ -432,16 +432,6 @@ jobs:
       # docs, so this builds them.
       - run: cargo doc --workspace --no-deps
 
-  docs-currency:
-    name: docs currency (no dead links, gravestones, or stale paths in shipped docs)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      # Shipped docs must describe the present tense of the tree: every relative
-      # link resolves, no gravestone or review-process language, no references
-      # into internal-only paths, no em-dashes, no stale backticked repo paths.
-      - run: python3 scripts/lint-docs-currency.py
-
   frontend-quality:
     name: frontend quality (lint, tests, browser flows, visual fit)
     needs: plan

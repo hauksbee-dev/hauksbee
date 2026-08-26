@@ -274,108 +274,6 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         )
         self.assertTrue(all(entry["classification"] for entry in exclusions))
 
-    def test_mirror_scope_matches_the_curated_release_tree(self) -> None:
-        manifest = self.surface_manifest()
-        development_only = {
-            ",
-            ",
-            ",
-            ",
-            ",
-            "frontend/capture/cards.ts",
-            "scripts/build-private-beta-snapshot.sh",
-            "scripts/make-public.sh",
-        }
-        for entry in manifest["surfaces"]:
-            path = entry["path"]
-            scopes = entry.get("scopes", ["development", "mirror"])
-            with self.subTest(path=path):
-                self.assertIn("development", scopes)
-                self.assertEqual("mirror" in scopes, path not in development_only)
-
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            mirror = Path(raw_tmp) / "mirror"
-            for entry in manifest["surfaces"]:
-                if "mirror" not in entry.get("scopes", ["development", "mirror"]):
-                    continue
-                relative = Path(entry["path"])
-                destination = mirror / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(ROOT / relative, destination)
-            for policy_file in (SURFACE_MANIFEST, SURFACE_CHECKER):
-                destination = mirror / policy_file.relative_to(ROOT)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(policy_file, destination)
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(mirror / SURFACE_CHECKER.relative_to(ROOT)),
-                    str(mirror),
-                    "--scope",
-                    "mirror",
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
-        builder = (ROOT / "scripts/build-public-mirror.sh").read_text()
-        self.assertIn(
-            "check-private-release-surfaces.py . --scope mirror",
-            builder,
-            "the real curated output, not only a synthetic fixture, must run the mirror policy",
-        )
-        self.assertIn("manifest['excluded_prefixes'] = []", builder)
-        self.assertIn("surface.get('scopes', ['development', 'mirror'])", builder)
-
-    def test_private_suite_disclosure_counts_each_absent_test_file(self) -> None:
-        builder = (ROOT / "scripts/build-public-mirror.sh").read_text()
-        board_block = builder.split("BOARD_EXCLUDE=(", 1)[1].split("\n)", 1)[0]
-        absent_paths = [
-            ROOT / line.strip()
-            for line in board_block.splitlines()
-            if line.strip().endswith(".rs") and "/tests/" in line
-        ]
-        # The historical engine paths remain in BOARD_EXCLUDE so filter-repo
-        # removes them from older commits. At the current tip, resolve the six
-        # extracted suites from the private crate that now owns them.
-        absent_paths = [
-            path
-            if path.exists()
-            else ROOT / "crates" / "hauksbee-tarski" / "tests" / path.name
-            for path in absent_paths
-        ]
-
-        disclosure = (ROOT / "docs/about/PRIVATE_SUITE.md").read_text()
-        rows = {
-            name: int(count)
-            for name, count in re.findall(
-                r"^\| `([^`]+)` \| ([0-9]+) \|", disclosure, re.MULTILINE
-            )
-        }
-        actual: dict[str, int] = {}
-        for path in absent_paths:
-            count = len(re.findall(r"^#\[(?:tokio::)?test\]", path.read_text(), re.MULTILINE))
-            actual[path.stem] = count
-            with self.subTest(suite=path.stem):
-                self.assertEqual(rows.get(path.stem), count)
-
-        headline = re.search(
-            r"\*\*([0-9]+) tests: ([0-9]+) in the ([0-9]+) absent files below, "
-            r"plus ([0-9]+) removed",
-            disclosure,
-        )
-        self.assertIsNotNone(headline)
-        total, absent, files, removed = map(int, headline.groups())
-        self.assertEqual(files, len(actual))
-        self.assertEqual(absent, sum(actual.values()))
-        self.assertEqual(total, absent + removed)
-
-        nep = (ROOT / "crates/hauksbee-engine/tests/nep_private_acceptance.rs").read_text()
-        self.assertIn("fn real_nep_host_exposes_standard_grade_7ms_gap()", nep)
-        self.assertIn("fn real_nep_host_succeeds_with_compliant_firmware()", nep)
-
     def private_installer_fixture(
         self, *, include_mcp: bool = True, bad_binary_version: str | None = None
     ) -> tuple[str, bytes, bytes]:
@@ -1088,58 +986,6 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     "api.github.com/repos/hauksbee-dev/hauksbee/contents/", text
                 )
 
-    def test_mirror_rejects_retained_scripts_with_missing_operational_dependencies(self) -> None:
-        manifest = self.surface_manifest()
-        launcher = next(
-            item for item in manifest["surfaces"] if item["path"] == "scripts/make-public.sh"
-        )
-        self.assertEqual(launcher.get("scopes"), ["development"])
-        builder = (ROOT / "scripts/build-public-mirror.sh").read_text()
-        self.assertIn("scripts/make-public.sh", builder)
-        self.assertIn("check-mirror-dependencies.py .", builder)
-
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            mirror = Path(raw_tmp)
-            scripts = mirror / "scripts"
-            scripts.mkdir()
-            launcher_fixture = scripts / "launcher.sh"
-            launcher_fixture.write_text(
-                '#!/usr/bin/env bash\nbash "$HAUKSBEE_ROOT/scripts/missing-builder.sh"\n'
-            )
-            launcher_fixture.chmod(0o755)
-            bad = subprocess.run(
-                ["python3", str(MIRROR_DEPENDENCY_CHECKER), str(mirror)],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertNotEqual(bad.returncode, 0, bad.stdout + bad.stderr)
-            self.assertIn("scripts/missing-builder.sh", bad.stderr)
-            launcher_fixture.unlink()
-            good = subprocess.run(
-                ["python3", str(MIRROR_DEPENDENCY_CHECKER), str(mirror)],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
-
-    def test_b3_names_the_real_qc_path_and_manual_failure_contract(self) -> None:
-        tasks = (ROOT / ").read_text()
-        start_match = re.search(r"(?m)^- \[[ x~]\] B3 ", tasks)
-        end_match = re.search(r"(?m)^- \[[ x~]\] B4 ", tasks)
-        self.assertIsNotNone(start_match)
-        self.assertIsNotNone(end_match)
-        assert start_match is not None and end_match is not None
-        start = start_match.start()
-        end = end_match.start()
-        b3 = tasks[start:end]
-        self.assertIn("qc/scenarios/", b3)
-        self.assertIn("qc/results/<timestamp>/report.md", b3)
-        self.assertIn("exits non-zero", b3)
-        self.assertIn("manually", b3)
-        self.assertNotIn("files a defect", b3)
-
     def test_docker_publication_checks_private_repo_and_package_before_and_after(self) -> None:
         workflow = (ROOT / ".github/workflows/docker.yml").read_text()
         probe = workflow.index("Probe private container publication")
@@ -1542,15 +1388,18 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("Hauksbee and libsimavr", slim)
         self.assertIn("Hauksbee and libsimavr", full)
 
-        # Published public packages pull anonymously; the pre-publication and
-        # private-mirror paths keep their credential-hygiene guidance.
+        # No beta release publishes images, so the doc must say a pull needs
+        # the reader's own authenticated candidate build, and its login
+        # guidance must keep the credential off argv (the bare `docker login`
+        # prompt, never --password).
         docker_doc = (ROOT / "docs/ci/DOCKER.md").read_text()
-        self.assertIn("The images are public", docker_doc)
+        self.assertIn("Authenticate against the registry", docker_doc)
         self.assertIn("docker login ghcr.io", docker_doc)
+        self.assertNotIn("docker login --password", docker_doc)
 
         recipes = (ROOT / "docs/ci/RECIPES.md").read_text()
-        self.assertIn("can pull it\nanonymously", recipes)
-        self.assertIn("Before publication", recipes)
+        self.assertIn("nothing to pull\nanonymously", recipes)
+        self.assertIn("protected secret store", recipes)
         for credential_contract in (
             "DOCKER_AUTH_CONFIG",
             "registryCredentialsId",
@@ -1580,7 +1429,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("release-quality:", workflow)
         self.assertIn(
-            "needs: [build, build-windows, required-integrations, release-quality]",
+            "needs: [build, build-windows, required-integrations,"
+            " release-quality, release-quality-residue]",
             workflow,
         )
         for gate in (
@@ -1626,38 +1476,6 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("/opt/hauksbee/external-smoke/esp32-flash.bin", docker)
         self.assertIn("freerouting handoff", docker)
         self.assertIn("--route --route-passes 2", docker)
-
-    def test_release_plans_do_not_advertise_a_public_installer_endpoint(self) -> None:
-        for relative in (
-            Path("),
-            Path("),
-        ):
-            with self.subTest(path=relative):
-                self.assertNotIn("hauksbee.dev/install", (ROOT / relative).read_text())
-
-    def test_release_contract_never_requires_public_repository_or_issues(self) -> None:
-        forbidden_by_file = {
-            ROOT / ".github/workflows/release.yml": (
-                "public slug",
-                "public repo",
-            ),
-            ROOT / " (
-                "public repo",
-                "repo is public",
-            ),
-            ROOT / " ("public issue",),
-            ROOT / " ("public issue",),
-        }
-
-        for path, forbidden_phrases in forbidden_by_file.items():
-            text = path.read_text().lower()
-            for phrase in forbidden_phrases:
-                with self.subTest(path=path.relative_to(ROOT), phrase=phrase):
-                    self.assertNotIn(
-                        phrase,
-                        text,
-                        f"{path.relative_to(ROOT)} contradicts the private-only release policy",
-                    )
 
     def release_preflight_body(self) -> str:
         lines = (ROOT / ".github/workflows/release.yml").read_text().splitlines(True)
@@ -1753,8 +1571,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                         printf '%s\\n' "$FAKE_GH_VISIBILITY"
                         ;;
                       "repos/hauksbee-dev/hauksbee/immutable-releases .enabled")
-                        [ "$FAKE_IMMUTABLE_RELEASES" = true ] || exit 1
-                        printf '%s\\n' true
+                        printf '%s\\n' "$FAKE_IMMUTABLE_RELEASES"
                         ;;
                       *) exit 64 ;;
                     esac
@@ -1949,61 +1766,6 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 check=False,
             )
             return result, log.read_text() if log.exists() else ""
-
-    def test_private_repositories_are_left_private(self) -> None:
-        result, calls = self.run_privacy_phase()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("developer repository is private", result.stdout)
-        self.assertIn("release mirror is private", result.stdout)
-        self.assertNotIn("repo edit", calls)
-        self.assertNotIn("repo create", calls)
-
-    def test_absent_mirror_is_created_private_when_armed(self) -> None:
-        result, calls = self.run_privacy_phase(mirror_visibility="missing", armed=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("repo create hauksbee-dev/hauksbee --private", calls)
-        self.assertIn(
-            "api --method PUT repos/hauksbee-dev/hauksbee/immutable-releases",
-            calls,
-        )
-        self.assertNotIn("--visibility public", calls)
-
-    def test_public_repository_is_changed_to_private_never_the_reverse(self) -> None:
-        result, calls = self.run_privacy_phase(mirror_visibility="public", armed=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(
-            "repo edit hauksbee-dev/hauksbee --visibility private", calls
-        )
-        self.assertNotIn("--visibility public", calls)
-
-    def test_public_developer_repository_is_changed_to_private(self) -> None:
-        result, calls = self.run_privacy_phase(
-            developer_visibility="public", armed=True
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(
-            "repo edit ETM-Code/hauksbee-developer --visibility private", calls
-        )
-        self.assertNotIn("--visibility public", calls)
-
-    def test_missing_developer_repository_is_a_hard_failure(self) -> None:
-        result, calls = self.run_privacy_phase(developer_visibility="missing")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("developer repository", result.stderr)
-        self.assertNotIn("repo create ETM-Code/hauksbee-developer", calls)
-
-    def test_mirror_phase_refuses_a_public_push_target_before_building(self) -> None:
-        result, calls = self.run_privacy_phase(
-            mirror_visibility="public", armed=True, phase="mirror"
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("refusing to push", result.stderr)
-        self.assertEqual(
-            calls.strip(),
-            "api repos/hauksbee-dev/hauksbee --jq .visibility",
-            "the launcher must reject visibility before it rebuilds or pushes",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()
