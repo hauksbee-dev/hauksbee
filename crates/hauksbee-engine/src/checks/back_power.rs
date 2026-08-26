@@ -1,6 +1,5 @@
 //! Back-powering / cross-domain pull lint: a modelled part's signal pin tied
 //! or pulled up to a rail ABOVE the part's own supply domain.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! The physics: virtually every IC input carries a protection clamp diode from
 //! the pin to its supply rail. Pull a pin to a rail higher than the part's

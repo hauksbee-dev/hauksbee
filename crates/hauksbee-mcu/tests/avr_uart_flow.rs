@@ -1,7 +1,7 @@
 //! UART RX flow control and core reset, against a real emulated ATmega328P.
 //!
 //! Reproduces (and now guards) the NEP-board study's two SEV defects on the
-//! flagship AVR + host-serial path (docs/dev-plans/nep-board-study.md):
+//! flagship AVR + host-serial path:
 //!
 //! 1. `uart_write` used to raise every byte onto simavr's `UART_IRQ_INPUT` at
 //!    a single sim instant. simavr's RX fifo is 64 bytes, so byte 65 onward of

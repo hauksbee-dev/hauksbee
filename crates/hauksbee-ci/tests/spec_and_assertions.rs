@@ -288,26 +288,6 @@ fn main {
     );
 }
 
-#[test]
-fn boot_coverage_requires_net_min_and_deadline() {
-    let board =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_brownout_cell.net");
-    // Missing deadline_ms.
-    let p = write_tmp(
-        "bootcov_bad.toml",
-        &format!(
-            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"boot-coverage\"\nnet=\"FOO\"\nmin=3.0\n",
-            board.display()
-        ),
-    );
-    let err = run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .unwrap_err();
-    assert!(err.to_string().contains("deadline_ms"), "got: {err}");
-}
-
 // E51: boot_coverage with NO firmware staged is a hollow gate; the net could
 // only reach its level passively (a board pull / bias settling), which is the
 // vacuous pass the check exists to prevent. The spec must refuse to LOAD.

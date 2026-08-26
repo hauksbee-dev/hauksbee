@@ -10,7 +10,6 @@
 //! front-end lowers to, so downstream binding and simulation never see which
 //! reader produced it.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/netlist.md.
 
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 use forge_sexpr::Document;

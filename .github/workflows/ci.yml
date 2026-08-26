@@ -403,34 +403,6 @@ jobs:
       # every retained artifact must still match its recorded digest.
       - run: python3 -m qc.unseen_boards audit-history
 
-  defect-regressions:
-    name: pinned upstream defect regressions
-    needs: [plan, test]
-    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: linux-ci
-          add-job-id-key: false
-          cache-on-failure: true
-          cache-workspace-crates: true
-      # The harness is deliberately stdlib-only. Its unit suite attacks hash
-      # drift, path escape, symlinks, duplicate cases, vacuous coverage, and
-      # commands that mutate their own supposedly pinned input bytes.
-      - run: python3 -m unittest -v qc.defect_regressions.test_tool
-      - run: python3 -m qc.defect_regressions.tool manifest qc/defect_regressions/manifest.json
-      - name: build the one binary used for both defect revisions
-        run: cargo build --locked -p hauksbee-engine --bin hauksbee --no-default-features --features renode,qemu
-      # Run the exact before/fix pair, not only the harness. The first shipped
-      # case is intentionally qualified rather than laundered into RED->GREEN:
-      # the upstream fix removes all four actionable findings, while unrelated
-      # open active parts make the fixed board INVALID under strict coverage.
-      - name: replay pinned C64-Saver defect and fix
-        run: python3 -m qc.defect_regressions.tool run qc/defect_regressions/c64_saver_i2c_pullups.json
-
   docs:
     name: cargo doc (rendered module docs stay valid)
     needs: [plan, clippy]

@@ -21,8 +21,6 @@
 //! [`matcher`]). Same-layer conflicts between two different
 //! packs are reported loudly at load, naming both packs.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-models/README.md (the
-//! crate tour) and docs/how-and-why/hauksbee-models/pack.md (resolution
 //! layering).
 //!
 //! # Quick start

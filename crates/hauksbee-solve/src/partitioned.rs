@@ -53,9 +53,7 @@
 //! shared free node into one island, so on real boards today the Jacobi sweep
 //! computes bit-for-bit what the Gauss-Seidel sweep did.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies; shared with `partition.rs`, whose analysis this executes):
-//! docs/how-and-why/hauksbee-solve/partition.md
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use rayon::prelude::*;

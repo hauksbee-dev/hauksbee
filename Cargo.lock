@@ -1511,22 +1511,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hauksbee-tarski"
-version = "0.1.0-beta.2"
-dependencies = [
- "anyhow",
- "hauksbee-engine",
- "hauksbee-extract",
- "hauksbee-frontdoor-api",
- "hauksbee-ir",
- "hauksbee-mcu",
- "hauksbee-models",
- "hauksbee-solve",
- "serde_json",
- "toml",
-]
-
-[[package]]
 name = "hauksbee-testkit"
 version = "0.1.0-beta.2"
 

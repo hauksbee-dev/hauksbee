@@ -11,7 +11,6 @@
 //! no `evalexpr` evaluation (that lives engine-side, where the expression
 //! evaluator already is). It is the shared contract both the interpreter and
 //! the extractor validate against.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-models/sensor_spec.md.
 //!
 //!
 //! ## TOML shape

@@ -17,7 +17,7 @@ import { terminateProcess } from './harness'
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = resolve(here, '../../..')
 const binary = resolve(repo, process.env.HAUKSBEE_BIN ?? 'target/debug/hauksbee')
-const board = resolve(repo, process.env.HB_MODEL_BOARD ?? 'qc/defect_regressions/fixtures/watchy_res_pullup/fixed/Watchy.kicad_pcb')
+const board = resolve(repo, process.env.HB_MODEL_BOARD ?? 'crates/hauksbee-ci/examples/boards/blinky.kicad_pcb')
 const firmware = resolve(repo, process.env.HB_MODEL_FIRMWARE ?? 'testdata/firmware/watchy_display_init/flash.bin')
 const sensorRef = process.env.HB_MODEL_SENSOR_REF ?? 'U4'
 const bundledLm75 = resolve(repo, 'testdata/sensor-specs/lm75.toml')

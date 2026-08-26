@@ -3,7 +3,7 @@
 //! garbage. Uses the real testdata ELFs so the e_machine values are genuine,
 //! not synthetic.
 //!
-//! Background: docs/hunts/personas/persona-esp32-iot.md loaded an Xtensa ESP32
+//! Background: loaded an Xtensa ESP32
 //! image onto a RISC-V ESP32-C3 board and got ~136 MB of UART garbage
 //! ("invalid header: 0xffffffff") with no error. These tests lock that shut.
 

@@ -6,8 +6,6 @@ mod ac_stability;
 mod analog_invalid;
 #[path = "cosim_coverage_honesty.rs"]
 mod cosim_coverage_honesty;
-#[path = "flagship_brownout.rs"]
-mod flagship_brownout;
 #[path = "inkplate_class_demo.rs"]
 mod inkplate_class_demo;
 #[path = "olimex_burst_calibration.rs"]

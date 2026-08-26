@@ -6,7 +6,6 @@
 //! The goal is to ingest real test vectors and user-supplied netlists, not to be
 //! a complete SPICE3 front end; anything unsupported is reported with the line.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/spice.md.
 //!
 //! # Element-name references (dev-plan 04 §2.2, resolve-by-name)
 //!

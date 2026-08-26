@@ -6,8 +6,6 @@
 //! the system matrix once; the index is stable for the whole run so the sparse
 //! pattern stays frozen.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/system.md
 
 use std::collections::HashMap;
 

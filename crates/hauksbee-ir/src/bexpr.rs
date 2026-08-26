@@ -1,5 +1,4 @@
 //! Compiled behavioral-source expressions (dev-plan 04 §2.5).
-//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/bexpr.md.
 //!
 //! A B-source card (`Bxxx n+ n- V={expr}` / `I={expr}`) carries an arithmetic
 //! expression over node voltages, branch currents, `time`, and `.param`

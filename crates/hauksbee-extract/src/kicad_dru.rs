@@ -17,15 +17,14 @@
 //! violation. KiCad produced one naming `restrictive 0.250 mm second`, with a
 //! 0.2500 mm rule and 0.1800 mm actual gap. The loose-last result discriminates
 //! the hypotheses and proves that the later matching custom rule wins. Raw
-//! outputs and hashes are retained in
-//! `qc/evidence/drc-parity/kicad-dru-precedence-10.0.5.md`.
+//! outputs and hashes are retained in the private evidence archive.
 //! The doorbell oracle independently established that a global 0.127 mm custom
 //! clearance overrides the sibling project's 0.200 mm Default netclass even
 //! though the custom rule is looser.
 //!
 //! The retained bare-value scope probe is
-//! `tests/fixtures/kicad_dru_bare_scope.kicad_pcb`; full evidence is in
-//! `qc/evidence/drc-parity/dru-bare-value-poisons-the-whole-file.md`. Its project rule is
+//! `tests/fixtures/kicad_dru_bare_scope.kicad_pcb`; full evidence is in the
+//! private evidence archive. Its project rule is
 //! 0.150 mm, its gap is 0.180 mm, and its custom file contains a bare 0.200
 //! rule followed by an explicit 0.200mm rule. KiCad CLI 10.0.5 reported no
 //! clearance violation. Removing only the bare rule made the explicit `mm

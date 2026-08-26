@@ -1,5 +1,4 @@
 //! Boot strapping-pin lint (static, no firmware needed).
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! An MCU samples certain pins at the reset latch window to choose its boot
 //! mode. If a strapping pin is not at the level the part needs during that

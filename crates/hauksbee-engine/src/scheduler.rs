@@ -1,5 +1,4 @@
 //! The co-simulation scheduler.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/scheduler.md.
 //!
 //! Generalizes the Tarski-Emulator lockstep pattern. Each call to
 //! [`Scheduler::step`] advances wall-clock `dt` in fixed sub-chunks (default

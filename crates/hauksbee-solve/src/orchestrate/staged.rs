@@ -68,8 +68,6 @@
 //! `torn_group_with_replay_pin_matches_monolith` fixture exercises the
 //! composition.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 use std::collections::{BTreeMap, HashMap};
 

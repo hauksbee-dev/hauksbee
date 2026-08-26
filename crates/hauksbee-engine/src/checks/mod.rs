@@ -1,5 +1,4 @@
 //! Design-rule / physics checks that run against a parsed or solved board.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! Each check is self-contained: it takes an
 //! [`ExtractedBoard`] (and, where it needs

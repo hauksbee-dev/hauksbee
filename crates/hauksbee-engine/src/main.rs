@@ -176,7 +176,7 @@ enum Command {
     /// supported/refused card list is the drift-tested compatibility
     /// statement (URL below).
     ///
-    /// Example (self-contained decks bundled under examples/learn/):
+    /// Example (self-contained decks bundled under):
     ///   hauksbee sim examples/decks/divider.cir --op --print V(out)
     ///   hauksbee sim examples/decks/rlc_ringdown.cir --tran --print V(out)
     ///   hauksbee sim examples/decks/rc_lowpass_ac.cir --ac --print V(out)

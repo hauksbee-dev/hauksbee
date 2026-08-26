@@ -4,7 +4,7 @@
 #     hauksbee-ci run crates/hauksbee-ci/examples/watchy_v15_display_res.toml
 #
 # This executes the formerly-MISSED Watchy display-RES# validation row
-# (docs/evidence/KNOWN_FAULTS_VALIDATION.md). The board is the unmodified corpus Watchy
+# (docs/evidence/CORPUS.md). The board is the unmodified corpus Watchy
 # v1.5 layout; its RES net (e-paper reset, U1 ESP32-PICO-D4 pad 28 = GPIO9, the
 # display FPC J1 pad 10) has NO pull resistor in v1.5 - the exact "control input
 # on a Hi-Z GPIO" topology the static netlist cannot adjudicate. The firmware is

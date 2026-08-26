@@ -277,11 +277,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
     def test_mirror_scope_matches_the_curated_release_tree(self) -> None:
         manifest = self.surface_manifest()
         development_only = {
-            "docs/dev-plans/launch-checklist.md",
-            "docs/dev-plans/launch-gtm-strategy.md",
-            "docs/dev-plans/linux-clean-room-report-2026-08-14.md",
-            "docs/dev-plans/public-release-cleanup-plan.md",
-            "docs/dev-plans/tasks.md",
+            ",
+            ",
+            ",
+            ",
+            ",
             "frontend/capture/cards.ts",
             "scripts/build-private-beta-snapshot.sh",
             "scripts/make-public.sh",
@@ -1125,7 +1125,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
 
     def test_b3_names_the_real_qc_path_and_manual_failure_contract(self) -> None:
-        tasks = (ROOT / "docs/dev-plans/tasks.md").read_text()
+        tasks = (ROOT / ").read_text()
         start_match = re.search(r"(?m)^- \[[ x~]\] B3 ", tasks)
         end_match = re.search(r"(?m)^- \[[ x~]\] B4 ", tasks)
         self.assertIsNotNone(start_match)
@@ -1629,8 +1629,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
 
     def test_release_plans_do_not_advertise_a_public_installer_endpoint(self) -> None:
         for relative in (
-            Path("docs/dev-plans/launch-video.md"),
-            Path("docs/dev-plans/go-to-market.md"),
+            Path("),
+            Path("),
         ):
             with self.subTest(path=relative):
                 self.assertNotIn("hauksbee.dev/install", (ROOT / relative).read_text())
@@ -1641,12 +1641,12 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 "public slug",
                 "public repo",
             ),
-            ROOT / "docs/dev-plans/launch-video.md": (
+            ROOT / " (
                 "public repo",
                 "repo is public",
             ),
-            ROOT / "docs/dev-plans/prelaunch-c-plan.md": ("public issue",),
-            ROOT / "docs/dev-plans/tasks.md": ("public issue",),
+            ROOT / " ("public issue",),
+            ROOT / " ("public issue",),
         }
 
         for path, forbidden_phrases in forbidden_by_file.items():

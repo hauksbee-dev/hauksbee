@@ -7,7 +7,6 @@
 //! board's nets; this module owns the *format* and *validation* only, no
 //! evaluation and no `evalexpr` (that lives engine-side, where the expression
 //! evaluator already is, same split as `sensor_spec.rs`).
-//! Long-form how-and-why: docs/how-and-why/hauksbee-models/logic_spec.md.
 //!
 //!
 //! ## TOML shape

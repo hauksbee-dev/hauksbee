@@ -1,62 +1,239 @@
 {
   "repository": "hauksbee-dev/hauksbee",
-  "excluded_prefixes": [
-    {"path": ".wiley/", "classification": "local-orchestration-runtime-not-release-source"},
-    {"path": "docs/dev-plans/", "classification": "development-plans-not-distribution-surfaces"},
-    {"path": "docs/how-and-why/", "classification": "internal-design-notes-not-distribution-surfaces"},
-    {"path": "docs/hunts/", "classification": "historical-hunt-records-not-used-for-release-or-distribution"},
-    {"path": "docs/learn/", "classification": "development-course-not-distribution-surfaces"},
-    {"path": "docs/record/", "classification": "development-records-not-distribution-surfaces"},
-    {"path": "docs/teach/", "classification": "internal-teaching-apparatus-not-distribution-surfaces"},
-    {"path": "packaging/private-beta/", "classification": "private-beta-packaging-not-stable-distribution"},
-    {"path": "qc/claims/results/", "classification": "generated-claim-receipts-not-distribution-surfaces"},
-    {"path": "qc/defect_regressions/", "classification": "upstream-defect-provenance-records-not-distribution-surfaces"},
-    {"path": "qc/evidence/", "classification": "internal-evidence-receipts-not-distribution-surfaces"},
-    {"path": "qc/model_workflow/", "classification": "internal-model-workflow-fixtures-not-distribution-surfaces"},
-    {"path": "qc/release-results/", "classification": "internal-release-qc-transcripts-not-distribution-surfaces"},
-    {"path": "qc/showcase/", "classification": "internal-showcase-claim-adapters-not-distribution-surfaces"}
-  ],
+  "excluded_prefixes": [],
   "surfaces": [
-    {"path": ".github/ISSUE_TEMPLATE/config.yml", "classification": "repository-policy", "occurrences": 1},
-    {"path": ".github/workflows/cla.yml", "classification": "workflow-metadata", "occurrences": 1},
-    {"path": ".github/workflows/docker.yml", "classification": "release-artifact-metadata", "occurrences": 5, "required_fragments": ["IMAGE: ghcr.io/hauksbee-dev/hauksbee"]},
-    {"path": ".github/workflows/release.yml", "classification": "release-workflow", "occurrences": 3},
-    {"path": ".pre-commit-hooks.yaml", "classification": "package-metadata", "occurrences": 1},
-    {"path": "BETA.md", "classification": "private-beta-documentation", "occurrences": 1},
-    {"path": "COMPLIANCE.md", "classification": "shipped-documentation", "occurrences": 2},
-    {"path": "CONTRIBUTING.md", "classification": "shipped-documentation", "occurrences": 1},
-    {"path": "Cargo.toml", "classification": "package-metadata", "occurrences": 2},
-    {"path": "README.md", "classification": "shipped-documentation", "occurrences": 3},
-    {"path": "SECURITY.md", "classification": "shipped-documentation", "occurrences": 1},
-    {"path": "app/macos/build-app.sh", "classification": "release-artifact-metadata", "occurrences": 2, "required_fragments": ["https://github.com/hauksbee-dev/hauksbee   commit"]},
-    {"path": "crates/hauksbee-ci/src/integrate.rs", "classification": "generated-integration", "occurrences": 4, "required_fragments": ["repo: https://github.com/hauksbee-dev/hauksbee"]},
-    {"path": "crates/hauksbee-ci/tests/schema_drift.rs", "classification": "generated-integration-regression", "occurrences": 1},
-    {"path": "crates/hauksbee-mcp/README.md", "classification": "shipped-documentation", "occurrences": 1},
-    {"path": "docker/Dockerfile.full", "classification": "release-artifact-metadata", "occurrences": 1, "required_fragments": ["org.opencontainers.image.source=\"https://github.com/hauksbee-dev/hauksbee\""]},
-    {"path": "docker/Dockerfile.slim", "classification": "release-artifact-metadata", "occurrences": 1, "required_fragments": ["org.opencontainers.image.source=\"https://github.com/hauksbee-dev/hauksbee\""]},
-    {"path": "docs/START_HERE.md", "classification": "shipped-documentation", "occurrences": 1},
-    {"path": "docs/ci/DOCKER.md", "classification": "shipped-documentation", "occurrences": 12},
-    {"path": "docs/ci/RECIPES.md", "classification": "shipped-documentation", "occurrences": 5},
-    {"path": "editors/vscode-hauksbee-board/README.md", "classification": "integration-documentation", "occurrences": 1},
-    {"path": "editors/vscode-hauksbee-board/package.json", "classification": "package-metadata", "occurrences": 1},
-    {"path": "editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json", "classification": "generated-integration", "occurrences": 1},
-    {"path": "frontend/capture/cards.ts", "classification": "generated-integration", "occurrences": 1, "scopes": ["development"]},
-    {"path": "frontend/tests/ci-wiring.test.ts", "classification": "generated-integration-regression", "occurrences": 1, "required_fragments": ["uses: hauksbee-dev/hauksbee/integrations/github-action@"]},
-    {"path": "frontend/src/demo/DemoApp.tsx", "classification": "generated-integration", "occurrences": 1},
-    {"path": "frontend/src/lib/version.ts", "classification": "generated-integration", "occurrences": 1, "required_fragments": ["ACTION_REPOSITORY = 'hauksbee-dev/hauksbee'"]},
-    {"path": "integrations/github-action/README.md", "classification": "integration-documentation", "occurrences": 6},
-    {"path": "integrations/github-action/action.yml", "classification": "generated-integration", "occurrences": 2, "required_fragments": ["default: \"hauksbee-dev/hauksbee\"", "default: \"ghcr.io/hauksbee-dev/hauksbee:slim\""]},
-    {"path": "integrations/github-action/example-workflow.yml", "classification": "generated-integration-example", "occurrences": 2},
-    {"path": "integrations/kicad-plugin/README.md", "classification": "integration-documentation", "occurrences": 1, "required_fragments": ["gh release download \"v<version>\" --repo hauksbee-dev/hauksbee"]},
-    {"path": "integrations/kicad-plugin/metadata.json", "classification": "package-metadata", "occurrences": 3, "required_fragments": ["\"repository\": \"https://github.com/hauksbee-dev/hauksbee\""]},
-    {"path": "integrations/pre-commit/README.md", "classification": "integration-documentation", "occurrences": 2},
-    {"path": "scripts/bundle.sh", "classification": "release-artifact-metadata", "occurrences": 2, "required_fragments": ["Source: https://github.com/hauksbee-dev/hauksbee  commit ${GIT_SHA}"]},
-    {"path": "scripts/build-private-beta-snapshot.sh", "classification": "private-beta-snapshot-builder", "occurrences": 6, "scopes": ["development"]},
-    {"path": "scripts/check-private-container-publication.sh", "classification": "private-container-publication-guard", "occurrences": 1, "required_fragments": ["orgs/hauksbee-dev/packages/container/hauksbee"]},
-    {"path": "scripts/get-hauksbee.ps1", "classification": "public-installer", "occurrences": 3, "required_fragments": ["$Repo = \"hauksbee-dev/hauksbee\""]},
-    {"path": "scripts/get-hauksbee.sh", "classification": "public-installer", "occurrences": 5, "required_fragments": ["REPO=\"hauksbee-dev/hauksbee\""]},
-    {"path": "scripts/make-public.sh", "classification": "private-release-launcher", "occurrences": 1, "scopes": ["development"]},
-    {"path": "scripts/test-install-mock.sh", "classification": "installer-regression", "occurrences": 1},
-    {"path": "scripts/test-windows-installer.ps1", "classification": "installer-regression", "occurrences": 1}
+    {
+      "path": ".github/ISSUE_TEMPLATE/config.yml",
+      "classification": "repository-policy",
+      "occurrences": 1
+    },
+    {
+      "path": ".github/workflows/cla.yml",
+      "classification": "workflow-metadata",
+      "occurrences": 1
+    },
+    {
+      "path": ".github/workflows/docker.yml",
+      "classification": "release-artifact-metadata",
+      "occurrences": 5,
+      "required_fragments": [
+        "IMAGE: ghcr.io/hauksbee-dev/hauksbee"
+      ]
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "classification": "release-workflow",
+      "occurrences": 3
+    },
+    {
+      "path": ".pre-commit-hooks.yaml",
+      "classification": "package-metadata",
+      "occurrences": 1
+    },
+    {
+      "path": "BETA.md",
+      "classification": "private-beta-documentation",
+      "occurrences": 1
+    },
+    {
+      "path": "COMPLIANCE.md",
+      "classification": "shipped-documentation",
+      "occurrences": 2
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "classification": "shipped-documentation",
+      "occurrences": 1
+    },
+    {
+      "path": "Cargo.toml",
+      "classification": "package-metadata",
+      "occurrences": 2
+    },
+    {
+      "path": "README.md",
+      "classification": "shipped-documentation",
+      "occurrences": 3
+    },
+    {
+      "path": "SECURITY.md",
+      "classification": "shipped-documentation",
+      "occurrences": 1
+    },
+    {
+      "path": "app/macos/build-app.sh",
+      "classification": "release-artifact-metadata",
+      "occurrences": 2,
+      "required_fragments": [
+        "https://github.com/hauksbee-dev/hauksbee   commit"
+      ]
+    },
+    {
+      "path": "crates/hauksbee-ci/src/integrate.rs",
+      "classification": "generated-integration",
+      "occurrences": 4,
+      "required_fragments": [
+        "repo: https://github.com/hauksbee-dev/hauksbee"
+      ]
+    },
+    {
+      "path": "crates/hauksbee-ci/tests/schema_drift.rs",
+      "classification": "generated-integration-regression",
+      "occurrences": 1
+    },
+    {
+      "path": "crates/hauksbee-mcp/README.md",
+      "classification": "shipped-documentation",
+      "occurrences": 1
+    },
+    {
+      "path": "docker/Dockerfile.full",
+      "classification": "release-artifact-metadata",
+      "occurrences": 1,
+      "required_fragments": [
+        "org.opencontainers.image.source=\"https://github.com/hauksbee-dev/hauksbee\""
+      ]
+    },
+    {
+      "path": "docker/Dockerfile.slim",
+      "classification": "release-artifact-metadata",
+      "occurrences": 1,
+      "required_fragments": [
+        "org.opencontainers.image.source=\"https://github.com/hauksbee-dev/hauksbee\""
+      ]
+    },
+    {
+      "path": "docs/START_HERE.md",
+      "classification": "shipped-documentation",
+      "occurrences": 1
+    },
+    {
+      "path": "docs/ci/DOCKER.md",
+      "classification": "shipped-documentation",
+      "occurrences": 12
+    },
+    {
+      "path": "docs/ci/RECIPES.md",
+      "classification": "shipped-documentation",
+      "occurrences": 5
+    },
+    {
+      "path": "editors/vscode-hauksbee-board/README.md",
+      "classification": "integration-documentation",
+      "occurrences": 1
+    },
+    {
+      "path": "editors/vscode-hauksbee-board/package.json",
+      "classification": "package-metadata",
+      "occurrences": 1
+    },
+    {
+      "path": "editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json",
+      "classification": "generated-integration",
+      "occurrences": 1
+    },
+    {
+      "path": "frontend/tests/ci-wiring.test.ts",
+      "classification": "generated-integration-regression",
+      "occurrences": 1,
+      "required_fragments": [
+        "uses: hauksbee-dev/hauksbee/integrations/github-action@"
+      ]
+    },
+    {
+      "path": "frontend/src/demo/DemoApp.tsx",
+      "classification": "generated-integration",
+      "occurrences": 1
+    },
+    {
+      "path": "frontend/src/lib/version.ts",
+      "classification": "generated-integration",
+      "occurrences": 1,
+      "required_fragments": [
+        "ACTION_REPOSITORY = 'hauksbee-dev/hauksbee'"
+      ]
+    },
+    {
+      "path": "integrations/github-action/README.md",
+      "classification": "integration-documentation",
+      "occurrences": 6
+    },
+    {
+      "path": "integrations/github-action/action.yml",
+      "classification": "generated-integration",
+      "occurrences": 2,
+      "required_fragments": [
+        "default: \"hauksbee-dev/hauksbee\"",
+        "default: \"ghcr.io/hauksbee-dev/hauksbee:slim\""
+      ]
+    },
+    {
+      "path": "integrations/github-action/example-workflow.yml",
+      "classification": "generated-integration-example",
+      "occurrences": 2
+    },
+    {
+      "path": "integrations/kicad-plugin/README.md",
+      "classification": "integration-documentation",
+      "occurrences": 1,
+      "required_fragments": [
+        "gh release download \"v<version>\" --repo hauksbee-dev/hauksbee"
+      ]
+    },
+    {
+      "path": "integrations/kicad-plugin/metadata.json",
+      "classification": "package-metadata",
+      "occurrences": 3,
+      "required_fragments": [
+        "\"repository\": \"https://github.com/hauksbee-dev/hauksbee\""
+      ]
+    },
+    {
+      "path": "integrations/pre-commit/README.md",
+      "classification": "integration-documentation",
+      "occurrences": 2
+    },
+    {
+      "path": "scripts/bundle.sh",
+      "classification": "release-artifact-metadata",
+      "occurrences": 2,
+      "required_fragments": [
+        "Source: https://github.com/hauksbee-dev/hauksbee  commit ${GIT_SHA}"
+      ]
+    },
+    {
+      "path": "scripts/check-private-container-publication.sh",
+      "classification": "private-container-publication-guard",
+      "occurrences": 1,
+      "required_fragments": [
+        "orgs/hauksbee-dev/packages/container/hauksbee"
+      ]
+    },
+    {
+      "path": "scripts/get-hauksbee.ps1",
+      "classification": "public-installer",
+      "occurrences": 3,
+      "required_fragments": [
+        "$Repo = \"hauksbee-dev/hauksbee\""
+      ]
+    },
+    {
+      "path": "scripts/get-hauksbee.sh",
+      "classification": "public-installer",
+      "occurrences": 5,
+      "required_fragments": [
+        "REPO=\"hauksbee-dev/hauksbee\""
+      ]
+    },
+    {
+      "path": "scripts/test-install-mock.sh",
+      "classification": "installer-regression",
+      "occurrences": 1
+    },
+    {
+      "path": "scripts/test-windows-installer.ps1",
+      "classification": "installer-regression",
+      "occurrences": 1
+    }
   ]
 }

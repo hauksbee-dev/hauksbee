@@ -49,7 +49,6 @@
 //! ## Where it lives / further reading
 //!
 //! Consumed by `hauksbee models lint` (`hauksbee-engine/src/commands/models.rs`).
-//! Rationale: `docs/how-and-why/hauksbee-models/schema.md`.
 
 use crate::schema::{ComponentKind, ModelEntry};
 

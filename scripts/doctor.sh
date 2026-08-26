@@ -121,7 +121,6 @@ _find_qemu_fork() {
   if [ -n "$home" ]; then
     # 3. conventional unpacked location (current + legacy pre-rename name).
     candidates+=("$home/.hauksbee-qemu-esp/qemu/bin/$name")
-    candidates+=("$home/.galvani-qemu-esp/qemu/bin/$name")
     # 4. esp-idf idf_tools install: ~/.espressif/tools/qemu-*/<ver>/qemu/bin/<name>.
     for d in "$home"/.espressif/tools/qemu-*/*/qemu/bin/"$name"; do
       [ -f "$d" ] && candidates+=("$d")

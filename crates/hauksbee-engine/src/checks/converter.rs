@@ -1,5 +1,4 @@
 //! Switching-converter topology detection from the netlist + part kinds.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! Several physics checks (input-cap ripple, switch-node ampacity) need to know
 //! *where* a switching converter is on the board: which net is the chopped

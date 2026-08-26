@@ -558,7 +558,7 @@ impl ColumnOverrides {
 /// One thing an artifact contributed to the analysis.
 ///
 /// Deliberately the smallest shape that answers "which file identified this
-/// part". The names and fields mirror `docs/dev-plans/evidence-spine.md` §2.2
+/// part". The names and fields mirror §2.2
 /// exactly (`Contribution { what, detail }`,
 /// `IgnoredInput { what, why }`, `ArtifactProvenance { path, kind, sha256,
 /// contributed, ignored, .. }`) so that when `hauksbee-ir`'s `evidence` module

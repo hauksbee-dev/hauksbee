@@ -1,6 +1,4 @@
 use hauksbee_extract::ExtractedBoard;
-use std::path::PathBuf;
-
 fn corpus(rel: &str) -> Option<String> {
     let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
         .unwrap_or_default()
@@ -240,32 +238,6 @@ fn kicad5_module_format() {
         board.components.iter().any(|c| !c.reference.is_empty()),
         "KiCad 5 fp_text references not extracted"
     );
-}
-
-#[test]
-fn tarski_netlist() {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_inputsystem.net");
-    let Ok(src) = std::fs::read_to_string(p) else {
-        eprintln!("tarski netlist missing; skipping");
-        return;
-    };
-    let board = ExtractedBoard::from_kicad_netlist(&src).unwrap();
-    assert_eq!(board.components.len(), 3442);
-    assert!(board.nets.len() > 2000, "got {}", board.nets.len());
-    // The known Tarski structure: 90 shift registers, 19 comparators.
-    let count = |pred: &dyn Fn(&hauksbee_extract::Component) -> bool| {
-        board.components.iter().filter(|c| pred(c)).count()
-    };
-    assert_eq!(count(&|c| c.lib_id.contains("74HC595")), 90);
-    assert_eq!(count(&|c| c.value.contains("LMV7219")), 19);
-    // Pin functions came through from the schematic.
-    let with_funcs = board
-        .components
-        .iter()
-        .flat_map(|c| &c.pins)
-        .filter(|p| !p.function.is_empty())
-        .count();
-    assert!(with_funcs > 1000);
 }
 
 #[test]

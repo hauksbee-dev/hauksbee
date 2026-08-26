@@ -22,7 +22,6 @@
 //! Waived findings are reported, never hidden. A spec accumulating waivers
 //! should look like a spec accumulating waivers.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/waiver.md.
 
 use hauksbee_ir::evidence::{parse_ymd_epoch_days, RunDate, WaiverState};
 use serde::Deserialize;

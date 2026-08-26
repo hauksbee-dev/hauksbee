@@ -11,7 +11,6 @@
 //! Output is a human report, a process exit code (0 green / 1 red), JUnit XML
 //! for any CI system, and GitHub Actions annotations.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-ci/README.md.
 //!
 //! ```no_run
 //! use hauksbee_ci::{run, RunConfig};

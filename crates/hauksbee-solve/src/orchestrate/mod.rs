@@ -8,7 +8,7 @@
 //!
 //! The split is deliberate and load-bearing. The original `tarski_decomp`
 //! fused deciding and executing into one 781-line function, and the saga
-//! (`docs/learn/tarski-saga.md`) records what that cost: every
+//! records what that cost: every
 //! decision was invisible (no way to ask "what did it tear and why" without
 //! reading a debugger), and every executor bug looked like a decision bug
 //! (and vice versa; the STEP-1 dead-membrane hunt burned days deciding which
@@ -27,8 +27,6 @@
 //!   driver groups by copying, and fill the certificate's capture-grid
 //!   tolerance with the grid actually used.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 pub mod balance;
 pub mod capture;

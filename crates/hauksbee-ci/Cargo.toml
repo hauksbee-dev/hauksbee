@@ -48,10 +48,6 @@ name = "ci_report_schema_drift"
 path = "tests/ci_report_schema_drift.rs"
 
 [[test]]
-name = "doc_coverage"
-path = "tests/doc_coverage.rs"
-
-[[test]]
 name = "hwtrace"
 path = "tests/hwtrace.rs"
 
@@ -70,10 +66,6 @@ path = "tests/sensor_attach.rs"
 [[test]]
 name = "spec_and_assertions"
 path = "tests/spec_and_assertions.rs"
-
-[[test]]
-name = "tarski_staged_replay"
-path = "tests/tarski_staged_replay.rs"
 
 [[test]]
 name = "tolerance"

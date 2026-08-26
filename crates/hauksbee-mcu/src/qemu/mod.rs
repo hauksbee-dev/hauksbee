@@ -80,7 +80,6 @@
 //! and byte-level I2C/SPI interception still use their named mailbox slots
 //! because those emulator models/hooks do not exist. See docs/cosim/MCU.md.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 mod flashimage;
 mod gdb;

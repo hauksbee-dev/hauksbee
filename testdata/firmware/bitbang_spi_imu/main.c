@@ -1,7 +1,7 @@
 /* Bit-banged SPI read fixture for the synchronous input-responder proof
  * (dev-plan 05 §1.5).
  *
- * Reads a spec-driven ICM-42605 IMU (docs/hunts/specs/icm42605.toml) over
+ * Reads a spec-driven ICM-42605 IMU over
  * SOFTWARE SPI: SCLK/MOSI/CS toggled as plain GPIOs and MISO sampled with a
  * plain PIND read — deliberately NOT the ATmega328P's hardware SPI pins
  * (PB2..PB5), so nothing but the engine's bit-banged SPI responder can answer.

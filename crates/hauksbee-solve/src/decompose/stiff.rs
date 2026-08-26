@@ -42,8 +42,6 @@
 //! the board fragments cheaply, nothing more; every honesty claim is deferred
 //! to the certificate the orchestrator fills in.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 use std::collections::HashMap;
 

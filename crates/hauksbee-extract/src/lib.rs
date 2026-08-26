@@ -25,8 +25,6 @@
 //!   tool as an ODB++ `.tgz` or an IPC-2581 XML is fully ingestible. See
 //!   [`odbpp`] and [`ipc2581`] for what each carries and what is dropped.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/README.md (the
-//! crate tour) and docs/how-and-why/hauksbee-extract/netlist.md (the
 //! canonical form defined here).
 
 pub mod altium;

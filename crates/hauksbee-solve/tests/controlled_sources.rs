@@ -1,5 +1,5 @@
 //! Controlled sources E/G (VCVS / VCCS): the per-touchpoint gates from
-//! `docs/dev-plans/04-spice-compat.md` §1 and §2.1.
+//! §1 and §2.1.
 //!
 //! The two gates that matter most here, because their failure mode is a
 //! plausible wrong waveform rather than a crash:

@@ -747,7 +747,7 @@ value_re = "(?i)^ESP32[- ]?PICO[- ]?D4$"
 # no firmware given the scheduler skips the MCU entirely (lint/report-only runs
 # never need QEMU); with firmware it boots the merged flash image and bridges
 # GPIO (via the RAM mailbox) / UART. The boot-coverage execution of the Watchy
-# RES# row (docs/evidence/KNOWN_FAULTS_VALIDATION.md) runs through this.
+# RES# row (docs/evidence/CORPUS.md) runs through this.
 backend = "qemu:esp32"
 
 [models.pins]

@@ -1109,7 +1109,7 @@ fn explicit_cross_class_matrix_entry_is_applied() {
 // inside an outline is NOT a short (Eagle carves around it). Two overlapping
 // same-rank pours of different signals get no rank arbitration and ARE reported.
 // That rule over-reports, at a rate measured against real fabrication output in
-// `docs/evidence/KNOWN_FAULTS_VALIDATION.md` (right about four of six
+// `docs/evidence/CORPUS.md` (right about four of six
 // layer-instances); narrowing it by `isolate` was tried and reverted there,
 // because it fixed one over-report and created a worse miss.
 // ---------------------------------------------------------------------------

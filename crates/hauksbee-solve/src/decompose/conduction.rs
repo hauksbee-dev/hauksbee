@@ -36,8 +36,6 @@
 //! joins islands (it is the global reference, not a coupling path), matching
 //! the rule the basic partitioner already uses.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 use hauksbee_ir::{Circuit, DeviceId, NodeId};
 

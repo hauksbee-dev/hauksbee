@@ -10,7 +10,6 @@
 //! story rests on: adding device physics means adding rows here, not writing
 //! Rust. `serde` derives keep the Rust structs and the TOML in lockstep.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-models/schema.md.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
