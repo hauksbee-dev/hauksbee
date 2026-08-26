@@ -183,6 +183,41 @@ fn qemu_xtensa_available() -> bool {
     hauksbee_mcu::qemu::is_available(hauksbee_mcu::qemu::QemuArch::Xtensa)
 }
 
+/// The Watchy example specs name their board with a repo-relative path into
+/// the hand-built corpus layout; that is right for a user running
+/// `hauksbee-ci run examples/...` from a hand-built checkout, but wrong for the
+/// fetch layout (no `famous/` level) and for HAUKSBEE_CORPUS_DIR pointing
+/// anywhere else. Run a temp copy of the spec instead, with the `board` key
+/// rewritten to wherever corpus_board actually resolved it and the `firmware`
+/// key absolutized (spec paths resolve relative to the spec file, and the temp
+/// copy does not live in examples/). TOML literal strings keep Windows paths
+/// free of escape mangling.
+fn resolved_spec(name: &str, board: &std::path::Path) -> (tempfile::TempDir, PathBuf) {
+    let src = example(name);
+    let text = std::fs::read_to_string(&src).expect("example spec reads");
+    let examples_dir = src.parent().expect("examples dir");
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if line.starts_with("board = ") {
+            out.push_str(&format!("board = '{}'\n", board.display()));
+        } else if let Some(rest) = line.strip_prefix("firmware = \"") {
+            let rel = rest.trim_end().trim_end_matches('"');
+            let abs = examples_dir
+                .join(rel)
+                .canonicalize()
+                .expect("firmware path resolves");
+            out.push_str(&format!("firmware = '{}'\n", abs.display()));
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    let dir = tempfile::tempdir().expect("temp dir for rewritten spec");
+    let spec = dir.path().join(name);
+    std::fs::write(&spec, out).expect("rewritten spec writes");
+    (dir, spec)
+}
+
 fn corpus_or_skip(what: &str) -> Option<PathBuf> {
     match watchy_v15_board() {
         Some(p) => Some(p),
@@ -200,16 +235,17 @@ fn corpus_or_skip(what: &str) -> Option<PathBuf> {
 /// (GPIO9) HIGH within the boot window on the real v1.5 board under QEMU.
 #[test]
 fn watchy_v15_display_res_driven_passes() {
-    if corpus_or_skip("watchy_v15_display_res PASS").is_none() {
+    let Some(board) = corpus_or_skip("watchy_v15_display_res PASS") else {
         return;
-    }
+    };
     if !qemu_xtensa_available() {
         eprintln!("skipping watchy_v15 boot-coverage (Espressif QEMU not installed)");
         return;
     }
+    let (_spec_dir, spec) = resolved_spec("watchy_v15_display_res.toml", &board);
     let t0 = std::time::Instant::now();
     let result = run(&RunConfig {
-        spec: example("watchy_v15_display_res.toml"),
+        spec,
         ..Default::default()
     })
     .expect("Watchy PASS spec runs");
@@ -249,15 +285,16 @@ fn watchy_v15_display_res_driven_passes() {
 /// drive the net.
 #[test]
 fn watchy_v15_display_res_undriven_fails() {
-    if corpus_or_skip("watchy_v15_display_res FAIL").is_none() {
+    let Some(board) = corpus_or_skip("watchy_v15_display_res FAIL") else {
         return;
-    }
+    };
     if !qemu_xtensa_available() {
         eprintln!("skipping watchy_v15 boot-coverage negative (Espressif QEMU not installed)");
         return;
     }
+    let (_spec_dir, spec) = resolved_spec("watchy_v15_display_res_undriven.toml", &board);
     let result = run(&RunConfig {
-        spec: example("watchy_v15_display_res_undriven.toml"),
+        spec,
         ..Default::default()
     })
     .expect("Watchy FAIL spec runs");
