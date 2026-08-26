@@ -162,10 +162,13 @@ fn gate_left_floating_fails_naming_the_net() {
 // absence is always a skip - the proven backend tests gate the same way).
 
 fn watchy_v15_board() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous/watchy_history/v1.5/Watchy.kicad_pcb");
-    p.exists().then_some(p)
+    // corpus_board, not a hand-joined path: the fetch layout has no `famous/`
+    // level, and the hand-rolled join made the nightly gate's REQUIRE_CORPUS
+    // panic fire on every runner that ran the documented fetch.
+    hauksbee_testkit::corpus_board(
+        env!("CARGO_MANIFEST_DIR"),
+        "famous/watchy_history/v1.5/Watchy.kicad_pcb",
+    )
 }
 
 fn qemu_xtensa_available() -> bool {
