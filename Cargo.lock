@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-ci"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-engine"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1380,7 +1380,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-extract"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "cfb",
  "encoding_rs",
@@ -1413,14 +1413,14 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-frontdoor-api"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "hauksbee-ir"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "evalexpr",
  "schemars",
@@ -1433,15 +1433,13 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-mcp"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
- "anyhow",
  "hauksbee-ci",
  "hauksbee-engine",
  "hauksbee-ir",
  "hauksbee-mcu",
  "rquickjs",
- "serde",
  "serde_json",
  "tempfile",
  "toml",
@@ -1449,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-mcu"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "anyhow",
  "bindgen 0.71.1",
@@ -1469,7 +1467,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-models"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "anyhow",
  "forge-sexpr",
@@ -1486,13 +1484,12 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-server"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "anyhow",
  "axum",
  "hauksbee-frontdoor-api",
  "hauksbee-mcu",
- "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -1501,9 +1498,8 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-solve"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
- "anyhow",
  "criterion",
  "hauksbee-ir",
  "num-complex",
@@ -1516,7 +1512,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-tarski"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "anyhow",
  "hauksbee-engine",
@@ -1532,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "hauksbee-testkit"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 
 [[package]]
 name = "heapless"
@@ -3340,7 +3336,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

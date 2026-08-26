@@ -57,7 +57,7 @@ describe('frontend release gates', () => {
       'cargo test --locked -p hauksbee-ci --test spec_and_assertions -- --nocapture',
     )
     const broadClippy = workflow.indexOf(
-      'cargo clippy --workspace --all-targets -- -D warnings',
+      'cargo clippy --workspace --lib --bins --examples -- -D warnings',
     )
     expect(lastFailure).toBeGreaterThan(-1)
     expect(lastFailure).toBeLessThan(broadClippy)
@@ -69,10 +69,14 @@ describe('frontend release gates', () => {
       'cargo check -p hauksbee-engine --no-default-features',
     )
     expect(noDefault).toContain(
-      'cargo clippy -p hauksbee-engine --no-default-features --all-targets -- -D warnings',
+      'cargo clippy -p hauksbee-engine --no-default-features --lib --bins --examples -- -D warnings',
     )
     expect(noDefault).toContain(
       'cargo test -p hauksbee-engine --no-default-features --all-targets',
+    )
+    expect(workflow).not.toContain('cargo clippy --workspace --all-targets')
+    expect(workflow).not.toContain(
+      'cargo clippy -p hauksbee-engine --no-default-features --all-targets',
     )
     for (const job of ['macos', 'windows']) {
       const start = workflow.indexOf(`  ${job}:`)
@@ -113,8 +117,8 @@ describe('frontend release gates', () => {
     expect(generated).toContain('hauksbee-token: ${{ secrets.HAUKSBEE_BETA_TOKEN }}')
     expect(generated.match(/secrets\./g)).toHaveLength(1)
     expect(generated).toContain('hauksbee-ref: 0123456789abcdef0123456789abcdef01234567')
-    expect(generated).toContain('hauksbee-version: v0.1.0-beta.1')
-    expect(generated).not.toContain('ref: v0.1.0-beta.1')
+    expect(generated).toContain('hauksbee-version: v0.1.0-beta.2')
+    expect(generated).not.toContain('ref: v0.1.0-beta.2')
     for (const inputPath of ['**/*.xml', '**/*.zip', '**/*.tgz', '**/*.tar.gz', '**/*.tar']) {
       expect(generated).toContain(`"${inputPath}"`)
     }
