@@ -1542,15 +1542,18 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("Hauksbee and libsimavr", slim)
         self.assertIn("Hauksbee and libsimavr", full)
 
-        # Published public packages pull anonymously; the pre-publication and
-        # private-mirror paths keep their credential-hygiene guidance.
+        # No beta release publishes images, so the doc must say a pull needs
+        # the reader's own authenticated candidate build, and its login
+        # guidance must keep the credential off argv (the bare `docker login`
+        # prompt, never --password).
         docker_doc = (ROOT / "docs/ci/DOCKER.md").read_text()
-        self.assertIn("The images are public", docker_doc)
+        self.assertIn("Authenticate against the registry", docker_doc)
         self.assertIn("docker login ghcr.io", docker_doc)
+        self.assertNotIn("docker login --password", docker_doc)
 
         recipes = (ROOT / "docs/ci/RECIPES.md").read_text()
-        self.assertIn("can pull it\nanonymously", recipes)
-        self.assertIn("Before publication", recipes)
+        self.assertIn("nothing to pull\nanonymously", recipes)
+        self.assertIn("protected secret store", recipes)
         for credential_contract in (
             "DOCKER_AUTH_CONFIG",
             "registryCredentialsId",
@@ -1580,7 +1583,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("release-quality:", workflow)
         self.assertIn(
-            "needs: [build, build-windows, required-integrations, release-quality]",
+            "needs: [build, build-windows, required-integrations,"
+            " release-quality, release-quality-residue]",
             workflow,
         )
         for gate in (
@@ -1753,8 +1757,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                         printf '%s\\n' "$FAKE_GH_VISIBILITY"
                         ;;
                       "repos/hauksbee-dev/hauksbee/immutable-releases .enabled")
-                        [ "$FAKE_IMMUTABLE_RELEASES" = true ] || exit 1
-                        printf '%s\\n' true
+                        printf '%s\\n' "$FAKE_IMMUTABLE_RELEASES"
                         ;;
                       *) exit 64 ;;
                     esac
