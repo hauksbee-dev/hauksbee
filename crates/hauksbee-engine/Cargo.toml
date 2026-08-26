@@ -71,6 +71,11 @@ forge-codegen = { workspace = true }
 forge-sexpr.workspace = true
 tempfile = { workspace = true }
 tokio = { version = "1.52.3", features = [
+    # `macros` is load-bearing for the smallest feature shape: the watch loop's
+    # `tokio::select!` needs it, and every default build got it for free via
+    # the server dependency's own tokio features. Only the no-default build
+    # ever noticed it missing.
+    "macros",
     "rt-multi-thread",
     "signal",
     "sync",
