@@ -491,6 +491,33 @@ def run_command(
     env["CARGO_TERM_COLOR"] = "never"
     if env_updates:
         env.update(env_updates)
+    # Compilation earns no evidence and its duration tracks runner load, not
+    # emulator health: a cold cargo target on a starved runner can spend the
+    # whole gate budget inside rustc. Build the test binary first, outside the
+    # timed window, so the timeout below bounds only the emulator run it
+    # exists to police. The build gets its own generous ceiling; a hung
+    # compiler is still an error, just not one reported as emulator evidence.
+    if command[0] == "cargo":
+        build_args = (
+            command[: command.index("--")] if "--" in command else command
+        )
+        build = subprocess.run(
+            (*build_args, "--no-run"),
+            cwd=repo,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=1800,
+        )
+        if build.returncode != 0:
+            return subprocess.CompletedProcess(
+                command,
+                build.returncode,
+                build.stdout
+                + "\nREQUIRED INTEGRATION BUILD FAILED: the test binary did "
+                "not compile, so the timed emulator run never started\n",
+            )
     run_token = secrets.token_hex(32)
     env[RUN_TOKEN_ENV] = run_token
     _enable_child_subreaper()
