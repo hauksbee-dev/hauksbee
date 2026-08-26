@@ -1,5 +1,6 @@
 [package]
 name = "hauksbee-ci"
+autotests = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -30,6 +31,66 @@ path = "src/main.rs"
 name = "hauksbee_ci"
 path = "src/lib.rs"
 
+# Cargo otherwise turns every top-level file under tests/ into a separately
+# linked executable. Keep stable, documented one-file targets explicit and
+# compile the remaining cases in three domain bundles. The source files stay in
+# place so include_str!, fixtures, and failure locations retain their paths.
+[[test]]
+name = "assembly_inputs_ci"
+path = "tests/assembly_inputs_ci.rs"
+
+[[test]]
+name = "boot_coverage"
+path = "tests/boot_coverage.rs"
+
+[[test]]
+name = "ci_report_schema_drift"
+path = "tests/ci_report_schema_drift.rs"
+
+[[test]]
+name = "doc_coverage"
+path = "tests/doc_coverage.rs"
+
+[[test]]
+name = "hwtrace"
+path = "tests/hwtrace.rs"
+
+[[test]]
+name = "mcu_descriptor_dir"
+path = "tests/mcu_descriptor_dir.rs"
+
+[[test]]
+name = "schema_drift"
+path = "tests/schema_drift.rs"
+
+[[test]]
+name = "sensor_attach"
+path = "tests/sensor_attach.rs"
+
+[[test]]
+name = "spec_and_assertions"
+path = "tests/spec_and_assertions.rs"
+
+[[test]]
+name = "tarski_staged_replay"
+path = "tests/tarski_staged_replay.rs"
+
+[[test]]
+name = "tolerance"
+path = "tests/tolerance.rs"
+
+[[test]]
+name = "integration_contracts"
+path = "tests/integration_contracts.rs"
+
+[[test]]
+name = "integration_cli"
+path = "tests/integration_cli.rs"
+
+[[test]]
+name = "integration_runtime"
+path = "tests/integration_runtime.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -41,20 +102,20 @@ regex = "1"
 # type (see tests/schema_drift.rs), so the derive lives on the real structs and
 # a new field can never silently miss the schema.
 schemars = "1.2"
-hauksbee-extract = { version = "0.1.0-beta.1", path = "../hauksbee-extract" }
-hauksbee-models = { version = "0.1.0-beta.1", path = "../hauksbee-models" }
-hauksbee-ir = { version = "0.1.0-beta.1", path = "../hauksbee-ir" }
-hauksbee-solve = { version = "0.1.0-beta.1", path = "../hauksbee-solve" }
-hauksbee-engine = { version = "0.1.0-beta.1", path = "../hauksbee-engine", default-features = false }
-hauksbee-frontdoor-api = { version = "0.1.0-beta.1", path = "../hauksbee-frontdoor-api" }
-hauksbee-server = { version = "0.1.0-beta.1", path = "../hauksbee-server", default-features = false, optional = true }
+hauksbee-extract = { version = "0.1.0-beta.2", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0-beta.2", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0-beta.2", path = "../hauksbee-ir" }
+hauksbee-solve = { version = "0.1.0-beta.2", path = "../hauksbee-solve" }
+hauksbee-engine = { version = "0.1.0-beta.2", path = "../hauksbee-engine", default-features = false }
+hauksbee-frontdoor-api = { version = "0.1.0-beta.2", path = "../hauksbee-frontdoor-api" }
+hauksbee-server = { version = "0.1.0-beta.2", path = "../hauksbee-server", default-features = false, optional = true }
 # Direct dep (was dev-only) for two uses: main() installs the emulator child
 # signal reaper (hauksbee_mcu::children), and the boot-coverage tests reuse
 # the backend's real Espressif-QEMU / Renode discovery (is_available) so heavy
 # co-sim cases skip cleanly when the emulator is absent. default-features =
 # false and no `avr` here on purpose: this line must never drag GPL simavr
 # into the permissive shape (see docs/about/release-and-licensing.md).
-hauksbee-mcu = { version = "0.1.0-beta.1", path = "../hauksbee-mcu", default-features = false, features = ["qemu", "renode"] }
+hauksbee-mcu = { version = "0.1.0-beta.2", path = "../hauksbee-mcu", default-features = false, features = ["qemu", "renode"] }
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }

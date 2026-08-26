@@ -27,11 +27,17 @@ qemu = ["hauksbee-mcu/qemu"]
 [dependencies]
 anyhow.workspace = true
 axum = { version = "0.8.9", features = ["ws", "multipart"] }
-hauksbee-frontdoor-api = { version = "0.1.0-beta.1", path = "../hauksbee-frontdoor-api" }
-hauksbee-mcu = { version = "0.1.0-beta.1", path = "../hauksbee-mcu", default-features = false }
-serde.workspace = true
+hauksbee-frontdoor-api = { version = "0.1.0-beta.2", path = "../hauksbee-frontdoor-api" }
+hauksbee-mcu = { version = "0.1.0-beta.2", path = "../hauksbee-mcu", default-features = false }
 serde_json.workspace = true
-tokio = { version = "1.52.3", features = ["full"] }
+tokio = { version = "1.52.3", features = [
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
 # Streams the dependency-install progress (`/api/deps/install/{id}`) as an SSE
 # body: ReceiverStream adapts the worker's mpsc channel into the axum Body.
 tokio-stream = "0.1"
