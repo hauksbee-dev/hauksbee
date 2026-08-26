@@ -18,8 +18,8 @@ gain). Run that from a normal checkout when you want the live viewer.
 | slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, the linked-in simavr (the AVR microcontroller emulator) | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim (running firmware on the emulated MCU against the live analog solve). The everyday CI image. |
 | full | `ghcr.io/hauksbee-dev/hauksbee:full` | Everything in slim, plus Renode, the Espressif QEMU fork, and freerouting (with a JRE) | STM32 / nRF52840 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU), and production autorouting of recompiled boards (freerouting). |
 
-A published release would use versioned tags such as `:slim-0.1.0-beta.1` and
-`:full-0.1.0-beta.1`. The beta attaches none, so pin the immutable digest of
+A published release would use versioned tags such as `:slim-0.1.0-beta.2` and
+`:full-0.1.0-beta.2`. The beta attaches none, so pin the immutable digest of
 the candidate build you pushed; floating tags are never evidence.
 
 ### Why two
@@ -125,7 +125,7 @@ source. Set `use-image: true`, and optionally pick the image:
 - uses: hauksbee-dev/hauksbee/integrations/github-action@REPLACE_WITH_RELEASE_COMMIT_SHA
   with:
     hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
-    hauksbee-version: v0.1.0-beta.1
+    hauksbee-version: v0.1.0-beta.2
     spec: ci/watchy.toml
     use-image: true
     # Use the digest in the matching `container-digests-<tag>` prerelease's
