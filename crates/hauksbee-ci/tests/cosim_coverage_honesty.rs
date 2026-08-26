@@ -24,6 +24,8 @@
 //! file's second test and test 1 runs the descriptor-untouched path FIRST via
 //! a serial mutex. Both skip cleanly without Renode or the firmware fixtures.
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -70,8 +72,8 @@ fn dropped_adc_injection_reaches_every_ci_report_format() {
         &format!(
             r#"
 name        = "ADC coverage honesty (dropped injection)"
-board       = "{}"
-firmware    = "{}"
+board       = {}
+firmware    = {}
 duration_ms = 200
 frame_ms    = 5.0
 
@@ -87,8 +89,8 @@ volts = 3.3
 kind     = "uart"
 contains = "hello from stm32"
 "#,
-            board.canonicalize().unwrap().display(),
-            fw.canonicalize().unwrap().display(),
+            support::toml_path(&board.canonicalize().unwrap()),
+            support::toml_path(&fw.canonicalize().unwrap()),
         ),
     );
 
@@ -158,8 +160,8 @@ fn unexercised_bus_sensor_warns_and_fails_its_peripheral_assertion() {
         &format!(
             r#"
 name        = "Unexercised I2C sensor must fail loudly"
-board       = "{}"
-firmware    = "{}"
+board       = {}
+firmware    = {}
 duration_ms = 150
 frame_ms    = 5.0
 
@@ -207,8 +209,8 @@ field = "temperature_c"
 min   = 35.0
 max   = 45.0
 "#,
-            board.canonicalize().unwrap().display(),
-            fw.canonicalize().unwrap().display(),
+            support::toml_path(&board.canonicalize().unwrap()),
+            support::toml_path(&fw.canonicalize().unwrap()),
         ),
     );
 

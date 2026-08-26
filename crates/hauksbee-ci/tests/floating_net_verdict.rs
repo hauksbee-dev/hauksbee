@@ -21,6 +21,8 @@
 //! Same stated assumption set on both sides, opposite verdicts: a user
 //! assertion plus the fix commit's own resistor becomes a RED -> GREEN pair.
 
+mod support;
+
 use hauksbee_ci::{report::CiResult, RunConfig};
 use std::path::{Path, PathBuf};
 
@@ -75,14 +77,14 @@ fn run(dir: &Path, board: &Path) -> CiResult {
         &spec,
         format!(
             "name = \"swclk rests low\"\n\
-             board = \"{}\"\n\
+             board = {}\n\
              duration_ms = 2\n\
              [[assert]]\n\
              kind = \"voltage\"\n\
              net = \"SWCLK\"\n\
              min = -0.1\n\
              max = 0.3\n",
-            board.display()
+            support::toml_path(board)
         ),
     )
     .expect("write spec");

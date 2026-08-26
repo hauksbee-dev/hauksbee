@@ -1204,8 +1204,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         *,
         phase: str = "before",
         token: str | None = "container-token",
-        repo_visibility: str = "private",
-        package_visibility: str = "private",
+        repo_visibility: str = "public",
+        package_visibility: str = "public",
     ) -> tuple[subprocess.CompletedProcess[str], str]:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
@@ -1293,7 +1293,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("privacy-bootstrap", docs)
         self.assertIn("no Hauksbee binaries or source", docs)
 
-    def test_container_publication_preflight_is_private_and_read_only(self) -> None:
+    def test_container_publication_preflight_is_public_and_read_only(self) -> None:
         for phase in ("before", "after"):
             with self.subTest(phase=phase):
                 result, calls = self.run_container_preflight(phase=phase)
@@ -1306,11 +1306,23 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     ],
                 )
 
+        # A just-bootstrapped package is private until a maintainer flips it;
+        # the pre-push check must tolerate that while the post-push check
+        # refuses to call the publication done.
+        bootstrap_window, _calls = self.run_container_preflight(
+            phase="before", package_visibility="private"
+        )
+        self.assertEqual(
+            bootstrap_window.returncode,
+            0,
+            bootstrap_window.stdout + bootstrap_window.stderr,
+        )
+
         for kwargs, phrase in (
             ({"token": None}, "GH_TOKEN"),
-            ({"repo_visibility": "public"}, "repository"),
+            ({"repo_visibility": "private"}, "repository"),
             ({"repo_visibility": "inaccessible"}, "repository"),
-            ({"package_visibility": "public"}, "package"),
+            ({"phase": "after", "package_visibility": "private"}, "package"),
             ({"package_visibility": "missing"}, "package"),
             ({"package_visibility": "inaccessible"}, "package"),
         ):

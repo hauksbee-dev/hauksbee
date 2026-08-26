@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+mod support;
+
 use hauksbee_ci::{run, RunConfig};
 
 fn testdata(rel: &str) -> PathBuf {
@@ -86,7 +88,7 @@ fn ci_vcd_sink_records_transitions() {
     }
     let spec = format!(
         r#"name = "vcd sink records a clock"
-board = "{board}"
+board = {board}
 duration_ms = 10
 frame_ms = 0.1
 
@@ -102,7 +104,7 @@ pwl = [
 id = "VCD"
 type = "vcd_sink"
 nets = ["CLK"]
-vcd_path = "{vcd}"
+vcd_path = {vcd}
 
 # The square wave is ~1 kHz -> ~20 edges over 10 ms. Allow slack for chunk
 # sampling at the 0.1 ms frame rate.
@@ -113,8 +115,8 @@ field = "transitions"
 min = 15
 max = 25
 "#,
-        board = board.display(),
-        vcd = vcd_out.display(),
+        board = support::toml_path(&board),
+        vcd = support::toml_path(&vcd_out),
         pwl = pwl,
     );
     let spec_path = write_tmp("vcd_sink.toml", &spec);
