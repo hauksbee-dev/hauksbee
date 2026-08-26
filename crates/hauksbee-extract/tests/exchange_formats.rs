@@ -788,18 +788,16 @@ const IPC_CORPUS: &[(&str, usize, usize, usize, ipc2581::NetSource, usize)] = &[
     ),
 ];
 
+// The vendor test cases under ipc2581/ and odbpp/ are local-only corpus
+// assets (corpus.toml's local-only list): no upstream publishes them at a
+// fetchable, pinnable URL, so a required fetch corpus is complete without
+// them and absence skips even under HAUKSBEE_REQUIRE_CORPUS=1.
 fn corpus_file(sub: &str, name: &str) -> Option<PathBuf> {
-    let root = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))?;
-    let p = root.join(sub).join(name);
-    if p.is_file() {
-        return Some(p);
-    }
-    assert!(
-        std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
-        "HAUKSBEE_REQUIRE_CORPUS set but {} is absent",
-        p.display()
-    );
-    None
+    hauksbee_testkit::local_only_asset(
+        env!("CARGO_MANIFEST_DIR"),
+        &format!("{sub}/{name}"),
+        "exchange_formats",
+    )
 }
 
 #[test]
@@ -959,20 +957,10 @@ fn a_zuken_document_keeps_its_step_prefixed_names_usable() {
 /// net the EDA data declares, and the reader must find the whole placement.
 #[test]
 fn the_real_valor_npi_job_reads_and_is_internally_consistent() {
-    let Some(root) = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")) else {
-        eprintln!("board-corpus not present; skipping the real ODB++ job");
+    let Some(job) = corpus_file("odbpp", "valor-npi-sample-design.tgz") else {
+        eprintln!("the real ODB++ job is not in this corpus; skipping");
         return;
     };
-    let job = root.join("odbpp").join("valor-npi-sample-design.tgz");
-    if !job.is_file() {
-        assert!(
-            std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
-            "HAUKSBEE_REQUIRE_CORPUS set but {} is absent",
-            job.display()
-        );
-        eprintln!("{} not present; skipping", job.display());
-        return;
-    }
     let bytes = std::fs::read(&job).expect("read the corpus job");
     assert!(
         odbpp::looks_like_odbpp_archive(&bytes),

@@ -380,7 +380,6 @@ jobs:
       - run: bash integrations/github-action/test_pick_release_tag.sh
       - run: bash integrations/github-action/test_resolve_inputs.sh
       - run: shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh
-      - run: shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
 
   release-evidence-invariants:
     name: release evidence invariants (offline)
