@@ -31,7 +31,7 @@ contains = [
 matches = [
   # The time it was driven at has to be reported, not just "in time".
   "driven to >= 3 V at [0-9.]+ ms \\(<= 20 ms\\)",
-  "^2/2 assertions passed in [0-9.]+s - GREEN$",
+  "^GREEN - 2/2 assertions passed in [0-9.]+s$",
 ]
 not_contains = ["[FAIL]", "RED"]
 
@@ -52,7 +52,7 @@ contains = [
   "points at the right image",
   "RED",
 ]
-matches = ["^0/1 assertions passed in [0-9.]+s - RED$"]
+matches = ["^RED - 0/1 assertions passed in [0-9.]+s$"]
 not_contains = ["[PASS]", "GREEN"]
 
 [[step]]

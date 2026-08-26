@@ -26,7 +26,7 @@ fn tiny_spec(dir: &Path) -> PathBuf {
         &spec,
         format!(
             "name = \"tiny\"\n\
-             board = \"{}\"\n\
+             board = '{}'\n\
              duration_ms = 5\n\
              [[supply]]\n\
              net = \"+5V\"\n\

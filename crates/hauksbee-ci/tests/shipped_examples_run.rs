@@ -43,7 +43,9 @@ fn referenced_files(spec: &Path) -> Vec<PathBuf> {
 }
 
 fn missing_optional_backend(stderr: &str) -> bool {
-    stderr.contains("Renode not found.") || stderr.contains("Espressif QEMU (")
+    stderr.contains("Renode not found.")
+        || stderr.contains("Espressif QEMU (")
+        || (cfg!(not(feature = "avr")) && stderr.contains("compiled without the `avr` feature"))
 }
 
 #[test]
@@ -89,7 +91,9 @@ fn every_shipped_example_spec_is_one_hauksbee_understands() {
         let code = out.status.code();
         let stderr = String::from_utf8_lossy(&out.stderr);
         if code == Some(2) && missing_optional_backend(&stderr) {
-            skipped.push(format!("{name} (optional emulator is not installed)"));
+            skipped.push(format!(
+                "{name} (its firmware backend is not available in this build)"
+            ));
             continue;
         }
         assert_ne!(

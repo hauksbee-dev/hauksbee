@@ -23,7 +23,7 @@ steps:
   - uses: hauksbee-dev/hauksbee/integrations/github-action@REPLACE_WITH_RELEASE_COMMIT_SHA
     with:
       hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
-      hauksbee-version: v0.1.0
+      hauksbee-version: v0.1.0-beta.2
       spec: ci/power-up.toml          # your checked-in hauksbee-ci spec
       junit: hauksbee-ci-results.xml   # JUnit XML written here (optional)
 ```
