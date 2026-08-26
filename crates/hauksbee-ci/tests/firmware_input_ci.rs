@@ -8,6 +8,8 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+mod support;
+
 use hauksbee_ci::{run, RunConfig};
 
 fn repo(rel: &str) -> PathBuf {
@@ -46,7 +48,7 @@ fn spec_firmware_zip_resolves_and_passes() {
         dir.join("spec.toml"),
         format!(
             r#"name = "firmware-from-zip parity"
-board = "{}"
+board = {}
 firmware = "fw.zip"
 mcu = "atmega328p"
 duration_ms = 50
@@ -62,7 +64,7 @@ net = "GATE_CTRL"
 min = 3.0
 deadline_ms = 20.0
 "#,
-            board.display()
+            support::toml_path(&board)
         ),
     )
     .unwrap();
@@ -91,7 +93,7 @@ fn spec_firmware_useless_dir_is_an_actionable_error() {
         dir.join("spec.toml"),
         format!(
             r#"name = "firmware-dir error"
-board = "{}"
+board = {}
 firmware = "not_a_project"
 duration_ms = 10
 
@@ -103,7 +105,7 @@ volts = 5.0
 [[assert]]
 kind = "no_faults"
 "#,
-            board.display()
+            support::toml_path(&board)
         ),
     )
     .unwrap();

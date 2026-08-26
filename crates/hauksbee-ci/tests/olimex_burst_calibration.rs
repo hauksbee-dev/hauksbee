@@ -14,6 +14,8 @@
 
 use std::path::PathBuf;
 
+mod support;
+
 use hauksbee_ci::{run, RunConfig};
 
 fn corpus() -> PathBuf {
@@ -55,7 +57,7 @@ fn olimex_evb_wifi_burst_on_robust_supply_passes() {
     // (the EVB is wall/USB powered, with a 3A-class AMS1117 LDO and bulk caps).
     let body = format!(
         r#"name = "Olimex ESP32-EVB: WiFi burst on robust supply (calibration)"
-board = "{board}"
+board = {board}
 duration_ms = 40
 frame_ms = 0.2
 
@@ -114,7 +116,7 @@ for_max_ms = 5.0
 [[assert]]
 kind = "no_faults"
 "#,
-        board = board.display()
+        board = support::toml_path(&board)
     );
 
     let result = run_body("olimex_burst.toml", &body);

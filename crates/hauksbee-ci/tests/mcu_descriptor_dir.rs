@@ -14,6 +14,8 @@
 //! the only test in this file precisely because the runner publishes the dir
 //! through the process-global env for the run's duration.
 
+mod support;
+
 use std::path::PathBuf;
 
 use hauksbee_ci::{run, RunConfig};
@@ -58,8 +60,8 @@ fn a_spec_descriptor_dir_serves_the_overridden_descriptor() {
         format!(
             r#"
 name        = "spec-declared descriptor dir"
-board       = "{}"
-firmware    = "{}"
+board       = {}
+firmware    = {}
 duration_ms = 150
 frame_ms    = 5.0
 
@@ -100,8 +102,8 @@ field = "temperature_c"
 min   = 20.0
 max   = 45.0
 "#,
-            board.canonicalize().unwrap().display(),
-            fw.canonicalize().unwrap().display(),
+            support::toml_path(&board.canonicalize().unwrap()),
+            support::toml_path(&fw.canonicalize().unwrap()),
         ),
     )
     .expect("write spec");

@@ -1,5 +1,7 @@
 //! Spec parsing, validation, output formats, and the firmware demo run.
 
+mod support;
+
 use std::path::PathBuf;
 
 use hauksbee_ci::{run, RunConfig, Spec};
@@ -87,8 +89,8 @@ fn unknown_net_lists_near_matches() {
     let p = write_tmp(
         "typonet.toml",
         &format!(
-            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"voltage\"\nnet=\"+5VV\"\nmin=4.9\n",
-            board.display()
+            "board={}\nduration_ms=1\n[[assert]]\nkind=\"voltage\"\nnet=\"+5VV\"\nmin=4.9\n",
+            support::toml_path(&board)
         ),
     );
     let err = run(&RunConfig {
@@ -108,8 +110,8 @@ fn typoed_max_current_ref_is_rejected_not_silently_green() {
     let p = write_tmp(
         "typoref.toml",
         &format!(
-            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"R11\"\namps=0.1\n",
-            board.display()
+            "board={}\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"R11\"\namps=0.1\n",
+            support::toml_path(&board)
         ),
     );
     let err = run(&RunConfig {
@@ -131,8 +133,8 @@ fn max_current_on_untracked_component_kind_is_rejected_not_green() {
     let p = write_tmp(
         "untracked_current.toml",
         &format!(
-            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"C1\"\namps=1.0\n",
-            board.display()
+            "board={}\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"C1\"\namps=1.0\n",
+            support::toml_path(&board)
         ),
     );
     let err = run(&RunConfig {
@@ -157,8 +159,8 @@ fn max_temp_on_component_without_thermal_model_is_rejected_not_green() {
     let p = write_tmp(
         "untracked_temp.toml",
         &format!(
-            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"max_temp\"\nref=\"U1\"\ncelsius=85\n",
-            board.display()
+            "board={}\nduration_ms=1\n[[assert]]\nkind=\"max_temp\"\nref=\"U1\"\ncelsius=85\n",
+            support::toml_path(&board)
         ),
     );
     let err = run(&RunConfig {
@@ -271,9 +273,9 @@ fn main {
     let p = write_tmp(
         "board_as_code.toml",
         &format!(
-            "board=\"{}\"\nduration_ms=1\n[[supply]]\nnet=\"A\"\nkind=\"ideal\"\nvolts=3.3\n\
+            "board={}\nduration_ms=1\n[[supply]]\nnet=\"A\"\nkind=\"ideal\"\nvolts=3.3\n\
              [[assert]]\nkind=\"voltage\"\nnet=\"A\"\nmin=3.0\nmax=3.6\n",
-            board.display()
+            support::toml_path(&board)
         ),
     );
     let result = run(&RunConfig {
@@ -296,8 +298,8 @@ fn boot_coverage_requires_net_min_and_deadline() {
     let p = write_tmp(
         "bootcov_bad.toml",
         &format!(
-            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"boot-coverage\"\nnet=\"FOO\"\nmin=3.0\n",
-            board.display()
+            "board={}\nduration_ms=1\n[[assert]]\nkind=\"boot-coverage\"\nnet=\"FOO\"\nmin=3.0\n",
+            support::toml_path(&board)
         ),
     );
     let err = run(&RunConfig {

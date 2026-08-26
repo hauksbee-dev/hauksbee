@@ -17,6 +17,9 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "avr")]
+mod support;
+
+#[cfg(feature = "avr")]
 use hauksbee_ci::{run, RunConfig};
 
 #[cfg(feature = "avr")]
@@ -142,8 +145,8 @@ reltol = 0.10
         format!(
             r#"
 name = "deliberate hwtrace mismatch"
-board = "{}"
-firmware = "{}"
+board = {}
+firmware = {}
 duration_ms = 1000
 
 [[supply]]
@@ -155,8 +158,8 @@ usb = "5v0.5a"
 kind = "hwtrace"
 trace = "trace.toml"
 "#,
-            repo.join("examples/boards/blinky.kicad_pcb").display(),
-            repo.join("../../testdata/firmware/demo/demo.hex").display(),
+            support::toml_path(&repo.join("examples/boards/blinky.kicad_pcb")),
+            support::toml_path(&repo.join("../../testdata/firmware/demo/demo.hex")),
         ),
     )
     .expect("write spec");

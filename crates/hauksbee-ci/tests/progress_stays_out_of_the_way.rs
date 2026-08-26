@@ -6,6 +6,8 @@
 //! parser and a CI log to a human reading a result, and a hundred progress
 //! lines in either is a regression, not a feature.
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -26,7 +28,7 @@ fn tiny_spec(dir: &Path) -> PathBuf {
         &spec,
         format!(
             "name = \"tiny\"\n\
-             board = '{}'\n\
+             board = {}\n\
              duration_ms = 5\n\
              [[supply]]\n\
              net = \"+5V\"\n\
@@ -34,7 +36,7 @@ fn tiny_spec(dir: &Path) -> PathBuf {
              volts = 5.0\n\
              [[assert]]\n\
              kind = \"no_faults\"\n",
-            board.display()
+            support::toml_path(&board)
         ),
     )
     .expect("write spec");
