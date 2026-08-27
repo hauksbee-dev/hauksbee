@@ -309,10 +309,20 @@ jobs:
                 test -s /tmp/blinky-routed.kicad_pcb
               fi
               set +e
-              timeout 15 java -jar /opt/freerouting.jar --help >/tmp/freerouting-smoke.log 2>&1
+              # 60s covers the arm64 leg, where the JVM runs under qemu-user
+              # emulation and cold start alone can blow the old 15s allowance
+              # before the banner is logged. Native amd64 prints it in ~2s.
+              timeout 60 java -jar /opt/freerouting.jar --help >/tmp/freerouting-smoke.log 2>&1
               freerouting_status=$?
               set -e
-              { [ "$freerouting_status" -eq 0 ] || [ "$freerouting_status" -eq 124 ]; }
+              # freerouting 1.9.0 has no headless --help: it logs its version,
+              # then tries to open its GUI and dies with a HeadlessException
+              # (exit 1) inside a container. Launch-to-version is what this
+              # smoke proves; real routing is proven by the from-code --route
+              # run above. Accept a clean exit, the 124 timeout kill, or the
+              # documented headless exit 1, requiring the HeadlessException
+              # marker in that last case so any other crash still fails.
+              { [ "$freerouting_status" -eq 0 ] || [ "$freerouting_status" -eq 124 ] || { [ "$freerouting_status" -eq 1 ] && grep -q "HeadlessException" /tmp/freerouting-smoke.log; }; } || { cat /tmp/freerouting-smoke.log; exit 25; }
               grep -F "Freerouting v1.9.0" /tmp/freerouting-smoke.log >/dev/null || { cat /tmp/freerouting-smoke.log; exit 25; }
               test -s /usr/share/doc/hauksbee/third-party/RENODE-LICENSE
               test -s /usr/share/doc/hauksbee/third-party/QEMU-COPYING
