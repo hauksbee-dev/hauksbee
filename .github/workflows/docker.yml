@@ -336,6 +336,11 @@ jobs:
             '
             test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$FULL_IMAGE")" \
               = "GPL-3.0-only AND GPL-2.0-only AND MIT"
+            # The runner's legacy image store keeps exactly one platform per
+            # digest reference, so the next iteration's pull of these same
+            # digests dies with "cannot overwrite digest" unless this
+            # platform's images are dropped first.
+            docker rmi -f "$SLIM_IMAGE" "$FULL_IMAGE" >/dev/null
           done
 
       - name: Check private container publication after push
