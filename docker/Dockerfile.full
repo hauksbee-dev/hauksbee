@@ -196,6 +196,10 @@ COPY --chown=hauksbee:hauksbee hauksbee/testdata/boards/stm32_bluepill_demo.kica
 COPY --chown=hauksbee:hauksbee hauksbee/testdata/firmware/stm32_blinky/blinky.elf /opt/hauksbee/external-smoke/stm32.elf
 COPY --chown=hauksbee:hauksbee hauksbee/testdata/boards/esp32_devkit_demo.kicad_pcb /opt/hauksbee/external-smoke/esp32.kicad_pcb
 COPY --chown=hauksbee:hauksbee hauksbee/testdata/firmware/esp32_blinky/flash.bin /opt/hauksbee/external-smoke/esp32-flash.bin
+# The Xtensa app ELF must travel beside the merged flash image: the qemu
+# backend validates a flash .bin's ISA against sibling ELFs, and without this
+# file the only sibling here is the ARM stm32.elf, which fails every run.
+COPY --chown=hauksbee:hauksbee hauksbee/testdata/firmware/esp32_blinky/esp32_blinky.elf /opt/hauksbee/external-smoke/esp32_blinky.elf
 COPY --chown=hauksbee:hauksbee hauksbee/examples/board-as-code/blinky.board /opt/hauksbee/external-smoke/blinky.board
 
 USER hauksbee
