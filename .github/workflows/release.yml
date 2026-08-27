@@ -870,10 +870,18 @@ jobs:
         shell: powershell
         working-directory: hauksbee
         run: .\scripts\test-windows-process-tree.ps1
+      # `--test-threads=1` is Windows-runner load management, not a smaller
+      # test set: every test still runs, one at a time. Several of these tests
+      # spawn a whole emulator (Renode's .NET host, QEMU) as a child process,
+      # and on this 4-core runner two Renode instances running concurrently is
+      # exactly the configuration that killed one of them mid-run (both TCP
+      # bridges reset with os error 10054, sensor_attach's cold leg) while the
+      # same co-sims pass one at a time. corpus-gate.yml serializes its
+      # emulator suites for the same reason.
       - name: Verify native engine, CI, and emulator lifecycle
         shell: powershell
         working-directory: hauksbee
-        run: cargo test --locked -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
+        run: cargo test --locked -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu -- --test-threads=1
       - name: Require and retain real Windows firmware integrations
         shell: pwsh
         working-directory: hauksbee
