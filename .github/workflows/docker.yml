@@ -247,17 +247,17 @@ jobs:
             docker pull --platform "$platform" "$SLIM_IMAGE"
             docker run --rm --platform "$platform" \
               -e EXPECTED_VERSION -e EXPECTED_SHA -e PLATFORM="$platform" \
-              --entrypoint /bin/sh "$SLIM_IMAGE" -eu -c '
+              --entrypoint /bin/sh "$SLIM_IMAGE" -eux -c '
                 hauksbee --version | grep -F "hauksbee $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
                 hauksbee-ci --version | grep -F "hauksbee-ci $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
                 output="$(mktemp)"
                 hauksbee run /opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb \
                   --firmware /opt/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex --headless --plain --seconds 0.05 \
-                  >"$output" 2>&1
-                ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output"
-                grep -Eq "UART|toggle|active net|firmware" "$output"
+                  >"$output" 2>&1 || { cat "$output"; exit 21; }
+                ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output" || { cat "$output"; exit 22; }
+                grep -Eq "UART|toggle|active net|firmware" "$output" || { cat "$output"; exit 23; }
                 cd /opt/hauksbee/crates/hauksbee-ci/examples
-                hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null
+                hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null || { hauksbee-ci run boot_gate_pass.toml || true; exit 26; }
                 test -s /usr/share/doc/hauksbee/SOURCE-OFFER.txt
                 test -s /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz
                 test -s /usr/share/doc/hauksbee/source/simavr-source.tar.gz
@@ -271,17 +271,17 @@ jobs:
             docker pull --platform "$platform" "$FULL_IMAGE"
             docker run --rm --platform "$platform" \
               -e EXPECTED_VERSION -e EXPECTED_SHA -e PLATFORM="$platform" \
-              --entrypoint /bin/sh "$FULL_IMAGE" -eu -c '
+              --entrypoint /bin/sh "$FULL_IMAGE" -eux -c '
               hauksbee --version | grep -F "hauksbee $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
               hauksbee-ci --version | grep -F "hauksbee-ci $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
               output="$(mktemp)"
               hauksbee run /opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb \
                 --firmware /opt/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex --headless --plain --seconds 0.05 \
-                >"$output" 2>&1
-              ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output"
-              grep -Eq "UART|toggle|active net|firmware" "$output"
+                >"$output" 2>&1 || { cat "$output"; exit 21; }
+              ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output" || { cat "$output"; exit 22; }
+              grep -Eq "UART|toggle|active net|firmware" "$output" || { cat "$output"; exit 23; }
               cd /opt/hauksbee/crates/hauksbee-ci/examples
-              hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null
+              hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null || { hauksbee-ci run boot_gate_pass.toml || true; exit 26; }
               renode --version >/dev/null
               /opt/qemu/bin/qemu-system-xtensa --version >/dev/null
               /opt/qemu/bin/qemu-system-riscv32 --version >/dev/null
@@ -289,23 +289,23 @@ jobs:
                 stm32="$(mktemp)"
                 timeout 90 hauksbee run /opt/hauksbee/external-smoke/stm32.kicad_pcb \
                   --firmware /opt/hauksbee/external-smoke/stm32.elf --headless --plain --seconds 0.25 \
-                  >"$stm32" 2>&1
-                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$stm32"
-                grep -Eq "UART|toggle|active net|firmware" "$stm32"
+                  >"$stm32" 2>&1 || { cat "$stm32"; exit 21; }
+                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$stm32" || { cat "$stm32"; exit 22; }
+                grep -Eq "UART|toggle|active net|firmware" "$stm32" || { cat "$stm32"; exit 23; }
 
                 esp32="$(mktemp)"
                 timeout 120 hauksbee run /opt/hauksbee/external-smoke/esp32.kicad_pcb \
                   --firmware /opt/hauksbee/external-smoke/esp32-flash.bin --headless --plain --seconds 0.25 \
-                  >"$esp32" 2>&1
-                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$esp32"
-                grep -Eq "UART|toggle|active net|firmware" "$esp32"
+                  >"$esp32" 2>&1 || { cat "$esp32"; exit 21; }
+                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$esp32" || { cat "$esp32"; exit 22; }
+                grep -Eq "UART|toggle|active net|firmware" "$esp32" || { cat "$esp32"; exit 23; }
 
                 route_log="$(mktemp)"
                 timeout 90 hauksbee from-code /opt/hauksbee/external-smoke/blinky.board \
                   --out /tmp/blinky-routed.kicad_pcb --route --route-passes 2 \
-                  >"$route_log" 2>&1
-                grep -F "freerouting handoff" "$route_log" >/dev/null
-                grep -F "merged" "$route_log" >/dev/null
+                  >"$route_log" 2>&1 || { cat "$route_log"; exit 21; }
+                grep -F "freerouting handoff" "$route_log" >/dev/null || { cat "$route_log"; exit 24; }
+                grep -F "merged" "$route_log" >/dev/null || { cat "$route_log"; exit 24; }
                 test -s /tmp/blinky-routed.kicad_pcb
               fi
               set +e
@@ -313,7 +313,7 @@ jobs:
               freerouting_status=$?
               set -e
               { [ "$freerouting_status" -eq 0 ] || [ "$freerouting_status" -eq 124 ]; }
-              grep -F "Freerouting v1.9.0" /tmp/freerouting-smoke.log >/dev/null
+              grep -F "Freerouting v1.9.0" /tmp/freerouting-smoke.log >/dev/null || { cat /tmp/freerouting-smoke.log; exit 25; }
               test -s /usr/share/doc/hauksbee/third-party/RENODE-LICENSE
               test -s /usr/share/doc/hauksbee/third-party/QEMU-COPYING
               test -s /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE
