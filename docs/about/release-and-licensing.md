@@ -82,9 +82,9 @@ The installer and `scripts/bundle.sh` agree on this exact shape (do not drift):
 | checksum                           | `<base>.tar.gz.sha256` (relative basename, `shasum -a 256` format)                                                                                                                                  |
 | tarball layout                     | `<base>/bin/hauksbee`, `<base>/bin/hauksbee-ci` and `<base>/bin/hauksbee-mcp` (three binaries, mode 0755)                                                                                           |
 | licence file                       | `<base>/LICENSE-BINARY.txt`, plus `<base>/LICENSE` and `<base>/NOTICE`. The default shape also carries `<base>/LICENSE-GPL-3.0.txt`                                                                 |
-| macOS release app                  | `<base>-app.zip` + `<base>-app.zip.sha256` (darwin suffixes only, default shape only, contains `Hauksbee.app`, built by `app/macos/build-app.sh`, signed and notarized, see `app/macos/SIGNING.md`) |
+| macOS release app                  | `<base>-app.zip` + `<base>-app.zip.sha256` (darwin suffixes only, default shape only, contains `Hauksbee.app`, built by `app/macos/build-app.sh`, signed and notarized, published only when the macOS signing secrets are configured, see `app/macos/SIGNING.md`) |
 | local permissive macOS app         | `<base>-permissive-app.zip` + `.sha256` (`app/macos/build-app.sh --no-default-features`; Apache-2.0 Renode/QEMU shape; intentionally not published by release automation)                           |
-| Windows                            | `hauksbee-<version>-windows-x86_64-permissive.zip` + `.zip.sha256`; contains the same three Authenticode-verified `.exe` binaries and an Apache-2.0 `LICENSE-BINARY.txt`                                    |
+| Windows                            | `hauksbee-<version>-windows-x86_64-permissive.zip` + `.zip.sha256`; contains the same three `.exe` binaries (Authenticode-verified whenever the Windows signing secrets are configured) and an Apache-2.0 `LICENSE-BINARY.txt`                                    |
 
 
 The `-permissive` suffix is part of the base name, so it appears in the tarball name, the checksum name **and** the directory inside the tarball. Both `scripts/bundle.sh --shape permissive` and `get-hauksbee.sh --permissive` derive it the same way. Do not let them drift.
@@ -95,7 +95,7 @@ The `-permissive` suffix is part of the base name, so it appears in the tarball 
 
 `scripts/get-hauksbee.ps1` is the Windows counterpart, holding the same contract with a `windows-x86_64` suffix and `.zip` + `.zip.sha256` assets (`Get-FileHash` for verification and all three `.exe` binaries inside). Windows has one shape rather than two: the installer always selects `-permissive`, says that AVR is disabled before download, and the bundle refuses any binary whose `doctor` output does not say the same thing.
 
-The full binary-release asset list for version `V` is 38 files:
+The full binary-release asset list for version `V` is 38 files (34 while the macOS signing secrets are absent: the two darwin app zips and their checksums ship only signed and notarised):
 
 - 4 targets x `hauksbee-V-<suffix>.tar.gz` + `.sha256`
 - 4 targets x `hauksbee-V-<suffix>-permissive.tar.gz` + `.sha256`
@@ -108,13 +108,15 @@ The full binary-release asset list for version `V` is 38 files:
 
 ### 3.1 macOS signing, stated plainly
 
-The workflow requires every published macOS release binary to be signed with a Developer ID identity. `Hauksbee.app` is signed and notarised with the ticket stapled, and the release workflow refuses to publish an app zip that is not, so the app opens on a double-click with no Gatekeeper warning. The tarball binaries are signed too, and notarised from launch onward; a bare command-line binary cannot carry a stapled ticket, so Gatekeeper confirms the notarisation online on first run, and a tarball fetched through a browser opens cleanly. Only a pre-release or locally built unsigned bundle still needs the one-time `xattr -d com.apple.quarantine` fallback on the installed binaries, while a copy installed by `get-hauksbee.sh` never carries the quarantine flag at all.
+With the macOS signing secrets configured, the workflow requires every published macOS release binary to be signed with a Developer ID identity. `Hauksbee.app` is signed and notarised with the ticket stapled, and the release workflow refuses to publish an app zip that is not, so the app opens on a double-click with no Gatekeeper warning. The tarball binaries are signed too, and notarised from launch onward; a bare command-line binary cannot carry a stapled ticket, so Gatekeeper confirms the notarisation online on first run, and a tarball fetched through a browser opens cleanly. Without any signing secrets configured, the release ships unsigned darwin tarballs and no app zip at all, so a published app zip is still, by construction, signed and notarised. An unsigned bundle (pre-release, locally built, or from a secretless release) needs the one-time `xattr -d com.apple.quarantine` fallback on the installed binaries, while a copy installed by `get-hauksbee.sh` never carries the quarantine flag at all.
 
-The gates live in `release.yml`. The "Gate the app zip on signing + notarisation (macOS only)" step runs `codesign --verify --deep --strict`, `spctl -a -t exec`, and `xcrun stapler validate` on the `Hauksbee.app` inside the zip, and fails the release if any of the three does. The "Verify the two shapes" step additionally runs `codesign --verify --strict` on every binary inside both darwin tarballs and fails the job if any is unsigned; notarisation of those binaries is required at launch on the same terms as the app gate. `get-hauksbee.sh` prints the quarantine fallback itself on Darwin for pre-release bundles, so the tarball side of the story is told by the installer as well as by the docs. Mechanics and credentials: `app/macos/SIGNING.md`.
+The gates live in `release.yml`. The "Gate the app zip on signing + notarisation (macOS only)" step runs `codesign --verify --deep --strict`, `spctl -a -t exec`, and `xcrun stapler validate` on the `Hauksbee.app` inside the zip, and fails the release if any of the three does. The "Verify the two shapes" step additionally runs `codesign --verify --strict` on every binary inside both darwin tarballs and fails the job if any is unsigned; notarisation of those binaries is required at launch on the same terms as the app gate. Both gates key off the signing secrets: they enforce whenever `HAUKSBEE_SIGN_IDENTITY` is configured and stand down only in the secretless unsigned mode, where no app zip exists to gate. `get-hauksbee.sh` prints the quarantine fallback itself on Darwin for pre-release bundles, so the tarball side of the story is told by the installer as well as by the docs. Mechanics and credentials: `app/macos/SIGNING.md`.
 
 The macOS jobs import a password-protected Developer ID `.p12` into a
-temporary keychain and fail before compiling if any required secret is absent.
-Configure `HAUKSBEE_SIGN_IDENTITY`,
+temporary keychain and fail before compiling if the secrets are only
+partially configured. A repository with none of the six secrets releases in
+unsigned mode instead, and adding them re-enables every signing gate with no
+workflow change. Configure `HAUKSBEE_SIGN_IDENTITY`,
 `HAUKSBEE_SIGNING_CERTIFICATE_BASE64`,
 `HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD`, `HAUKSBEE_NOTARY_APPLE_ID`,
 `HAUKSBEE_NOTARY_TEAM_ID`, and `HAUKSBEE_NOTARY_PASSWORD` as protected
@@ -130,16 +132,18 @@ Built **natively** on GitHub's `ubuntu-24.04-arm` runner (and Intel macOS on `ma
 
 Windows x64 is a release target in one deliberately narrower shape. Before an asset is published, the `windows-latest` gate builds and tests `hauksbee`, `hauksbee-ci`, and the MCU process layer with MSVC, builds the embedded web app, launches the release-mode `hauksbee.exe`, drops a real Board-as-Code file through Chromium, and retains the screenshot/report/server logs. The release job repeats the native tests, packages all three executables, verifies the checksum and extracted contents, and runs `doctor` from the packaged binary before upload. Both jobs install repository-checksummed Renode and Espressif QEMU archives and reject a release unless the exact RP2040, Xtensa and RISC-V firmware-through-emulator tests pass without `SKIP:`. A local GNU cross-check is useful compiler coverage; it is not substituted for this native gate.
 
-Every executable in the Windows release zip is signed with Authenticode and
-verified with `signtool verify /pa /all` before compression and again after
-extraction. The release workflow requires the secrets
-`HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64` and
-`HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD`; it accepts an optional
-`HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL` override and otherwise uses the
-configured RFC 3161 timestamp service. A missing credential, invalid PFX,
-missing Windows SDK `signtool.exe`, failed timestamp, or failed verification
-fails the release. Local `scripts/bundle-windows.ps1` calls remain unsigned
-unless `-RequireAuthenticodeSignature` is explicitly supplied.
+Whenever the secrets `HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64` and
+`HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD` are configured, every executable in
+the Windows release zip is signed with Authenticode and verified with
+`signtool verify /pa /all` before compression and again after extraction; an
+optional `HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL` secret overrides the
+default RFC 3161 timestamp service. In that mode an invalid PFX, missing
+Windows SDK `signtool.exe`, failed timestamp, or failed verification fails
+the release. While the PFX secrets are absent, the zip ships unsigned and
+the build log says so; adding the secrets makes signing and its verification
+mandatory again with no workflow change. Local `scripts/bundle-windows.ps1`
+calls remain unsigned unless `-RequireAuthenticodeSignature` is explicitly
+supplied.
 
 The platform differences are explicit:
 
