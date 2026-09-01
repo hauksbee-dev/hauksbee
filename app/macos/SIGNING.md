@@ -1,9 +1,12 @@
 # Signing and notarisation status
 
-Release builds of Hauksbee.app are **signed with a Developer ID identity and
+Any published Hauksbee.app is **signed with a Developer ID identity and
 notarised** (ticket stapled), so a normal download opens with a plain
 double-click and no Gatekeeper warning. `spctl --assess --type execute` on a
 quarantined release bundle reports `accepted, source=Notarized Developer ID`.
+The release workflow builds and publishes the app zip only when the signing
+secrets it lists are configured; a release cut without them ships unsigned
+darwin tarballs and no app zip at all, which keeps that guarantee structural.
 
 `build-app.sh` does the signing and notarisation when given credentials (see
 "How to produce a signed build" below; the release flow uses the `notary`

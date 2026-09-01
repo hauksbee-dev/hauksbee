@@ -204,6 +204,12 @@ jobs:
           - os: macos-15-intel       # Intel
             label: darwin-x86_64
     runs-on: ${{ matrix.os }}
+    env:
+      # The `secrets` context is not available in step-level `if:` expressions,
+      # so the macOS signing mode is derived once here. '1' means the repo has
+      # signing material and every signing/notarisation gate below enforces;
+      # '0' means the darwin legs ship unsigned tarballs and no app zip.
+      HAUKSBEE_MACOS_SIGNING_CONFIGURED: ${{ secrets.HAUKSBEE_SIGN_IDENTITY != '' && '1' || '0' }}
     steps:
       # Checkout into a subdirectory; the build steps cd into it explicitly. The
       # forge-* crates are vendored inside this repo, so no sibling is needed.
@@ -245,6 +251,20 @@ jobs:
             HAUKSBEE_NOTARY_TEAM_ID
             HAUKSBEE_NOTARY_PASSWORD
           )
+          configured=0
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] && configured=$((configured+1))
+          done
+          if (( configured == 0 )); then
+            # No signing material is configured at all. This leg ships
+            # UNSIGNED: every signing/notarisation gate below keys off the
+            # same secrets and stands down with this import, and the app zip
+            # is not built, so the published-app-zips-are-signed claim stays
+            # structural. The moment the six secrets exist this branch stops
+            # matching and every gate enforces again, unchanged.
+            echo "::notice title=Unsigned darwin release leg::none of the six macOS signing secrets are configured; darwin binaries ship unsigned and no app zip is produced."
+            exit 0
+          fi
           for name in "${required[@]}"; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error title=Missing macOS release credential::$name must be configured as a protected repository or environment secret."
@@ -426,7 +446,7 @@ jobs:
           HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
           HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
           HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
-          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ runner.os == 'macOS' && '1' || '0' }}
+          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ (runner.os == 'macOS' && secrets.HAUKSBEE_SIGN_IDENTITY != '') && '1' || '0' }}
         run: |
           cd hauksbee
           scripts/bundle.sh --shape default \
@@ -445,15 +465,17 @@ jobs:
       # unsigned or un-notarised app zip reach the release, so a release that
       # publishes an app zip has, by construction, published a signed and
       # notarised app.
+      # Skipped entirely when the signing secrets are absent: an app zip
+      # only ever ships signed and notarised.
       - name: Build Hauksbee.app (macOS only)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.HAUKSBEE_MACOS_SIGNING_CONFIGURED == '1'
         shell: bash
         env:
           HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
           HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
           HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
           HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
-          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ runner.os == 'macOS' && '1' || '0' }}
+          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ (runner.os == 'macOS' && secrets.HAUKSBEE_SIGN_IDENTITY != '') && '1' || '0' }}
         run: |
           chmod +x hauksbee/app/macos/build-app.sh
           cd hauksbee
@@ -468,7 +490,7 @@ jobs:
       # un-stapled builds fail the job here, before any upload step can see the
       # zip. If this fails, wire up the signing secrets per app/macos/SIGNING.md.
       - name: Gate the app zip on signing + notarisation (macOS only)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.HAUKSBEE_MACOS_SIGNING_CONFIGURED == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -511,7 +533,7 @@ jobs:
           HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
           HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
           HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
-          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ runner.os == 'macOS' && '1' || '0' }}
+          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ (runner.os == 'macOS' && secrets.HAUKSBEE_SIGN_IDENTITY != '') && '1' || '0' }}
         run: |
           cd hauksbee
           if ! scripts/bundle.sh --shape permissive \
@@ -541,6 +563,8 @@ jobs:
       # cannot say "builtin" unless libsimavr really was linked.
       - name: Verify the two shapes (behaviour + labels)
         shell: bash
+        env:
+          HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
         run: |
           set -uo pipefail
           cd hauksbee/dist
@@ -612,7 +636,10 @@ jobs:
               fi
             done
           done
-          if [ "${{ runner.os }}" = "macOS" ]; then
+          # Signature checks run only when signing material exists; an
+          # unsigned leg ships no app zip and its tarballs are unsigned by
+          # declaration, not by accident.
+          if [ "${{ runner.os }}" = "macOS" ] && [ -n "${HAUKSBEE_SIGN_IDENTITY:-}" ]; then
             # Every binary inside BOTH darwin tarballs must carry a valid
             # Developer ID signature; an unsigned darwin tarball must not be
             # released. Notarisation of these bare Mach-Os cannot be checked
@@ -906,8 +933,9 @@ jobs:
         shell: pwsh
         working-directory: hauksbee
         env:
-          # Windows release assets are never allowed to leave this job
-          # unsigned. Store the PFX as base64 (one-line or whitespace-wrapped)
+          # Windows release assets are signed and verified whenever the PFX
+          # secrets exist; without them the zip ships unsigned and this step
+          # says so. Store the PFX as base64 (one-line or whitespace-wrapped)
           # and keep its password in a separate repository/environment secret.
           # The packager consumes these only when the explicit requirement
           # switch below is present; ordinary local bundles stay unsigned.
@@ -917,7 +945,15 @@ jobs:
           # scripts/bundle-windows.ps1 uses timestamp.digicert.com.
           HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL }}
         run: |
-          .\scripts\bundle-windows.ps1 -Version "${{ steps.ver.outputs.version }}" -ExpectedCommit "${{ steps.ver.outputs.source_sha }}" -Out dist -RequireAuthenticodeSignature
+          $signingRequired = -not [string]::IsNullOrWhiteSpace($env:HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64)
+          if (-not $signingRequired) {
+            Write-Host "PFX secrets absent; packaging unsigned Windows binaries. Signing and its verification enforce automatically once HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64/_PASSWORD exist."
+          }
+          .\scripts\bundle-windows.ps1 `
+            -Version "${{ steps.ver.outputs.version }}" `
+            -ExpectedCommit "${{ steps.ver.outputs.source_sha }}" `
+            -Out "dist" `
+            -RequireAuthenticodeSignature:$signingRequired
           $V = "${{ steps.ver.outputs.version }}"
           $zip = "dist\hauksbee-$V-windows-x86_64-permissive.zip"
           $sum = "$zip.sha256"
@@ -931,23 +967,25 @@ jobs:
           foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
             if (-not (Test-Path (Join-Path $root "bin\$binary"))) { throw "$binary missing from Windows bundle" }
           }
-          $signToolCommand = Get-Command signtool.exe -ErrorAction SilentlyContinue
-          $signToolPath = if ($null -ne $signToolCommand) {
-            $signToolCommand.Path
-          } else {
-            $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
-            Get-ChildItem -LiteralPath $kitsRoot -Directory -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -match '^10\.0\.[0-9.]+$' } |
-              Sort-Object Name -Descending |
-              ForEach-Object { Join-Path $_.FullName "x64\signtool.exe" } |
-              Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-              Select-Object -First 1
-          }
-          if ([string]::IsNullOrWhiteSpace($signToolPath)) { throw "signtool.exe is unavailable; refusing to publish an unverified Windows bundle" }
-          foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
-            $binaryPath = Join-Path $root "bin\$binary"
-            & $signToolPath verify /q /pa /all $binaryPath | Out-Host
-            if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for packaged $binary" }
+          if ($signingRequired) {
+            $signToolCommand = Get-Command signtool.exe -ErrorAction SilentlyContinue
+            $signToolPath = if ($null -ne $signToolCommand) {
+              $signToolCommand.Path
+            } else {
+              $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+              Get-ChildItem -LiteralPath $kitsRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^10\.0\.[0-9.]+$' } |
+                Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName "x64\signtool.exe" } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+                Select-Object -First 1
+            }
+            if ([string]::IsNullOrWhiteSpace($signToolPath)) { throw "signtool.exe is unavailable; refusing to publish an unverified Windows bundle" }
+            foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
+              $binaryPath = Join-Path $root "bin\$binary"
+              & $signToolPath verify /q /pa /all $binaryPath | Out-Host
+              if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for packaged $binary" }
+            }
           }
           if (-not (Test-Path (Join-Path $root "LICENSE-BINARY.txt"))) { throw "LICENSE-BINARY.txt missing" }
           $doctor = & (Join-Path $root "bin\hauksbee.exe") doctor | Out-String
@@ -1443,7 +1481,9 @@ jobs:
 #   hauksbee-<ver>-<label>.tar.gz              + .sha256   default, GPL-3.0
 #   hauksbee-<ver>-<label>-permissive.tar.gz   + .sha256   permissive, Apache-2.0
 #   hauksbee-<ver>-<label>-app.zip             + .sha256   macOS legs only,
-#                                                          wraps the default shape
+#                                                          wraps the default shape;
+#                                                          omitted when the repo
+#                                                          has no signing secrets
 #   hauksbee-ci-pcm-v<ver>.zip                  + .sha256   one platform-neutral
 #                                                          KiCad PCM archive
 #   hauksbee-<ver>-windows-x86_64-permissive.zip + .sha256 Windows x64,
