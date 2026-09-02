@@ -2,7 +2,8 @@
 #
 # Trigger: push a tag like `v0.1.0` (same tag that drives release.yml), or run
 # manually. Tag pushes publish stable version tags after immutable verification;
-# manual runs build and verify source-SHA candidate images only. Both paths
+# a manual run of an existing tag rebuilds its candidates and reconciles that
+# tag's immutable digest record and versioned image tags. Both paths
 # produce two multi-arch (linux/amd64 + linux/arm64) images:
 #
 #   ghcr.io/hauksbee-dev/hauksbee:slim     prebuilt binaries + model db + simavr;
@@ -30,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing version tag whose source is built into candidate-only images; stable tags are published only by a tag-push run."
+        description: "Existing version tag to rebuild and reconcile: candidates are re-verified, then the tag's immutable digest record and versioned image tags are published if missing. Floating :latest tags move only on a tag push."
         required: true
 
 env:
@@ -353,7 +354,12 @@ jobs:
   publish-digests:
     name: publish immutable image digest record
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    # Tag pushes record and promote as part of the release train. A manual
+    # dispatch of an existing tag is the reconcile path for a tag whose
+    # original run could not publish its record: the build job has already
+    # checked out that exact tag, proven tag/source/workspace-version parity,
+    # and verified the candidate images this job records.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -384,11 +390,18 @@ jobs:
           manifest="hauksbee-${VERSION}-docker-digests.txt"
           # This auxiliary tag must not match either workflow's `v*` release
           # trigger, or publishing provenance recursively launches another
-          # binary/container release run.
-          digest_tag="container-digests-${GITHUB_REF_NAME}"
-          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled \
+          # binary/container release run. Derived from the verified version
+          # rather than the git ref so a manual reconcile run of an existing
+          # tag records under the same name as the original tag push.
+          digest_tag="container-digests-v${VERSION}"
+          # GITHUB_TOKEN cannot read the repo-level immutable-releases policy
+          # endpoint (admin-only; it answers 403 to the workflow token), so
+          # enforcement is proven on the release train itself: the published
+          # binary release this record describes must already be immutable,
+          # and the record's own immutability is asserted again after publish.
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v${VERSION}" --jq .immutable \
             | grep -qx true || {
-              echo "repository does not enforce immutable releases" >&2
+              echo "release v${VERSION} is not immutable; enable immutable releases before recording container digests" >&2
               exit 1
             }
           find . -maxdepth 1 -type f -name "$manifest" -delete
@@ -447,6 +460,12 @@ jobs:
           if [ "$is_draft" = true ]; then
             gh release edit "$digest_tag" --draft=false --repo "$GH_REPO"
           fi
+          # The published record must itself be immutable, or it is no record.
+          gh api "repos/$GH_REPO/releases/tags/$digest_tag" --jq .immutable \
+            | grep -qx true || {
+              echo "digest record $digest_tag published mutable; repository must enforce immutable releases" >&2
+              exit 1
+            }
           for attempt in $(seq 1 12); do
             if gh release verify-asset "$digest_tag" "$manifest" --repo "$GH_REPO"; then break; fi
             [ "$attempt" -lt 12 ] || {
@@ -472,11 +491,16 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then
             docker buildx imagetools create --tag "${IMAGE}:slim-${VERSION}" "$SLIM_REF"
             docker buildx imagetools create --tag "${IMAGE}:full-${VERSION}" "$FULL_REF"
-          else
+          elif [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
             docker buildx imagetools create \
               --tag "${IMAGE}:slim" --tag "${IMAGE}:slim-${VERSION}" --tag "${IMAGE}:latest" \
               "$SLIM_REF"
             docker buildx imagetools create \
               --tag "${IMAGE}:full" --tag "${IMAGE}:full-${VERSION}" --tag "${IMAGE}:full-latest" \
               "$FULL_REF"
+          else
+            # Reconcile runs move only the versioned tags; the floating
+            # :latest family advances solely on an actual tag push.
+            docker buildx imagetools create --tag "${IMAGE}:slim-${VERSION}" "$SLIM_REF"
+            docker buildx imagetools create --tag "${IMAGE}:full-${VERSION}" "$FULL_REF"
           fi
