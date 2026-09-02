@@ -439,14 +439,25 @@ jobs:
             # commit first; the release then binds to the existing tag. A
             # leftover tag from an earlier failed run must already point at
             # this exact commit or the record is refused.
-            tag_sha="$(gh api "repos/$GH_REPO/git/ref/tags/$digest_tag" --jq .object.sha 2>/dev/null || true)"
-            if [ -z "$tag_sha" ]; then
+            tag_probe="$(mktemp)"
+            tag_status=0
+            gh api --include "repos/$GH_REPO/git/ref/tags/$digest_tag" >"$tag_probe" 2>&1 || tag_status=$?
+            tag_http="$(sed -nE '1s#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' "$tag_probe")"
+            if [ "$tag_http" = 200 ]; then
+              tag_sha="$(gh api "repos/$GH_REPO/git/ref/tags/$digest_tag" --jq .object.sha)"
+              [ "$tag_sha" = "$SOURCE_SHA" ] || {
+                echo "existing tag $digest_tag points at $tag_sha, not verified source $SOURCE_SHA" >&2
+                exit 1
+              }
+            elif [ "$tag_http" = 404 ]; then
               gh api --method POST "repos/$GH_REPO/git/refs" \
                 -f ref="refs/tags/$digest_tag" -f sha="$SOURCE_SHA" >/dev/null
-            elif [ "$tag_sha" != "$SOURCE_SHA" ]; then
-              echo "existing tag $digest_tag points at $tag_sha, not verified source $SOURCE_SHA" >&2
+            else
+              cat "$tag_probe" >&2
+              echo "could not prove digest tag absence (gh exit $tag_status, HTTP ${tag_http:-unknown})" >&2
               exit 1
             fi
+            find "$tag_probe" -maxdepth 0 -type f -delete
             # A separate prerelease keeps the stable binary release immutable
             # while making verified OCI digests durable and discoverable.
             gh release create "$digest_tag" "$manifest" --repo "$GH_REPO" \
