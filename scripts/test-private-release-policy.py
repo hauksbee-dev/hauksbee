@@ -1023,7 +1023,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("id: slim", workflow)
         self.assertIn("SLIM_IMAGE=${{ env.IMAGE }}@${{ steps.slim.outputs.digest }}", workflow)
         self.assertNotIn("SLIM_IMAGE=${{ env.IMAGE }}:slim-", workflow)
-        self.assertIn('digest_tag="container-digests-${GITHUB_REF_NAME}"', workflow)
+        # Derived from the verified version, not the git ref, so a manual
+        # reconcile run of an existing tag records under the original name.
+        self.assertIn('digest_tag="container-digests-v${VERSION}"', workflow)
+        self.assertNotIn('digest_tag="container-digests-${GITHUB_REF_NAME}"', workflow)
         self.assertNotIn('digest_tag="${GITHUB_REF_NAME}-docker-digests"', workflow)
         self.assertIn('gh release create "$digest_tag" "$manifest" --repo "$GH_REPO"', workflow)
         self.assertIn("--prerelease --latest=false", workflow)
