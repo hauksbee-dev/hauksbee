@@ -134,8 +134,10 @@ To make the warning disappear entirely the release pipeline needs:
    with `codesign --verify --deep --strict` and `spctl -a -vv`.
 
 Until those pieces are configured in the release environment, the workflow
-fails closed rather than publishing an unsigned macOS asset. Local unsigned
-builds remain supported and are documented above.
+releases in unsigned mode: plain darwin tarballs, no app zip. Once they are
+configured it fails closed rather than publish an unsigned macOS asset, and a
+partial configuration fails the job outright. Local unsigned builds remain
+supported and are documented above.
 
 ## Release acceptance
 
