@@ -1033,6 +1033,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         # commit; a bare-SHA --target is refused to the workflow token (403).
         self.assertIn('-f ref="refs/tags/$digest_tag" -f sha="$SOURCE_SHA"', workflow)
         self.assertIn("not verified source", workflow)
+        self.assertIn("could not prove digest tag absence", workflow)
         self.assertNotIn('--target "$SOURCE_SHA"', workflow)
         self.assertIn("--prerelease --latest=false", workflow)
         self.assertIn('gh release edit "$digest_tag" --draft=false --repo "$GH_REPO"', workflow)
