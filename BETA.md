@@ -33,7 +33,7 @@ During beta, upgrade to the newest build before reporting a bug. Only the latest
 ## Getting a beta build
 
 Use the exact release link in your invitation. Confirm that it names a SemVer
-pre-release tag such as `v0.1.0-beta.2`, then compare the source commit and the
+pre-release tag such as `v0.1.0-beta.3`, then compare the source commit and the
 asset's SHA-256 manifest before running it. Do not install through a moving
 `latest` URL.
 

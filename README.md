@@ -12,7 +12,7 @@ A design-rule checker checks geometry against rules. A schematic simulator execu
 
 ## Get Hauksbee
 
-Beta testers should use the exact `v0.1.0-beta.2` release link supplied with
+Beta testers should use the exact `v0.1.0-beta.3` release link supplied with
 their invitation once that release is published. Do not substitute the stable
 `latest` URL. Verify the source commit and checksum as described in
 [BETA](BETA.md#getting-a-beta-build). A macOS app is distributed only after its
