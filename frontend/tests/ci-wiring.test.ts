@@ -117,8 +117,8 @@ describe('frontend release gates', () => {
     expect(generated).toContain('hauksbee-token: ${{ secrets.HAUKSBEE_BETA_TOKEN }}')
     expect(generated.match(/secrets\./g)).toHaveLength(1)
     expect(generated).toContain('hauksbee-ref: 0123456789abcdef0123456789abcdef01234567')
-    expect(generated).toContain('hauksbee-version: v0.1.0-beta.2')
-    expect(generated).not.toContain('ref: v0.1.0-beta.2')
+    expect(generated).toContain('hauksbee-version: v0.1.0-beta.3')
+    expect(generated).not.toContain('ref: v0.1.0-beta.3')
     for (const inputPath of ['**/*.xml', '**/*.zip', '**/*.tgz', '**/*.tar.gz', '**/*.tar']) {
       expect(generated).toContain(`"${inputPath}"`)
     }
