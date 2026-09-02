@@ -1029,6 +1029,11 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertNotIn('digest_tag="container-digests-${GITHUB_REF_NAME}"', workflow)
         self.assertNotIn('digest_tag="${GITHUB_REF_NAME}-docker-digests"', workflow)
         self.assertIn('gh release create "$digest_tag" "$manifest" --repo "$GH_REPO"', workflow)
+        # The record is anchored by an explicit tag ref at the verified source
+        # commit; a bare-SHA --target is refused to the workflow token (403).
+        self.assertIn('-f ref="refs/tags/$digest_tag" -f sha="$SOURCE_SHA"', workflow)
+        self.assertIn("not verified source", workflow)
+        self.assertNotIn('--target "$SOURCE_SHA"', workflow)
         self.assertIn("--prerelease --latest=false", workflow)
         self.assertIn('gh release edit "$digest_tag" --draft=false --repo "$GH_REPO"', workflow)
         self.assertIn('gh release verify-asset "$digest_tag" "$manifest" --repo "$GH_REPO"', workflow)
