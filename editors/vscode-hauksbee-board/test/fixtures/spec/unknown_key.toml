@@ -1,5 +1,0 @@
-board = "nope.kicad_pcb"
-duraton_ms = 5
-
-[[assert]]
-kind = "no_faults"

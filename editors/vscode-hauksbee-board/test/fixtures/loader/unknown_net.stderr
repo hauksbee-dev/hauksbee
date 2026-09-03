@@ -1,3 +1,0 @@
-hauksbee-ci: unknown_net.toml: spec references net(s) not found on the board:
-  'VCCC' (in assert); did you mean: ADC0?
-

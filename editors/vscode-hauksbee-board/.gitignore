@@ -1,8 +1,0 @@
-node_modules/
-out/
-*.vsix
-
-# headless VS Code test artefacts
-out-e2e/
-.vscode-test/
-.scratch/
