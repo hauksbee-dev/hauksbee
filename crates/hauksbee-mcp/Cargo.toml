@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "hauksbee-mcp"
 version.workspace = true
 edition.workspace = true
@@ -55,3 +56,7 @@ hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features =
 
 [lints]
 workspace = true
+
+[[test]]
+name = "it"
+path = "tests/main.rs"
