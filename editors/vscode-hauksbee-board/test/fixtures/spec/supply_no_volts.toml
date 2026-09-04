@@ -1,0 +1,8 @@
+board = "nope.kicad_pcb"
+
+[[supply]]
+net = "+5V"
+kind = "bench"
+
+[[assert]]
+kind = "no_faults"

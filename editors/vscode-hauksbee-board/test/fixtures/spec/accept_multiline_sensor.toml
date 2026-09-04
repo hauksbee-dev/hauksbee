@@ -1,0 +1,17 @@
+# An inline sensor spec is a whole nested TOML document inside a multi-line
+# string. Nothing in it belongs to the CI spec's own vocabulary.
+board = "nope.kicad_pcb"
+
+[[sensor]]
+id = "U2_temp"
+spec = """
+[sensor]
+bus = "i2c"
+address = 0x48
+"""
+
+[sensor.inputs]
+temperature_c = 40.0
+
+[[assert]]
+kind = "no_faults"

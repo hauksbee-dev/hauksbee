@@ -123,7 +123,7 @@ export function SelectionCard({
   return (
     // maxHeight 100% + an internal scroll: the card is anchored inside a strip
     // that starts BELOW the viewer toolbar (see BoardView / SimView), so it can
-    // never grow up under the 2D/3D and Fit controls and hide its own title.
+    // never grow up under the Fit control and hide its own title.
     // A part with fifty nets scrolls; the identity row and the close button
     // stay pinned to the top of the card, always reachable.
     <div

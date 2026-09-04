@@ -80,8 +80,6 @@ export interface BoardInfoMsg {
   peripherals?: PeripheralInfo[]
   /** Inputs explicitly exposed by the engine. Never inferred from net names. */
   input_sources?: InputSourceInfo[]
-  /** Future: URL to the pre-exported GLB for 3D view. Optional chaining required. */
-  glb_url?: string
   /** Copper-short honesty: what happened to the DRC's detected shorts on the
    *  live engine. Absent when no shorts were detected. */
   shorts?: ShortsDisclosure

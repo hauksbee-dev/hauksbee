@@ -1,0 +1,165 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Hauksbee Board DSL",
+  "scopeName": "source.board",
+  "fileTypes": ["board"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#board-directive" },
+    { "include": "#fn-block-header" },
+    { "include": "#instance-header" },
+    { "include": "#comp-line" },
+    { "include": "#slot-line" },
+    { "include": "#pad-line" },
+    { "include": "#net-line" },
+    { "include": "#space-line" },
+    { "include": "#pin-lock-line" },
+    { "include": "#inline-keywords" },
+    { "include": "#pad-shapes-kinds" },
+    { "include": "#edge-values" },
+    { "include": "#bracket-list" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.board",
+      "match": "#.*$"
+    },
+    "board-directive": {
+      "comment": "board version N  /  board outline X Y X Y  /  board size W H",
+      "match": "^\\s*(board)\\s+(version|outline|size)\\b",
+      "captures": {
+        "1": { "name": "keyword.control.board.board" },
+        "2": { "name": "keyword.other.board-sub.board" }
+      }
+    },
+    "fn-block-header": {
+      "comment": "fn <name> { — block (function) definition header",
+      "match": "^\\s*(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=(\\{))",
+      "captures": {
+        "1": { "name": "keyword.control.fn.board" },
+        "2": { "name": "entity.name.function.board" }
+      }
+    },
+    "instance-header": {
+      "comment": "instance <block_name> { — block instantiation",
+      "match": "^\\s*(instance)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=(\\{))",
+      "captures": {
+        "1": { "name": "keyword.control.instance.board" },
+        "2": { "name": "entity.name.type.instance.board" }
+      }
+    },
+    "comp-line": {
+      "comment": "comp <RefDes> lib \"...\" val \"...\" layer \"...\" at X Y rot R {",
+      "match": "^\\s*(comp)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "keyword.control.comp.board" },
+        "2": { "name": "variable.other.reference-designator.board" }
+      }
+    },
+    "slot-line": {
+      "comment": "slot N lib \"...\" val \"...\" pads N",
+      "match": "^\\s*(slot)\\s+([0-9]+)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.slot.board" },
+        "2": { "name": "constant.numeric.slot-index.board" }
+      }
+    },
+    "pad-line": {
+      "comment": "pad \"N\" smd|thru_hole|np_thru_hole|connect shape at ... size ... layers [...] net|nonet",
+      "match": "^\\s*(pad)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.pad.board" }
+      }
+    },
+    "net-line": {
+      "comment": "net \"name\" — net declaration",
+      "match": "^\\s*(net)\\b",
+      "captures": {
+        "1": { "name": "keyword.control.net.board" }
+      }
+    },
+    "space-line": {
+      "comment": "space fn <block> <dist>  or  space <dist> inside comp",
+      "match": "\\b(space)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.space.board" }
+      }
+    },
+    "pin-lock-line": {
+      "comment": "pin <ref> edge <side>  /  lock <ref>",
+      "match": "^\\s*(pin|lock)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.control.placement.board" },
+        "2": { "name": "variable.other.reference-designator.board" }
+      }
+    },
+    "inline-keywords": {
+      "comment": "Keyword-value pairs that appear inline on comp/slot/pad lines",
+      "match": "\\b(lib|val|pads|layer|at|rot|size|drill|layers|nonet|edge|fn)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.property.board" }
+      }
+    },
+    "pad-shapes-kinds": {
+      "comment": "Pad kinds and shapes that appear as bare words after pad \"N\"",
+      "match": "\\b(smd|thru_hole|np_thru_hole|connect|rect|roundrect|oval|circle|trapezoid|custom)\\b",
+      "captures": {
+        "1": { "name": "support.type.pad-shape.board" }
+      }
+    },
+    "edge-values": {
+      "comment": "Pin edge direction values",
+      "match": "\\b(left|right|top|bottom)\\b",
+      "captures": {
+        "1": { "name": "support.constant.edge.board" }
+      }
+    },
+    "bracket-list": {
+      "comment": "[ F.Cu F.Mask F.Paste ] layer bracket lists",
+      "begin": "\\[",
+      "end": "\\]",
+      "beginCaptures": { "0": { "name": "punctuation.definition.list.begin.board" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.list.end.board" } },
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#string" },
+        {
+          "name": "support.other.layer-name.board",
+          "match": "[A-Za-z][A-Za-z0-9_.]*"
+        }
+      ]
+    },
+    "string": {
+      "name": "string.quoted.double.board",
+      "begin": "\"",
+      "end": "\"",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.board" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.board" } },
+      "patterns": [
+        {
+          "name": "constant.character.escape.board",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.board",
+      "match": "-?\\b[0-9]+(?:\\.[0-9]+)?\\b"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.block.begin.board",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.section.block.end.board",
+          "match": "\\}"
+        }
+      ]
+    }
+  }
+}

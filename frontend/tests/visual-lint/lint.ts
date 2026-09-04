@@ -239,9 +239,8 @@ if (!externalBase) {
 }
 
 const browser = await chromium.launch({
-  // No 3D anywhere in the lint (the surfaces never open the 3D tab), so no GPU
-  // flags and no software-GL workarounds are needed. If a surface is ever added
-  // that mounts Board3DViewer, it will hang here: don't.
+  // Every surface is 2D canvas, so no GPU flags and no software-GL
+  // workarounds are needed.
   headless: true,
 })
 

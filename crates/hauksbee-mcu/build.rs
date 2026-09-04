@@ -316,6 +316,11 @@ fn probe_static_preferred(name: &str, missing_msg: &str) {
         if let Some(dir) = search_dirs.iter().find(|d| d.join(&archive).exists()) {
             println!("cargo:rustc-link-search=native={}", dir.display());
             println!("cargo:rustc-link-lib=static={lib}");
+            if lib == "elf" {
+                // A static libelf pulls in its own compression deps.
+                println!("cargo:rustc-link-lib=z");
+                println!("cargo:rustc-link-lib=zstd");
+            }
         } else {
             // No archive anywhere on the ladder: link dynamically and SAY so.
             // Never print nothing here; a silent dynamic link is exactly the

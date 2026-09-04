@@ -1,0 +1,1 @@
+hauksbee-ci: typo_kind.toml: invalid spec: unknown assertion kind 'voltag' (did you mean 'voltage'?) (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot_coverage|phase_margin|ac_gain|hwtrace|model_coverage)

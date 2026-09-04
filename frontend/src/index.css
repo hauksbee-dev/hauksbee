@@ -1,6 +1,6 @@
 @import "tailwindcss";
-/* Keep the class scanner away from served binary assets (multi-MB GLB
-   models hang the oxide scanner) and other non-source trees. */
+/* Keep the class scanner away from served assets (multi-MB sample boards
+   hang the oxide scanner) and other non-source trees. */
 @source not "../public";
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -98,11 +98,6 @@
   --term-ts: #31435c;
   --term-prompt: #44546e;
 
-  /* 3D scene backdrop (the radial glow behind the board model). */
-  --scene-bg: #020617;
-  --scene-glow-hi: #0d1a2e;
-  --scene-glow-mid: #07101f;
-
   /* Report dot map (the fallback board map drawn from component positions). */
   --map-dot: #e08a4e;
   --map-label: #8fa0b3;
@@ -197,12 +192,6 @@
   --term-info: #64748b;
   --term-ts: #a3aab2;
   --term-prompt: #8a93a0;
-
-  /* 3D scene: warm daylight backdrop, brightest under the board, falling to
-     a deeper warm edge so the model stays grounded. */
-  --scene-bg: #ddd5c6;
-  --scene-glow-hi: #f7f3ea;
-  --scene-glow-mid: #ebe4d6;
 
   --map-dot: #b35f24;
   --map-label: #57626f;

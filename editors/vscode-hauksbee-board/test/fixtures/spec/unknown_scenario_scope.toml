@@ -1,0 +1,7 @@
+board = "nope.kicad_pcb"
+
+[[assert]]
+kind = "rail_window"
+net = "+5V"
+scenario = "inrush"
+min = 4.5

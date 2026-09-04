@@ -39,7 +39,7 @@ interface FaultPanelProps {
   activeRefs?: Set<string>
   /** Clears the accumulated log */
   onClear?: () => void
-  /** Callback to highlight a faulted component in 2D/3D */
+  /** Callback to highlight a faulted component on the board */
   onFaultComponentSelect?: (ref: string | null) => void
   selectedFaultRef?: string | null
 }

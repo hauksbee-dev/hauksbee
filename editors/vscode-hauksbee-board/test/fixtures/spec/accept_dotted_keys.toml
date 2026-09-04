@@ -1,0 +1,10 @@
+# Tables written with dotted keys instead of headers, which is valid TOML.
+board = "nope.kicad_pcb"
+ac.fstart = 10.0
+ac.fstop = 1000000.0
+ac.points = 20
+
+[[assert]]
+kind = "phase_margin"
+net = "FB"
+min = 45.0
