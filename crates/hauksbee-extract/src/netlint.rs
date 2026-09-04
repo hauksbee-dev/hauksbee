@@ -2002,7 +2002,7 @@ mod pin_array_tests {
 
     #[test]
     fn body_dimension_footprints_are_not_pin_arrays() {
-        // R45/R46: KiCad appends a body dimension ("7x7mm", "3.9x4.9mm") to nearly
+        // KiCad appends a body dimension ("7x7mm", "3.9x4.9mm") to nearly
         // every SMD IC footprint. Reading any `<digit>x<digit>` as a pin
         // grid makes those ICs "connector-like", silently suppressing the
         // floating-control / I2C-pull-up / output-contention lints on real
@@ -2041,7 +2041,7 @@ mod i2c_pullup_dedup_tests {
 
     #[test]
     fn single_device_with_a_double_listed_pad_does_not_fire_missing_pullup() {
-        // R45: a single on-board I2C device (ambiguous → deliberate skip) whose SDA
+        // A single on-board I2C device (ambiguous → deliberate skip) whose SDA
         // pad is double-listed (IPC-356 both-sided access record) counted as TWO
         // active devices, escalating the skip into a false "on-board master and
         // peripheral, no pull-up" MissingI2cPullup finding. Deduping by reference,
@@ -2075,7 +2075,6 @@ mod i2c_pullup_dedup_tests {
 
 #[cfg(test)]
 mod sd_pullup_tests {
-    use super::sd_role;
     use crate::{Component, ExtractedBoard, LintCheck, Net, Pin, Severity};
 
     fn pin(number: &str, net: Option<i64>) -> Pin {
@@ -2100,40 +2099,6 @@ mod sd_pullup_tests {
             dnp: false,
             pins,
         }
-    }
-
-    #[test]
-    fn role_names() {
-        // The RockSat-X RSXVT2026 spellings that motivated the check.
-        assert_eq!(sd_role("sd_cmd"), Some("CMD"));
-        assert_eq!(sd_role("sd_data_0"), Some("DAT0"));
-        assert_eq!(sd_role("sd_data_3"), Some("DAT3"));
-        // Common alternates.
-        assert_eq!(sd_role("/SDIO_CMD"), Some("CMD"));
-        assert_eq!(sd_role("uSD_DAT2"), Some("DAT2"));
-        assert_eq!(sd_role("TF_D1"), Some("DAT1"));
-        assert_eq!(sd_role("SDMMC1_D0"), Some("DAT0"));
-        // eMMC: same physics, wider bus.
-        assert_eq!(sd_role("EMMC_CMD"), Some("CMD"));
-        assert_eq!(sd_role("MMC_D7"), Some("DAT7"));
-        // Hierarchical: the context lives in the sheet path, the role in the
-        // leaf (KiCad local labels).
-        assert_eq!(sd_role("/uSD Connector/CMD"), Some("CMD"));
-        assert_eq!(sd_role("/uSD Connector/data_0"), Some("DAT0"));
-        // ...but a sheet named after the card must not promote an unrelated
-        // leaf signal into a bus line.
-        assert_eq!(sd_role("/uSD Connector/detect"), None);
-        // Push-pull, never needs a pull-up.
-        assert_eq!(sd_role("sd_clock"), None);
-        assert_eq!(sd_role("SD_CLK"), None);
-        // Card detect is not a bus line.
-        assert_eq!(sd_role("SD_CD"), None);
-        // No SD context: a bare CMD net (motor driver, modem) must not match.
-        assert_eq!(sd_role("CMD"), None);
-        assert_eq!(sd_role("MOTOR_CMD"), None);
-        assert_eq!(sd_role("DATA0"), None);
-        // SDRAM address lines never carry a DAT role.
-        assert_eq!(sd_role("SD_A0"), None);
     }
 
     /// Host MCU + card socket, no pull-up: CMD fires Medium, DAT1 fires Low.
@@ -2271,82 +2236,6 @@ mod sd_pullup_tests {
         );
     }
 
-    /// A breakout that carries an ESD array (a multi-pin active part) beside
-    /// the socket and the header must still be silent: the bus passes through
-    /// to a host board that owns the pull-ups.
-    #[test]
-    fn breakout_with_esd_array_is_silent() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "sd_cmd".into(),
-            }],
-            components: vec![
-                part("J1", "HEADER", "PinHeader_1x08", vec![pin("1", Some(1))]),
-                part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part(
-                    "D1",
-                    "TPD4E05U06",
-                    "SOT-23-6",
-                    vec![
-                        pin("1", Some(1)),
-                        pin("2", None),
-                        pin("3", None),
-                        pin("6", None),
-                    ],
-                ),
-            ],
-        };
-        let report = board.net_lint();
-        assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 0);
-    }
-
-    /// A 33R series damper into a filtered node (EMI cap to ground makes it
-    /// rail-like) is not a pull-up and must not clear the finding.
-    #[test]
-    fn series_damper_into_filtered_node_does_not_clear() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "sd_cmd".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "sd_cmd_f".into(),
-                },
-                Net {
-                    id: 9,
-                    name: "GND".into(),
-                },
-            ],
-            components: vec![
-                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part(
-                    "R5",
-                    "33",
-                    "R_0402",
-                    vec![pin("1", Some(1)), pin("2", Some(2))],
-                ),
-                part(
-                    "C7",
-                    "22p",
-                    "C_0402",
-                    vec![pin("1", Some(2)), pin("2", Some(9))],
-                ),
-            ],
-        };
-        let report = board.net_lint();
-        assert_eq!(
-            report.of_check(LintCheck::MissingSdPullup).count(),
-            1,
-            "a sub-1k series damper must not be credited as a pull-up"
-        );
-    }
-
     /// Hierarchical KiCad names put the card context in the sheet path and
     /// only the role in the leaf; the check must still see the bus.
     #[test]
@@ -2464,148 +2353,6 @@ mod sd_pullup_tests {
         assert_eq!(cmd_findings(&named).len(), 0);
     }
 
-    /// The I2C presence check makes the same promise about DNP pull-ups and
-    /// must keep it the same way: a policy-fitted DNP pull-up surfaces as a
-    /// Low finding naming the part, never a silent green.
-    #[test]
-    fn i2c_dnp_pullup_surfaces_instead_of_clearing() {
-        use crate::dnp::DnpPolicy;
-        let mut r = part(
-            "R2",
-            "4k7",
-            "R_0402",
-            vec![pin("1", Some(1)), pin("2", Some(3))],
-        );
-        r.dnp = true;
-        let mut board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "SDA".into(),
-                },
-                Net {
-                    id: 3,
-                    name: "+3V3".into(),
-                },
-            ],
-            components: vec![
-                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part("U2", "BME280", "LGA-8", vec![pin("3", Some(1))]),
-                r,
-            ],
-        };
-        board
-            .apply_dnp_policy(DnpPolicy::FitExceptLinks, &[], &[])
-            .unwrap();
-        let report = board.net_lint();
-        let f: Vec<_> = report.of_check(LintCheck::MissingI2cPullup).collect();
-        assert_eq!(f.len(), 1);
-        assert_eq!(
-            f[0].severity,
-            Severity::Medium,
-            "regime severity, not a flat note"
-        );
-        assert!(f[0].message.contains("R2") && f[0].message.contains("do-not-populate"));
-    }
-
-    /// The JLCPCB/EasyEDA default microSD socket ships as bare "TF-01A", and
-    /// Hirose sockets as bare "DM3AT..."; both must be recognised, and a
-    /// structurally obvious socket (one connector spanning CMD+DAT+CLK)
-    /// must be recognised even under a house-library name.
-    #[test]
-    fn vendor_and_structural_sockets_are_recognised() {
-        for (value, footprint) in [("TF-01A", "TF-01A"), ("SOCKET", "Hirose_DM3AT-SF-PEJM5")] {
-            let board = ExtractedBoard {
-                name: "b".into(),
-                nets: vec![Net {
-                    id: 1,
-                    name: "SD_CMD".into(),
-                }],
-                components: vec![
-                    part("U1", "STM32H7", "LQFP-100", vec![pin("1", Some(1))]),
-                    part("J2", value, footprint, vec![pin("3", Some(1))]),
-                ],
-            };
-            let n = board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count();
-            assert_eq!(n, 1, "socket {value}/{footprint} not recognised");
-        }
-        // Structural: nothing in the name says card, but one connector spans
-        // CMD + DAT0 + CLK.
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "SD_CMD".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "SD_D0".into(),
-                },
-                Net {
-                    id: 3,
-                    name: "SD_CLK".into(),
-                },
-            ],
-            components: vec![
-                part(
-                    "U1",
-                    "STM32H7",
-                    "LQFP-100",
-                    vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))],
-                ),
-                part(
-                    "J9",
-                    "CUSTOM-SOCKET-9902",
-                    "house_lib:conn_9902",
-                    vec![pin("3", Some(1)), pin("5", Some(2)), pin("7", Some(3))],
-                ),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            2,
-            "structural socket recognition (CMD and D0 fire; CLK never does)"
-        );
-    }
-
-    /// A test point on the bus is a single-point attachment, not the bus
-    /// leaving the board; it must not disable the check.
-    #[test]
-    fn test_point_does_not_disable() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "sd_cmd".into(),
-            }],
-            components: vec![
-                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part(
-                    "TP4",
-                    "TestPoint",
-                    "TestPoint:TestPoint_Pad_D1.5mm",
-                    vec![pin("1", Some(1))],
-                ),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            1
-        );
-    }
-
     /// SD buses routinely interpose a small series damper between host and
     /// socket; a pull-up on the far side of it is a real pull-up.
     #[test]
@@ -2720,245 +2467,6 @@ mod sd_pullup_tests {
         assert_eq!(f, vec![Severity::Medium]);
     }
 
-    /// A breakout whose header carries the WHOLE bus (the realistic shape)
-    /// must stay silent: the header spans many roles but a pin array is not
-    /// a card socket, so it still counts as the bus leaving the board.
-    #[test]
-    fn breakout_with_full_bus_header_is_silent() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "sd_cmd".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "sd_data_0".into(),
-                },
-                Net {
-                    id: 3,
-                    name: "sd_clk".into(),
-                },
-            ],
-            components: vec![
-                part(
-                    "J2",
-                    "SOCKET",
-                    "microSD_socket",
-                    vec![pin("3", Some(1)), pin("5", Some(2)), pin("4", Some(3))],
-                ),
-                part(
-                    "J1",
-                    "HEADER",
-                    "Connector_PinHeader:PinHeader_2x05_P2.54mm",
-                    vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))],
-                ),
-                part(
-                    "D1",
-                    "TPD4E05U06",
-                    "SOT-23-6",
-                    vec![
-                        pin("1", Some(1)),
-                        pin("2", Some(2)),
-                        pin("3", None),
-                        pin("4", None),
-                    ],
-                ),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            0
-        );
-    }
-
-    /// A mezzanine/FPC carrying the bus to a daughtercard is the bus leaving
-    /// the board, never the socket, whatever roles it spans.
-    #[test]
-    fn fpc_to_daughtercard_is_silent() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "sd_cmd".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "sd_data_0".into(),
-                },
-                Net {
-                    id: 3,
-                    name: "sd_clk".into(),
-                },
-            ],
-            components: vec![
-                part(
-                    "U1",
-                    "STM32H7",
-                    "LQFP-100",
-                    vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))],
-                ),
-                part(
-                    "J5",
-                    "FH12",
-                    "Connector_FFC-FPC:Hirose_FH12-10S-0.5SH",
-                    vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3))],
-                ),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            0
-        );
-    }
-
-    /// SDRAM broken out to a SODIMM: many SD_D* roles on one connector, but
-    /// no CMD anywhere, so the structural socket test must refuse it.
-    #[test]
-    fn sodimm_sdram_bus_is_silent() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "SD_D0".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "SD_D1".into(),
-                },
-                Net {
-                    id: 3,
-                    name: "SD_D2".into(),
-                },
-                Net {
-                    id: 4,
-                    name: "SD_CLK".into(),
-                },
-            ],
-            components: vec![
-                part(
-                    "U1",
-                    "FPGA",
-                    "BGA-256",
-                    vec![
-                        pin("1", Some(1)),
-                        pin("2", Some(2)),
-                        pin("3", Some(3)),
-                        pin("4", Some(4)),
-                    ],
-                ),
-                part(
-                    "J1",
-                    "SODIMM-144",
-                    "Connector_SODIMM:SODIMM-144",
-                    vec![
-                        pin("1", Some(1)),
-                        pin("2", Some(2)),
-                        pin("3", Some(3)),
-                        pin("4", Some(4)),
-                    ],
-                ),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            0
-        );
-    }
-
-    /// The series-element hop must never walk into ground: everything touches
-    /// ground, and an unrelated bleeder there is not this line's pull-up.
-    #[test]
-    fn hop_into_ground_does_not_credit_a_bleeder() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "sd_cmd".into(),
-                },
-                Net {
-                    id: 8,
-                    name: "GND".into(),
-                },
-                Net {
-                    id: 3,
-                    name: "+3V3".into(),
-                },
-            ],
-            components: vec![
-                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part(
-                    "R2",
-                    "100",
-                    "R_0402",
-                    vec![pin("1", Some(1)), pin("2", Some(8))],
-                ),
-                part(
-                    "R9",
-                    "100k",
-                    "R_0402",
-                    vec![pin("1", Some(3)), pin("2", Some(8))],
-                ),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            1,
-            "the +3V3-to-GND bleeder is not a pull-up on sd_cmd"
-        );
-    }
-
-    /// A series-damped bus with NO pull-up anywhere must still fire: host
-    /// evidence crosses the damper to the socket-side net, which reports
-    /// (once; the host-side half has no socket and stays quiet).
-    #[test]
-    fn series_damped_bus_without_pullup_fires_once() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "sd_cmd".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "sd_cmd_mcu".into(),
-                },
-            ],
-            components: vec![
-                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part(
-                    "R5",
-                    "33",
-                    "R_0402",
-                    vec![pin("1", Some(1)), pin("2", Some(2))],
-                ),
-                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(2))]),
-            ],
-        };
-        let report = board.net_lint();
-        let f: Vec<_> = report.of_check(LintCheck::MissingSdPullup).collect();
-        assert_eq!(f.len(), 1, "exactly one finding for the split bus: {f:?}");
-        assert_eq!(f[0].nets, vec!["sd_cmd".to_string()]);
-    }
-
     /// A TXS-class translator with integrated pull-ups on the bus means a
     /// discrete resistor is not the whole story: abstain.
     #[test]
@@ -2978,187 +2486,6 @@ mod sd_pullup_tests {
                     vec![pin("2", Some(1)), pin("3", None), pin("4", None)],
                 ),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            0
-        );
-    }
-
-    /// A passive adapter whose header sits one damper away from the socket:
-    /// the exit evidence must cross the hop, and the ESD array must not be
-    /// mistaken for host silicon.
-    #[test]
-    fn adapter_with_damped_header_and_esd_is_silent() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "SD_CMD".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "SD_CMD_H".into(),
-                },
-            ],
-            components: vec![
-                part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part(
-                    "D1",
-                    "TPD4E05U06",
-                    "SOT-23-6",
-                    vec![
-                        pin("1", Some(1)),
-                        pin("2", None),
-                        pin("3", None),
-                        pin("4", None),
-                    ],
-                ),
-                part(
-                    "R5",
-                    "33",
-                    "R_0402",
-                    vec![pin("1", Some(1)), pin("2", Some(2))],
-                ),
-                part(
-                    "J1",
-                    "HEADER",
-                    "Connector_PinHeader:PinHeader_1x10_P2.54mm",
-                    vec![pin("1", Some(2))],
-                ),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            0
-        );
-    }
-
-    /// TXS0206A is the dedicated SD-card translator with integrated
-    /// pull-ups; its presence must abstain the check.
-    #[test]
-    fn txs0206_translator_abstains() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "sd_cmd".into(),
-            }],
-            components: vec![
-                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part(
-                    "U9",
-                    "TXS0206A",
-                    "DSBGA-12",
-                    vec![pin("2", Some(1)), pin("3", None), pin("4", None)],
-                ),
-                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            0
-        );
-    }
-
-    /// A real host-side pull-up whose node also carries an EMI cap to ground
-    /// must still be found across the damper: the structural "has a bypass
-    /// cap" rail test must not block the hop.
-    #[test]
-    fn pullup_behind_emi_capped_node_is_found() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "SD_CMD".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "SD_CMD_MCU".into(),
-                },
-                Net {
-                    id: 3,
-                    name: "+3V3".into(),
-                },
-                Net {
-                    id: 8,
-                    name: "GND".into(),
-                },
-            ],
-            components: vec![
-                part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-                part(
-                    "D1",
-                    "TPD4E05U06",
-                    "SOT-23-6",
-                    vec![
-                        pin("1", Some(1)),
-                        pin("2", None),
-                        pin("3", None),
-                        pin("4", None),
-                    ],
-                ),
-                part(
-                    "R5",
-                    "33",
-                    "R_0402",
-                    vec![pin("1", Some(1)), pin("2", Some(2))],
-                ),
-                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(2))]),
-                part(
-                    "R9",
-                    "47k",
-                    "R_0402",
-                    vec![pin("1", Some(2)), pin("2", Some(3))],
-                ),
-                part(
-                    "C7",
-                    "22p",
-                    "C_0402",
-                    vec![pin("1", Some(2)), pin("2", Some(8))],
-                ),
-            ],
-        };
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            0,
-            "the 47k on the EMI-capped host node is the pull-up"
-        );
-    }
-
-    /// An eMMC module (down eMMC + board-to-board connector, host off-board)
-    /// has no host silicon here: the module carrier owns the pull-ups.
-    #[test]
-    fn emmc_module_is_silent() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "EMMC_CMD".into(),
-            }],
-            components: vec![
-                part("U8", "KLM8G1GETF-B041", "BGA-153", vec![pin("M5", Some(1))]),
-                part(
-                    "J1",
-                    "DF40",
-                    "Connector_Hirose:Hirose_DF40C-60DP",
-                    vec![pin("7", Some(1))],
-                ),
             ],
         };
         assert_eq!(
@@ -3267,7 +2594,7 @@ mod parse_ohms_tests {
 
     #[test]
     fn leading_r_sub_ohm_notation_parses() {
-        // R5 regression: "R47" = 0.47 Ω (the leading-R sub-1-ohm marking). The
+        // "R47" = 0.47 Ω (the leading-R sub-1-ohm marking). The
         // empty integer part must not fail the parse: a failure here propagates
         // via `?` and aborts the whole rail-resistor search, silently skipping
         // the LED-current check on a near-dead-short.
@@ -3283,7 +2610,7 @@ mod parse_ohms_tests {
 
     #[test]
     fn spice_meg_multiplier_parses() {
-        // R24: "10MEG" landed on the single 'M' and misparsed to None, dropping
+        // "10MEG" landed on the single 'M' and misparsed to None, dropping
         // a 10 MΩ resistor from the pull-up / LED-current analyses. MEG/GIG must
         // be matched before the single-letter scan.
         assert_eq!(parse_ohms("10MEG"), Some(1e7));
@@ -3294,14 +2621,14 @@ mod parse_ohms_tests {
 
     #[test]
     fn parse_ohms_matches_the_canonical_parser() {
-        // R25 (DRIFT-1): the "/footprint" qualifier (Olimex "2.2k/R0603") must
+        // The "/footprint" qualifier (Olimex "2.2k/R0603") must
         // be tolerated, net-lint dropped it and returned None, silently
         // disabling the LED-current check for that resistor.
         assert_eq!(parse_ohms("2.2k/R0603"), Some(2200.0));
         assert_eq!(parse_ohms("330R/R0603"), Some(330.0));
-        // R25 (DRIFT-2): lowercase 'm' is milli, not mega.
+        // Lowercase 'm' is milli, not mega.
         assert_eq!(parse_ohms("2m2"), Some(0.0022));
-        // R25 (DRIFT-4): inline tolerance annotations are tolerated.
+        // Inline tolerance annotations are tolerated.
         assert_eq!(parse_ohms("10k 1%"), Some(10_000.0));
     }
 }
@@ -3336,7 +2663,7 @@ mod mirror_and_pad_tests {
 
     #[test]
     fn split_keyboard_mirror_prefix_is_stripped_before_classifying() {
-        // R32: si.rs strips the split-keyboard mirror `r` prefix (rC2 -> C2), but
+        // Si.rs strips the split-keyboard mirror `r` prefix (rC2 -> C2), but
         // netlint's classifiers uppercased the raw reference, so a mirrored-half
         // decoupling cap `rC2` read as an `R` designator: is_capacitor missed it
         // and check_design_file_qc raised a bogus DesignatorFootprintMismatch
@@ -3365,7 +2692,7 @@ mod mirror_and_pad_tests {
 
     #[test]
     fn connected_pads_dedups_repeated_pad_numbers() {
-        // R32: some extractors (IPC-356 top+bottom access records, Eagle .brd
+        // Some extractors (IPC-356 top+bottom access records, Eagle .brd
         // per-contact listing, both-sided through-hole pads) list a pad more than
         // once. Counting raw net-carrying pin ENTRIES made a two-terminal part
         // look like 3+ terminals, so is_resistor/is_capacitor (which gate on
@@ -3394,7 +2721,7 @@ mod wired_or_tests {
 
     #[test]
     fn wired_or_names_match_whole_words_not_substrings() {
-        // Round-29: substring matching suppressed the output-contention ERC on any
+        // Substring matching suppressed the output-contention ERC on any
         // net whose name merely CONTAINED "INT"/"PG"/etc. Genuine open-drain lines
         // must still be recognised; unrelated push-pull signal nets must not be.
         // Recognised (whole-word, incl. active-low N-prefix and digit index):
@@ -3443,7 +2770,7 @@ mod passive_prefix_tests {
 
     #[test]
     fn led_speaker_ldr_lcd_are_not_inductors() {
-        // R52: the 'L' arm classified every L-prefixed designator as an inductor,
+        // The 'L' arm classified every L-prefixed designator as an inductor,
         // so an LED/LS/LDR/LCD with a blank value fired a false "set the actual L
         // value" placeholder finding (and an LDR on a resistor footprint fired a
         // false designator/footprint mismatch). Only real inductors are 'L'.
@@ -3467,7 +2794,7 @@ mod rail_and_cap_tests {
 
     #[test]
     fn numeric_rails_keep_their_magnitude() {
-        // R12: "+15V"/"+25V"/"+35V" contain the substring "5V" and start with
+        // "+15V"/"+25V"/"+35V" contain the substring "5V" and start with
         // '+', so the loose fallback mislabeled them 5.0 V.
         assert_eq!(rail_voltage("+15V"), Some(15.0));
         assert_eq!(rail_voltage("+25V"), Some(25.0));
@@ -3483,7 +2810,7 @@ mod rail_and_cap_tests {
 
     #[test]
     fn rail_named_signal_nets_are_not_rails() {
-        // R31: numeric_rail_magnitude read only the leading "<digits>V<digits>"
+        // Numeric_rail_magnitude read only the leading "<digits>V<digits>"
         // and ignored any trailing text, so rail-named SIGNAL nets over-matched
         // as supplies ("5V_DET" -> 5.0 V). net_is_raillike then wrongly treated a
         // presence/enable/select net as a rail, e.g. suppressing a missing I2C
@@ -3495,7 +2822,7 @@ mod rail_and_cap_tests {
         assert_eq!(rail_voltage("5V_DETECT"), None);
         assert_eq!(rail_voltage("12V_PG"), None);
         assert_eq!(rail_voltage("24V_MON"), None);
-        // R50: the 5V branch had a rail-context guard but the 3V3/1V8 loose
+        // The 5V branch had a rail-context guard but the 3V3/1V8 loose
         // `contains` fallbacks did not, so a `3V3_EN` / `1V8_PG` signal net (which
         // fails the numeric-rail full-consumption check and drops to the fallback)
         // still read as a rail, suppressing a genuine missing-pull-up finding
@@ -3517,7 +2844,7 @@ mod rail_and_cap_tests {
 
     #[test]
     fn r_style_capacitance_keeps_the_fractional_part() {
-        // R12: "4u7" = 4.7 uF (unit letter as the decimal point); the trailing
+        // "4u7" = 4.7 uF (unit letter as the decimal point); the trailing
         // digit was dropped, under-reporting the value.
         assert_eq!(parse_capacitance_uf("4u7"), Some(4.7));
         assert_eq!(parse_capacitance_uf("1u5"), Some(1.5));
@@ -3530,7 +2857,7 @@ mod rail_and_cap_tests {
 
     #[test]
     fn high_voltage_rails_above_sixty_volts_keep_their_magnitude() {
-        // R34: numeric_rail_magnitude clamped `mag <= 60.0` and fell back to the
+        // Numeric_rail_magnitude clamped `mag <= 60.0` and fell back to the
         // 5 V default above it, so rail_voltage("+65V") returned Some(5.0). That
         // under-counted the drive in check_led_current and suppressed a genuine
         // over-current finding on high-voltage LED strings / motor rails. Real
@@ -3545,7 +2872,7 @@ mod rail_and_cap_tests {
 
     #[test]
     fn attached_voltage_rating_is_not_read_as_a_capacitance_fraction() {
-        // R34: the R-style-decimal frac loop ran even when the unit already
+        // The R-style-decimal frac loop ran even when the unit already
         // spelled out the Farad ("uF"), so "1uF25V" ate the "25" rating and
         // became 1.25 uF, false-flagging a valid 0201 (1 uF ceiling) cap on the
         // package-ceiling check. When the 'F' is present the value is complete

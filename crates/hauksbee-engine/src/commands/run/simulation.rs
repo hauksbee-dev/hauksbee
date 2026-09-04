@@ -1,5 +1,5 @@
-//! Selects the interactive terminal path or constructs the live simulation
-//! state used by thermal, serial, headless, and browser surfaces. Engine setup
+//! Constructs the live simulation state used by the thermal, serial,
+//! headless, and browser surfaces. Engine setup
 //! binds the prepared board, authenticates firmware evidence, offers required
 //! emulator installation, and applies requested copper-short bridges.
 
@@ -16,70 +16,6 @@ pub(crate) struct SimulationContext {
     pub(crate) engine: HauksbeeEngine,
     pub(crate) board_evidence: BoardEvidence,
     pub(crate) probe_known_nets: Vec<String>,
-}
-
-pub(crate) fn launch_tui_if_selected(
-    cfg: &RunConfig,
-    run_inputs: &RunInputs,
-    schematic: Option<&std::path::Path>,
-) -> anyhow::Result<bool> {
-    let text = &run_inputs.text;
-    let is_altium = run_inputs.is_altium;
-    // Default flow (no report/headless/ac flag). The interactive terminal UI is
-    // the new human-facing default: bare `run <board>` on a TTY launches it. Any
-    // explicit report flag was handled above, so reaching here means none was
-    // given. `--serve` keeps the historical websocket frontend; a non-TTY stdout
-    // (piped / CI) also keeps the websocket behaviour untouched, so existing
-    // scripts and tests are unaffected.
-    //
-    // `--firmware`/`--apply-shorts` only matter for the simulating paths; the TUI
-    // honours `--firmware` and `--chunk-us` for its co-sim pane. We branch to the
-    // TUI before building the websocket engine so we never spin up tokio for the
-    // TUI path.
-    let stdout_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
-    // Altium boards reach here with an empty `text` (binary parsed from bytes);
-    // the TUI's text-based build path can't analyse those, so they keep the
-    // websocket flow.
-    // `--serial-attach` is a live co-sim session driven from another terminal, so
-    // it must never be swallowed by the TTY-default dashboard: the whole point is
-    // that this terminal narrates the serial endpoint while the user's tool talks
-    // to it.
-    let launch_tui = !cfg.serve
-        && !cfg.headless
-        && !cfg.serial_attach
-        && !is_altium
-        && (cfg.tui || stdout_is_tty);
-    if launch_tui {
-        // The TUI rebuilds its board from the layout text, so it cannot apply
-        // the overlay; refuse rather than show pristine-design numbers under an
-        // --asbuilt flag the user believes is in effect.
-        if cfg.asbuilt.is_some() {
-            return Err(anyhow::anyhow!(
-                "the interactive dashboard does not apply --asbuilt; run a report \
-                 (--check/--report) or a co-sim (--headless/--serve) instead"
-            ));
-        }
-        // Forcing the TUI without a terminal on the other end fails deep inside
-        // the terminal setup with a bare OS error; say what is actually wrong.
-        if cfg.tui && !stdout_is_tty && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            return Err(anyhow::anyhow!(
-                "the interactive dashboard needs a terminal, and neither stdin nor stdout \
-                 is one (output is piped or redirected). Drop --tui and use --check/--report \
-                 for a report, --json for machine output, or --serve for the browser UI"
-            ));
-        }
-        crate::tui::run_with_schematic_and_chunk(
-            &cfg.board,
-            &text,
-            cfg.models_dir.as_deref(),
-            cfg.firmware.clone(),
-            schematic,
-            cfg.chunk_us,
-        )?;
-        return Ok(true);
-    }
-
-    Ok(false)
 }
 
 pub(crate) fn build_live_simulation(

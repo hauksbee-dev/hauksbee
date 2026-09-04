@@ -1,13 +1,6 @@
 use hauksbee_extract::ExtractedBoard;
 use std::path::PathBuf;
 
-fn corpus(rel: &str) -> Option<String> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join(rel);
-    std::fs::read_to_string(p).ok()
-}
-
 #[test]
 fn dnp_flag_parsed_from_pcb_attr_and_schematic_symbol() {
     // PCB footprint: `(attr ... dnp)` marks Do-Not-Populate; a plain `(attr smd)`
@@ -111,7 +104,7 @@ fn oversized_net_id_keeps_declared_name() {
 
 #[test]
 fn numeric_net_zero_means_no_net_not_a_shared_node() {
-    // Round-8 #3: KiCad ≤9 writes `(net 0 "")` on every unconnected / free
+    // KiCad ≤9 writes `(net 0 "")` on every unconnected / free
     // pad. Interning id 0 fused all of them onto one shared node (and left a
     // bogus empty-named net in the table). Two unrelated pads on `(net 0 "")`
     // must each carry NO net, not the same id 0.
@@ -202,47 +195,6 @@ fn v10_empty_net_name_means_no_net() {
 }
 
 #[test]
-fn pic_programmer_pcb() {
-    let Some(src) = corpus("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_pcb") else {
-        eprintln!("corpus missing; skipping");
-        return;
-    };
-    let board = ExtractedBoard::from_kicad_pcb(&src).unwrap();
-    assert!(
-        board.components.len() > 50,
-        "got {}",
-        board.components.len()
-    );
-    assert!(board.nets.len() > 50);
-    let gnd = board.net_by_name("GND").expect("GND net");
-    assert!(board.net_members(gnd.id).len() > 10);
-    // Every pad's net id must exist in the net table.
-    assert!(board.lint().undeclared_nets.is_empty());
-    // Every component must have a reference.
-    for c in &board.components {
-        assert!(!c.reference.is_empty(), "unnamed component {:?}", c.lib_id);
-    }
-}
-
-#[test]
-fn kicad5_module_format() {
-    let Some(src) = corpus("stormduino/stormduino Rev2.kicad_pcb") else {
-        eprintln!("corpus missing; skipping");
-        return;
-    };
-    let board = ExtractedBoard::from_kicad_pcb(&src).unwrap();
-    assert!(
-        board.components.len() > 20,
-        "got {}",
-        board.components.len()
-    );
-    assert!(
-        board.components.iter().any(|c| !c.reference.is_empty()),
-        "KiCad 5 fp_text references not extracted"
-    );
-}
-
-#[test]
 fn tarski_netlist() {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_inputsystem.net");
     let Ok(src) = std::fs::read_to_string(p) else {
@@ -266,27 +218,4 @@ fn tarski_netlist() {
         .filter(|p| !p.function.is_empty())
         .count();
     assert!(with_funcs > 1000);
-}
-
-#[test]
-fn tarski_pcb_full_board() {
-    let Some(p) = hauksbee_testkit::private_asset(
-        "HAUKSBEE_TARSKI_DIR",
-        "Neuron/InputSystem/InputSystem.kicad_pcb",
-        "tarski_pcb_full_board",
-    ) else {
-        return;
-    };
-    let src = std::fs::read_to_string(p).expect("readable once located");
-    let t0 = std::time::Instant::now();
-    let board = ExtractedBoard::from_kicad_pcb(&src).unwrap();
-    let dt = t0.elapsed();
-    eprintln!(
-        "tarski pcb: {} components, {} nets in {dt:?}",
-        board.components.len(),
-        board.nets.len()
-    );
-    assert!(board.components.len() > 3000);
-    assert!(board.lint().undeclared_nets.is_empty());
-    assert!(dt.as_secs() < 30, "44MB extraction took {dt:?}");
 }

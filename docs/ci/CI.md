@@ -209,8 +209,7 @@ unknown reference, or duplicate within either artifact refuses; identical
 same-side decisions across the two artifacts deduplicate. BOM population fields
 remain advice: they never become hidden executable policy. CI JSON inventories
 the board, spec, BOM, placement and variant with exact SHA-256s and
-contributions; assertion evidence cites those causal inputs, and
-`--emit-manifest` captures all five transitive inputs. See
+contributions, and assertion evidence cites those causal inputs. See
 [`BOM.md`](../ingest/BOM.md) and [`DNP.md`](../ingest/DNP.md) for the authority
 and reconciliation rules. A population that leaves every component open is
 invalid rather than vacuously GREEN, and a simulated peripheral `ref` cannot

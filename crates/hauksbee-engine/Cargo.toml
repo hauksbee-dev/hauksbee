@@ -13,7 +13,6 @@ description = "Integration heart: binds an extracted board to models and co-simu
 # Board-specific probes and suites remain useful in the development tree but
 # are not part of the publishable engine package. The reusable Tarski library
 # surface lives in the private `hauksbee-tarski` workspace crate.
-exclude = ["examples/tarski_*.rs", "tests/tarski_*.rs"]
 
 [features]
 # Propagate the MCU backend choices. All on by default so the engine runs AVR,
@@ -78,12 +77,9 @@ toml = "0.8"
 # features only (macOS FSEvents; inotify/ReadDirectoryChanges are always compiled
 # on Linux/Windows); the recommended-watcher + watch-a-dir-and-filter pattern
 # needs nothing more.
-notify = "8"
 # Interactive TUI: the default human-facing surface when `hauksbee run <board>`
 # is invoked with no output flag on a TTY. Adapts ratatui + crossterm rather
 # than hand-rolling a terminal renderer.
-ratatui = { workspace = true }
-crossterm = { workspace = true }
 # Sandboxed arithmetic/boolean expression evaluator for behavioural-model laws
 # and FSM guards. Chosen over rhai: the laws here are pure arithmetic over a
 # bound context (pin voltages, active state, params) with no need for a scripting

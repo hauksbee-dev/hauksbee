@@ -6,18 +6,13 @@
 //! vias classified as vias. When they are absent (a stripped export, or legacy
 //! CAM output), the geometry-only reconstruction runs exactly as before.
 //!
-//! Both sides are proven here:
-//! - a synthetic job, once with attributes and once stripped, end to end
-//!   through [`from_gerber_dir`];
-//! - the ZSWatch corpus board, whose production folder ships the X2 gerbers
-//!   NEXT TO the netlist they were exported with, so the film's claims are
-//!   checked against a same-batch oracle rather than against themselves.
+//! A synthetic job is read twice, once with attributes and once stripped, end
+//! to end through [`from_gerber_dir`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use hauksbee_extract::gerber::from_gerber_dir;
-use hauksbee_extract::ExtractedBoard;
 
 /// A two-component film: R1 (two pads, nets VCC/SIG), C7 (two pads, SIG/GND),
 /// a stitching via on VCC sitting INSIDE C7's footprint window, and a track.
@@ -159,144 +154,4 @@ fn the_same_job_stripped_reproduces_the_geometry_only_reconstruction() {
     // Geometry unions only what touches: R1-2 -- track -- C7-1 is one net;
     // R1-1, C7-2 and the via are three more.
     assert_eq!(g.stats.n_nets, 4);
-}
-
-// ── Corpus oracle: ZSWatch ──────────────────────────────────────────────────
-
-fn zswatch_paths() -> Option<(PathBuf, PathBuf)> {
-    let root = hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR"))?;
-    let base = root.join("zswatch_mainboard/production/watch-RELEASED");
-    let gerbers = base.join("Manufacturing/Fabrication/Gerbers");
-    let netlist = base.join("Netlist/ZSWatch-Watch-netlist.net");
-    (gerbers.is_dir() && netlist.is_file()).then_some((gerbers, netlist))
-}
-
-/// The netlist name a gerber `%TO.N` corresponds to: KiCad's X2 export writes
-/// the net's short name, while the netlist may carry the hierarchical path
-/// (`/Touch/TOUCH-RST`). Compare on the last path segment.
-fn short(name: &str) -> &str {
-    name.rsplit('/').next().unwrap_or(name)
-}
-
-#[test]
-fn zswatch_x2_export_agrees_with_its_own_netlist_oracle() {
-    let Some((gerbers, netlist)) = zswatch_paths() else {
-        eprintln!("skipping: ZSWatch corpus board not present");
-        return;
-    };
-    let oracle = ExtractedBoard::from_kicad_netlist(&std::fs::read_to_string(netlist).unwrap())
-        .expect("netlist oracle");
-    let g = from_gerber_dir(&gerbers).expect("gerber extraction");
-    assert!(g.stats.x2_bound_pads > 0, "the export carries %TO.P");
-    assert!(g.stats.x2_named_nets > 0, "the export carries %TO.N");
-
-    // Oracle pad map: (refdes, pin) -> oracle net id, plus net names.
-    let oracle_net_name: HashMap<i64, &str> = oracle
-        .nets
-        .iter()
-        .map(|n| (n.id, n.name.as_str()))
-        .collect();
-    let mut oracle_pads: HashMap<(String, String), i64> = HashMap::new();
-    for c in &oracle.components {
-        for p in &c.pins {
-            if let Some(net) = p.net {
-                oracle_pads.insert((c.reference.clone(), p.number.clone()), net);
-            }
-        }
-    }
-    let recon_net_name: HashMap<i64, &str> = g
-        .board
-        .nets
-        .iter()
-        .map(|n| (n.id, n.name.as_str()))
-        .collect();
-
-    let mut matched: Vec<((String, String), i64, i64)> = Vec::new(); // key, oracle net, recon net
-    let mut recon_pads = 0usize;
-    for c in &g.board.components {
-        for p in &c.pins {
-            recon_pads += 1;
-            let key = (c.reference.clone(), p.number.clone());
-            if let (Some(&onet), Some(rnet)) = (oracle_pads.get(&key), p.net) {
-                matched.push((key, onet, rnet));
-            }
-        }
-    }
-    eprintln!(
-        "[zswatch-x2] oracle pads {} | recon pads {} | matched {} | recon nets {} | oracle nets {}",
-        oracle_pads.len(),
-        recon_pads,
-        matched.len(),
-        g.board.nets.len(),
-        oracle.nets.len(),
-    );
-
-    // Pads the film binds that the netlist does not list. Measured on this
-    // export these are exclusively MECHANICAL pads (mounting holes "MH",
-    // mounting posts "MP", connector shields "SH", one unconnected pin): pads
-    // that physically exist, which the netlist export omits or collapses. So
-    // they are bounded, and none may carry a plain numeric pin the netlist
-    // would certainly have listed.
-    let unmatched: Vec<_> = g
-        .board
-        .components
-        .iter()
-        .flat_map(|c| {
-            c.pins
-                .iter()
-                .map(move |p| (c.reference.clone(), p.number.clone()))
-        })
-        .filter(|k| !oracle_pads.contains_key(k))
-        .collect();
-    eprintln!(
-        "[zswatch-x2] {} film pads not in the netlist (mechanical): {unmatched:?}",
-        unmatched.len()
-    );
-    assert!(
-        unmatched.len() * 100 <= recon_pads * 8,
-        "too many film-bound pads absent from the oracle: {unmatched:?}"
-    );
-
-    // Coverage: the films flash every pad on outer copper, so nearly all
-    // oracle pads must be recovered with their exact identity.
-    assert!(
-        matched.len() * 100 >= oracle_pads.len() * 95,
-        "matched {} of {} oracle pads",
-        matched.len(),
-        oracle_pads.len()
-    );
-
-    // Net names: the film's name for each pad's net must be the oracle's.
-    let name_mismatches: Vec<_> = matched
-        .iter()
-        .filter(|(_, onet, rnet)| short(oracle_net_name[onet]) != short(recon_net_name[rnet]))
-        .map(|(key, onet, rnet)| {
-            (
-                key.clone(),
-                oracle_net_name[onet].to_string(),
-                recon_net_name[rnet].to_string(),
-            )
-        })
-        .collect();
-    assert!(
-        name_mismatches.is_empty(),
-        "every matched pad's net name must come from the film verbatim; \
-         mismatches: {name_mismatches:?}"
-    );
-
-    // Partition: same-net iff same-net, across every matched pad pair.
-    let mut disagree = 0usize;
-    for i in 0..matched.len() {
-        for j in (i + 1)..matched.len() {
-            let same_o = matched[i].1 == matched[j].1;
-            let same_r = matched[i].2 == matched[j].2;
-            if same_o != same_r {
-                disagree += 1;
-            }
-        }
-    }
-    assert_eq!(
-        disagree, 0,
-        "net partition must agree over all matched pads"
-    );
 }

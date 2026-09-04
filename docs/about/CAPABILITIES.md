@@ -573,9 +573,6 @@ The rest of the CLI surface, one line each:
   --route-dsn`: merge a FreeRouting `.ses` session back into the recompiled
   board.
 - **`hauksbee sim <deck>`**: run a SPICE deck through the solver directly.
-- **`hauksbee watch <board|code|spec>`**: re-run the right check on every
-  file change (a `.kicad_pcb` runs `run --check`, a `.board` runs
-  `check-code`, a `.toml` runs the spec).
 - **`hauksbee doctor`**: report which co-sim backends this build can reach
   and where each simulator was found.
 - **`hauksbee install esp-qemu`**: download Espressif's official prebuilt

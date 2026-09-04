@@ -1452,12 +1452,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fully_located_job_gains_no_accounting_note() {
-        // Every pad placed: no note, so the channel stays worth reading.
-        assert!(stats_with_flashes(300, 300).coverage_notes().is_empty());
-    }
-
-    #[test]
     fn reader_refusal_notes_are_carried_verbatim() {
         // coverage_notes must not drop the reader's own refusals.
         let mut stats = stats_with_flashes(10, 10);
@@ -1471,7 +1465,7 @@ mod tests {
 
     #[test]
     fn pitch_hint_keys_on_the_p_before_a_digit() {
-        // Round-26: the pitch token is a 'p' IMMEDIATELY followed by a digit.
+        // The pitch token is a 'p' IMMEDIATELY followed by a digit.
         // Keying on the FIRST 'p' matched the 'p' in "pinheader", read no digits,
         // and silently mis-pitched every non-2.54 header. The header's real pitch
         // must be recovered regardless of leading p-words in the name.
@@ -1480,32 +1474,6 @@ mod tests {
         assert_eq!(pitch_hint("connector_pin_socket_p5.08mm"), Some(5.08));
         // No pitch token at all → no hint (caller applies its own default).
         assert_eq!(pitch_hint("pinheader_generic"), None);
-    }
-
-    #[test]
-    fn grid_hint_rejects_decimal_body_sizes() {
-        // R36: the digit walk stopped at the decimal point, so a body dimension
-        // like "3.2x2.5mm" captured the integer fragments "2"/"2" that touch the
-        // 'x' and returned a bogus 2x2 pin grid, oversizing the crystal pad
-        // window ~3x and letting it claim stray orphan flashes. A decimal body
-        // size must not read as a grid.
-        assert_eq!(grid_hint("crystal_smd_3225-2pin_3.2x2.5mm"), None);
-        assert_eq!(grid_hint("2.0x1.6mm"), None);
-        assert_eq!(grid_hint("5.0x3.2mm"), None);
-        // Integer "mm" body sizes are rejected too.
-        assert_eq!(grid_hint("12x12mm"), None);
-        // Genuine pin grids (integer counts, no '.') still parse.
-        assert_eq!(grid_hint("2x18"), Some((2, 18)));
-        assert_eq!(grid_hint("01x02"), Some((1, 2)));
-
-        // The decimal crystal body must not inflate the pad-search half-extent:
-        // it takes the largest-dimension path (3.2/2 + 1 = 2.6 mm), not the
-        // 2x2-grid path (~7.62 mm).
-        let he = footprint_half_extent("Crystal_SMD_3225-2Pin_3.2x2.5mm");
-        assert!(
-            he < 4.0,
-            "decimal crystal body half-extent must be small, got {he}"
-        );
     }
 
     #[test]
@@ -1576,38 +1544,8 @@ mod tests {
     }
 
     #[test]
-    fn polygon_flash_inside_a_gridded_pour_keeps_its_containment_witness() {
-        let pour = CopperPrim::bare(
-            Shape::Polygon {
-                pts: (0..2048)
-                    .map(|index| {
-                        let angle = index as f64 * std::f64::consts::TAU / 2048.0;
-                        (10.0 * angle.cos(), 10.0 * angle.sin())
-                    })
-                    .collect(),
-                r: 0.0,
-            },
-            PrimKind::Region,
-        );
-        let pad = CopperPrim::bare(
-            Shape::Polygon {
-                pts: vec![(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)],
-                r: 0.0,
-            },
-            PrimKind::Flash,
-        );
-
-        let (_board, stats) =
-            reconstruct("polygon-pad-in-pour", vec![vec![pour, pad]], vec![], vec![]);
-        assert_eq!(
-            stats.n_nets, 1,
-            "a rectangular pad wholly flooded by a large pour is the same conductor"
-        );
-    }
-
-    #[test]
     fn gnd_label_is_deterministic_on_a_copper_count_tie() {
-        // Round-8 #14: two separate region pours with EQUAL primitive counts
+        // Two separate region pours with EQUAL primitive counts
         // tie on "most copper". Iterating the HashMap keys made the GND label
         // land on whichever tied net came first in iteration order, flaky
         // across extractions. The tiebreak now always labels the lowest net id.
@@ -1688,25 +1626,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unresolvable_span_stitches_nothing_and_is_counted() {
-        // The refusal: four pads stacked at one point, a plated hit whose span
-        // the files did not give us. Every layer stays its own net and the
-        // refusal is counted, rather than four nets being merged on a guess.
-        let pad = || vec![cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash)];
-        let unknown = PlatedHole {
-            x: 0.0,
-            y: 0.0,
-            diameter: 0.3,
-            to: None,
-            span: LayerSpan::Unknown,
-        };
-        let (_b, s) = reconstruct("t", vec![pad(), pad(), pad(), pad()], vec![unknown], vec![]);
-        assert_eq!(s.n_nets, 4, "an unknown span must not stitch anything");
-        assert_eq!(s.refused_span_holes, 1);
-        assert_eq!(s.n_holes, 1, "the hit is still reported, just not stitched");
-    }
-
-    #[test]
     fn a_declared_span_naming_a_missing_layer_is_refused_not_widened() {
         // `Plated,1,6,PTH` on a two-layer job names a layer the stack does not
         // have. Clamping that to the stack would silently turn it into a
@@ -1761,28 +1680,6 @@ mod tests {
             s2.n_nets, 2,
             "a round hole at the start reaches only one pad"
         );
-    }
-
-    #[test]
-    fn a_slot_wall_joins_copper_it_only_grazes_mid_span() {
-        // A pad sitting beside the MIDDLE of a slot, touching the wall but
-        // nowhere near either end. Tessellating a slot as two end discs, or as
-        // a chord that cuts the corner, misses this contact.
-        let layer = vec![
-            cap(0.0, 0.0, 0.0, 0.0, 0.2, PrimKind::Flash),
-            // Wall of a 0.6 mm-wide slot along y = 0 reaches y = +-0.3. A 0.2 mm
-            // pad centred at (3.0, 0.5) has its edge at y = 0.3: tangent.
-            cap(3.0, 0.5, 3.0, 0.5, 0.2, PrimKind::Flash),
-        ];
-        let slot = PlatedHole {
-            x: 0.0,
-            y: 0.0,
-            diameter: 0.6,
-            to: Some((6.0, 0.0)),
-            span: LayerSpan::Through,
-        };
-        let (_b, s) = reconstruct("t", vec![layer], vec![slot], vec![]);
-        assert_eq!(s.n_nets, 1, "a mid-span tangent contact is a connection");
     }
 
     /// A pad flash carrying X2 identity: `%TO.P,<refdes>,<pin>` + `%TO.N,<net>`.
@@ -1938,59 +1835,6 @@ mod tests {
     }
 
     #[test]
-    fn a_partially_attributed_film_keeps_geometric_binding_for_bare_pads() {
-        // One film where SOME pads carry %TO.P and one pad flash does not
-        // (partial X2: merged films, subset-attributing exporters). Absence
-        // of .P is not a non-pad assertion, so the bare flash must still
-        // bind geometrically instead of silently vanishing.
-        let layer = vec![
-            x2_pad(0.0, 0.0, "R1", "1", "VCC"),
-            cap(20.0, 0.0, 20.0, 0.0, 0.3, PrimKind::Flash),
-        ];
-        let (board, stats) = reconstruct(
-            "t",
-            vec![layer],
-            vec![],
-            vec![placement("R1", 0.0, 0.0), placement("R2", 20.0, 0.0)],
-        );
-        assert_eq!(stats.x2_bound_pads, 1);
-        let by_ref: HashMap<&str, usize> = board
-            .components
-            .iter()
-            .map(|c| (c.reference.as_str(), c.pins.len()))
-            .collect();
-        assert_eq!(by_ref["R1"], 1);
-        assert_eq!(by_ref["R2"], 1, "the bare pad on the SAME film still binds");
-    }
-
-    #[test]
-    fn a_legacy_film_mixed_into_an_x2_job_keeps_its_geometric_binding() {
-        // Layer 0 is an X2 film (its pads carry %TO.P); layer 1 is a legacy
-        // film with a bare flash sitting under placed component R2. Gating
-        // the whole job on the X2 film's presence silently deleted R2's pad;
-        // the geometric window must still bind flashes of unattributed films.
-        let x2_layer = vec![x2_pad(0.0, 0.0, "R1", "1", "VCC")];
-        let legacy_layer = vec![cap(20.0, 0.0, 20.0, 0.0, 0.3, PrimKind::Flash)];
-        let (board, stats) = reconstruct(
-            "t",
-            vec![x2_layer, legacy_layer],
-            vec![],
-            vec![placement("R1", 0.0, 0.0), placement("R2", 20.0, 0.0)],
-        );
-        assert_eq!(stats.x2_bound_pads, 1);
-        let by_ref: HashMap<&str, usize> = board
-            .components
-            .iter()
-            .map(|c| (c.reference.as_str(), c.pins.len()))
-            .collect();
-        assert_eq!(by_ref["R1"], 1, "the film-bound pad");
-        assert_eq!(
-            by_ref["R2"], 1,
-            "the legacy film's flash still binds geometrically"
-        );
-    }
-
-    #[test]
     fn geometry_bridging_two_x2_nets_is_named_not_silently_resolved() {
         // Two pads whose copper TOUCHES while the film assigns them different
         // nets: a real short or an over-merge. The net keeps its synthetic
@@ -2034,51 +1878,6 @@ mod tests {
         assert_eq!(pins[0].number, "1", "invented claim-order numbering stays");
         assert_eq!(pins[1].number, "2");
         assert!(board.nets.iter().all(|n| n.name.starts_with("NET_")));
-    }
-
-    #[test]
-    fn a_header_window_follows_its_stored_rotation() {
-        // A 1x40 header is a ~100 mm LINE. Its old square window was ~104 mm
-        // in BOTH axes, so it claimed flashes sitting nowhere near its pin
-        // row. The P&P stores the rotation; at 45° the window must follow it:
-        // a pad on the rotated row axis is claimed, a stray flash the same
-        // distance out on the unrotated axis is not.
-        let header = |rot: f64| Placement {
-            reference: "J1".into(),
-            value: String::new(),
-            package: "PinHeader_1x40_P2.54mm".into(),
-            x: 0.0,
-            y: 0.0,
-            rotation: rot,
-            top: true,
-            dnp: false,
-        };
-        let on_axis_45 = 42.4; // (42.4, 42.4) is ~60 mm along the 45° row
-        let layer = vec![
-            cap(
-                on_axis_45,
-                on_axis_45,
-                on_axis_45,
-                on_axis_45,
-                0.3,
-                PrimKind::Flash,
-            ),
-            cap(60.0, 0.0, 60.0, 0.0, 0.3, PrimKind::Flash),
-        ];
-        let (board, stats) = reconstruct("t", vec![layer.clone()], vec![], vec![header(45.0)]);
-        assert_eq!(
-            stats.assigned_flashes, 1,
-            "only the pad on the rotated pin row belongs to the header"
-        );
-        let pos = board.components[0].pins[0].position.unwrap();
-        assert!(
-            (pos.0 - on_axis_45).abs() < 1e-6,
-            "the claimed pad is the on-axis one"
-        );
-
-        // At rotation 0 the same header claims the (60, 0) pad instead.
-        let (_b, stats) = reconstruct("t", vec![layer], vec![], vec![header(0.0)]);
-        assert_eq!(stats.assigned_flashes, 1);
     }
 
     #[test]

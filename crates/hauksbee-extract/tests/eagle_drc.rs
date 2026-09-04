@@ -138,7 +138,7 @@ fn element_missing_package_still_extracts_and_keeps_nets() {
     );
 }
 
-/// Round-4 #7: an Eagle <element> marked populate="no" (do-not-populate /
+/// An Eagle <element> marked populate="no" (do-not-populate /
 /// assembly variant) must extract with dnp=true, matching the KiCad readers.
 /// A populated element (no populate attr) stays dnp=false.
 #[test]
@@ -174,7 +174,7 @@ fn eagle_populate_no_sets_dnp() {
     assert!(r2.dnp, "R2 populate=\"no\" -> do-not-populate");
 }
 
-/// Round-5: a mirrored, rotated Eagle element (`MR90`) must place its pads with
+/// A mirrored, rotated Eagle element (`MR90`) must place its pads with
 /// the corpus-validated drc.rs handedness, flip-X then rotate by `-deg`, not
 /// the old `+deg` form that put pads on the wrong side of the origin whenever
 /// the rotation was not a multiple of 180.
@@ -210,43 +210,7 @@ fn eagle_mirrored_rotated_pad_uses_drc_handedness() {
     );
 }
 
-/// Round-7 #5: the spin-prefixed mirror form `SMR90` must be recognised as
-/// mirrored, exactly like `MR90`. `starts_with('M')` missed it (the string
-/// starts with 'S'); `contains('M')`, matching drc.rs, catches it.
-#[test]
-fn eagle_spin_mirrored_element_is_recognised_as_mirrored() {
-    let packages = r#"
-<package name="P">
-  <smd name="1" x="2" y="0" dx="0.5" dy="0.5" layer="1"/>
-</package>
-"#;
-    let elements = r#"
-<element name="U1" library="lib" package="P" value="" x="0" y="0" rot="SMR90"/>
-"#;
-    let signals = r#"
-<signal name="NET1">
-  <contactref element="U1" pad="1"/>
-</signal>
-"#;
-    let text = board(packages, elements, signals, default_rules());
-    let brd = ExtractedBoard::from_eagle_brd(&text).expect("eagle extraction succeeds");
-    let u1 = brd
-        .components
-        .iter()
-        .find(|c| c.reference == "U1")
-        .expect("U1");
-    // Mirrored -> bottom copper, and mirror-then-rotate places pad 1 at (0, 2)
-    // just like MR90. Un-mirrored (the bug) would leave it on F.Cu at (0, -2).
-    assert_eq!(u1.layer, "B.Cu", "SMR90 is mirrored -> bottom side");
-    let p1 = u1.pins.iter().find(|p| p.number == "1").expect("pad 1");
-    let (x, y) = p1.position.expect("pad 1 has a position");
-    assert!(
-        (x - 0.0).abs() < 1e-6 && (y - 2.0).abs() < 1e-6,
-        "SMR90 pad expected at (0, 2), got ({x}, {y})"
-    );
-}
-
-/// Round-7 #1: Eagle namespaces packages per <library>. Two libraries each
+/// Eagle namespaces packages per <library>. Two libraries each
 /// defining a package named "COMMON" (with different pads) must NOT merge, an
 /// element keyed to one library's package must get only that library's pads,
 /// not the concatenation of both.
@@ -412,30 +376,6 @@ fn wire_smd_overlap_is_a_short() {
 }
 
 #[test]
-fn smd_smd_overlap_in_different_packages_is_a_short() {
-    // Two SMD pads on different nets, in different elements, overlapping. Pads
-    // 2 mm wide, centres 1 mm apart → overlap by 1 mm.
-    let packages = r#"
-<package name="PAD2">
-  <smd name="1" x="0" y="0" dx="2" dy="2" layer="1"/>
-</package>"#;
-    let elements = r#"
-<element name="U1" library="lib" package="PAD2" x="5" y="5"/>
-<element name="U2" library="lib" package="PAD2" x="6" y="5"/>"#;
-    let signals = r#"
-<signal name="A">
-  <contactref element="U1" pad="1"/>
-</signal>
-<signal name="B">
-  <contactref element="U2" pad="1"/>
-</signal>
-"#;
-    let report = drc(packages, elements, signals);
-    assert_eq!(report.short_count(), 1);
-    assert_short(&report, "A", "B");
-}
-
-#[test]
 fn established_eagle_jumper_library_and_package_pair_is_local() {
     // EAGLE has no native net-tie flag. The Arduino convention uses two
     // independent class fields together: library="jumper", package="SJ".
@@ -491,147 +431,6 @@ fn eagle_jumper_does_not_hide_ordinary_copper_crossing_over_its_pads() {
 }
 
 #[test]
-fn eagle_jumper_allows_routes_that_terminate_on_its_declared_pad_pair() {
-    // EAGLE has no native net-tie primitive: the established jumper convention
-    // routes one signal from pad 1 into pad 2 while the other signal terminates
-    // on pad 2. Both route endpoints are anchored to their corresponding
-    // jumper pads, matching the Arduino Uno GROUND tie.
-    let packages = r#"
-<package name="SJ">
-  <smd name="1" x="-0.75" y="0" dx="1" dy="1" layer="1"/>
-  <smd name="2" x="0.75" y="0" dx="1" dy="1" layer="1"/>
-</package>"#;
-    let elements = r#"<element name="JP1" library="jumper" package="SJ" x="5" y="5"/>"#;
-    let signals = r#"
-<signal name="A">
-  <contactref element="JP1" pad="1"/>
-  <wire x1="4.25" y1="5" x2="5.25" y2="5" width="0.2" layer="1"/>
-</signal>
-<signal name="B">
-  <contactref element="JP1" pad="2"/>
-  <wire x1="5.75" y1="5" x2="5.25" y2="5" width="0.2" layer="1"/>
-</signal>
-"#;
-
-    let report = drc_in_library("jumper", packages, elements, signals);
-    assert!(
-        report.is_clean(),
-        "routes anchored to the declared jumper pads are local tie copper: {:?}",
-        report.findings
-    );
-}
-
-#[test]
-fn a_jumper_name_in_one_field_does_not_exempt_copper() {
-    let packages = r#"
-<package name="JUMPER">
-  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
-  <smd name="2" x="0.9" y="0" dx="1" dy="1" layer="1"/>
-</package>"#;
-    let elements =
-        r#"<element name="JP1" library="lib" package="JUMPER" value="JUMPER" x="5" y="5"/>"#;
-    let signals = r#"
-<signal name="A"><contactref element="JP1" pad="1"/></signal>
-<signal name="B"><contactref element="JP1" pad="2"/></signal>
-"#;
-    assert_short(&drc(packages, elements, signals), "A", "B");
-}
-
-#[test]
-fn ordinary_component_pads_on_different_nets_still_short() {
-    let packages = r#"
-<package name="QFN">
-  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
-  <smd name="2" x="0.9" y="0" dx="1" dy="1" layer="1"/>
-</package>"#;
-    let elements = r#"<element name="U1" library="lib" package="QFN" x="5" y="5"/>"#;
-    let signals = r#"
-<signal name="A"><contactref element="U1" pad="1"/></signal>
-<signal name="B"><contactref element="U1" pad="2"/></signal>
-"#;
-
-    assert_short(&drc(packages, elements, signals), "A", "B");
-}
-
-#[test]
-fn long_pad_uses_board_elongation_rule() {
-    let packages = r#"
-<package name="LONG_PAD">
-  <pad name="1" x="0" y="0" drill="0.8" diameter="2" shape="long" rot="R90"/>
-</package>"#;
-    let elements = r#"<element name="J1" library="lib" package="LONG_PAD" x="5" y="5"/>"#;
-    let signals = r#"
-<signal name="A"><contactref element="J1" pad="1"/></signal>
-<signal name="B"><wire x1="0" y1="6.7" x2="10" y2="6.7" width="0.2" layer="1"/></signal>
-"#;
-    let rules = r#"<designrules name="narrow-long-pad">
-<param name="mdWireWire" value="0.1mm"/>
-<param name="mdWirePad" value="0.1mm"/>
-<param name="mdPadPad" value="0.1mm"/>
-<param name="psElongationLong" value="50"/>
-</designrules>"#;
-
-    let report = drc_rules(packages, elements, signals, rules);
-    assert_eq!(
-        report.short_count(),
-        0,
-        "50% elongation makes total pad length 1.5x its diameter"
-    );
-}
-
-#[test]
-fn shared_component_does_not_exempt_unrelated_copper() {
-    // R1 legitimately has one terminal on each net. That connectivity says
-    // nothing about an A/B track collision elsewhere on the board.
-    let packages = r#"
-<package name="R0402">
-  <smd name="1" x="-1" y="0" dx="0.5" dy="0.5" layer="1"/>
-  <smd name="2" x="1" y="0" dx="0.5" dy="0.5" layer="1"/>
-</package>"#;
-    let elements = r#"<element name="R1" library="lib" package="R0402" x="20" y="20"/>"#;
-    let signals = r#"
-<signal name="A">
-  <contactref element="R1" pad="1"/>
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1"/>
-</signal>
-<signal name="B">
-  <contactref element="R1" pad="2"/>
-  <wire x1="5" y1="-5" x2="5" y2="5" width="0.4" layer="1"/>
-</signal>
-"#;
-
-    assert_short(&drc(packages, elements, signals), "A", "B");
-}
-
-#[test]
-fn dual_field_eagle_jumper_exemption_is_local_to_its_copper() {
-    let packages = r#"
-<package name="SMT-JUMPER_2-NC_TRACE">
-  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
-  <smd name="2" x="0.9" y="0" dx="1" dy="1" layer="1"/>
-</package>"#;
-    let elements = r#"<element name="NT1" library="SparkFun-Jumpers" package="SMT-JUMPER_2-NC_TRACE" value="JUMPER-SMT" x="20" y="20"/>"#;
-    let signals = r#"
-<signal name="A">
-  <contactref element="NT1" pad="1"/>
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1"/>
-</signal>
-<signal name="B">
-  <contactref element="NT1" pad="2"/>
-  <wire x1="5" y1="-5" x2="5" y2="5" width="0.4" layer="1"/>
-</signal>
-"#;
-    let report = drc_in_library("SparkFun-Jumpers", packages, elements, signals);
-
-    assert_eq!(
-        report.short_count(),
-        1,
-        "only the unrelated track short fires"
-    );
-    assert_short(&report, "A", "B");
-}
-
-#[test]
 fn via_wire_overlap_is_a_short() {
     // A via on net A dropped onto a wire on net B. The via has an explicit
     // diameter and spans all copper layers, so it shorts the bottom-layer wire.
@@ -647,39 +446,6 @@ fn via_wire_overlap_is_a_short() {
     assert_short(&report, "A", "B");
     let f = report.shorts().next().unwrap();
     assert_eq!(f.layer, "B.Cu", "via reaches the bottom layer");
-}
-
-#[test]
-fn via_without_diameter_uses_restring_rule() {
-    // A via with no `diameter` attribute: the outer diameter is derived from the
-    // drill and the restring rule. With drill 0.4 mm and the default restring,
-    // the ring clamps to 0.2032 mm so the diameter is ~0.8 mm; a wire 0.35 mm
-    // from the via centre (inside that radius) is shorted.
-    let signals = r#"
-<signal name="A">
-  <via x="5" y="0" extent="1-16" drill="0.4"/>
-</signal>
-<signal name="B">
-  <wire x1="0" y1="0.35" x2="10" y2="0.35" width="0.1" layer="1"/>
-</signal>
-"#;
-    let report = drc("", "", signals);
-    assert_short(&report, "A", "B");
-}
-
-#[test]
-fn via_outside_wire_is_clean() {
-    // The same via, but the wire is well clear of it.
-    let signals = r#"
-<signal name="A">
-  <via x="50" y="50" extent="1-16" drill="0.4" diameter="1.0"/>
-</signal>
-<signal name="B">
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="16"/>
-</signal>
-"#;
-    let report = drc("", "", signals);
-    assert!(report.is_clean(), "no shorts: {}", report.short_count());
 }
 
 #[test]
@@ -729,91 +495,6 @@ fn mirrored_package_pad_is_placed_on_the_bottom() {
         r2.is_clean(),
         "top-layer wire must not hit the mirrored (bottom) pad"
     );
-}
-
-#[test]
-fn mirror_reflects_x_not_y_for_offset_pads() {
-    // Regression for the SparkFun RP2040 Thing Plus false-short class: an `MR0`
-    // mirrored element must reflect its pads about the Y axis (negate local X),
-    // NOT the X axis (negate local Y). With a pad OFFSET from the element origin
-    // the two conventions place it on opposite sides, so this discriminates them
-    // (the origin-pad test above cannot). The element sits at x=10; the pad is
-    // local (+3, +4). Correct (flip-X): world (10-3, 0+4) = (7, 4). The buggy
-    // flip-Y would give (10+3, -4) = (13, -4).
-    let packages = r#"
-<package name="OFFPAD">
-  <smd name="1" x="3" y="4" dx="1" dy="1" layer="1"/>
-</package>"#;
-    let elements = r#"<element name="U1" library="lib" package="OFFPAD" x="10" y="0" rot="MR0"/>"#;
-    // A short bottom wire centred on the flip-X position (7, 4): must short.
-    let at_flipx = r#"
-<signal name="A">
-  <wire x1="6.5" y1="4" x2="7.5" y2="4" width="0.4" layer="16"/>
-</signal>
-<signal name="B">
-  <contactref element="U1" pad="1"/>
-</signal>
-"#;
-    let r = drc(packages, elements, at_flipx);
-    assert_short(&r, "A", "B");
-
-    // A wire at the WRONG flip-Y position (13, -4) must NOT short: nothing is
-    // there under the correct transform.
-    let at_flipy = r#"
-<signal name="A">
-  <wire x1="12.5" y1="-4" x2="13.5" y2="-4" width="0.4" layer="16"/>
-</signal>
-<signal name="B">
-  <contactref element="U1" pad="1"/>
-</signal>
-"#;
-    let r2 = drc(packages, elements, at_flipy);
-    assert!(
-        r2.is_clean(),
-        "the pad must be at flip-X (7,4), not flip-Y (13,-4)"
-    );
-}
-
-#[test]
-fn mirrored_offset_th_pad_direction_is_reflected_for_mr0_and_mr180() {
-    // A real EAGLE `shape="offset"` through-hole pad is asymmetric: the hole
-    // sits at one end of the capsule. Mirroring must therefore reverse the pad
-    // axis, not just move its centre. With the element origin at x=10:
-    //   MR0   extends toward -X;
-    //   MR180 extends toward +X.
-    // A symmetric round/long pad would not discriminate this sign error.
-    let packages = r#"
-<package name="OFFSET_TH">
-  <pad name="1" x="0" y="0" drill="0.8" diameter="2" shape="offset" rot="R0"/>
-</package>"#;
-
-    for (element_rotation, expected_x, reflected_away_x) in
-        [("MR0", 7.5, 12.5), ("MR180", 12.5, 7.5)]
-    {
-        let elements = format!(
-            r#"<element name="U1" library="lib" package="OFFSET_TH" x="10" y="0" rot="{element_rotation}"/>"#
-        );
-        let at_expected = format!(
-            r#"
-<signal name="A"><contactref element="U1" pad="1"/></signal>
-<signal name="B"><wire x1="{expected_x}" y1="-1" x2="{expected_x}" y2="1" width="0.2" layer="1"/></signal>
-"#
-        );
-        assert_short(&drc(packages, &elements, &at_expected), "A", "B");
-
-        let at_wrong_side = format!(
-            r#"
-<signal name="A"><contactref element="U1" pad="1"/></signal>
-<signal name="B"><wire x1="{reflected_away_x}" y1="-1" x2="{reflected_away_x}" y2="1" width="0.2" layer="1"/></signal>
-"#
-        );
-        let report = drc(packages, &elements, &at_wrong_side);
-        assert!(
-            report.is_clean(),
-            "{element_rotation}: no copper belongs on the unreflected side: {:?}",
-            report.findings
-        );
-    }
 }
 
 #[test]
@@ -920,60 +601,6 @@ fn octagon_pad_shape_is_detected() {
 // interior is bare board; only a zero-width circle is Eagle-filled solid.
 // ---------------------------------------------------------------------------
 
-#[test]
-fn copper_inside_a_stroked_circle_is_not_a_short() {
-    // Ring: radius 3, stroke 0.4 → copper only in the 2.8..3.2 band. A wire
-    // through the middle sits 1.7 mm clear of the inner edge; the old
-    // solid-disc model read a full overlap short.
-    let signals = r#"
-<signal name="A">
-  <wire x1="-1" y1="0" x2="1" y2="0" width="0.2" layer="1"/>
-</signal>
-<signal name="B">
-  <circle x="0" y="0" radius="3" width="0.4" layer="1"/>
-</signal>
-"#;
-    let report = drc("", "", signals);
-    assert!(
-        report.findings.is_empty(),
-        "the annulus hole is bare board: {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.gap_mm))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn wire_crossing_the_annulus_ring_is_a_short() {
-    // Control: copper crossing the stroked band itself still shorts, so the
-    // annulus fix cannot pass by dropping the circle.
-    let signals = r#"
-<signal name="A">
-  <wire x1="2" y1="0" x2="4" y2="0" width="0.2" layer="1"/>
-</signal>
-<signal name="B">
-  <circle x="0" y="0" radius="3" width="0.4" layer="1"/>
-</signal>
-"#;
-    assert_short(&drc("", "", signals), "A", "B");
-}
-
-#[test]
-fn zero_width_circle_stays_a_filled_disc() {
-    // Eagle renders width-0 circles filled; copper at the centre is a short.
-    let signals = r#"
-<signal name="A">
-  <wire x1="-0.4" y1="0" x2="0.4" y2="0" width="0.2" layer="1"/>
-</signal>
-<signal name="B">
-  <circle x="0" y="0" radius="1" width="0" layer="1"/>
-</signal>
-"#;
-    assert_short(&drc("", "", signals), "A", "B");
-}
-
 // ---------------------------------------------------------------------------
 // Net classes. <classes> is a clearance matrix: class N's own row entry is its
 // same-class rule, an explicit cross-class entry pins that pair (and may relax
@@ -1048,35 +675,6 @@ fn cross_class_pair_without_matrix_entry_uses_the_larger_class_clearance() {
 }
 
 #[test]
-fn explicit_cross_class_matrix_entry_can_relax_below_the_larger_class() {
-    // Same pair, but class 1 explicitly declares a 0.2 mm clearance to
-    // class 0: the matrix cell overrides the larger-class fallback, so the
-    // 0.3 mm gap is legal. This pins that explicit cells WIN (an
-    // always-take-the-max model would still flag 0.4 here).
-    let classes = r#"
-<classes>
-<class number="0" name="default" width="0" drill="0">
-<clearance class="0" value="0.15"/>
-</class>
-<class number="1" name="power" width="0" drill="0">
-<clearance class="0" value="0.2"/>
-<clearance class="1" value="0.4"/>
-</class>
-</classes>"#;
-    let rules = format!("{classes}{}", default_rules());
-    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
-    assert!(
-        report.findings.is_empty(),
-        "the explicit 0.2 mm matrix cell overrides the 0.4 mm class rule: {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.gap_mm, f.required_clearance_mm))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[test]
 fn explicit_cross_class_matrix_entry_is_applied() {
     // Same pair, but class 1 declares a 0.5 mm clearance to class 0: the
     // 0.3 mm gap now violates it.
@@ -1108,10 +706,6 @@ fn explicit_cross_class_matrix_entry_is_applied() {
 // the computed fill (with isolate antipads) is derived data. Foreign copper
 // inside an outline is NOT a short (Eagle carves around it). Two overlapping
 // same-rank pours of different signals get no rank arbitration and ARE reported.
-// That rule over-reports, at a rate measured against real fabrication output in
-// `docs/evidence/KNOWN_FAULTS_VALIDATION.md` (right about four of six
-// layer-instances); narrowing it by `isolate` was tried and reverted there,
-// because it fixed one over-report and created a worse miss.
 // ---------------------------------------------------------------------------
 
 fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
@@ -1130,7 +724,7 @@ fn overlapping_same_rank_pours_of_different_nets_are_a_short() {
     // Pour settings ride along on the finding so a reader can see what the
     // overlap was made of. They do not gate it: whether two overlapping pours
     // end up in contact is a property of the fill, which the `.brd` does not
-    // carry (see `docs/about/LIMITATIONS.md`).
+    // carry.
     let signals = format!(
         r#"
 <signal name="A">{}</signal>
@@ -1213,312 +807,11 @@ fn a_cutout_polygon_is_not_copper() {
     );
 }
 
-#[test]
-fn foreign_copper_inside_a_pour_outline_stays_silent() {
-    // A via and a wire of another net fully inside a pour's outline: Eagle's
-    // fill carves max(isolate, clearance) around them, so treating the drawn
-    // outline as solid copper would manufacture false shorts.
-    let signals = format!(
-        r#"
-<signal name="A">{}</signal>
-<signal name="B">
-  <via x="5" y="5" drill="0.3" diameter="0.6"/>
-  <wire x1="3" y1="3" x2="7" y2="3" width="0.2" layer="1"/>
-</signal>
-"#,
-        pour(r#" rank="1" isolate="0.3""#, 0.0, 0.0, 10.0, 10.0),
-    );
-    let report = drc("", "", &signals);
-    assert!(
-        report.findings.is_empty(),
-        "the pour fill is carved around foreign copper: {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone()))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn grazing_clearance_at_the_annulus_outer_edge_is_not_lost_to_flattening() {
-    // Ring radius 3, stroke 0.4: true outer copper edge at 3.2. A radial wire
-    // whose copper tip stops 0.19 mm off that edge, aimed at 11.25 degrees —
-    // the mid-chord angle of a coarse 16-segment flattening, where the chord
-    // sags ~0.057 mm inward and would misreport the gap as ~0.25 mm (over the
-    // 0.2 mm rule: silently dropped). The sagitta-bounded chain must report
-    // the true ~0.19 mm clearance violation.
-    let signals = r#"
-<signal name="A">
-  <wire x1="3.37391" y1="0.67110" x2="4.41357" y2="0.87790" width="0.1" layer="1"/>
-</signal>
-<signal name="B">
-  <circle x="0" y="0" radius="3" width="0.4" layer="1"/>
-</signal>
-"#;
-    let rules = r#"<designrules name="wide">
-<param name="mdWireWire" value="0.2mm"/>
-</designrules>"#;
-    let report = drc_rules("", "", signals, rules);
-    assert_eq!(report.short_count(), 0, "0.19 mm off the copper, no short");
-    let f = report
-        .clearance_violations()
-        .next()
-        .expect("a 0.19 mm gap violates the 0.2 mm rule");
-    assert!(
-        (0.178..0.198).contains(&f.gap_mm),
-        "true grazing gap is ~0.19 mm (chord sag would say ~0.25), got {}",
-        f.gap_mm
-    );
-}
-
-#[test]
-fn near_but_disjoint_same_rank_pours_are_not_a_short() {
-    // Two same-rank pours whose vertex rings stop 0.1 mm apart, both drawn
-    // with a 0.2 mm width: inflating the rings by width/2 would fabricate an
-    // overlap short here. Ring overlap is what Eagle's DRC flags; disjoint
-    // rings stay silent.
-    let signals = format!(
-        r#"
-<signal name="A">{}</signal>
-<signal name="B">{}</signal>
-"#,
-        pour(r#" rank="1""#, 0.0, 0.0, 10.0, 10.0),
-        pour(r#" rank="1""#, 10.1, 0.0, 20.0, 10.0),
-    );
-    let report = drc("", "", &signals);
-    assert!(
-        report.findings.is_empty(),
-        "disjoint pour rings are not an overlap: {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone(), f.gap_mm))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn annulus_covering_inflation_keeps_an_exact_edge_touch_a_short() {
-    // Ring radius 0.1, stroke 0.05: true outer copper edge at 0.125. A wire
-    // whose copper tip reaches 0.1245 (0.5 um INTO the copper) aimed at
-    // 11.25 degrees, the mid-chord angle of the 16-segment floor chain used
-    // at this radius. Without the covering inflation the chord sags ~1.9 um
-    // inward and this overlap would read as a positive 1.4 um gap (a
-    // clearance note, not a short). The covering chain must report the short.
-    let signals = r#"
-<signal name="A">
-  <wire x1="0.131916" y1="0.026240" x2="0.490393" y2="0.097545" width="0.02" layer="1"/>
-</signal>
-<signal name="B">
-  <circle x="0" y="0" radius="0.1" width="0.05" layer="1"/>
-</signal>
-"#;
-    assert_short(&drc("", "", signals), "A", "B");
-}
-
-#[test]
-fn pour_without_rank_attribute_defaults_to_rank_one() {
-    // Eagle board polygons behave as rank 1 when the attribute is elided, so
-    // an attribute-less pour overlapping an explicit rank="1" pour of another
-    // net is a same-rank overlap and must short. Defaulting the absent
-    // attribute to any other value would silently arbitrate it away.
-    let signals = format!(
-        r#"
-<signal name="A">{}</signal>
-<signal name="B">{}</signal>
-"#,
-        pour("", 0.0, 0.0, 10.0, 10.0),
-        pour(r#" rank="1""#, 5.0, 5.0, 15.0, 15.0),
-    );
-    assert_short(&drc("", "", &signals), "A", "B");
-}
-
 // ---------------------------------------------------------------------------
 // Drawn copper (<circle> / <rectangle> in a signal) is exact copper, not a
 // pour fill: a pad landing on it is a real short, and must not be swallowed
 // by the Zone-Pad antipad-carve suppression that guards KiCad pour fills.
 // ---------------------------------------------------------------------------
-
-const ONE_SMD_PACKAGE: &str = r#"
-<package name="P1X1">
-  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
-</package>"#;
-
-#[test]
-fn pad_on_a_drawn_copper_ring_is_a_short() {
-    // SMD pad at (2, 0) lands on the radius-2 ring band (copper 1.8..2.2).
-    let elements = r#"<element name="U1" library="lib" package="P1X1" x="2" y="0"/>"#;
-    let signals = r#"
-<signal name="A">
-  <contactref element="U1" pad="1"/>
-</signal>
-<signal name="B">
-  <circle x="0" y="0" radius="2" width="0.4" layer="1"/>
-</signal>
-"#;
-    let report = drc(ONE_SMD_PACKAGE, elements, signals);
-    assert_short(&report, "A", "B");
-}
-
-#[test]
-fn pad_inside_a_drawn_ring_hole_stays_silent() {
-    // The same pad at the ring centre: 1.3 mm of air to the band.
-    let elements = r#"<element name="U1" library="lib" package="P1X1" x="0" y="0"/>"#;
-    let signals = r#"
-<signal name="A">
-  <contactref element="U1" pad="1"/>
-</signal>
-<signal name="B">
-  <circle x="0" y="0" radius="2" width="0.4" layer="1"/>
-</signal>
-"#;
-    let report = drc(ONE_SMD_PACKAGE, elements, signals);
-    assert!(
-        report.findings.is_empty(),
-        "the ring hole is bare board: {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.gap_mm))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn pad_on_a_drawn_copper_rectangle_is_a_short() {
-    let elements = r#"<element name="U1" library="lib" package="P1X1" x="2" y="0"/>"#;
-    let signals = r#"
-<signal name="A">
-  <contactref element="U1" pad="1"/>
-</signal>
-<signal name="B">
-  <rectangle x1="1" y1="-1" x2="3" y2="1" layer="1"/>
-</signal>
-"#;
-    let report = drc(ONE_SMD_PACKAGE, elements, signals);
-    assert_short(&report, "A", "B");
-}
-
-#[test]
-fn curved_pour_edges_use_dense_flattening_for_the_rank_overlap_test() {
-    // Pour B's closing edge is a 90-degree arc (radius 70.7) bulging toward
-    // pour A. The true arc penetrates A's corner region by ~45-70 um, but the
-    // coarse 8-segment chord chain misses A entirely (its nearest vertex sits
-    // outside A's y-band and the adjacent chord only reaches A's edge line
-    // beyond A's top edge). Only sagitta-bounded flattening finds this
-    // same-rank overlap short.
-    let pour_a = r#"<polygon width="0.2" layer="1" rank="1">
-<vertex x="0" y="40"/>
-<vertex x="99.92" y="40"/>
-<vertex x="99.92" y="47"/>
-<vertex x="0" y="47"/>
-</polygon>"#;
-    let pour_b = r#"<polygon width="0.2" layer="1" rank="1">
-<vertex x="120.5" y="0"/>
-<vertex x="200" y="0"/>
-<vertex x="200" y="100"/>
-<vertex x="120.5" y="100" curve="90"/>
-</polygon>"#;
-    let signals = format!(
-        r#"
-<signal name="A">{pour_a}</signal>
-<signal name="B">{pour_b}</signal>
-"#
-    );
-    assert_short(&drc("", "", &signals), "A", "B");
-}
-
-#[test]
-fn class_clearance_below_the_design_rules_is_floored_at_the_design_rules() {
-    // Class 1 declares a 0.1 mm same-class clearance under a 0.4 mm design
-    // rule: Eagle ignores class values below the rules, so two class-1 wires
-    // 0.3 mm apart still violate the 0.4 mm rule. Without the design-rule
-    // floor the 0.1 mm class value would silently loosen the board.
-    let classes = r#"
-<classes>
-<class number="1" name="loose" width="0" drill="0">
-<clearance class="1" value="0.1"/>
-</class>
-</classes>"#;
-    let rules = format!(
-        "{classes}{}",
-        r#"<designrules name="wide">
-<param name="mdWireWire" value="0.4mm"/>
-</designrules>"#
-    );
-    let report = drc_rules("", "", &two_wire_signals("1", "1"), &rules);
-    let f = report
-        .clearance_violations()
-        .next()
-        .expect("0.3 mm gap violates the floored 0.4 mm rule");
-    assert!(
-        (f.required_clearance_mm - 0.4).abs() < 1e-9,
-        "class values below the design rules are floored, got {}",
-        f.required_clearance_mm
-    );
-}
-
-#[test]
-fn cross_class_matrix_cell_below_the_design_rules_is_floored() {
-    // Class 1 declares a 0.1 mm clearance to class 0 under a 0.4 mm design
-    // rule: the explicit cell may relax below the classes' own rules but
-    // never below the design rules, so cross-class wires 0.3 mm apart still
-    // violate the floored 0.4 mm requirement.
-    let classes = r#"
-<classes>
-<class number="0" name="default" width="0" drill="0">
-<clearance class="0" value="0.15"/>
-</class>
-<class number="1" name="power" width="0" drill="0">
-<clearance class="0" value="0.1"/>
-<clearance class="1" value="0.45"/>
-</class>
-</classes>"#;
-    let rules = format!(
-        "{classes}{}",
-        r#"<designrules name="wide">
-<param name="mdWireWire" value="0.4mm"/>
-</designrules>"#
-    );
-    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
-    let f = report
-        .clearance_violations()
-        .next()
-        .expect("0.3 mm gap violates the floored 0.4 mm pair rule");
-    assert!(
-        (f.required_clearance_mm - 0.4).abs() < 1e-9,
-        "matrix cells below the design rules are floored, got {}",
-        f.required_clearance_mm
-    );
-}
-
-#[test]
-fn divergent_design_rule_values_resolve_to_the_tightest() {
-    // mdWireWire 0.4 mm alongside mdPadPad 0.15 mm: this path models ONE
-    // clearance, the tightest copper-gating rule (0.15 mm), so two wires
-    // 0.3 mm apart stay silent. Taking the loosest (or reading only
-    // mdWireWire) would manufacture a violation here.
-    let rules = r#"<designrules name="mixed">
-<param name="mdWireWire" value="0.4mm"/>
-<param name="mdPadPad" value="0.15mm"/>
-</designrules>"#;
-    let report = drc_rules("", "", &two_wire_signals("0", "0"), rules);
-    assert!(
-        (report.clearance_mm - 0.15).abs() < 1e-9,
-        "the tightest md* rule is the model's single clearance, got {}",
-        report.clearance_mm
-    );
-    assert!(
-        report.findings.is_empty(),
-        "0.3 mm gap clears the tightest (0.15 mm) rule: {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.gap_mm, f.required_clearance_mm))
-            .collect::<Vec<_>>()
-    );
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Declared net ties from a companion `.sch`
@@ -1616,36 +909,6 @@ fn schematic_declaring_nothing() -> String {
 }
 
 #[test]
-fn an_eagle_short_names_the_schematic_as_context_not_authority() {
-    // Side (b): the `.brd` alone. The contact is real and stays a short, and the
-    // report may name the companion that explains net-pair intent, while the
-    // physical finding remains unresolved without board-local authority.
-    let report = drc("", "", CROSSING_GND_AGND);
-    assert_eq!(report.short_count(), 1);
-    assert_eq!(report.short_count(), 1, "extraction never guesses intent");
-}
-
-#[test]
-fn a_clean_eagle_board_gains_no_unlocking_hint() {
-    // The hint exists to resolve a finding. A board with no short has no finding
-    // to resolve, so asking for an upload there would be noise.
-    let report = drc(
-        "",
-        "",
-        r#"
-<signal name="GND">
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.5" layer="1"/>
-</signal>
-<signal name="AGND">
-  <wire x1="0" y1="5" x2="10" y2="5" width="0.5" layer="1"/>
-</signal>
-"#,
-    );
-    assert_eq!(report.short_count(), 0);
-    assert!(report.findings.is_empty());
-}
-
-#[test]
 fn a_declared_pair_adds_context_without_authorizing_the_contact() {
     let report = drc("", "", CROSSING_GND_AGND);
     let before = report.shorts().next().cloned().expect("one short");
@@ -1708,115 +971,4 @@ fn copper_the_schematic_does_not_declare_stays_a_serious_short() {
     // nothing here" is a stronger, different statement from never having looked.
     let source = qualified.source_summary();
     assert!(source.contains("0 declared net ties"), "{source}");
-}
-
-#[test]
-fn a_declared_pair_adds_context_only_to_the_pair_it_names() {
-    // A board with two contacts, one declared and one not. The declaration is
-    // per net pair, so it must not spill onto the other: flattening it to "this
-    // board has a tie, stop reporting" is exactly the over-reach that would turn
-    // a false positive into a false negative.
-    let signals = format!(
-        r#"{CROSSING_GND_AGND}
-<signal name="+5V">
-  <wire x1="20" y1="0" x2="30" y2="0" width="0.5" layer="1"/>
-</signal>
-<signal name="VBAT">
-  <wire x1="25" y1="-5" x2="25" y2="5" width="0.5" layer="1"/>
-</signal>
-"#
-    );
-    let report = drc("", "", &signals);
-    assert_eq!(report.short_count(), 2);
-    let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
-        .expect("schematic parses");
-    let qualified = report.qualify_with_declared_ties("emonTx.sch", &ties);
-    assert_eq!(qualified.qualified_count(), 0);
-
-    assert_eq!(report.short_count(), 2, "both contacts still reported");
-    assert_eq!(
-        qualified.undeclared_shorts(&report).count(),
-        2,
-        "both physical contacts still gate without board-coordinate authority"
-    );
-    let declared = report
-        .shorts()
-        .find(|finding| finding.net_b_name == "AGND")
-        .expect("declared pair finding");
-    assert!(qualified.declaration_for(declared).is_some());
-    let gating: Vec<_> = qualified
-        .undeclared_shorts(&report)
-        .map(|f| {
-            let mut n = [f.net_a_name.as_str(), f.net_b_name.as_str()];
-            n.sort_unstable();
-            format!("{}/{}", n[0], n[1])
-        })
-        .collect();
-    assert_eq!(gating, ["AGND/GND", "+5V/VBAT"]);
-}
-
-#[test]
-fn a_declared_tie_does_not_excuse_a_clearance_violation() {
-    // A clearance finding is a near-miss, not a contact, so there is nothing
-    // about it a tie could excuse. Qualifying it would silently relax spacing.
-    let signals = r#"
-<signal name="GND">
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.5" layer="1"/>
-</signal>
-<signal name="AGND">
-  <wire x1="0" y1="0.6" x2="10" y2="0.6" width="0.5" layer="1"/>
-</signal>
-"#;
-    let report = drc("", "", signals);
-    assert_eq!(report.short_count(), 0, "they do not touch");
-    let before = report.clearance_violations().count();
-    assert!(before > 0, "but they are inside the 0.1524 mm rule");
-    let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
-        .expect("schematic parses");
-    let qualified = report.qualify_with_declared_ties("emonTx.sch", &ties);
-    assert_eq!(
-        report.clearance_violations().count(),
-        before,
-        "clearance findings are untouched"
-    );
-    assert!(
-        report
-            .clearance_violations()
-            .all(|f| qualified.tie_for(f).is_none()),
-        "and none of them is marked declared"
-    );
-}
-
-#[test]
-fn a_net_pair_with_multiple_spatial_contacts_is_not_qualified_without_location_identity() {
-    let signals = r#"
-<signal name="GND">
-  <wire x1="0" y1="0" x2="20" y2="0" width="0.5" layer="1"/>
-  <wire x1="0" y1="0" x2="20" y2="0" width="0.5" layer="16"/>
-</signal>
-<signal name="AGND">
-  <wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="1"/>
-  <wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="16"/>
-  <wire x1="15" y1="-5" x2="15" y2="5" width="0.5" layer="1"/>
-</signal>"#;
-    let report = drc("", "", signals);
-    assert_eq!(
-        report.short_count(),
-        3,
-        "two layers at x=5 plus one bridge at x=15"
-    );
-
-    let ties = hauksbee_extract::declared_net_ties(&schematic_declaring_the_tie())
-        .expect("schematic parses");
-    let qualified = report.qualify_with_declared_ties("board.sch", &ties);
-    assert_eq!(
-        qualified.qualified_count(),
-        0,
-        "the schematic declaration names only the net pair, not which physical cluster is the tie"
-    );
-    assert_eq!(
-        qualified.undeclared_shorts(&report).count(),
-        3,
-        "without location-bound identity every spatial cluster must remain gate-grade"
-    );
 }

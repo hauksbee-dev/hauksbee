@@ -9,7 +9,6 @@ members = [
     "crates/hauksbee-frontdoor-api",
     "crates/hauksbee-server",
     "crates/hauksbee-engine",
-    "crates/hauksbee-tarski",
     "crates/hauksbee-ci",
     "crates/hauksbee-testkit",
     "crates/hauksbee-mcp",
@@ -125,8 +124,6 @@ tempfile = "3"
 # Interactive terminal UI (the default human-facing surface for `hauksbee run`).
 # ratatui + crossterm are the battle-tested standard; we adapt them rather than
 # hand-rolling a terminal renderer.
-ratatui = "0.29"
-crossterm = "0.28"
 
 # Tuned for a small shipped binary (the release tarball is what users download).
 # Fat LTO + a single codegen unit + strip takes the two GPL-free binaries from

@@ -14,8 +14,7 @@ use crate::result::{JsonFinding, JsonInputEvidence, Refusal, EXIT_INVALID_FOR_AN
 use crate::schematic_ties::SchematicTies;
 
 use super::{
-    ci_check_selected, ci_surface_is_model_dependent, input_kind_name, manifest::capture_manifest,
-    valid_digest, warn_sibling_boards, Notes, RunConfig, SelectedSurface,
+    ci_check_selected, ci_surface_is_model_dependent, input_kind_name, valid_digest, warn_sibling_boards, Notes, RunConfig, SelectedSurface,
 };
 
 pub(crate) struct RunInputs {
@@ -47,7 +46,6 @@ pub(crate) fn prepare_run_inputs(
     // the terminal. The native emulator loaders segfault (exit 139) on a missing
     // file instead of erroring; this turns a one-character typo into a clean,
     // actionable message naming the absolute path that was tried.
-    let firmware_source = cfg.firmware.clone();
     if let Some(fw) = &cfg.firmware {
         // A PlatformIO project directory, a built .pio tree, or a zip of either
         // resolves to its compiled image first; a bare .elf/.hex passes through.
@@ -279,9 +277,6 @@ pub(crate) fn prepare_run_inputs(
     }
     // Same for --tui: an explicit report flag prints and exits, so the
     // dashboard never launches.
-    if cfg.tui && any_report_flag {
-        eprintln!("warning: a report flag prints and exits, so --tui is ignored here");
-    }
     if cfg.plain && cfg.json {
         eprintln!(
             "warning: --plain and --json were both given; --json wins (machine output \
@@ -384,20 +379,6 @@ pub(crate) fn prepare_run_inputs(
                 ties.ties.len()
             );
         }
-    }
-    if let Some(path) = &cfg.emit_manifest {
-        let manifest = capture_manifest(
-            &cfg,
-            firmware_source.as_deref(),
-            schematic,
-            schematic_ties.as_ref(),
-        )?;
-        manifest.write_new(path)?;
-        eprintln!(
-            "wrote immutable run manifest {} to {}",
-            manifest.manifest_id,
-            path.display()
-        );
     }
 
     // --junit/--sarif: evaluate the selected surface with the same waiver and

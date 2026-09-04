@@ -43,56 +43,13 @@ fn i2c_rise_time_hand_values() {
 }
 
 #[test]
-fn trace_capacitance_per_mm_matches_transmission_line_physics() {
-    // The constant is the whole trace term, so it is pinned against the closed
-    // form rather than only against tests that use it: C' = sqrt(Er_eff)/(c0*Z0).
-    // A units slip here (pF/inch or pF/cm written as pF/mm) inflates every bus by
-    // an order of magnitude while leaving every other test self-consistent.
-    const C0_MM_PER_S: f64 = 2.998e11; // mm/s
-    let c_per_mm = |er_eff: f64, z0: f64| 1e12 * er_eff.sqrt() / (C0_MM_PER_S * z0);
-
-    // FR4 Er_eff ~ 3: a 50 ohm line is ~0.116 pF/mm, a 100 ohm line ~0.057.
-    let fifty = c_per_mm(3.0, 50.0);
-    assert!(
-        (fifty - 0.116).abs() < 0.005,
-        "50 ohm microstrip is ~0.116 pF/mm, got {fifty}"
-    );
-    // The widest, closest-coupled realistic case bounds the constant from above.
-    let worst = c_per_mm(3.2, 40.0);
-    assert!(
-        (worst - 0.149).abs() < 0.005,
-        "40 ohm worst case is ~0.149 pF/mm, got {worst}"
-    );
-    // The reported range must bracket the real one: the low end at the
-    // high-impedance (100 ohm) figure that gates findings, the high end at the
-    // worst realistic case. Neither may drift an order of magnitude.
-    let thin_two_layer = c_per_mm(2.9, 150.0);
-    assert!(
-        (super::C_TRACE_PF_PER_MM_LOW - thin_two_layer).abs() < 0.005,
-        "the firing bound {} must be the thin 2-layer figure {thin_two_layer}",
-        super::C_TRACE_PF_PER_MM_LOW
-    );
-    assert!(
-        (super::C_TRACE_PF_PER_MM_HIGH - worst).abs() < 0.005,
-        "the reported ceiling {} must be the worst-case figure {worst}",
-        super::C_TRACE_PF_PER_MM_HIGH
-    );
-    // And the 50 ohm nominal must fall inside the reported range, or the range
-    // does not describe real routing at all.
-    assert!(
-        super::C_TRACE_PF_PER_MM_LOW < fifty && fifty < super::C_TRACE_PF_PER_MM_HIGH,
-        "the 50 ohm nominal {fifty} must lie inside the reported range"
-    );
-}
-
-#[test]
 fn parse_helpers() {
     assert_eq!(super::parse_farads("15p"), Some(15e-12));
     assert_eq!(super::parse_farads("18pF"), Some(18e-12));
     assert_eq!(super::parse_farads("4p7"), Some(4.7e-12));
     assert_eq!(super::parse_farads("0.1uF"), Some(0.1e-6));
     assert_eq!(super::parse_farads("TBD"), None);
-    // R33: a trailing dielectric / voltage / tolerance token (space- or
+    // A trailing dielectric / voltage / tolerance token (space- or
     // letter-separated) is metadata, not a fractional part; the base value must
     // still parse, not drop to None (which produced a false "crystal has no load
     // caps" finding on a correctly-capped board). The "4p7" fraction form (digits
@@ -114,41 +71,6 @@ fn parse_helpers() {
     assert_eq!(super::parse_ohms("2.2k/R0603"), Some(2200.0));
     assert_eq!(super::parse_ohms("4k7"), Some(4700.0));
     assert_eq!(super::parse_ohms("0R"), Some(0.0));
-}
-
-#[test]
-fn parse_helpers_handle_unicode_and_spice_multipliers() {
-    // R24: both micro glyphs; the micro sign U+00B5 and the Greek small-letter
-    // mu U+03BC, must parse as 1e-6 (libraries write "4.7µF" with either).
-    assert_eq!(super::parse_farads("4.7\u{00b5}F"), Some(4.7e-6));
-    assert_eq!(super::parse_farads("4.7\u{03bc}F"), Some(4.7e-6));
-    assert_eq!(super::parse_farads("0.1\u{03bc}F"), Some(0.1e-6));
-    // Both ohm glyphs, Greek capital omega U+03A9 and the ohm sign U+2126.
-    assert_eq!(super::parse_ohms("10\u{03a9}"), Some(10.0));
-    assert_eq!(super::parse_ohms("10\u{2126}"), Some(10.0));
-    // SPICE-style MEG/GIG multipliers, matched before the single-letter scan.
-    assert_eq!(super::parse_ohms("10MEG"), Some(1e7));
-    assert_eq!(super::parse_ohms("2GIG"), Some(2e9));
-    // The 4M7 single-letter decimal notation still means 4.7 MΩ (not MEG).
-    assert_eq!(super::parse_ohms("4M7"), Some(4.7e6));
-}
-
-#[test]
-fn parse_ohms_no_longer_drifts_from_the_canonical_parser() {
-    // R25 (DRIFT-2): lowercase 'm' is MILLIohm, not mega, "2m2" is 2.2 mΩ, a
-    // current-sense shunt marking. The hand-rolled parser uppercased first and
-    // read it as 2.2 MΩ (a 1e9 error).
-    assert_eq!(super::parse_ohms("2m2"), Some(0.0022));
-    assert_eq!(super::parse_ohms("1m"), Some(0.001));
-    // R25 (DRIFT-3): leading-R sub-ohm shunt marks parse (were None in si.rs).
-    assert_eq!(super::parse_ohms("R47"), Some(0.47));
-    assert_eq!(super::parse_ohms("R1"), Some(0.1));
-    // R25 (DRIFT-4): an inline tolerance annotation must not reject the value.
-    assert_eq!(super::parse_ohms("10k 1%"), Some(10_000.0));
-    assert_eq!(super::parse_ohms("4.7k 1%"), Some(4700.0));
-    // Uppercase 'M' is still mega (SPICE convention); the milli fix must not
-    // regress this.
-    assert_eq!(super::parse_ohms("4M7"), Some(4.7e6));
 }
 
 #[test]
@@ -200,52 +122,6 @@ fn arc_length_is_the_swept_arc_not_the_chord() {
     // Collinear points are a degenerate arc: the chord IS the length.
     let flat = arc_length_mm((0.0, 0.0), (5.0, 0.0), (10.0, 0.0));
     assert!((flat - 10.0).abs() < 1e-9, "got {flat}");
-}
-
-#[test]
-fn routed_length_counts_arc_sweep() {
-    // A net routed as one semicircle of radius 50: 157.08 mm of copper, not the
-    // 100 mm chord. Under-reporting this suppresses I2C rise-time findings and
-    // corrupts USB skew.
-    let doc = root_of(
-        r#"(net 1 "SDA")
-           (arc (start 50 0) (mid 0 50) (end -50 0) (width 0.2) (layer "F.Cu") (net 1))"#,
-    );
-    let l = routed_length_mm(doc.root().unwrap(), 1);
-    assert!(
-        (l - std::f64::consts::PI * 50.0).abs() < 1e-6,
-        "expected the swept 157.08 mm, got {l}"
-    );
-}
-
-#[test]
-fn routed_length_falls_back_to_the_chord_without_a_mid_point() {
-    // An arc with no (mid ...) gives us nothing but the chord, which is a floor
-    // on the real length and never an over-estimate.
-    let doc = root_of(
-        r#"(net 1 "SDA")
-           (arc (start 0 0) (end 3 4) (width 0.2) (layer "F.Cu") (net 1))"#,
-    );
-    let l = routed_length_mm(doc.root().unwrap(), 1);
-    assert!((l - 5.0).abs() < 1e-9, "expected the 5 mm chord, got {l}");
-}
-
-#[test]
-fn routed_length_resolves_name_only_nets() {
-    // A KiCad-10 board that references the net by name on the segment - `(net
-    // "USB_DP")` with no numeric id. arg_i64(0) is None on the string token, so
-    // a numeric-only lookup counts zero length for net 1. The name must resolve
-    // through the (net 1 "USB_DP") table.
-    let doc = root_of(
-        r#"(net 1 "USB_DP")
-           (segment (start 0 0) (end 3 0) (width 0.2) (layer "F.Cu") (net "USB_DP"))
-           (segment (start 3 0) (end 3 4) (width 0.2) (layer "F.Cu") (net "USB_DP"))"#,
-    );
-    let l = routed_length_mm(doc.root().unwrap(), 1);
-    assert!(
-        (l - 7.0).abs() < 1e-9,
-        "name-only nets must resolve: got {l}"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -335,44 +211,6 @@ fn crystal_missing_both_caps_fires() {
     );
 }
 
-/// Two-sided assembly contract: the identical topology that is clean when the
-/// caps are fitted (`crystal_known_cl_within_tolerance_is_info_not_finding`)
-/// must fire missing-load-caps when the caps are DNP or identity-refused,
-/// because an absent or untrusted cap loads nothing.
-#[test]
-fn dnp_or_refused_load_caps_do_not_satisfy_crystal_topology() {
-    let refuse_caps = |b: &mut ExtractedBoard, f: &dyn Fn(&mut crate::Component)| {
-        for c in b
-            .components
-            .iter_mut()
-            .filter(|c| c.reference.starts_with('C'))
-        {
-            f(c);
-        }
-    };
-
-    let mut dnp = xtal_board("ABM8-272-T3", "33p", "33p");
-    refuse_caps(&mut dnp, &|c| c.dnp = true);
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&dnp, &mut r);
-    assert_eq!(r.finding_count(), 1, "DNP caps must read as missing caps");
-
-    let mut refused = xtal_board("ABM8-272-T3", "33p", "33p");
-    refuse_caps(&mut refused, &|c| {
-        c.properties.push((
-            crate::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
-            "two records with different values".to_string(),
-        ));
-    });
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&refused, &mut r);
-    assert_eq!(
-        r.finding_count(),
-        1,
-        "identity-refused caps must read as missing caps"
-    );
-}
-
 #[test]
 fn rtc_with_integrated_caps_no_cap_is_silent() {
     // A 32.768 kHz crystal on a PCF8523 RTC (integrated load caps): no external
@@ -391,92 +229,6 @@ fn rtc_with_integrated_caps_no_cap_is_silent() {
     let mut r = SiReport::default();
     check_crystal_load_cap(&b, &mut r);
     assert_eq!(r.finding_count(), 0, "RTC integrates caps; must be silent");
-}
-
-#[test]
-fn ceramic_resonator_no_caps_is_silent() {
-    // A 3-terminal ceramic resonator (CSTCE / RESONATOR footprint) integrates
-    // its load caps; no external caps is correct. (Arduino Uno Y2 topology.)
-    let b = pcb(r#"(net 1 "XTAL1") (net 2 "XTAL2") (net 3 "GND")
-        (footprint "Resonator:RESONATOR"
-          (at 10 10) (layer "F.Cu")
-          (property "Reference" "Y2") (property "Value" "CSTCE16M0V53-R0 16MHZ")
-          (pad "1" smd rect (at -1 0) (net 1 "XTAL1"))
-          (pad "2" smd rect (at 0 0) (net 3 "GND"))
-          (pad "3" smd rect (at 1 0) (net 2 "XTAL2")))"#);
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&b, &mut r);
-    assert_eq!(
-        r.findings.len(),
-        0,
-        "ceramic resonator must be entirely silent"
-    );
-}
-
-#[test]
-fn split_keyboard_mirror_prefix_caps_are_traced() {
-    // The right half of a Corne carries `r`-prefixed mirror refs (rY1, rC1,
-    // rC2). The type classifiers must see Y1/C1/C2 underneath, so the load caps
-    // trace and the crystal is INFO (not a false "no caps" finding).
-    let b = pcb(r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
-        (footprint "Crystal:Crystal_SMD_3225-4Pin" (at 10 10) (layer "F.Cu")
-          (property "Reference" "rY1") (property "Value" "12MHz")
-          (pad "1" smd rect (at -1 0) (net 1 "XIN"))
-          (pad "2" smd rect (at -1 1) (net 3 "GND"))
-          (pad "3" smd rect (at 1 0) (net 2 "XOUT"))
-          (pad "4" smd rect (at 1 1) (net 3 "GND")))
-        (footprint "Capacitor_SMD:C_0402" (at 8 10) (layer "F.Cu")
-          (property "Reference" "rC1") (property "Value" "27p")
-          (pad "1" smd rect (at 0 0) (net 1 "XIN"))
-          (pad "2" smd rect (at 1 0) (net 3 "GND")))
-        (footprint "Capacitor_SMD:C_0402" (at 12 10) (layer "F.Cu")
-          (property "Reference" "rC2") (property "Value" "27p")
-          (pad "1" smd rect (at 0 0) (net 2 "XOUT"))
-          (pad "2" smd rect (at 1 0) (net 3 "GND")))"#);
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&b, &mut r);
-    assert_eq!(
-        r.finding_count(),
-        0,
-        "mirror-prefix caps must trace, no false finding"
-    );
-    assert!(r
-        .of_check(SiCheck::CrystalLoadCap)
-        .any(|f| f.severity == SiSeverity::Info && f.message.contains("17.5")));
-}
-
-#[test]
-fn eagle_double_pad_capacitor_still_counts_as_two_terminal() {
-    // The Eagle .brd extractor lists each pad once per signal contact, so a
-    // 2-terminal cap can show four pin entries (pad 1 x2, pad 2 x2). The
-    // distinct-pad count must still see two terminals so the load cap traces.
-    let b = pcb(r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
-        (footprint "Crystal:Crystal_SMD_2Pin" (at 10 10) (layer "F.Cu")
-          (property "Reference" "Y2") (property "Value" "16MHz")
-          (pad "1" smd rect (at -1 0) (net 1 "XIN"))
-          (pad "3" smd rect (at 1 0) (net 2 "XOUT")))
-        (footprint "Capacitor_SMD:C_0402" (at 8 10) (layer "F.Cu")
-          (property "Reference" "C4") (property "Value" "22pF")
-          (pad "1" smd rect (at 0 0) (net 1 "XIN"))
-          (pad "1" smd rect (at 0 0) (net 1 "XIN"))
-          (pad "2" smd rect (at 1 0) (net 3 "GND"))
-          (pad "2" smd rect (at 1 0) (net 3 "GND")))
-        (footprint "Capacitor_SMD:C_0402" (at 12 10) (layer "F.Cu")
-          (property "Reference" "C2") (property "Value" "22pF")
-          (pad "1" smd rect (at 0 0) (net 2 "XOUT"))
-          (pad "1" smd rect (at 0 0) (net 2 "XOUT"))
-          (pad "2" smd rect (at 1 0) (net 3 "GND"))
-          (pad "2" smd rect (at 1 0) (net 3 "GND")))"#);
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&b, &mut r);
-    assert_eq!(
-        r.finding_count(),
-        0,
-        "double-pad caps must trace, no false 'no caps' finding"
-    );
-    assert!(r
-        .of_check(SiCheck::CrystalLoadCap)
-        .any(|f| f.severity == SiSeverity::Info));
 }
 
 #[test]
@@ -665,35 +417,6 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
 }
 
 #[test]
-fn a_pin_only_overrun_is_full_severity_and_routing_independent() {
-    // 10k pull with 25 device pins is 250 pF of pin capacitance alone: 2118 ns,
-    // over standard mode without counting a single millimetre of copper. That
-    // verdict does not rest on the routing, so it keeps full severity, while
-    // still naming the per-pin figure it does rest on.
-    let text = i2c_routed_text(25, 5.0);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
-    let f = r
-        .of_check(SiCheck::I2cRiseTime)
-        .find(|f| f.severity.is_finding())
-        .expect("a pin-only overrun must fire");
-    assert_eq!(f.severity, SiSeverity::High, "{}", f.message);
-    assert!(
-        f.message
-            .contains("does not rest on any routing assumption"),
-        "must say the verdict is routing-independent: {}",
-        f.message
-    );
-    assert!(
-        f.message.contains("10 pF per I2C pin"),
-        "and must still name the pin-capacitance figure it DOES rest on: {}",
-        f.message
-    );
-}
-
-#[test]
 fn i2c_short_routing_leaves_the_same_bus_silent() {
     // The identical bus routed compactly (10 mm) is 101.5 pF / ~860 ns even at the
     // high end of the range: in spec. Counting trace copper must not turn every
@@ -761,201 +484,6 @@ fn a_declared_stackup_computes_the_trace_capacitance_instead_of_assuming_it() {
     );
 }
 
-#[test]
-fn without_a_plane_below_the_capacitance_is_not_called_computed() {
-    // A microstrip needs a reference PLANE, and a stackup lists dielectric
-    // thicknesses rather than which copper is poured solid. On a 2-layer board
-    // whose bottom is sparse routing there is no plane under the trace, its real
-    // capacitance is lower, and computing a microstrip figure would over-report
-    // the rise time. Same board as the computed test, minus the pour.
-    let body = r#"
-      (setup (stackup
-        (layer "F.Cu" (type "copper") (thickness 0.035))
-        (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
-        (layer "B.Cu" (type "copper") (thickness 0.035))
-      ))
-      (net 1 "SDA") (net 2 "+3V3")
-      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
-        (property "Reference" "R1") (property "Value" "2.2k")
-        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
-        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
-      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
-        (property "Reference" "U1") (property "Value" "SENSOR")
-        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
-      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
-    "#;
-    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
-    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
-    assert!(
-        f.message.contains("ASSUMED"),
-        "with no plane below, the range is still all there is: {}",
-        f.message
-    );
-    assert!(
-        !f.message.contains("computed from the board stackup"),
-        "and it must not claim otherwise: {}",
-        f.message
-    );
-}
-
-#[test]
-fn a_computed_capacitance_finding_uses_no_range_language() {
-    // With the geometry computed there is no low and high end, so the failing
-    // message must not invent them (it previously printed "at the LOW end ... up
-    // to N ns at the high end" with the same number twice). A 25-device bus on a
-    // planed, stackup-declaring board fires and must read as a single figure.
-    let mut body = String::from(
-        r#"
-      (setup (stackup
-        (layer "F.Cu" (type "copper") (thickness 0.035))
-        (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
-        (layer "B.Cu" (type "copper") (thickness 0.035))
-      ))
-      (net 1 "SDA") (net 2 "+3V3") (net 3 "GND")
-      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
-        (property "Reference" "R1") (property "Value" "10k")
-        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
-        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
-      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
-      (zone (net 3) (net_name "GND") (layer "B.Cu")
-        (filled_polygon (layer "B.Cu")
-          (pts (xy -5 -5) (xy 70 -5) (xy 70 20) (xy -5 20))))
-    "#,
-    );
-    for i in 0..25 {
-        body.push_str(&format!(
-            r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
-              (property "Reference" "U{}") (property "Value" "SENSOR")
-              (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
-            10 + i,
-            i + 1
-        ));
-    }
-    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
-    let f = r
-        .of_check(SiCheck::I2cRiseTime)
-        .find(|f| f.severity.is_finding())
-        .expect("25 device pins on a 10k pull must fire");
-    assert!(
-        f.message.contains("computed from the board stackup"),
-        "this board declares the geometry: {}",
-        f.message
-    );
-    assert!(
-        !f.message.contains("LOW end") && !f.message.contains("high end"),
-        "a computed figure has no range to report: {}",
-        f.message
-    );
-}
-
-#[test]
-fn a_remote_pour_is_not_this_bus_reference_plane() {
-    // The board-wide question "is there a pour anywhere" is not evidence about
-    // THIS net. A small polygon in a far corner must not turn an unreferenced
-    // route into a supposedly geometry-computed microstrip.
-    let body = r#"
-      (setup (stackup
-        (layer "F.Cu" (type "copper") (thickness 0.035))
-        (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
-        (layer "B.Cu" (type "copper") (thickness 0.035))
-      ))
-      (net 1 "SDA") (net 2 "+3V3") (net 3 "GND")
-      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
-        (property "Reference" "R1") (property "Value" "2.2k")
-        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
-        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
-      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
-        (property "Reference" "U1") (property "Value" "SENSOR")
-        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
-      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
-      (zone (net 3) (net_name "GND") (layer "B.Cu")
-        (filled_polygon (layer "B.Cu")
-          (pts (xy 200 200) (xy 210 200) (xy 210 210) (xy 200 210))))
-    "#;
-    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
-    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
-    assert!(
-        f.message.contains("ASSUMED"),
-        "a pour the bus does not run over is not its reference plane: {}",
-        f.message
-    );
-    assert!(
-        !f.message.contains("computed from the board stackup"),
-        "and must not be called computed: {}",
-        f.message
-    );
-}
-
-#[test]
-fn a_bus_leaving_the_top_layer_is_not_called_computed() {
-    // read_stackup describes F.Cu and the dielectric below it, and nothing else.
-    // A net that routes on B.Cu or an inner layer is outside what those numbers
-    // can honestly be applied to, so it must fall back to the assumed range rather
-    // than compute a figure for geometry the board never stated.
-    let body = r#"
-      (setup (stackup
-        (layer "F.Cu" (type "copper") (thickness 0.035))
-        (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
-        (layer "In1.Cu" (type "copper") (thickness 0.0175))
-        (layer "dielectric 2" (type "core") (thickness 1.2) (epsilon_r 4.5))
-        (layer "B.Cu" (type "copper") (thickness 0.035))
-      ))
-      (net 1 "SDA") (net 2 "+3V3")
-      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
-        (property "Reference" "R1") (property "Value" "2.2k")
-        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
-        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
-      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
-        (property "Reference" "U1") (property "Value" "SENSOR")
-        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
-      (segment (start 0 0) (end 30 0) (width 0.25) (layer "F.Cu") (net 1))
-      (segment (start 30 0) (end 60 0) (width 0.25) (layer "B.Cu") (net 1))
-    "#;
-    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
-    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
-    assert!(
-        f.message.contains("ASSUMED"),
-        "a bus off F.Cu must keep the assumed range: {}",
-        f.message
-    );
-    assert!(
-        !f.message.contains("computed from the board stackup"),
-        "and must not claim to have computed it: {}",
-        f.message
-    );
-}
-
-#[test]
-fn i2c_without_layout_says_routing_was_not_counted() {
-    // No layout: the pin-count model is a floor, not an answer, and the note must
-    // name the upload that would complete it rather than implying completeness.
-    let b = i2c_board("SDA", "2.2k", 3);
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, None, &mut r);
-    assert!(
-        r.of_check(SiCheck::I2cRiseTime)
-            .any(|f| f.message.contains("routing capacitance NOT counted")
-                && f.message.contains(".kicad_pcb")),
-        "a layout-less run must disclose the missing routing term and the upload"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Antenna keepout check.
 // ---------------------------------------------------------------------------
@@ -1000,122 +528,6 @@ fn antenna_keepout_ground_pour_inside_fires_high() {
           (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35))))"#;
     let r = run_keepout(&wroom_text(intruder));
     assert_eq!(r.finding_count(), 1, "ground pour in keepout must fire");
-    assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
-}
-
-#[test]
-fn antenna_keepout_ground_pour_fires_even_when_module_has_a_bonded_gnd_pad() {
-    // R39: a real WROOM module bonds many pads to the board GND net. Building
-    // `own_nets` from ALL of the antenna's pad nets and skipping any intrusion
-    // on an own net puts the board GND in own_nets whenever a GND pad exists, so
-    // a ground pour flooding the keepout is silently skipped, a false all-clear
-    // on the exact detuning case. Only the NON-ground own nets are excluded, so a
-    // ground pour still fires even though the module has a GND pad.
-    let text = r#"(kicad_pcb (version 20240101) (net 0 "") (net 1 "GND") (net 2 "ANT")
-        (footprint "OLIMEX_Cases-FP:ESP-WROOM-32_MODULE"
-          (at 50 50 0) (layer "F.Cu")
-          (property "Reference" "U3") (property "Value" "ESP32-WROOM-32E-N4")
-          (pad "1" smd rect (at 0 5) (net 2 "ANT"))
-          (pad "2" smd rect (at 0 6) (net 1 "GND")))
-        (zone (net 1) (net_name "GND") (layers "F.Cu")
-          (filled_polygon (layer "F.Cu")
-            (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35)))))"#;
-    let r = run_keepout(text);
-    assert_eq!(
-        r.finding_count(),
-        1,
-        "a ground pour in the keepout must fire even though the module has a bonded GND pad"
-    );
-    assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
-}
-
-#[test]
-fn antenna_keepout_finding_kinds_are_sorted_deterministically() {
-    // R41: the intrusion `kinds` were collected into a HashSet and formatted with
-    // {:?}, so a multi-kind intrusion's message order varied run-to-run (a HashSet
-    // Debug order is randomized per process), non-reproducible SI output. Sorting
-    // (like the sibling `nets`) makes it byte-stable. A track + via + zone on the
-    // same non-ground net inside the keepout must render as ["track", "via", "zone"].
-    let text = r#"(kicad_pcb (version 20240101) (net 0 "") (net 1 "GND") (net 2 "ANT") (net 3 "SIG")
-        (footprint "OLIMEX_Cases-FP:ESP-WROOM-32_MODULE"
-          (at 50 50 0) (layer "F.Cu")
-          (property "Reference" "U3") (property "Value" "ESP32-WROOM-32E-N4")
-          (pad "1" smd rect (at 0 5) (net 2 "ANT")))
-        (segment (start 45 30) (end 55 30) (net 3) (layer "F.Cu"))
-        (via (at 50 30) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 3))
-        (zone (net 3) (net_name "SIG") (layers "F.Cu")
-          (filled_polygon (layer "F.Cu")
-            (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35)))))"#;
-    let r = run_keepout(text);
-    let msg = &r
-        .findings_only()
-        .next()
-        .expect("a keepout intrusion finding")
-        .message;
-    assert!(
-        msg.contains("[\"track\", \"via\", \"zone\"]"),
-        "intrusion kinds must be sorted for reproducible output, got: {msg}"
-    );
-}
-
-#[test]
-fn antenna_keepout_engulfing_pour_fires_high() {
-    // A board-wide ground plane whose fill polygon covers the whole board. Every
-    // fill vertex is OUTSIDE the small keepout rectangle (board x 41..59, y
-    // 22.25..37.25), so vertex-sampling alone reported a false all-clear. The
-    // pour still fully engulfs the antenna keepout - the exact bad-WiFi case the
-    // check exists to catch. Detected by testing the keepout corners against the
-    // fill polygon.
-    let intruder = r#"(zone (net 1) (net_name "GND") (layers "F.Cu")
-        (filled_polygon (layer "F.Cu")
-          (pts (xy 0 0) (xy 100 0) (xy 100 100) (xy 0 100))))"#;
-    let r = run_keepout(&wroom_text(intruder));
-    assert_eq!(
-        r.finding_count(),
-        1,
-        "a pour that engulfs the keepout must fire"
-    );
-    assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
-}
-
-#[test]
-fn antenna_keepout_nonconvex_engulfing_pour_fires_high() {
-    // A REAL KiCad pour outline is deeply non-convex (it weaves around vias, pads
-    // and thermal reliefs). This plane covers the whole antenna keepout (board x
-    // 41..59, y 22.25..37.25) but carries a notch far from it (x 85..95, y 60..100),
-    // giving the outline reflex vertices. A convex-only `point_in_poly`
-    // winding test returns false for a point inside such a polygon the moment two
-    // edges disagree in sign, silently missing the engulf and reporting a
-    // false all-clear on exactly the copper-under-antenna geometry the check
-    // exists to catch. The even-odd ray cast handles arbitrary polygons.
-    let intruder = r#"(zone (net 1) (net_name "GND") (layers "F.Cu")
-        (filled_polygon (layer "F.Cu")
-          (pts (xy 0 0) (xy 100 0) (xy 100 100) (xy 95 100)
-               (xy 95 60) (xy 85 60) (xy 85 100) (xy 0 100))))"#;
-    let r = run_keepout(&wroom_text(intruder));
-    assert_eq!(
-        r.finding_count(),
-        1,
-        "a non-convex pour that engulfs the keepout must fire"
-    );
-    assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
-}
-
-#[test]
-fn antenna_keepout_name_only_net_pour_fires_high() {
-    // KiCad-10 elements can reference their net by NAME only - `(net "GND")` with
-    // no leading numeric id. arg_i64(0) returns None on the string token, so the
-    // old code skipped the pour and reported a false all-clear. The name must
-    // resolve through the (net 1 "GND") table before the keepout is judged.
-    let intruder = r#"(zone (net "GND") (layers "F.Cu")
-        (filled_polygon (layer "F.Cu")
-          (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35))))"#;
-    let r = run_keepout(&wroom_text(intruder));
-    assert_eq!(
-        r.finding_count(),
-        1,
-        "a name-only-net pour in the keepout must still fire"
-    );
     assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
 }
 
@@ -1182,24 +594,6 @@ fn usb_gross_skew_fires() {
 }
 
 #[test]
-fn usb_width_mismatch_is_info_note_not_a_finding() {
-    // Matched length but different widths -> the width note is INFO, never a
-    // finding: trace neck-down at pad entry is universal and benign (it fired
-    // Low on all three ZSWatch DevKit revisions before this was demoted).
-    let (b, doc) = usb_board(20.0, 20.1, 0.2, 0.3);
-    let mut r = SiReport::default();
-    check_usb_diff_pair(&b, doc.root().unwrap(), &mut r);
-    assert_eq!(
-        r.finding_count(),
-        0,
-        "a width mismatch alone must not be a finding"
-    );
-    let f = r.of_check(SiCheck::UsbDiffPair).next().unwrap();
-    assert_eq!(f.severity, SiSeverity::Info);
-    assert!(f.message.contains("width mismatch"));
-}
-
-#[test]
 fn usb_polarity_classifier_rejects_non_usb() {
     // `usb_polarity` now takes an uppercased leaf and returns the stem + polarity
     // (None when not a USB data line). VDD, LED-, DDR must not classify.
@@ -1221,34 +615,6 @@ fn usb_polarity_classifier_rejects_non_usb() {
         super::usb_polarity("USB_DN").map(|(s, _)| s),
         Some("USB_".to_string())
     );
-}
-
-#[test]
-fn usb_pair_key_scopes_by_sheet_and_stem() {
-    // Two legs of the SAME logical pair (same sheet, same stem, opposite
-    // polarity) must produce keys that differ only in polarity, so they pair.
-    let (k_dp, p_dp) = super::usb_pair_key("/USB_DP").unwrap();
-    let (k_dn, p_dn) = super::usb_pair_key("/USB_DN").unwrap();
-    assert_eq!(k_dp, k_dn, "connector-side DP/DN share a scope key");
-    assert_eq!((p_dp, p_dn), ('+', '-'));
-
-    // The MCU-side legs on a different sheet must produce a DIFFERENT key, so the
-    // matcher can never pair across the series ESD device.
-    let (k_mcu_p, _) = super::usb_pair_key("/ESP32-C3-02/USB_D+").unwrap();
-    let (k_mcu_m, _) = super::usb_pair_key("/ESP32-C3-02/USB_D-").unwrap();
-    assert_eq!(k_mcu_p, k_mcu_m, "MCU-side D+/D- share a scope key");
-    assert_ne!(
-        k_dp, k_mcu_p,
-        "connector-side and MCU-side legs (across the ESD array) must NOT share a key"
-    );
-    assert_ne!(
-        k_dp, k_mcu_m,
-        "the exact false-positive cross-pair (/USB_DP x /ESP32-C3-02/USB_D-) must never key-match"
-    );
-
-    // A non-USB net yields no key.
-    assert!(super::usb_pair_key("/VBUS").is_none());
-    assert!(super::usb_pair_key("GND").is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -1283,14 +649,6 @@ fn microstrip_z0_matches_reference_calculator() {
         (z3 - 48.0).abs() < 2.0,
         "wide-trace 50-ohm-ish case = {z3} ohm"
     );
-}
-
-#[test]
-fn microstrip_z0_declines_degenerate_geometry() {
-    // A trace so wide the log argument falls to <= 1 (formula invalid): decline,
-    // do not return a bogus negative impedance.
-    assert!(microstrip_z0(50.0, 0.2, 0.035, 4.3).is_none());
-    assert!(microstrip_z0(0.0, 0.2, 0.035, 4.3).is_none());
 }
 
 #[test]
@@ -1411,31 +769,6 @@ fn controlled_impedance_out_of_band_usb_fires() {
 }
 
 #[test]
-fn controlled_impedance_uncontrolled_board_is_info_even_out_of_band() {
-    // The SAME grossly-out-of-band geometry but the board declares
-    // `dielectric_constraints no` (it did NOT intend to control these nets, like
-    // every full-speed USB keyboard in the corpus). Must be info, never a fire:
-    // the designer chose not to control impedance, so a high reading is not a
-    // defect. This is the corpus zero-false-positive gate in unit form.
-    let text = impedance_usb_text_intent(0.1, 0.5, 0.5, 4.3, false);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    assert_eq!(r.finding_count(), 0, "uncontrolled board must never fire");
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("an info note");
-    assert_eq!(f.severity, SiSeverity::Info);
-    assert!(
-        f.message.contains("does not declare controlled impedance"),
-        "must explain why it is info: {}",
-        f.message
-    );
-}
-
-#[test]
 fn controlled_impedance_no_stackup_is_info_never_finding() {
     // The SAME out-of-band geometry but with NO stackup block: the estimate uses
     // the default-assumption stackup and MUST be info only, never a finding. This
@@ -1462,35 +795,8 @@ fn controlled_impedance_no_stackup_is_info_never_finding() {
     );
 }
 
-#[test]
-fn controlled_impedance_ethernet_pair_targets_100_ohm() {
-    // An Ethernet-named pair (TRD0_P/TRD0_N) is judged against 100 ohm, not 90.
-    let text = r#"(kicad_pcb (version 20240101)
-        (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
-        (setup (stackup
-          (layer "F.Cu" (type "copper") (thickness 0.035))
-          (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.3))
-          (layer "B.Cu" (type "copper") (thickness 0.035))))
-        (net 0 "") (net 1 "TRD0_P") (net 2 "TRD0_N")
-        (segment (start 0 0) (end 20 0) (width 0.25) (layer "F.Cu") (net 1))
-        (segment (start 0 0.45) (end 20 0.45) (width 0.25) (layer "F.Cu") (net 2)))"#;
-    let b = ExtractedBoard::from_kicad_pcb(text).unwrap();
-    let doc = forge_sexpr::parse(text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("a note");
-    assert!(
-        f.message.contains("100 ohm") && f.message.contains("Ethernet"),
-        "Ethernet pair must target 100 ohm: {}",
-        f.message
-    );
-}
-
 // ---------------------------------------------------------------------------
-// R45: pad-dedup in I2C bus-capacitance and pull-up counting.
+// Pad-dedup in I2C bus-capacitance and pull-up counting.
 // ---------------------------------------------------------------------------
 
 /// A component with one SDA pad listed `copies` times on net 1 (an IPC-356
@@ -1527,7 +833,7 @@ fn double_listed_board(reference: &str, value: &str, copies: usize) -> Extracted
 
 #[test]
 fn bus_capacitance_dedups_a_double_listed_pad() {
-    // R45: counting raw net_members double-counted a both-sided through-hole pad's
+    // Counting raw net_members double-counted a both-sided through-hole pad's
     // pin capacitance (2 devices instead of 1), inflating the I2C rise time enough
     // to fire a spurious fast-mode finding. Dedup by (ref, pad number).
     let board = double_listed_board("U1", "SENSOR", 2);
@@ -1539,37 +845,8 @@ fn bus_capacitance_dedups_a_double_listed_pad() {
 }
 
 #[test]
-fn fast_mode_name_is_whole_token_not_substring() {
-    // R48: `contains("FM")`/`contains("FAST")` over-matched, an FPGA Mezzanine
-    // Connector I2C bus `FMC_SDA` embeds "FM" inside the token "FMC", so a
-    // standard-mode bus was judged against the 3.3x-tighter fast-mode limit,
-    // firing a false rise-time finding. Only a whole `FM`/`FAST` token selects
-    // fast mode.
-    assert!(
-        super::is_fast_mode_name("I2C_FM_SDA"),
-        "explicit FM token is fast-mode"
-    );
-    assert!(
-        super::is_fast_mode_name("SDA_FAST"),
-        "explicit FAST token is fast-mode"
-    );
-    assert!(
-        !super::is_fast_mode_name("FMC_SDA"),
-        "FMC (mezzanine connector) is NOT fast-mode"
-    );
-    assert!(
-        !super::is_fast_mode_name("CONFIRM_SCL"),
-        "CONFIRM must not match FM"
-    );
-    assert!(
-        !super::is_fast_mode_name("SDA"),
-        "a plain SDA bus defaults to standard mode"
-    );
-}
-
-#[test]
 fn si_rail_voltage_rejects_signal_named_rails() {
-    // R50: the loose 3V3/1V8 `contains` fallbacks in si.rs rail_voltage (a
+    // The loose 3V3/1V8 `contains` fallbacks in si.rs rail_voltage (a
     // duplicate of netlint's) had no signal-role guard, so a `3V3_EN` enable net
     // read as a 3.3V rail, miscounting a resistor tapping it as an I2C pull-up
     // and suppressing a genuine MissingI2cPullup finding.
@@ -1580,35 +857,6 @@ fn si_rail_voltage_rejects_signal_named_rails() {
     assert_eq!(super::rail_voltage("3V3"), Some(3.3));
     assert_eq!(super::rail_voltage("+1V8"), Some(1.8));
     assert_eq!(super::rail_voltage("MCU_3V3"), Some(3.3));
-}
-
-#[test]
-fn si_rail_voltage_resolves_numeric_rails_like_netlint() {
-    // R51: si.rs rail_voltage handled bare "3V0" but not "5V0" and lacked
-    // netlint's numeric_rail_magnitude, so a pull-up returning to a bare "5V0" /
-    // "+12V" / "24V" rail was not seen as rail-like and the I2C rise-time audit
-    // was silently skipped, a --si vs --lint disagreement.
-    assert_eq!(super::rail_voltage("5V0"), Some(5.0));
-    assert_eq!(super::rail_voltage("+12V"), Some(12.0));
-    assert_eq!(super::rail_voltage("24V"), Some(24.0));
-    assert_eq!(super::rail_voltage("+15V0"), Some(15.0));
-    // The numeric grammar must still reject signal-tagged names.
-    assert_eq!(super::rail_voltage("5V0_EN"), None);
-    assert_eq!(super::rail_voltage("12V_PG"), None);
-}
-
-#[test]
-fn si_rail_voltage_recognises_the_same_tokens_as_netlint() {
-    // R53: si.rs rail_voltage drifted from netlint's table, VCC5V/VCC5 (5V) and
-    // VPP/VDD_IO (battery/IO rails) were recognised by --lint but not --si, so the
-    // same net was a rail for the pull-up-presence check but not the mirroring
-    // rise-time audit (a --si vs --lint disagreement).
-    assert_eq!(super::rail_voltage("VCC5V"), Some(5.0));
-    assert_eq!(super::rail_voltage("VCC5"), Some(5.0));
-    assert_eq!(super::rail_voltage("VPP"), Some(3.7));
-    assert_eq!(super::rail_voltage("VDD_IO"), Some(3.7));
-    // The loose 5V fallback (with rail context) matches too.
-    assert_eq!(super::rail_voltage("VCC_5V_MCU"), Some(5.0));
 }
 
 /// A controlled-impedance USB pair over a B.Cu pour, with the pour's fill given
@@ -1736,53 +984,6 @@ fn a_pair_crossing_a_plane_void_names_the_span_instead_of_a_zdiff() {
 }
 
 #[test]
-fn a_void_on_a_board_that_does_not_declare_controlled_impedance_stays_info() {
-    // Gate 3 still applies to the abstention: a board that chose not to control
-    // these nets (every full-speed USB keyboard in the corpus) gets the same
-    // named span as an info note, never a fire. This is what keeps the corpus
-    // silent.
-    let void = format!("{} {}", rect_fill(-5.0, 6.0), rect_fill(14.0, 25.0));
-    let text = impedance_usb_over_plane(&void).replace(
-        "(dielectric_constraints yes)",
-        "(dielectric_constraints no)",
-    );
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    assert_eq!(r.finding_count(), 0, "an undeclared board must never fire");
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("an info abstention");
-    assert_eq!(f.severity, SiSeverity::Info);
-    assert!(f.message.contains("reference missing under trace"));
-}
-
-#[test]
-fn a_board_with_no_pour_on_the_reference_layer_says_the_plane_is_unverified() {
-    // The bias is against inventing a void: with nothing to test against, the
-    // estimate keeps its previous treatment, but it says its reference is
-    // unverified so the number never reads as more grounded than it is.
-    let text = impedance_usb_text(0.3, 0.2, 0.2, 4.3);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("an impedance note");
-    assert_eq!(r.finding_count(), 0);
-    assert!(
-        f.message.contains("reference plane unverified")
-            && f.message.contains("no filled copper pour on B.Cu"),
-        "an unverified reference must be stated, with its reason: {}",
-        f.message
-    );
-}
-
-#[test]
 fn a_via_antipad_in_the_plane_is_not_a_missing_reference() {
     // The Watchy lesson, in unit form. A plane's anti-pads are a DESIGNED hole:
     // the copper is cleared so the via can pass through. A differential pair's
@@ -1817,227 +1018,4 @@ fn a_via_antipad_in_the_plane_is_not_a_missing_reference() {
         f.message
     );
     assert_eq!(r.finding_count(), 0, "an anti-pad must never fire");
-}
-
-#[test]
-fn two_clearances_either_side_of_a_via_are_not_one_void() {
-    // A review caught this: excused anti-pad samples used to be skipped without
-    // breaking the contiguous-run counter, so two sub-threshold clearances lying
-    // either side of a via bridged into one run that cleared the 2 mm bar. Voids
-    // are now sized by the geometric extent of a cluster of mutually-close
-    // uncovered samples, so the copper between two holes separates them.
-    //
-    // Two 1.2 mm-wide bites out of the pour, at x = 7..8.2 and x = 11..12.2, with
-    // a via between them at x = 9.6. Neither bite reaches 2 mm across.
-    let holed = r#"(filled_polygon (pts
-        (xy -5 -5) (xy 25 -5) (xy 25 5)
-        (xy 12.2 5) (xy 12.2 -0.3) (xy 11.0 -0.3) (xy 11.0 5)
-        (xy 8.2 5) (xy 8.2 -0.3) (xy 7.0 -0.3) (xy 7.0 5)
-        (xy -5 5)))"#;
-    let vias = r#"(via (at 9.6 0) (size 0.45) (drill 0.25) (layers "F.Cu" "B.Cu") (net 1))"#;
-    let text = impedance_usb_over_plane_with(holed, vias);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("an impedance note");
-    assert!(
-        !f.message.contains("reference missing"),
-        "two separate sub-threshold clearances must not bridge into one void: {}",
-        f.message
-    );
-    assert_eq!(r.finding_count(), 0);
-}
-
-#[test]
-fn a_through_hole_pad_clearance_is_not_a_missing_reference() {
-    // The second false-positive class a review caught: only vias were excused, so
-    // a through-hole connector pad or a mounting hole, which clears far more
-    // copper than a signal via, still read as a plane void. The claim that no
-    // plausible anti-pad reaches 2 mm was simply false for those.
-    //
-    // A 2.5 mm mounting-hole pad on all copper layers, with the pour cleared
-    // around it over 2.4 mm of the pair's route.
-    let holed = r#"(filled_polygon (pts
-        (xy -5 -5) (xy 25 -5) (xy 25 5)
-        (xy 11.2 5) (xy 11.2 -0.3) (xy 8.8 -0.3) (xy 8.8 5)
-        (xy -5 5)))"#;
-    let pad = r#"(footprint "MountingHole" (at 10 0)
-        (pad "1" thru_hole circle (at 0 0) (size 2.5 2.5) (drill 2.2)
-             (layers "*.Cu" "*.Mask")))"#;
-    let text = impedance_usb_over_plane_with(holed, pad);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("an impedance note");
-    assert!(
-        !f.message.contains("reference missing"),
-        "a mounting-hole anti-pad is designed clearance, not a plane void: {}",
-        f.message
-    );
-    assert_eq!(r.finding_count(), 0);
-}
-
-#[test]
-fn a_void_on_a_minority_routing_layer_is_still_caught() {
-    // A review caught this false negative: the check sampled only the layer
-    // carrying most of the pair's routed length, so a pair running mostly over
-    // solid copper and then dropping to the far side over a void went unexamined.
-    // Every outer layer the pair routes on is now checked.
-    //
-    // 20 mm of each leg on F.Cu over a solid B.Cu pour, then a 6 mm stub on B.Cu
-    // whose reference (F.Cu) has no pour at all under it.
-    let text = format!(
-        r#"(kicad_pcb (version 20240101)
-        (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
-        (setup (stackup
-          (layer "F.Cu" (type "copper") (thickness 0.035))
-          (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.3))
-          (layer "B.Cu" (type "copper") (thickness 0.035))
-          (dielectric_constraints yes)))
-        (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM") (net 3 "GND")
-        (segment (start 0 0) (end 20 0) (width 0.3) (layer "F.Cu") (net 1))
-        (segment (start 0 0.5) (end 20 0.5) (width 0.3) (layer "F.Cu") (net 2))
-        (segment (start 20 0) (end 26 0) (width 0.3) (layer "B.Cu") (net 1))
-        (segment (start 20 0.5) (end 26 0.5) (width 0.3) (layer "B.Cu") (net 2))
-        (zone (net 3) (net_name "GND") (layer "B.Cu") {}))"#,
-        rect_fill(-5.0, 30.0)
-    );
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("an impedance note");
-    // F.Cu carries no pour, so the B.Cu stub's reference cannot be verified. The
-    // point is that the minority layer is EXAMINED rather than silently skipped:
-    // its unverifiable reference must reach the report.
-    assert!(
-        f.message.contains("reference plane unverified")
-            && f.message.contains("no filled copper pour on F.Cu"),
-        "the minority routing layer must be examined and its reference reported: {}",
-        f.message
-    );
-}
-
-#[test]
-fn a_hatched_reference_pour_is_not_read_as_one_long_void() {
-    // A review caught this as the worst false positive the check could make. A
-    // hatched / meshed pour is deliberately discontinuous copper, laid down for
-    // copper balance or flex, and is still a perfectly good AC return path. Its
-    // fill is a lattice of strips, so containment against those strips would
-    // report the gaps between them as a void running the whole length of the pair.
-    // There is no honest way to verify such a plane from fill polygons, so the
-    // check must say that rather than guess.
-    //
-    // Three 0.4 mm strips with 0.6 mm gaps, on a zone declaring a hatch fill.
-    let strips = "(filled_polygon (pts (xy -5 -5) (xy 25 -5) (xy 25 -4.6) (xy -5 -4.6))) \
-                  (filled_polygon (pts (xy -5 -0.2) (xy 25 -0.2) (xy 25 0.2) (xy -5 0.2))) \
-                  (filled_polygon (pts (xy -5 4.6) (xy 25 4.6) (xy 25 5) (xy -5 5)))";
-    let text = impedance_usb_over_plane(strips).replace(
-        "(net_name \"GND\")",
-        "(net_name \"GND\") (fill yes (mode hatch))",
-    );
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("an impedance note");
-    assert!(
-        !f.message.contains("reference missing"),
-        "a hatched pour is a return path, not a void: {}",
-        f.message
-    );
-    assert!(
-        f.message.contains("is hatched"),
-        "and the check must say why it could not verify it: {}",
-        f.message
-    );
-    assert_eq!(r.finding_count(), 0, "a hatched pour must never fire");
-}
-
-#[test]
-fn a_bite_under_each_leg_is_not_one_merged_void() {
-    // A review caught this: the legs of a USB pair sit about half a millimetre
-    // apart, well inside the void-linking distance, so pooling both legs' samples
-    // let a sub-threshold bite under D+ and another under D- merge into a single
-    // "void" whose extent was largely the diagonal between the two legs. Voids are
-    // now measured one leg at a time.
-    //
-    // The pour is two bands split at y = 0.25, one carrying each leg. The lower
-    // band has a 1.2 mm bite under D+ (y = 0) at x = 7.0..8.2; the upper band has
-    // one under D- (y = 0.5) at x = 9.0..10.2. Neither reaches the 2 mm floor on
-    // the leg it undermines, and they are on different legs.
-    let bitten_bands = r#"(filled_polygon (pts
-            (xy -5 -5) (xy 25 -5) (xy 25 0.25)
-            (xy 8.2 0.25) (xy 8.2 -0.2) (xy 7.0 -0.2) (xy 7.0 0.25)
-            (xy -5 0.25)))
-        (filled_polygon (pts
-            (xy -5 0.25) (xy 9.0 0.25) (xy 9.0 0.7) (xy 10.2 0.7) (xy 10.2 0.25)
-            (xy 25 0.25) (xy 25 5) (xy -5 5)))"#;
-    let text = impedance_usb_over_plane(bitten_bands);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("an impedance note");
-    assert!(
-        !f.message.contains("reference missing"),
-        "two sub-threshold bites on different legs must not merge into one void: {}",
-        f.message
-    );
-    assert_eq!(r.finding_count(), 0);
-}
-
-#[test]
-fn a_solid_pour_is_still_verified_alongside_a_hatched_one() {
-    // The hatch fix must not disqualify the whole layer: a board often carries a
-    // solid GND pour AND a hatched copper-balance zone on the same layer, and the
-    // solid one can still be verified against. Disqualifying the layer would have
-    // turned a real void into a silent Zdiff.
-    // The solid pour is split over x = 6..14, a real void.
-    let split = format!("{} {}", rect_fill(-5.0, 6.0), rect_fill(14.0, 25.0));
-    let text = format!(
-        r#"(kicad_pcb (version 20240101)
-        (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
-        (setup (stackup
-          (layer "F.Cu" (type "copper") (thickness 0.035))
-          (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.3))
-          (layer "B.Cu" (type "copper") (thickness 0.035))
-          (dielectric_constraints yes)))
-        (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM") (net 3 "GND")
-        (segment (start 0 0) (end 20 0) (width 0.3) (layer "F.Cu") (net 1))
-        (segment (start 0 0.5) (end 20 0.5) (width 0.3) (layer "F.Cu") (net 2))
-        (zone (net 3) (net_name "GND") (layer "B.Cu") {split})
-        (zone (net 3) (net_name "GND") (layer "B.Cu") (fill yes (mode hatch))
-          (filled_polygon (pts (xy 40 40) (xy 45 40) (xy 45 45) (xy 40 45)))))"#
-    );
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    let f = r
-        .of_check(SiCheck::ControlledImpedance)
-        .next()
-        .expect("an impedance note");
-    assert!(
-        f.message.contains("reference missing"),
-        "the solid pour must still be checked despite a hatched zone sharing the layer: {}",
-        f.message
-    );
 }

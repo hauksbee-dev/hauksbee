@@ -2888,27 +2888,6 @@ mod tests {
     use hauksbee_extract::{DrcFinding, Item, ItemKind};
 
     #[test]
-    fn doorbell_custom_rule_provenance_names_override_and_coverage_gap() {
-        let parsed = hauksbee_extract::parse_kicad_dru(include_str!(
-            "../../../qc/blind_trials/work/doorbell/kicad/doorbell.kicad_dru"
-        ))
-        .unwrap();
-        let coverage = CustomRulesCoverage::from_parsed("doorbell.kicad_dru".into(), &parsed);
-        let provenance = ClearanceRuleProvenance::custom_rules_file(0.127, Some(0.2), coverage);
-        assert_eq!(
-            provenance.source_notice(),
-            "CLEARANCE RULE SOURCE: custom rules file doorbell.kicad_dru (report-wide value 0.127 mm), which overrides the .kicad_pro netclass value of 0.200 mm."
-        );
-        let notice = provenance.custom_rules_notice().unwrap();
-        assert!(notice.contains("CUSTOM RULES NOT EVALUATED: 1 rule"));
-        assert!(notice.contains("PTH hole-to-copper clearance"));
-        assert!(notice.contains("do not qualify reported findings"));
-        let not_covered = provenance.custom_rules_not_covered().unwrap();
-        assert!(not_covered.contains("via/NPTH hole-to-copper clearance"));
-        assert!(not_covered.contains("board-edge copper clearance"));
-    }
-
-    #[test]
     fn bare_value_rule_uses_custom_rule_disclosure_without_qualifying_findings() {
         let parsed = hauksbee_extract::parse_kicad_dru(include_str!(
             "../../hauksbee-extract/tests/fixtures/kicad_dru_bare_scope.kicad_dru"

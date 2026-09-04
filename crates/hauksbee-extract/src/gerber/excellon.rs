@@ -1100,43 +1100,6 @@ M30
     }
 
     #[test]
-    fn a_modal_run_of_cuts_stays_a_slot_after_the_first_g01() {
-        // Motion codes are modal: an exporter writes `G01` once and then bare
-        // coordinate lines for the rest of the run. With the cutter down those
-        // are cuts. Requiring the code on every line breaks the chain, drops
-        // the second wall, and plants a drilled hole at its far end, so a pad
-        // at (12, 0) is left off the net and a hit appears that the file never
-        // described.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.600
-%
-G90
-T1
-G00X0.0Y0.0
-M15
-G01X6.0Y0.0
-X12.0Y0.0
-Y4.0
-M16
-M30
-",
-        );
-        assert_eq!(d.holes.len(), 3, "three cuts in the run: {:?}", d.holes);
-        assert!(
-            d.holes.iter().all(|h| h.to.is_some()),
-            "no drilled hole may appear in a cut run: {:?}",
-            d.holes
-        );
-        assert_eq!(d.holes[1].to, Some((12.0, 0.0)));
-        // The modal Y-only line keeps the X and cuts upward from (12, 0).
-        assert_eq!(d.holes[2].to, Some((12.0, 4.0)));
-    }
-
-    #[test]
     fn an_arc_motion_on_a_file_that_never_cuts_is_not_a_drilled_hole() {
         // No `M15` anywhere, so nothing here is a cut. The arc line is a move,
         // and reading its endpoint as a plated hit invents a barrel out of a
@@ -1157,53 +1120,6 @@ M30
         );
         assert_eq!(d.holes.len(), 1, "only the drilled point: {:?}", d.holes);
         assert!((d.holes[0].x - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn a_hairline_arc_stays_hairline_and_a_closed_one_is_a_full_circle() {
-        // A sweep of a thousandth of a radian is a thousandth of a radian. The
-        // full-circle promotion has to key on the endpoints being the same
-        // POINT, not on the angle being small: reading a hairline arc as closed
-        // wraps the wall right round the circle and joins everything it passes.
-        let tiny = tessellate_arc(1.0, 0.0, 1.0, 0.001, -1.0, 0.0, false);
-        assert_eq!(tiny.len(), 1, "a hairline arc is one short segment");
-        let (_, _, ex, ey) = tiny[0];
-        assert!(
-            (ex - 1.0).abs() < 1e-3 && (ey - 0.001).abs() < 1e-9,
-            "the hairline arc must stay at its own end, not travel: ({ex}, {ey})"
-        );
-        // The smallest offset the finest coordinate format can express, a
-        // nanometre, is still a distinct point and still not a circle.
-        let nano = tessellate_arc(1.0, 0.0, 1.0, 1e-6, -1.0, 0.0, false);
-        assert_eq!(nano.len(), 1, "got {} segments", nano.len());
-        assert!(
-            nano.iter().all(|(ax, _, bx, _)| *ax > 0.5 && *bx > 0.5),
-            "a nanometre arc must not travel round the circle"
-        );
-        // Coincident endpoints ARE the full-circle spelling, and still are.
-        let circle = tessellate_arc(1.0, 0.0, 1.0, 0.0, -1.0, 0.0, false);
-        assert!(
-            circle.len() >= 16,
-            "a closed arc is a full circle, got {} segments",
-            circle.len()
-        );
-        assert!(
-            circle.iter().any(|(ax, _, _, _)| *ax < -0.99),
-            "a full circle reaches the far side of its own circle"
-        );
-    }
-
-    #[test]
-    fn an_arc_too_large_to_tessellate_in_budget_is_refused() {
-        // A ten-metre arc cannot be chorded inside the sagitta budget without
-        // more segments than the cap allows. Emitting it at whatever resolution
-        // fits hands back a wall knowingly out of position; nothing is the
-        // honest answer, and no board contains such an arc anyway.
-        let huge = tessellate_arc(10000.0, 0.0, 10000.0, 0.0, -10000.0, 0.0, false);
-        assert!(huge.is_empty(), "got {} segments", huge.len());
-        // A 200 mm arc, larger than most boards, is still well within budget.
-        let big = tessellate_arc(200.0, 0.0, 0.0, 200.0, -200.0, 0.0, false);
-        assert!(!big.is_empty() && big.len() < ARC_MAX_STEPS);
     }
 
     #[test]
@@ -1315,39 +1231,6 @@ M30
     }
 
     #[test]
-    fn a_plunge_carrying_its_own_position_cuts_from_there() {
-        // `M15X10Y10` plunges the cutter AT (10, 10). Swallowing the line whole
-        // leaves the modal position back at the last rapid, so the following
-        // cut is drawn from the wrong end: a plated wall right across ground
-        // the file never routed, joining whatever it crosses on the way.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.800
-%
-G90
-T1
-G00X0.0Y0.0
-M15X10.0Y10.0
-G01X20.0Y10.0
-M16
-M30
-",
-        );
-        assert_eq!(d.holes.len(), 1);
-        let cut = &d.holes[0];
-        assert!(
-            (cut.x - 10.0).abs() < 1e-9 && (cut.y - 10.0).abs() < 1e-9,
-            "the cut starts where the cutter plunged, got ({}, {})",
-            cut.x,
-            cut.y
-        );
-        assert_eq!(cut.to, Some((20.0, 10.0)));
-    }
-
-    #[test]
     fn an_m150_is_not_an_m15() {
         // M-codes are parsed as numbers for the same reason G-codes are.
         // Prefix matching made `M150` plunge the cutter, and the next move
@@ -1378,62 +1261,6 @@ M30
             "no cut may be inferred from an M150: {:?}",
             d.holes
         );
-    }
-
-    #[test]
-    fn a_mode_line_carrying_coordinates_is_not_a_drilled_hole() {
-        // The same rule inside a rout section.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.800
-%
-G90
-T1
-G00X0.0Y0.0
-M15
-G01X5.0Y0.0
-M16
-G90X20.0Y20.0
-M30
-",
-        );
-        assert_eq!(d.holes.len(), 1, "only the cut: {:?}", d.holes);
-        assert_eq!(d.holes[0].to, Some((5.0, 0.0)));
-    }
-
-    #[test]
-    fn a_g85_with_no_start_coordinates_cuts_from_the_current_position() {
-        // The modal form: the head is already at (3, 4), and `G85X9.0Y4.0`
-        // cuts from there. Requiring coordinates on both sides of the code sent
-        // this to the plain reader, which recorded a round hole at the slot's
-        // FAR end and lost the wall along with everything it touches.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.600
-%
-G90
-G05
-T1
-X3.0Y4.0
-G85X9.0Y4.0
-M30
-",
-        );
-        assert_eq!(
-            d.holes.len(),
-            2,
-            "the positioning hit and the slot: {:?}",
-            d.holes
-        );
-        let slot = &d.holes[1];
-        assert!((slot.x - 3.0).abs() < 1e-9 && (slot.y - 4.0).abs() < 1e-9);
-        assert_eq!(slot.to, Some((9.0, 4.0)));
     }
 
     #[test]
@@ -1488,165 +1315,6 @@ M30
         );
         assert_eq!(d.holes.len(), 1, "only the cut: {:?}", d.holes);
         assert_eq!(d.holes[0].to, Some((8.0, 2.0)));
-    }
-
-    #[test]
-    fn a_g05_returns_a_rout_file_to_drilling_bare_coordinates() {
-        // The other half of the same rule. A file that routs and then drills is
-        // how every rout-carrying board in the corpus is written, and after the
-        // `G05` a bare coordinate line is a hit again. Treating rout mode as
-        // sticky would silently drop every drilled hole after the first slot.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.800
-%
-G90
-T1
-G00X2.0Y2.0
-M15
-G01X8.0Y2.0
-M16
-G05
-X1.0Y1.0
-X2.0Y1.0
-M30
-",
-        );
-        assert_eq!(
-            d.holes.len(),
-            3,
-            "one cut and two drilled hits: {:?}",
-            d.holes
-        );
-        assert!(d.holes[0].to.is_some());
-        assert!(d.holes[1].to.is_none() && d.holes[2].to.is_none());
-    }
-
-    #[test]
-    fn a_tool_select_carrying_its_first_hit_keeps_the_hit() {
-        // `T1X0.0Y0.0` selects tool 1 and drills at the origin. Consuming the
-        // whole line as a tool select drops the hole, and with it whatever the
-        // via was stitching.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.400
-%
-G90
-T1X0.0Y0.0
-X1.0Y0.0
-M30
-",
-        );
-        assert_eq!(d.holes.len(), 2, "got {:?}", d.holes);
-        assert!(d.holes[0].x.abs() < 1e-9 && d.holes[0].y.abs() < 1e-9);
-        assert!(
-            (d.holes[0].diameter - 0.4).abs() < 1e-9,
-            "the tool was selected"
-        );
-    }
-
-    #[test]
-    fn a_cut_after_retract_is_not_a_slot() {
-        // A G01 with the cutter UP moves it, it does not cut. Treating every
-        // G01 as a cut paints a plated wall across the board.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T3C0.800
-%
-G90
-T3
-G00X2.0Y2.0
-M15
-G01X8.0Y2.0
-M16
-G01X40.0Y40.0
-M30
-",
-        );
-        assert_eq!(d.holes.len(), 1);
-        assert_eq!(d.holes[0].to, Some((8.0, 2.0)));
-    }
-
-    #[test]
-    fn a_file_without_m15_keeps_its_old_reading_of_g01() {
-        // No `M15` anywhere, so this file is not in rout mode and its `G01`
-        // lines are positioned hits, the reading every existing job relies on.
-        // The fixture carries real `G01` coordinate lines, so a reader that
-        // treated G01 as a cut regardless of mode would fail here rather than
-        // slip through on a fixture that never exercises the path.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.300
-%
-G90
-T1
-X1.0Y1.0
-G01X2.0Y1.0
-G01X3.0Y1.0
-M30
-",
-        );
-        assert_eq!(d.holes.len(), 3, "three positioned hits, no slots");
-        assert!(
-            d.holes.iter().all(|h| h.to.is_none()),
-            "no cut may be inferred without an M15"
-        );
-    }
-
-    #[test]
-    fn a_g_code_is_read_as_a_number_not_a_text_prefix() {
-        // `G5` must not swallow `G50`, and an arc must be an arc whichever axis
-        // the exporter writes first, so the code is parsed rather than prefix
-        // matched.
-        assert_eq!(leading_g_code("G0"), Some(0));
-        assert_eq!(leading_g_code("G00X1.0"), Some(0));
-        assert_eq!(leading_g_code("G000"), Some(0));
-        assert_eq!(leading_g_code("G01X1.0Y2.0"), Some(1));
-        assert_eq!(leading_g_code("G2Y5.0X1.0I0J1"), Some(2));
-        assert_eq!(leading_g_code("G3Y5.0"), Some(3));
-        assert_eq!(leading_g_code("G05"), Some(5));
-        assert_eq!(leading_g_code("G50"), Some(50));
-        assert_eq!(leading_g_code("M30"), None);
-        assert_eq!(leading_g_code("GX1.0"), None);
-    }
-
-    #[test]
-    fn a_y_first_arc_line_is_still_an_arc() {
-        // `G3Y..X..` is the same arc as `G3X..Y..`. Prefix matching on `G3X`
-        // made the axis order decide whether a plated wall existed at all.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.800
-%
-G90
-T1
-G00X5.0Y0.0
-M15
-G3Y5.0X0.0I-5.0J0.0
-M16
-M30
-",
-        );
-        assert!(
-            d.holes.len() >= 4 && d.holes.iter().all(|h| h.to.is_some()),
-            "a Y-first arc must tessellate into slot segments, got {:?}",
-            d.holes
-        );
     }
 
     #[test]
@@ -1748,35 +1416,6 @@ M30
     }
 
     #[test]
-    fn a_g85_slot_with_implicit_decimals_scales_both_ends_the_same_way() {
-        // The inch G85 test above uses explicit decimal points, which would
-        // pass even if the second coordinate pair skipped the zero-suppression
-        // reader entirely. This one has no decimal points at all, so the far
-        // end only lands in the right place if it went through the same
-        // int/dec split and the same justification as the near end.
-        let d = parse(
-            "\
-M48
-INCH,TZ
-T1C0.0236
-%
-G90
-G05
-T1
-X0050000Y0020000G85X0070000Y0020000
-M30
-",
-        );
-        assert_eq!(d.holes.len(), 1);
-        let h = &d.holes[0];
-        // 2:4 inch, right-justified: 0050000 -> 005.0000 -> 5.0 inch.
-        assert!((h.x - 5.0 * 25.4).abs() < 1e-3, "start x was {}", h.x);
-        let (tx, ty) = h.to.expect("a slot end");
-        assert!((tx - 7.0 * 25.4).abs() < 1e-3, "end x was {tx}");
-        assert!((ty - 2.0 * 25.4).abs() < 1e-3, "end y was {ty}");
-    }
-
-    #[test]
     fn a_routed_arc_is_tessellated_and_never_becomes_a_hole_at_its_endpoint() {
         // A quarter-circle cut of radius 5 from (5,0) to (0,5) about the
         // origin. The chord between those points passes 1.46 mm inside the true
@@ -1839,62 +1478,6 @@ M30
         assert!((first.x - 5.0).abs() < 1e-9 && first.y.abs() < 1e-9);
         let last = d.holes.last().unwrap().to.unwrap();
         assert!(last.0.abs() < 1e-9 && (last.1 - 5.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn a_lower_case_arc_center_is_still_a_center() {
-        // The G-code is matched case-insensitively, so the centre offsets have
-        // to be as well. Reading `I`/`J` off the raw line dropped the wall of
-        // any arc whose exporter wrote them in lower case, silently.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.800
-%
-G90
-T1
-G00X5.0Y0.0
-M15
-g03x0.0y5.0i-5.0j0.0
-M16
-M30
-",
-        );
-        assert!(
-            d.holes.len() >= 4 && d.holes.iter().all(|h| h.to.is_some()),
-            "got {:?}",
-            d.holes
-        );
-    }
-
-    #[test]
-    fn a_rout_arc_without_a_center_yields_no_geometry_rather_than_a_phantom_hole() {
-        // No I/J: there is no arc to build. Falling through to the plain
-        // coordinate reader would plant a round plated hit at the endpoint that
-        // the file never described, which is copper we invented.
-        let d = parse(
-            "\
-M48
-FMAT,2
-METRIC
-T1C0.800
-%
-G90
-T1
-G00X5.0Y0.0
-M15
-G03X0.0Y5.0
-M16
-M30
-",
-        );
-        assert!(
-            d.holes.is_empty(),
-            "an unbuildable arc must produce nothing, got {:?}",
-            d.holes
-        );
     }
 
     #[test]

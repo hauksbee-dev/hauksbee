@@ -7,7 +7,6 @@ use crate::result::Refusal;
 
 mod cosim;
 mod cosim_gates;
-mod manifest;
 mod prepare;
 mod serve_flow;
 mod simulation;
@@ -61,7 +60,6 @@ pub struct RunConfig {
     /// `--no-open` under `--serve`: never open a browser, even when launched
     /// by the desktop app.
     pub no_open: bool,
-    pub tui: bool,
     pub port: u16,
     pub models_dir: Option<std::path::PathBuf>,
     pub ac: Option<String>,
@@ -102,11 +100,6 @@ pub struct RunConfig {
     pub junit: Option<std::path::PathBuf>,
     /// Write this invocation's selected checks as SARIF 2.1.0 (CI artifact).
     pub sarif: Option<std::path::PathBuf>,
-    /// Canonical immutable reproduction manifest requested by the CLI.
-    pub emit_manifest: Option<std::path::PathBuf>,
-    /// Normalized argv (tool name, then exact arguments) with
-    /// `--emit-manifest` removed so replay cannot clobber its evidence.
-    pub manifest_command: Vec<String>,
 }
 
 pub(crate) fn input_kind_name(kind: crate::board_input::InputKind) -> &'static str {
@@ -251,7 +244,6 @@ fn begin_ci_artifact_run(cfg: &RunConfig, surface: SelectedSurface) -> anyhow::R
         cfg.placement.as_deref(),
         cfg.firmware.as_deref(),
         cfg.asbuilt.as_deref(),
-        cfg.emit_manifest.as_deref(),
         cfg.ac_csv.as_deref(),
         cfg.probe_csv.as_deref(),
     ];
@@ -355,7 +347,6 @@ pub fn run_with_schematic(
         && !any_report_flag
         && !cfg.headless
         && !cfg.serve
-        && !cfg.tui
         && !cfg.list_nets
         && !cfg.serial_attach
         && cfg.ac.is_none()
@@ -403,9 +394,6 @@ fn run_inner(
         any_report_flag,
     )?;
     if static_surfaces::emit_selected(&cfg, quiet, surface, &run_inputs, &mut artifacts)? {
-        return Ok(());
-    }
-    if simulation::launch_tui_if_selected(&cfg, &run_inputs, schematic.as_deref())? {
         return Ok(());
     }
     let prebound = artifacts.prebound.take();

@@ -711,33 +711,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn shipped_docs_describe_the_actual_interactive_contract() {
-        let mcu = include_str!("../../../../docs/cosim/MCU.md");
-        let mcu_words = mcu.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            mcu_words.contains("footer carries the total disclosure count"),
-            "the footer renders coverage.len(), not only hole_count()"
-        );
-        assert!(
-            mcu_words.contains("disposition-specific next action"),
-            "the overlay does not always present an input that unlocks coverage"
-        );
-
-        let extending = include_str!("../../../../docs/extending/add-a-microcontroller.md");
-        assert!(
-            extending.contains("batch reports and the interactive TUI"),
-            "the synchronous web front door refuses external backends before watchdog data exists"
-        );
-        assert!(
-            !extending.contains("batch report surfaces, interactive TUI/web front door"),
-            "do not claim the external-backend web refusal rendered scheduler limitations"
-        );
-
-        let changelog = include_str!("../../../../CHANGELOG.md");
-        assert!(
-            changelog.contains("headless or interactive co-simulation"),
-            "--chunk-us is honored by both run modes"
-        );
-    }
 }

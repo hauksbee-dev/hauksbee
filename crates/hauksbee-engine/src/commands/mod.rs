@@ -15,4 +15,3 @@ pub mod run;
 #[cfg(feature = "serve")]
 pub mod serve;
 pub mod sim;
-pub mod watch;
