@@ -254,18 +254,6 @@ fn list_nets_with_a_report_flag_warns_which_flag_is_ignored() {
     );
 }
 
-#[test]
-fn tui_with_a_report_flag_warns() {
-    let b = blinky_board();
-    let out = run(&["run", b.to_str().unwrap(), "--tui", "--drc"]);
-    assert_eq!(out.status.code(), Some(0));
-    assert!(
-        stderr(&out).contains("--tui is ignored"),
-        "no silent drop: {}",
-        stderr(&out)
-    );
-}
-
 // ── M2: every analysis surface accepts --plain ────────────────────
 
 #[test]

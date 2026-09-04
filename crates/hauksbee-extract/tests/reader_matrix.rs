@@ -1,4 +1,4 @@
-//! Detection matrix for the board-reader registry (plan 06 §4 gate b).
+//! Detection matrix for the board-reader registry.
 //!
 //! Proves two things across every board/netlist fixture committed to the repo,
 //! plus a synthesised Eagle and Altium sample:
@@ -53,15 +53,6 @@ fn collect(dir: &Path, exts: &[&str], out: &mut Vec<PathBuf>) {
 /// A minimal but valid Eagle `.brd` (only the `<eagle` root matters here).
 fn synth_eagle() -> Vec<u8> {
     b"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<eagle version=\"6.6.0\"><drawing/></eagle>\n"
-        .to_vec()
-}
-
-/// A minimal ASCII Protel `.pcbdoc`: leading `|RECORD=` pipe records with the
-/// `Protel_Advanced_PCB` kind, which is exactly what the reader keys on.
-fn synth_protel_ascii() -> Vec<u8> {
-    b"|RECORD=Board|KIND=Protel_Advanced_PCB|VERSION=5.00\n\
-      |RECORD=Net|ID=0|NAME=GND\n\
-      |RECORD=Component|ID=0|LAYER=TOP|X=0mil|Y=0mil|ROTATION=0|PATTERN=R0603|SOURCEDESIGNATOR=R1\n"
         .to_vec()
 }
 
@@ -151,12 +142,6 @@ fn detection_matrix_every_fixture() {
         path: None,
         expected: "altium",
     });
-    cases.push(Case {
-        label: "<synth> protel-ascii.pcbdoc".into(),
-        bytes: synth_protel_ascii(),
-        path: None,
-        expected: "protel-ascii",
-    });
 
     assert!(
         cases.len() >= 10,
@@ -226,11 +211,10 @@ fn detection_matrix_every_fixture() {
 fn probe_all(bytes: &[u8], path: Option<&Path>) -> Vec<&'static str> {
     use hauksbee_extract::reader::{
         AltiumReader, BoardReader, EagleReader, Ipc356Reader, KicadNetlistReader, KicadPcbReader,
-        KicadSchematicReader, ProtelAsciiReader,
+        KicadSchematicReader,
     };
     let readers: Vec<(&'static str, Box<dyn BoardReader>)> = vec![
         ("altium", Box::new(AltiumReader)),
-        ("protel-ascii", Box::new(ProtelAsciiReader)),
         ("eagle", Box::new(EagleReader)),
         ("kicad-netlist", Box::new(KicadNetlistReader)),
         ("kicad-schematic", Box::new(KicadSchematicReader)),

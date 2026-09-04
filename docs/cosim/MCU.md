@@ -495,9 +495,9 @@ caveats are counted at the latest chunk boundary, which the overlay says out
 loud: a caveat that only becomes true later appears later, and the finished run's
 report is the record.
 
-The dashboard honors an explicit `hauksbee run --tui --chunk-us N` value all
-the way into the worker. Narrowing that value can improve a poll-boundary
-backend's edge resolution and strict replay capacity. It cannot improve a
+An explicit `hauksbee run --chunk-us N` value reaches the worker unchanged.
+Narrowing that value can improve a poll-boundary backend's edge resolution and
+strict replay capacity. It cannot improve a
 cycle-exact backend beyond one emulated core cycle; that disclosure instead
 points to a justified clock configuration or hardware measurement.
 

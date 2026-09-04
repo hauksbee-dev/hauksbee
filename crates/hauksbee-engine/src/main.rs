@@ -66,9 +66,8 @@ enum Command {
     /// Accepts any supported board input (see the BOARD argument below), all
     /// analysed identically.
     ///
-    /// With no flag on a terminal, bare `run` opens the interactive full-screen
-    /// dashboard (TUI); piped/redirected (CI) it prints a hint. Pass `--serve` (or
-    /// use the `serve` subcommand) for the live 2D/3D websocket frontend. The
+    /// Pass `--serve` (or use the `serve` subcommand) for the live websocket
+    /// frontend. The
     /// `--report`/`--drc`/`--lint`/`--si`/`--resources` flags each print one
     /// static report and exit; `--headless --firmware <hex>` runs the firmware
     /// co-sim for `--seconds`.
@@ -93,18 +92,6 @@ enum Command {
     ///   hauksbee run board.kicad_pcb --firmware blink.hex --headless --seconds 2   # firmware co-sim
     #[command(verbatim_doc_comment)]
     Run(RunArgs),
-
-    /// Verify an immutable run manifest and execute its recorded command.
-    ///
-    /// Reproduction fails before launching if the manifest was edited, any
-    /// input bytes changed, a behavior-changing environment selector differs,
-    /// or this binary is not the recorded tool revision. The manifest may only
-    /// invoke `hauksbee` or its sibling `hauksbee-ci`; it cannot name an
-    /// arbitrary executable.
-    ///
-    /// Example:
-    ///   hauksbee reproduce run.manifest.json
-    Reproduce(ReproduceArgs),
 
     /// Decompile a board into editable Board-as-Code text.
     ///
@@ -248,15 +235,6 @@ enum Command {
     #[command(verbatim_doc_comment)]
     Models(ModelsArgs),
 
-    /// Watch a target and re-run the right check on every file change: a board
-    /// runs `run --check`, a `.board` runs `check-code`, a `.toml` runs the spec
-    /// through `hauksbee-ci`. Ctrl-C exits with the last run's code.
-    ///
-    /// Example:
-    ///   hauksbee watch my_board.kicad_pcb --plain
-    #[command(verbatim_doc_comment)]
-    Watch(WatchArgs),
-
     /// Install an external co-sim dependency.
     ///
     /// `install esp-qemu` downloads Espressif's official prebuilt QEMU fork
@@ -279,14 +257,6 @@ struct InstallArgs {
     command: InstallCommand,
 }
 
-#[derive(Parser)]
-struct ReproduceArgs {
-    /// Manifest emitted by `hauksbee run --emit-manifest` or
-    /// `hauksbee-ci run --emit-manifest`.
-    #[arg(value_name = "MANIFEST.JSON")]
-    manifest: PathBuf,
-}
-
 #[derive(Subcommand)]
 enum InstallCommand {
     /// Fetch the Espressif QEMU fork (ESP32 / ESP32-S3 / ESP32-C3 co-sim).
@@ -301,19 +271,6 @@ enum InstallCommand {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-}
-
-#[derive(Parser)]
-struct WatchArgs {
-    /// Board, `.board`, or hauksbee-ci spec (`.toml`) to watch.
-    #[arg(value_name = "TARGET")]
-    target: PathBuf,
-    /// Stream plain-language reports (default: the expert report).
-    #[arg(long, visible_alias = "explain")]
-    plain: bool,
-    /// Run the check once and exit (test the plumbing without watching).
-    #[arg(long)]
-    once: bool,
 }
 
 #[derive(Parser)]
@@ -750,13 +707,6 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "CI output")]
     sarif: Option<PathBuf>,
 
-    /// Write a canonical, immutable JSON reproduction manifest. It hashes all
-    /// run inputs and model sources, records exact options/tool/solver versions
-    /// and safe environment selectors, and refuses to overwrite an existing
-    /// file. Replay it with `hauksbee reproduce <FILE>`.
-    #[arg(long, value_name = "FILE", help_heading = "CI output")]
-    emit_manifest: Option<PathBuf>,
-
     /// Seconds of simulated time to run under --headless.
     #[arg(
         long,
@@ -912,10 +862,8 @@ struct RunArgs {
     #[arg(long, help_heading = "Advanced / analyses")]
     apply_shorts: bool,
 
-    /// Serve the live 2D/3D websocket frontend (the historical bare-`run`
-    /// behaviour). With no report/serve flag on a TTY, `run` now launches the
-    /// interactive terminal UI instead; pass `--serve` to keep the web frontend,
-    /// or use the `hauksbee serve` subcommand.
+    /// Serve the live websocket frontend for this board (or use the
+    /// `hauksbee serve` subcommand).
     #[arg(long, help_heading = "Advanced / analyses")]
     serve: bool,
 
@@ -929,12 +877,6 @@ struct RunArgs {
     /// app (mirrors `serve --no-open`).
     #[arg(long, help_heading = "Advanced / analyses", conflicts_with = "open")]
     no_open: bool,
-
-    /// Force the interactive terminal UI even when stdout is not a TTY (mainly
-    /// for testing under a PTY). Normally the TUI is the auto-default for bare
-    /// `run` on a TTY; this never triggers when a report flag is given.
-    #[arg(long, help_heading = "Advanced / analyses")]
-    tui: bool,
 
     /// Port for the live frontend websocket server (`--serve`).
     #[arg(
@@ -1364,7 +1306,6 @@ fn invalidate_run_artifacts_after_parse_error(args: &[String], error: &clap::Err
                 "--placement",
                 "--firmware",
                 "--asbuilt",
-                "--emit-manifest",
                 "--ac-csv",
                 "--probe-csv",
             ]
@@ -1474,7 +1415,6 @@ fn main() -> anyhow::Result<()> {
             let schematic = args.schematic.take();
             hauksbee_engine::commands::run::run_with_schematic(run_config(args), quiet, schematic)
         }
-        Command::Reproduce(args) => hauksbee_engine::run_manifest::reproduce(&args.manifest),
         Command::ToCode(args) => {
             hauksbee_engine::commands::boardcode::to_code(&args.board, args.out.as_deref())
         }
@@ -1600,9 +1540,6 @@ fn main() -> anyhow::Result<()> {
                 args.api_key_env,
             ),
         },
-        Command::Watch(args) => {
-            hauksbee_engine::commands::watch::run(args.target, args.plain, args.once)
-        }
         Command::Install(args) => match args.command {
             InstallCommand::EspQemu { yes } => hauksbee_engine::commands::install::esp_qemu(yes),
             InstallCommand::Renode { yes } => hauksbee_engine::commands::install::renode(yes),
@@ -1698,8 +1635,6 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         asbuilt: a.asbuilt,
         junit: a.junit,
         sarif: a.sarif,
-        emit_manifest: a.emit_manifest,
-        manifest_command: hauksbee_engine::run_manifest::replay_argv("hauksbee"),
         seconds: a.seconds,
         headless: a.headless,
         report: a.report,
@@ -1725,7 +1660,6 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         serve: a.serve,
         open: a.open,
         no_open: a.no_open,
-        tui: a.tui,
         port: a.port,
         models_dir: a.models_dir,
         ac: a.ac,

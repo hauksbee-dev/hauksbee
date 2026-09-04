@@ -418,19 +418,6 @@ fn junit_and_sarif_artifacts_are_written_and_valid() {
 
 // ── --tui without a terminal (minor 8) ──────────────────────────────────────
 
-#[test]
-fn tui_without_a_terminal_names_the_problem() {
-    let b = clean_board();
-    let out = run(&["run", b.to_str().unwrap(), "--tui"]);
-    assert!(!out.status.success());
-    let err = stderr(&out);
-    assert!(
-        err.contains("terminal"),
-        "must explain the missing TTY, not an os error: {err}"
-    );
-    assert!(!err.contains("os error"), "{err}");
-}
-
 // ── to-code (minor 18 + copper disclosure) ──────────────────────────────────
 
 #[test]

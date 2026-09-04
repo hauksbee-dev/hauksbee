@@ -1,0 +1,114 @@
+# Copy this into your HARDWARE repo as .github/workflows/hauksbee-ci.yml
+#
+# It runs hauksbee-ci on every push and pull request that touches the board or
+# firmware, so a layout change that would brown out the rail (or break the
+# blink, or silence the UART) turns the build red before anyone touches a
+# soldering iron.
+
+name: hardware-ci
+
+# contents: read checks out the repo; checks: write lets the action publish
+# the JUnit results to the Checks tab. Fork pull requests run the check but
+# lack checks: write; see the README for the two-workflow reporting pattern.
+permissions:
+  contents: read
+  checks: write
+
+on:
+  push:
+    paths:
+      - "ci/**"
+      - "*.toml"
+      - ".github/workflows/**"
+      - "hardware/**"
+      - "firmware/**"
+      - "models/**"
+      - "**/*.kicad_pcb"
+      - "**/*.kicad_sch"
+      - "**/*.net"
+      - "**/*.brd"
+      - "**/*.PcbDoc"
+      - "**/*.d356"
+      - "**/*.board"
+      - "**/*.xml"
+      - "**/*.zip"
+      - "**/*.tgz"
+      - "**/*.tar.gz"
+      - "**/*.tar"
+  pull_request:
+    paths:
+      - "ci/**"
+      - "*.toml"
+      - ".github/workflows/**"
+      - "hardware/**"
+      - "firmware/**"
+      - "models/**"
+      - "**/*.kicad_pcb"
+      - "**/*.kicad_sch"
+      - "**/*.net"
+      - "**/*.brd"
+      - "**/*.PcbDoc"
+      - "**/*.d356"
+      - "**/*.board"
+      - "**/*.xml"
+      - "**/*.zip"
+      - "**/*.tgz"
+      - "**/*.tar.gz"
+      - "**/*.tar"
+
+concurrency:
+  group: hauksbee-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  power-up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # 1. Check out YOUR hardware repo (board + firmware + spec).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # 2. (Optional) build your firmware here, so the ELF the spec points at
+      #    exists. For an AVR project that is usually a `make` in firmware/.
+      # - name: Build firmware
+      #   run: make -C firmware
+
+      # 3. Run the hardware check. The action fetches hauksbee-ci, runs your
+      #    spec, writes JUnit XML, and emits inline annotations. Pin the
+      #    action to the release's full 40-character commit, not a tag: a tag
+      #    can move after review, while an object ID cannot redirect the
+      #    Action code. The separate version input names the release assets,
+      #    and the Action verifies both identities.
+      - name: hauksbee-ci power-up check
+        uses: hauksbee-dev/hauksbee/integrations/github-action@REPLACE_WITH_RELEASE_COMMIT_SHA
+        with:
+          hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
+          hauksbee-version: v0.1.0
+          spec: ci/power-up.toml
+          junit: hauksbee-ci-results.xml
+
+  # A matrix is the natural way to run several specs (power-up, blink,
+  # brown-out across supplies) in parallel. To run them all in ONE job with
+  # one merged JUnit file instead, pass `specs: ci/*.toml`.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        spec:
+          - ci/power-up.toml
+          - ci/blink.toml
+          - ci/brownout.toml
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: hauksbee-dev/hauksbee/integrations/github-action@REPLACE_WITH_RELEASE_COMMIT_SHA
+        with:
+          hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
+          hauksbee-version: v0.1.0
+          spec: ${{ matrix.spec }}
+          junit: results-${{ strategy.job-index }}.xml
