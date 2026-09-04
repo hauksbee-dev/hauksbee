@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { chromium } from 'playwright'
 import type { BoardSession } from '../src/hooks/useBoardSession'
@@ -7,11 +7,13 @@ import type { WebReport } from '../src/types/report'
 import { reportVerdictHeadline, reportVerdictTone } from '../src/lib/report-verdict'
 import { visibleImportMarkers } from '../src/lib/board-renderer'
 
+// The real frontdoor report lives in the repository's demo/ tree; a checkout
+// without it skips the tests that need it rather than failing on a missing file.
+const FRONTDOOR_REPORT = new URL('../../demo/sessions/blinky/report-nominal.json', import.meta.url)
+const hasFrontdoorReport = existsSync(FRONTDOOR_REPORT)
+
 function realFrontdoorReport(): WebReport {
-  const startup = JSON.parse(readFileSync(
-    new URL('../../demo/sessions/blinky/report-nominal.json', import.meta.url),
-    'utf8',
-  )) as { report: WebReport }
+  const startup = JSON.parse(readFileSync(FRONTDOOR_REPORT, 'utf8')) as { report: WebReport }
   const report = startup.report
   report.cosim = {
     ...report.cosim!,
@@ -76,7 +78,7 @@ function session(report: WebReport): BoardSession {
   }
 }
 
-test('the browser renders every structured timing qualification from a frontdoor report', async () => {
+test.skipIf(!hasFrontdoorReport)('the browser renders every structured timing qualification from a frontdoor report', async () => {
   Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')
   const html = renderToStaticMarkup(<BoardView
@@ -112,7 +114,7 @@ test('the browser renders every structured timing qualification from a frontdoor
   }
 })
 
-test('typed co-sim invalidity and faults cannot retain a green verdict card', () => {
+test.skipIf(!hasFrontdoorReport)('typed co-sim invalidity and faults cannot retain a green verdict card', () => {
   const refused = realFrontdoorReport()
   refused.serious = 0
   refused.total = 0
@@ -135,7 +137,7 @@ test('typed co-sim invalidity and faults cannot retain a green verdict card', ()
   expect(reportVerdictTone(faulted)).toBe('error')
 })
 
-test('model coverage is a clickable human workflow, not an agent-only report', async () => {
+test.skipIf(!hasFrontdoorReport)('model coverage is a clickable human workflow, not an agent-only report', async () => {
   Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')
   const report = realFrontdoorReport()
@@ -311,7 +313,7 @@ test('live input sliders require an explicit engine source, not an input-looking
   expect(declared).toContain('3.3 V')
 })
 
-test('a report-only restored session does not offer model saves it cannot re-analyze', async () => {
+test.skipIf(!hasFrontdoorReport)('a report-only restored session does not offer model saves it cannot re-analyze', async () => {
   Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')
   const restored = session(realFrontdoorReport())
@@ -337,7 +339,7 @@ test('a report-only restored session does not offer model saves it cannot re-ana
   expect(html).not.toContain('data-testid="write-part-open"')
 })
 
-test('import diagnostics expose recovered, partial, unplaced and split-net guidance without inventing coordinates', async () => {
+test.skipIf(!hasFrontdoorReport)('import diagnostics expose recovered, partial, unplaced and split-net guidance without inventing coordinates', async () => {
   Object.assign(globalThis, { __APP_VERSION__: '0.1.0' })
   const { BoardView } = await import('../src/components/BoardView')
   const report = realFrontdoorReport()
@@ -447,7 +449,7 @@ test('collapsed navigation keeps an accessible name for every icon button', asyn
   }
 })
 
-test('a permissive build does not advertise the unavailable AVR sample', async () => {
+test.skipIf(!hasFrontdoorReport)('a permissive build does not advertise the unavailable AVR sample', async () => {
   const { UploadView } = await import('../src/components/UploadView')
   const html = renderToStaticMarkup(<UploadView
     session={session(realFrontdoorReport())}

@@ -1,0 +1,6 @@
+board = "nope.kicad_pcb"
+
+[[assert]]
+kind = "voltag"
+net = "VCC"
+min = 3.0

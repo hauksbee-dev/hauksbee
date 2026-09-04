@@ -1,0 +1,7 @@
+board = "blinky.kicad_pcb"
+duration_ms = 5
+
+[[assert]]
+kind = "voltage"
+net = "VCCC"
+min = 4.0

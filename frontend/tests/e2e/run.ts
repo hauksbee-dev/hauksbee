@@ -15,7 +15,6 @@ const results = join(frontend, 'test-results/e2e')
 export const E2E_FLOWS = [
   'layers-dismiss.ts',
   'sessions-export.ts',
-  'viewer-3d-idle.ts',
 ] as const
 
 async function main(): Promise<void> {

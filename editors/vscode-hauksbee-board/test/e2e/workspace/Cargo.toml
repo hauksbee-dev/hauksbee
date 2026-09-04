@@ -1,0 +1,4 @@
+# A control file: the extension must leave other people's TOML alone.
+[package]
+name = "not-a-spec"
+version = "0.1.0"

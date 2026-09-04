@@ -12,8 +12,8 @@
 //
 // typescript-eslint's `recommendedTypeChecked` in full: most of what it adds
 // here is `no-unsafe-*` and `no-base-to-string` firing where our types meet
-// something genuinely untyped (a parsed TOML document, a JSON response, three.js
-// internals). That is where the casts live on purpose, so the rule would be
+// something genuinely untyped (a parsed TOML document, a JSON response). That
+// is where the casts live on purpose, so the rule would be
 // permanently red for structural reasons rather than finding anything. The
 // type-aware rules that DO find bugs are switched on individually below.
 //
@@ -58,8 +58,8 @@ const unusedVars = {
 }
 
 export default tseslint.config(
-  // Build output and dependencies. Also `public/`: it holds sample boards and
-  // multi-MB GLB models, and pointing a parser at those is how you hang it.
+  // Build output and dependencies. Also `public/`: it holds multi-MB sample
+  // boards, and pointing a parser at those is how you hang it.
   {
     ignores: ['dist/**', 'node_modules/**', 'public/**', 'test-results/**'],
   },
@@ -88,8 +88,8 @@ export default tseslint.config(
       // on everything it closes over; each has the reason written above it, and
       // a per-site disable comment would bury that reason under boilerplate.
       'react-hooks/exhaustive-deps': 'warn',
-      // Bare `any` has one narrow home here: the WebGL / three.js and canvas
-      // seams where vendor types meet ours. Worth seeing, not worth failing.
+      // Bare `any` has one narrow home here: the canvas seams where vendor
+      // types meet ours. Worth seeing, not worth failing.
       '@typescript-eslint/no-explicit-any': 'warn',
     },
   },

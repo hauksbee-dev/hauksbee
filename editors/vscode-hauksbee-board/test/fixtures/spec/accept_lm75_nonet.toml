@@ -1,0 +1,11 @@
+# An I2C peripheral attaches over the bus, so it needs no `net`.
+board = "nope.kicad_pcb"
+
+[[peripheral]]
+id = "U2"
+type = "i2c_lm75"
+address = 0x48
+temp_c = 25.0
+
+[[assert]]
+kind = "no_faults"

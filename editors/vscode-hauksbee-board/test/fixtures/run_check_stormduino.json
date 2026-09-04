@@ -1,0 +1,193 @@
+{
+  "board": "",
+  "bind": {
+    "resolved": 33,
+    "unresolved": 4,
+    "non_ignored": 37,
+    "critical_parts_bound": "4/5",
+    "critical_parts_bound_n": 4,
+    "critical_parts_total": 5,
+    "mcu_bound": true,
+    "active_path_unresolved": [
+      {
+        "reference": "F1",
+        "value": "Fuse",
+        "reason": "no model; left open",
+        "consequence": "F1 defaults to OPEN; nets through it are isolated in simulation",
+        "active_ic": false
+      },
+      {
+        "reference": "U4",
+        "value": "CH340C",
+        "reason": "no model",
+        "consequence": "U4 is an active IC left OPEN; analog/AC/thermal results on its nets are NOT trustworthy",
+        "active_ic": true
+      },
+      {
+        "reference": "Q1",
+        "value": "BS250",
+        "reason": "no model",
+        "consequence": "Q1 defaults to OPEN; nets through it are isolated in simulation",
+        "active_ic": false
+      },
+      {
+        "reference": "SW1",
+        "value": "SW_Push",
+        "reason": "no model",
+        "consequence": "SW1 defaults to OPEN; nets through it are isolated in simulation",
+        "active_ic": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R9"
+      ],
+      "actionable": true,
+      "message": "R9 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R9 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R10"
+      ],
+      "actionable": true,
+      "message": "R10 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R10 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R2"
+      ],
+      "actionable": true,
+      "message": "R2 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R2 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R1"
+      ],
+      "actionable": true,
+      "message": "R1 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R1 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R6"
+      ],
+      "actionable": true,
+      "message": "R6 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R6 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R7"
+      ],
+      "actionable": true,
+      "message": "R7 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R7 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R8"
+      ],
+      "actionable": true,
+      "message": "R8 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R8 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R3"
+      ],
+      "actionable": true,
+      "message": "R3 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R3 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R4"
+      ],
+      "actionable": true,
+      "message": "R4 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R4 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "lint",
+      "kind": "designator_footprint_mismatch",
+      "severity": "warning",
+      "nets": [],
+      "refs": [
+        "R5"
+      ],
+      "actionable": true,
+      "message": "R5 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "plain": "R5 is a R designator but uses C footprint 'Capacitor_SMD:C_0805_2012Metric'",
+      "fix": "Make the reference/value and footprint agree, then regenerate the BOM."
+    },
+    {
+      "check": "usb_c",
+      "kind": "cc_compliance",
+      "severity": "info",
+      "nets": [],
+      "refs": [
+        "J2"
+      ],
+      "actionable": false,
+      "message": "No discrete CC pulldown (Rd) is visible on the receptacle. If a USB-C PD controller / sink IC (e.g. STUSB4500, FUSB302, CYPD) provides Rd internally this is correct — hauksbee cannot see termination inside an IC, so it cannot confirm it from copper.",
+      "plain": "No discrete CC pulldown (Rd) is visible on the receptacle. If a USB-C PD controller / sink IC (e.g. STUSB4500, FUSB302, CYPD) provides Rd internally this is correct — hauksbee cannot see termination inside an IC, so it cannot confirm it from copper."
+    }
+  ],
+  "drc": {
+    "clearance_rule_mm": 0.2,
+    "primitive_count": 281,
+    "shorts": [],
+    "violations": [],
+    "at_limit": []
+  }
+}

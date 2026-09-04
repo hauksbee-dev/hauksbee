@@ -4,8 +4,7 @@
 // Adding a surface is one entry in APP_SURFACES. `reach` runs on a page that is
 // already sitting on the surface BEFORE it in the array (the app keeps views
 // mounted, so the chain is cheap and matches how a person actually walks
-// through it). Keep each `reach` to the clicks a user would make, and never
-// touch the 3D tab: three.js on a headless GPU-less runner wedges the page.
+// through it). Keep each `reach` to the clicks a user would make.
 
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

@@ -201,9 +201,6 @@ export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor
   )
   // Expand-to-viewport for the live board. Per-view, not persisted.
   const [boardFullscreen, setBoardFullscreen] = useState(false)
-  // 2D/3D mode of the viewer's segmented control, so the hint chip describes
-  // the interactions that actually exist in that mode.
-  const [viewerMode, setViewerMode] = useState<'2d' | '3d'>('2d')
   const [probes, setProbes] = useState<string[]>([])
   const [selectedFaultRef, setSelectedFaultRef] = useState<string | null>(null)
   const liveInteractionSeq = useRef(0)
@@ -491,7 +488,7 @@ export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor
     return active
   }, [faultLog, frame])
 
-  // Faulted refs drive the 2D/3D part glow, and the glow means "over its rating
+  // Faulted refs drive the part glow, and the glow means "over its rating
   // NOW". A part that recovered keeps its row in the log but stops glowing.
   const faultedRefs = useMemo(
     () => (activeFaultRefs.size === 0 ? undefined : activeFaultRefs),
@@ -772,7 +769,6 @@ export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor
               if (net) setSelectedFp(null)
             }}
             faultedRefs={faultedRefs}
-            onViewModeChange={setViewerMode}
             fullscreen={boardFullscreen}
             onToggleFullscreen={() => setBoardFullscreen(v => !v)}
           />
@@ -829,9 +825,7 @@ export default function SimView({ onQueueCheck, onQueuePeripheral, onQueueSensor
           >
             {inputFocused
               ? 'shortcuts paused, click away from the input to use Space / N'
-              : viewerMode === '3d'
-                ? 'Space=play/pause · N=step · drag=orbit · scroll=zoom · shift+drag=pan'
-                : 'Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe'}
+              : 'Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe'}
           </div>
         </div>
 

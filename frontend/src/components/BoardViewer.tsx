@@ -8,7 +8,6 @@ import type { OverlayData, RenderOptions } from '../lib/board-renderer'
 import { getLayerStyle, boardTheme } from '../lib/layer-colors'
 import { onThemeChange } from '../lib/theme-tokens'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
-import { Board3DViewer } from './Board3DViewer'
 import { FitIcon, LayersIcon, ExpandIcon, CollapseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 
@@ -64,11 +63,7 @@ interface BoardViewerProps {
    *  collapses; without one the control is absent. */
   fullscreen?: boolean
   onToggleFullscreen?: () => void
-  /** Fires when the 2D/3D segmented control switches, so the embedding view
-   *  can adapt its own chrome (e.g. the caption under the canvas swaps to
-   *  orbit instructions in 3D). */
-  onViewModeChange?: (mode: '2d' | '3d') => void
-  /** How the wheel behaves over the 2D canvas.
+  /** How the wheel behaves over the canvas.
    *
    *  `'always'` (default) suits a full-height surface that owns the viewport:
    *  the wheel is the zoom, there is nothing behind it to scroll.
@@ -95,24 +90,6 @@ const PARTICLE_SPEED = 0.3 // t units per second
  *  The flow animation is a claim that charge is moving; it may only be made
  *  about a net whose current the frame actually MEASURED above this floor. */
 const FLOW_CURRENT_FLOOR_A = 1e-6
-
-// Map board name to GLB URL. Extends as more boards are exported.
-const BOARD_GLB_MAP: Record<string, string> = {
-  'demo': '/boards3d/demo.glb',
-  'pic_programmer': '/boards3d/pic_programmer.glb',
-  'stickhub': '/boards3d/stickhub.glb',
-}
-
-function resolveGlbUrl(boardFile: string, boardInfo?: BoardInfoMsg | null): string | null {
-  // Check protocol-provided URL first (future field)
-  if (boardInfo?.glb_url) return boardInfo.glb_url
-
-  // Try matching by board name in the path
-  for (const [key, url] of Object.entries(BOARD_GLB_MAP)) {
-    if (boardFile.includes(key)) return url
-  }
-  return null
-}
 
 /** The Layers panel's rows, derived from what the parsed board actually
  *  contains: real copper/silk/fab layers only, never a fixed template. */
@@ -215,7 +192,7 @@ function LayerRow({ label, swatch, on, onToggle }: {
 
 export function BoardViewer({
   boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick,
-  onEmptyBoard, faultedRefs, netOptions, focusPoint, onViewModeChange,
+  onEmptyBoard, faultedRefs, netOptions, focusPoint,
   importMarkers,
   fullscreen = false, onToggleFullscreen,
   wheelMode = 'always',
@@ -229,7 +206,6 @@ export function BoardViewer({
   const [board, setBoard] = useState<ParsedBoard | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d')
   const [layersOpen, setLayersOpen] = useState(false)
   const layersWrap = useRef<HTMLDivElement>(null)
   const layersTrigger = useRef<HTMLButtonElement>(null)
@@ -238,12 +214,6 @@ export function BoardViewer({
   // so the map gives the page back the moment attention moves on.
   const [zoomFocused, setZoomFocused] = useState(false)
   const [hovering, setHovering] = useState(false)
-
-  // Tell the embedding view which mode the segmented control is in (effect,
-  // not inline in the click handlers, so the initial mode is reported too).
-  useEffect(() => {
-    onViewModeChange?.(viewMode)
-  }, [viewMode, onViewModeChange])
 
   // Layers panel state: per-layer overrides plus the pads/labels/activity
   // switches. Hidden layers also stop rendering activity on their copper.
@@ -273,7 +243,7 @@ export function BoardViewer({
   const fitScaleRef = useRef(1)
 
   // Whether the USER moved the camera this session (wheel, drag, pinch).
-  // Auto-refit (on becoming visible again, on 3D-to-2D return, on resize) is
+  // Auto-refit (on becoming visible again, on resize) is
   // only allowed while this is false: a camera the user set is theirs, but a
   // camera nobody touched must never present a stale zoom pinned top-left.
   const userMovedCamera = useRef(false)
@@ -345,9 +315,6 @@ export function BoardViewer({
     return m
   }, [frame?.net_voltages, unobservedNets])
 
-  // GLB URL for 3D view
-  const glbUrl = useMemo(() => resolveGlbUrl(boardFile, boardInfo), [boardFile, boardInfo])
-
   // ── Load board ──
   useEffect(() => {
     // Changing boardFile does not implicitly cancel the previous fetch: a slow
@@ -402,13 +369,6 @@ export function BoardViewer({
   }, [board, setCamera])
 
   useEffect(() => { fitToView() }, [fitToView])
-
-  // Returning from 3D to 2D: the 2D camera is whatever it was when the user
-  // left, which after a mount-while-hidden or a long 3D session reads as a
-  // stale zoom pinned in a corner. Refit unless the user set the camera.
-  useEffect(() => {
-    if (viewMode === '2d' && !userMovedCamera.current) fitToView()
-  }, [viewMode, fitToView])
 
   // ── Canvas resize observer ──
   useEffect(() => {
@@ -577,7 +537,7 @@ export function BoardViewer({
     return null
   }, [board, describeFootprint, showLabels])
 
-  // ── Animation loop (2D only) ──
+  // ── Animation loop ──
   // Per-frame data reaches the loop through refs, NOT effect deps: putting
   // `frame` in the deps tore down and restarted the rAF loop 30 times a
   // second on a live sim.
@@ -623,7 +583,7 @@ export function BoardViewer({
   }, [focusPoint, focusPoint?.seq, board, setCamera])
 
   useEffect(() => {
-    if (!board || viewMode === '3d') return
+    if (!board) return
 
     let lastT = performance.now()
     let lastReadout = 0
@@ -828,7 +788,7 @@ export function BoardViewer({
 
     animFrame.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(animFrame.current)
-  }, [board, netIndex, viewMode, setCamera, importMarkers])
+  }, [board, netIndex, setCamera, importMarkers])
 
   // ── Wheel zoom ──
   // Attached natively (non-passive): React registers wheel listeners as
@@ -836,7 +796,7 @@ export function BoardViewer({
   // browser's own pinch-zoom of the page.
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || viewMode === '3d') return
+    if (!canvas) return
     const onWheel = (e: WheelEvent) => {
       // Embedded in a scrolling document, the map only takes the wheel with
       // intent: ctrl/cmd held (the universal "zoom this, not the page"), or
@@ -862,7 +822,7 @@ export function BoardViewer({
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
     return () => canvas.removeEventListener('wheel', onWheel)
-  }, [viewMode, wheelMode, zoomFocused])
+  }, [wheelMode, zoomFocused])
 
   // Give the wheel back to the page as soon as the reader clicks away. Capture
   // phase, so it fires even when the click lands on something that stops
@@ -1116,15 +1076,14 @@ export function BoardViewer({
       className="relative w-full h-full overflow-hidden"
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
-      style={{ background: 'var(--instrument)', cursor: viewMode === '2d' ? (dragging.current ? 'grabbing' : 'crosshair') : 'default' }}
+      style={{ background: 'var(--instrument)', cursor: dragging.current ? 'grabbing' : 'crosshair' }}
     >
-      {/* 2D canvas layer */}
+      {/* Board canvas layer */}
       <canvas
         ref={canvasRef}
         role="img"
         aria-label="Board map: scroll to zoom, drag to pan, click a trace to select its net. Keyboard users can pick a net in the checks panel."
         className="absolute inset-0"
-        style={{ display: viewMode === '2d' ? 'block' : 'none' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -1136,13 +1095,12 @@ export function BoardViewer({
       <canvas
         ref={overlayRef}
         className="absolute inset-0 pointer-events-none"
-        style={{ display: viewMode === '2d' ? 'block' : 'none' }}
       />
 
       {/* The wheel currently belongs to the page: say so, and say how to take
           it, rather than letting the reader discover it by scrolling and
           watching the board vanish. */}
-      {viewMode === '2d' && wheelMode === 'capture-on-focus' && hovering && !zoomFocused && (
+      {wheelMode === 'capture-on-focus' && hovering && !zoomFocused && (
         <div
           data-testid="zoom-hint"
           className="absolute bottom-3 left-1/2 z-20 px-2.5 py-1 rounded-md text-[11px] pointer-events-none"
@@ -1167,30 +1125,6 @@ export function BoardViewer({
         view.
       </p>
 
-      {/* 3D view -- only mounted when 3D tab is active. Boards without a
-          pre-exported GLB get a model GENERATED from the parsed layout
-          (extruded substrate, instanced pads/vias/bodies), so 3D works for
-          any board that renders in 2D, the 3,443-part flagship included. */}
-      {viewMode === '3d' && (
-        <div className="absolute inset-0">
-          {(glbUrl || board) ? (
-            <Board3DViewer
-              glbUrl={glbUrl}
-              board={board}
-              frame={frame}
-              boardInfo={boardInfo}
-              faults={frame?.faults}
-            />
-          ) : (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="hb-card px-4 py-3 text-sm" style={{ color: 'var(--silk-dim)' }}>
-                No 3D model available for this board
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* ── Viewer toolbar ── */}
       {/* Wraps. Held to one row, `justify-between` pushed the Layers button and
           the expand control clean off a 320px viewport, where nothing could
@@ -1199,9 +1133,8 @@ export function BoardViewer({
           line it lands on. */}
       <div className="absolute top-3 left-3 right-3 z-20 flex flex-wrap items-start justify-between gap-2 pointer-events-none">
         <div className="flex flex-wrap items-center gap-2 pointer-events-auto">
-          {/* 2D / 3D segmented control */}
           <div
-            className="flex rounded-lg overflow-hidden"
+            className="flex items-center rounded-lg overflow-hidden"
             style={{
               border: '1px solid var(--hairline)',
               background: 'color-mix(in srgb, var(--surface) 88%, transparent)',
@@ -1211,71 +1144,33 @@ export function BoardViewer({
           >
             <button
               type="button"
-              data-testid="view-2d"
-              onClick={() => setViewMode('2d')}
+              onClick={() => {
+                // An explicit Fit is a return to the automatic framing, so
+                // auto-refit may take over again from here.
+                userMovedCamera.current = false
+                fitToView()
+              }}
+              title="Fit the board to the view"
+              aria-label="Fit the board to the view"
               className="hb-press"
-              style={toolbarBtn(viewMode === '2d')}
+              style={toolbarBtn(false)}
             >
-              2D
+              <FitIcon size={13} /> Fit
             </button>
-            <button
-              type="button"
-              data-testid="view-3d"
-              disabled={!glbUrl && !board}
-              onClick={() => { if (glbUrl || board) setViewMode('3d') }}
-              title={!glbUrl && !board ? 'The board has not loaded yet' : undefined}
-              className="hb-press"
+            <span
+              ref={zoomReadoutRef}
+              data-testid="zoom-readout"
+              className="tnum"
+              aria-label="Zoom level relative to fit"
               style={{
-                ...toolbarBtn(viewMode === '3d'),
-                borderLeft: '1px solid var(--hairline)',
-                cursor: (glbUrl || board) ? 'pointer' : 'not-allowed',
-                opacity: (glbUrl || board) ? 1 : 0.4,
+                color: 'var(--silk-faint)', fontSize: 11, fontFamily: 'var(--font-mono)',
+                padding: '5px 10px', borderLeft: '1px solid var(--hairline)', minWidth: 52,
+                textAlign: 'right', display: 'inline-block',
               }}
             >
-              3D
-            </button>
+              100%
+            </span>
           </div>
-
-          {viewMode === '2d' && (
-            <div
-              className="flex items-center rounded-lg overflow-hidden"
-              style={{
-                border: '1px solid var(--hairline)',
-                background: 'color-mix(in srgb, var(--surface) 88%, transparent)',
-                backdropFilter: 'blur(6px)',
-                boxShadow: 'var(--shadow-card)',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  // An explicit Fit is a return to the automatic framing, so
-                  // auto-refit may take over again from here.
-                  userMovedCamera.current = false
-                  fitToView()
-                }}
-                title="Fit the board to the view"
-                aria-label="Fit the board to the view"
-                className="hb-press"
-                style={toolbarBtn(false)}
-              >
-                <FitIcon size={13} /> Fit
-              </button>
-              <span
-                ref={zoomReadoutRef}
-                data-testid="zoom-readout"
-                className="tnum"
-                aria-label="Zoom level relative to fit"
-                style={{
-                  color: 'var(--silk-faint)', fontSize: 11, fontFamily: 'var(--font-mono)',
-                  padding: '5px 10px', borderLeft: '1px solid var(--hairline)', minWidth: 52,
-                  textAlign: 'right', display: 'inline-block',
-                }}
-              >
-                100%
-              </span>
-            </div>
-          )}
 
           {onToggleFullscreen && (
             <button
@@ -1301,7 +1196,7 @@ export function BoardViewer({
           )}
         </div>
 
-        {viewMode === '2d' && board && (
+        {board && (
           <div ref={layersWrap} className="flex flex-col items-end gap-2 ml-auto pointer-events-auto">
             <button
               type="button"
@@ -1400,7 +1295,7 @@ export function BoardViewer({
         </div>
       )}
 
-      {board && !loading && viewMode === '2d' && (
+      {board && !loading && (
         <div className="absolute bottom-2 right-2 text-[10px] px-2 py-1 rounded tnum"
           style={{ background: 'var(--overlay-chip-bg)', color: 'var(--overlay-chip-text)', pointerEvents: 'none', fontFamily: 'var(--font-mono)' }}>
           {/* "fp" was a footgun as well as an abbreviation: the report banner

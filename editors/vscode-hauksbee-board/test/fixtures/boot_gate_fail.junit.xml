@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="hauksbee-ci" tests="1" failures="1" errors="0" time="0.043">
+  <testsuite name="boot-coverage: MOSFET gate left floating (FAIL)" tests="1" failures="1" errors="0" time="0.043">
+    <testcase classname="boot-coverage" name="GATE_CTRL driven to &gt;= 3 V within 20 ms of reset">
+      <failure message="control net &apos;GATE_CTRL&apos; was never driven to &gt;= 3 V (firmware left it Hi-Z / undefined through the whole run); observed range [0.000, 0.000] V">control net &apos;GATE_CTRL&apos; was never driven to &gt;= 3 V (firmware left it Hi-Z / undefined through the whole run); observed range [0.000, 0.000] V</failure>
+    </testcase>
+  </testsuite>
+</testsuites>

@@ -329,9 +329,6 @@ export function BoardView({
   // a labeled marker there. Only wired when the real renderer is drawing
   // (the dot map has no camera to move).
   const [focusPoint, setFocusPoint] = useState<{ x: number; y: number; label: string; seq: number } | null>(null)
-  // Which mode the viewer's 2D/3D control is in, so the caption under the
-  // canvas describes the interactions that actually exist in that mode.
-  const [viewerMode, setViewerMode] = useState<'2d' | '3d'>('2d')
   // Expand-to-viewport for the map. Per-view and deliberately not persisted:
   // it is a "let me look at this properly" gesture, not a setting.
   const [mapFullscreen, setMapFullscreen] = useState(false)
@@ -581,7 +578,7 @@ export function BoardView({
             className="mt-3 rounded-lg px-4 py-3 text-xs"
             style={{ border: '1px solid var(--hairline)', background: 'var(--surface)', color: 'var(--silk-dim)' }}
           >
-            <div>To bring this board to life (live scope, 2D/3D view, transport controls) run:</div>
+            <div>To bring this board to life (live scope, board view, transport controls) run:</div>
             <div className="mt-1.5 flex items-center flex-wrap">
               <code className="hb-code" style={{ padding: '2px 6px', fontSize: 11 }}>
                 {runCommand}
@@ -795,7 +792,6 @@ export function BoardView({
                 partCount={r.num_components}
                 focusPoint={focusPoint}
                 importMarkers={importMarkers}
-                onViewModeChange={setViewerMode}
                 fullscreen={mapFullscreen}
                 onToggleFullscreen={() => setMapFullscreen(v => !v)}
                 onNetClick={setSelectedNet}
@@ -810,7 +806,7 @@ export function BoardView({
                 // A strip that starts below the viewer toolbar and ends at the
                 // bottom of the map. The card sits at its foot and grows up
                 // into it, so a part with many nets scrolls inside the card
-                // instead of sliding under the 2D/3D and Fit controls.
+                // instead of sliding under the Fit control.
                 <div
                   className="absolute left-3 z-10 flex items-end pointer-events-none"
                   style={{ top: TOOLBAR_CLEARANCE, bottom: 12 }}
@@ -856,9 +852,7 @@ export function BoardView({
               )}
             </div>
             <div className="mt-1.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-              {viewerMode === '3d'
-                ? 'Drag to orbit · scroll to zoom · shift-drag to pan · switch to 2D to select traces and parts'
-                : 'Click the map (or hold ctrl) to zoom · drag to pan · hover a trace to see its net · click a trace or part to inspect it, drive it, probe it or check it'}
+              Click the map (or hold ctrl) to zoom · drag to pan · hover a trace to see its net · click a trace or part to inspect it, drive it, probe it or check it
             </div>
           </section>
         ) : r.components?.length > 0 ? (

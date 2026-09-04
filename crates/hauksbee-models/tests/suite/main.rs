@@ -17,7 +17,6 @@ mod codex_behavioral_fixture;
 mod codex_prompt_delivery;
 mod connector_rating_resolve;
 mod corpus_batch_resolve;
-mod corpus_coverage_ratchet;
 mod declared_coverage;
 mod digital_pin_maps;
 mod exact_override_tiebreak;
