@@ -261,7 +261,7 @@ fn sigterm_to_the_owner_reaps_the_emulator() {
 
     let exe = std::env::current_exe().unwrap();
     let mut helper = std::process::Command::new(exe)
-        .args(["reaper_helper_process", "--exact", "--nocapture"])
+        .args(["child_reaping::reaper_helper_process", "--exact", "--nocapture"])
         .env(HELPER_FLAG, "1")
         .env("HAUKSBEE_QEMU_XTENSA", &fake)
         .env(GRANDCHILD_PID_FILE, &pid_file)

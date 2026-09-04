@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "hauksbee-mcu"
 version.workspace = true
 edition.workspace = true
@@ -80,3 +81,7 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "it"
+path = "tests/main.rs"
