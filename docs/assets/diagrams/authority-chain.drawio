@@ -1,0 +1,67 @@
+<mxfile host="hauksbee">
+  <diagram name="authority-chain" id="authority-chain">
+    <mxGraphModel dx="1100" dy="700" grid="0" page="0" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="board" value="Board sources&#10;KiCad · Eagle · Altium&#10;IPC-2581 · ODB++&#10;Gerber + IPC-D-356" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="121" y="52" width="177" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="assembly" value="Assembly&#10;BOM · placement&#10;fitted variant" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="338" y="69" width="132" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="firmware" value="Firmware&#10;+ model packs" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="510" y="86" width="120" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="inventory" value="Input authority + SHA-256 inventory" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="274" y="200" width="260" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="ir" value="Extracted board IR + explicit model coverage" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="245" y="300" width="318" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="static" value="Static checks" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="52" y="400" width="120" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="analog" value="Analog / AC / thermal" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="212" y="400" width="171" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="cosim" value="MCU co-sim" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="423" y="400" width="120" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="outputs" value="Terminal · JSON · JUnit · SARIF · web · MCP" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="142" y="500" width="312" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;exitX=0.5;exitY=1;entryX=0.15;entryY=0;" edge="1" parent="1" source="board" target="inventory">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="assembly" target="inventory">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;exitX=0.5;exitY=1;entryX=0.85;entryY=0;" edge="1" parent="1" source="firmware" target="inventory">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="inventory" target="ir">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.15;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="ir" target="static">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.17;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="ir" target="analog">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.75;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="ir" target="cosim">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=0.5;exitY=1;entryX=0.15;entryY=0;" edge="1" parent="1" source="static" target="outputs">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="analog" target="outputs">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=0.5;exitY=1;entryX=0.85;entryY=0;" edge="1" parent="1" source="cosim" target="outputs">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

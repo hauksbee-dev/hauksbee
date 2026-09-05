@@ -71,3 +71,5 @@ mod tolerance;
 mod unpowered_rail_is_declared;
 #[path = "watchdog_coverage_hole.rs"]
 mod watchdog_coverage_hole;
+#[path = "tarski_staged_replay.rs"]
+mod tarski_staged_replay;

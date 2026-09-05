@@ -1,0 +1,58 @@
+<mxfile host="hauksbee">
+  <diagram name="gerber-reconstruction" id="gerber-reconstruction">
+    <mxGraphModel dx="1300" dy="700" grid="0" page="0" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="job" value="job dir" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="130" width="200" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="layermap" value="mapping file (opt)" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="300" y="40" width="240" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="cls" value="copper layers, drill, pick-and-place, (BOM)" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="300" y="130" width="950" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="parseeach" value="parse each" style="text;html=1;fontSize=10;fontColor=#94a3b8;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="732" y="196" width="90" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1" value="RS-274X&#10;copper &#8594; primitives" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="300" y="250" width="220" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2" value="Excellon / gerber drill&#10;&#8594; plated holes" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="545" y="250" width="220" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="p3" value="P&amp;P CSV / Allegro loc&#10;&#8594; placements" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="790" y="250" width="220" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="p4" value="BOM CSV&#10;(enrich)" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="250" width="220" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn" value="connect: R-tree union-find connectivity&#10;&#8226; copper that touches = one conductor&#10;&#8226; plated holes stitch layers (vias/PTH)&#10;&#8226; pour membership = containment&#10;&#8226; components claim nearby flashes" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="300" y="380" width="650" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="brd" value="ExtractedBoard" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="560" y="520" width="280" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="g1" value="classify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="job" target="cls">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="0" y="-14" as="offset"/></mxGeometry>
+        </mxCell>
+        <mxCell id="g2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.5;exitY=0;entryX=0;entryY=0.5;" edge="1" parent="1" source="job" target="layermap"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="g0" value="overrides" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=0.5;exitY=1;entryX=0.126;entryY=0;" edge="1" parent="1" source="layermap" target="cls">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="45" y="0" as="offset"/></mxGeometry>
+        </mxCell>
+        <mxCell id="g3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.1158;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="cls" target="p1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="g4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.3737;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="cls" target="p2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="g5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.6316;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="cls" target="p3"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="g6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.8842;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="cls" target="p4"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="g7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.5;exitY=1;entryX=0.169;entryY=0;" edge="1" parent="1" source="p1" target="conn"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="g8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.5;exitY=1;entryX=0.546;entryY=0;" edge="1" parent="1" source="p2" target="conn"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="g9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.5;exitY=1;entryX=0.923;entryY=0;" edge="1" parent="1" source="p3" target="conn"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="g10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=0.615;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="conn" target="brd"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="g11" value="enrich" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=0.5;exitY=1;entryX=1;entryY=0.5;" edge="1" parent="1" source="p4" target="brd">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="0" y="-14" as="offset"/></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

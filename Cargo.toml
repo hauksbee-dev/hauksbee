@@ -10,6 +10,7 @@ members = [
     "crates/hauksbee-server",
     "crates/hauksbee-engine",
     "crates/hauksbee-ci",
+    "crates/hauksbee-tarski",
     "crates/hauksbee-testkit",
     "crates/hauksbee-mcp",
 ]
