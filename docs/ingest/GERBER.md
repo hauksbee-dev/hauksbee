@@ -80,8 +80,11 @@ drill's declared layer count is reported as a note.
   preferred to a phantom short.
 - **Plating** comes from `TF.FileFunction`, `%TA.AperFunction` drill functions
   (`MechanicalDrill` vs `ViaDrill`/`ComponentDrill`/`CastellatedDrill`), the
-  file name, or the job's plated/non-plated split; a film with none is dropped
-  and named (`ReconStats::refused_plating_files`).
+  file name, or the job's plated/non-plated split. A silent file (a DipTrace,
+  Allegro, Eagle or Altium drill with none of those) is read as plated when
+  its hits sit under a pad flash on two or more copper layers, and that
+  inference is counted (`ReconStats::inferred_plating_holes`); a silent file
+  with no such evidence is dropped and named (`ReconStats::refused_plating_files`).
 - **Component binding**: each flash goes to the nearest placed component
   whose footprint window contains it. On X2 films `%TO.P`/`%TO.N` bind
   pad-to-refdes-to-net exactly and `ViaPad` flashes classify as vias. On
@@ -121,7 +124,8 @@ flashes matched to a placed component") on every surface.
 - A bare number pair in a drill file name (`drill-1-6.art`) is not a layer pair.
 - Edge contacts / gold fingers get no special treatment.
 - The `GND` label is a heuristic.
-- The `.zip` reader flattens by basename; extract nested archives manually.
+- The `.zip` reader keeps the archive's directory tree and skips `__MACOSX`,
+  dotfiles and `Thumbs.db`.
 - No pick-and-place: nets and DRC reconstruct, components cannot bind. No
   drill: multi-layer boards fragment per layer. No BOM: values come from the
   P&P `Val`/`Package` only.
