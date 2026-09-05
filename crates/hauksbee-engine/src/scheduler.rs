@@ -1074,11 +1074,16 @@ impl NetStat {
     }
 }
 
-fn mcu_occurrence_subjects(report: &crate::report::BindReport) -> Vec<String> {
+fn mcu_occurrence_subjects(report: &crate::reports::bind::BindReport) -> Vec<String> {
     let component_rows: Vec<_> = report
         .rows
         .iter()
-        .filter(|row| !matches!(&row.outcome, crate::report::BindOutcome::PowerRail { .. }))
+        .filter(|row| {
+            !matches!(
+                &row.outcome,
+                crate::reports::bind::BindOutcome::PowerRail { .. }
+            )
+        })
         .collect();
     let component_subjects = crate::evidence::component_occurrence_subjects_for_references(
         component_rows.iter().map(|row| row.reference.as_str()),
@@ -1087,7 +1092,7 @@ fn mcu_occurrence_subjects(report: &crate::report::BindReport) -> Vec<String> {
         .iter()
         .zip(component_subjects)
         .filter_map(|(row, subject)| {
-            matches!(&row.outcome, crate::report::BindOutcome::Mcu { .. }).then_some(subject)
+            matches!(&row.outcome, crate::reports::bind::BindOutcome::Mcu { .. }).then_some(subject)
         })
         .collect()
 }
@@ -6919,7 +6924,7 @@ missing = ["measurement_registers"]
             device_meta,
             dacs: Vec::new(),
             peripherals: Vec::new(),
-            report: crate::report::BindReport::default(),
+            report: crate::reports::bind::BindReport::default(),
         }
     }
 
@@ -7055,7 +7060,7 @@ missing = ["measurement_registers"]
         assert_eq!(bound.peripherals.len(), 1, "exact model attaches itself");
         assert!(matches!(
             bound.report.rows[0].outcome,
-            crate::report::BindOutcome::Behavioral { .. }
+            crate::reports::bind::BindOutcome::Behavioral { .. }
         ));
 
         let sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
@@ -7254,8 +7259,8 @@ missing = ["measurement_registers"]
 
     #[test]
     fn scheduler_occurrence_identity_ignores_synthetic_rail_rows() {
-        let mut report = crate::report::BindReport::default();
-        let row = |value: &str, model_id: Option<&str>, outcome| crate::report::BindRow {
+        let mut report = crate::reports::bind::BindReport::default();
+        let row = |value: &str, model_id: Option<&str>, outcome| crate::reports::bind::BindRow {
             reference: "RAIL:+5V".into(),
             value: value.into(),
             model_id: model_id.map(str::to_string),
@@ -7268,14 +7273,14 @@ missing = ["measurement_registers"]
         report.push(row(
             "STM32F411",
             Some("stm32f4"),
-            crate::report::BindOutcome::Mcu {
+            crate::reports::bind::BindOutcome::Mcu {
                 backend: "renode:stm32f4".into(),
             },
         ));
         report.push(row(
             "5 V ideal rail",
             None,
-            crate::report::BindOutcome::PowerRail { volts: 5.0 },
+            crate::reports::bind::BindOutcome::PowerRail { volts: 5.0 },
         ));
         assert_eq!(mcu_occurrence_subjects(&report), ["RAIL:+5V"]);
     }

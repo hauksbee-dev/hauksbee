@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use hauksbee_engine::binder::BoundBoard;
-use hauksbee_engine::report::BindReport;
+use hauksbee_engine::reports::bind::BindReport;
 use hauksbee_engine::scheduler::Scheduler;
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::SolverOptions;

@@ -10,7 +10,7 @@ use hauksbee_engine::binder::{
     apply_bom_identity, apply_placement_identity, bind_board, FitAdvice, IdentityFinding,
     IdentityRefusal,
 };
-use hauksbee_engine::report::BindOutcome;
+use hauksbee_engine::reports::bind::BindOutcome;
 use hauksbee_extract::bom::{Bom, ColumnOverrides};
 use hauksbee_extract::dnp::DnpPolicy;
 use hauksbee_extract::placement::PlacementFile;

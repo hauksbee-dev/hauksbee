@@ -17,7 +17,7 @@
 //! input current is real.
 
 use hauksbee_engine::binder::{bind_board_with, BoundBoard};
-use hauksbee_engine::report::BindOutcome;
+use hauksbee_engine::reports::bind::BindOutcome;
 use hauksbee_engine::scheduler::Scheduler;
 use hauksbee_engine::CustomRegistry;
 use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};

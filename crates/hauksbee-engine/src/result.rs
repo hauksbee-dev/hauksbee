@@ -69,7 +69,7 @@ use std::collections::BTreeMap;
 use hauksbee_extract::{DrcReport, ViolationKind};
 use hauksbee_ir::evidence::Assumption;
 
-use crate::report::{BindOutcome, BindReport};
+use crate::reports::bind::{BindOutcome, BindReport};
 
 /// Distinct process exit code for "the board is invalid for the analysis you
 /// asked for", a meaningless result, not a clean one. Kept here so the CLI and
@@ -461,7 +461,7 @@ impl BindSummary {
 /// consequence once instead of a sentence per part.
 fn grouped_refs(parts: &[UnresolvedActive]) -> String {
     let mut sorted: Vec<&UnresolvedActive> = parts.iter().collect();
-    sorted.sort_by_key(|u| crate::report::natural_ref_key(&u.reference));
+    sorted.sort_by_key(|u| crate::reports::bind::natural_ref_key(&u.reference));
     sorted
         .iter()
         .map(|u| {
@@ -785,7 +785,7 @@ pub fn unmodelled_critical_refs(summary: &BindSummary) -> Vec<String> {
         )
         .map(|u| u.reference.clone())
         .collect();
-    refs.sort_by_key(|r| crate::report::natural_ref_key(r));
+    refs.sort_by_key(|r| crate::reports::bind::natural_ref_key(r));
     refs.dedup();
     refs
 }
@@ -2920,7 +2920,7 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::report::{BindOutcome, BindRow};
+    use crate::reports::bind::{BindOutcome, BindRow};
     use hauksbee_extract::{DrcFinding, Item, ItemKind};
     use hauksbee_models::Confidence;
 

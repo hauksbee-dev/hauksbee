@@ -33,7 +33,7 @@ use hauksbee_models::{
 use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
 use crate::power_supply::{PowerSupply, SupplyLeg};
-use crate::report::{BindOutcome, BindReport, BindRow};
+use crate::reports::bind::{BindOutcome, BindReport, BindRow};
 use crate::stress::DeviceMeta;
 use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 

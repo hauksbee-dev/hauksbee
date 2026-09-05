@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use hauksbee_engine::behavioral::BehavioralDevice;
 use hauksbee_engine::binder::BoundBoard;
-use hauksbee_engine::report::BindReport;
+use hauksbee_engine::reports::bind::BindReport;
 use hauksbee_engine::scheduler::{Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_models::behavioral::Behavioral;

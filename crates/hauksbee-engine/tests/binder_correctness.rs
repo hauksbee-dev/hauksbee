@@ -7,7 +7,7 @@
 //! footprints are exact, independent of any netlist parser).
 
 use hauksbee_engine::binder::bind_board;
-use hauksbee_engine::report::BindOutcome;
+use hauksbee_engine::reports::bind::BindOutcome;
 use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;

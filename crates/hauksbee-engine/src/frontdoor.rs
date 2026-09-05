@@ -197,7 +197,7 @@ impl BindSummaryWeb {
         // web banner, the bind-role note) must agree on one order, and "U3, U6,
         // U2, U5, U1" reads as noise next to "U1, U2, U3, U5, U6". The shared
         // reference-natural key, so U10 does not sort before U2.
-        open_parts.sort_by_key(|p| crate::report::natural_ref_key(&p.reference));
+        open_parts.sort_by_key(|p| crate::reports::bind::natural_ref_key(&p.reference));
         open_parts.dedup_by(|a, b| a.reference == b.reference);
 
         BindSummaryWeb {
