@@ -51,6 +51,8 @@ mod gerber_x2_roles;
 mod ingest_robustness;
 #[path = "kicad_dru.rs"]
 mod kicad_dru;
+#[path = "known_faults.rs"]
+mod known_faults;
 #[path = "netlint.rs"]
 mod netlint;
 #[path = "netlist_code_missing.rs"]

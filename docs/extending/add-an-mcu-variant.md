@@ -132,7 +132,7 @@ known family falls back to a built-in router (any `STM32F1xx` value binds
 ## Step 5: prove it
 
 ```
-cargo test -p hauksbee-mcu --test soc_descriptors        # resolver + validation, no emulator
+cargo test -p hauksbee-mcu --test it soc_descriptors        # resolver + validation, no emulator
 mkdir mcu && cp crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml mcu/
 HAUKSBEE_MCU_DIR=./mcu hauksbee run testdata/boards/stm32_bluepill_demo.kicad_pcb \
     --firmware testdata/firmware/stm32_blinky/blinky.elf --headless --seconds 1

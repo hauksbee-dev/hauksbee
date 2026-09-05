@@ -1,6 +1,7 @@
 //! Compact circuit builders, stamp scaffolding and waveform comparisons
-//! shared by the crate's unit tests. Test-only: `lib.rs` declares this module
-//! under `#[cfg(test)]`.
+//! shared by the crate's unit tests, so each test states only the circuit
+//! and the number it expects. Test-only: `lib.rs` declares this module under
+//! `#[cfg(test)]`, and nothing in the shipped library depends on it.
 #![allow(dead_code)]
 
 use std::collections::HashMap;

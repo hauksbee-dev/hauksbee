@@ -126,18 +126,12 @@ tempfile = "3"
 # ratatui + crossterm are the battle-tested standard; we adapt them rather than
 # hand-rolling a terminal renderer.
 
-# Tuned for a small shipped binary (the release tarball is what users download).
-# Fat LTO + a single codegen unit + strip takes the two GPL-free binaries from
-# ~19 MB combined down to ~14.8 MB (measured ~-23%), with no runtime cost; we
-# keep opt-level 3 because the hot numeric solve path is the product's speed
-# story. `strip` keeps the tarball small even if a build bypasses bundle.sh;
-# panic location info survives (we do not strip panic messages). `opt-level="s"`
-# shrinks a further ~17% but can slow the solver a few percent, so adopt it only
-# after a release-build timing check on a real spec confirms the hot path holds.
+# Thin LTO with parallel codegen: a release build finishes in a fraction of the
+# time fat LTO + one codegen unit took, for a few percent of binary size.
 [profile.release]
 opt-level = 3
-lto = "fat"
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 strip = true
 debug = false
 
