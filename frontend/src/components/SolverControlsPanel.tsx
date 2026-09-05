@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { SolverControls, ClientMessage } from '../types/protocol'
+import { Switch } from './ui'
 
 // Solver controls for the sim rail's "Solver" card: ambient temperature,
 // model fidelity toggles, integration method, timestep and granularity.
@@ -31,29 +32,7 @@ function Toggle({ label, value, onChange, description }: {
         <div className="text-[11px]" style={{ color: 'var(--silk)' }}>{label}</div>
         {description && <div className="text-[9px]" style={{ color: 'var(--silk-faint)' }}>{description}</div>}
       </div>
-      <button
-        onClick={() => onChange(!value)}
-        role="switch"
-        aria-checked={value}
-        aria-label={label}
-        className="hb-press relative rounded-full cursor-pointer"
-        style={{
-          width: 36, height: 20,
-          background: value ? 'var(--copper-tint-strong)' : 'var(--surface-3)',
-          border: value ? '1px solid var(--copper-deep)' : '1px solid var(--hairline)',
-          transition: 'background-color 0.15s, border-color 0.15s',
-        }}
-      >
-        <div
-          className="absolute rounded-full"
-          style={{
-            top: 2, width: 14, height: 14,
-            background: value ? 'var(--copper)' : 'var(--silk-faint)',
-            left: value ? 'calc(100% - 17px)' : 2,
-            transition: 'left 0.15s cubic-bezier(0.2,0,0,1), background-color 0.15s',
-          }}
-        />
-      </button>
+      <Switch on={value} onToggle={() => onChange(!value)} label={label} />
     </div>
   )
 }

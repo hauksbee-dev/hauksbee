@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebOpenPart } from '../types/report'
+import { errorText, postJson } from '../lib/api'
 
 // Write a part by hand, in hauksbee's native TOML, with the real validator
 // answering as you type.
@@ -9,10 +10,9 @@ import type { WebOpenPart } from '../types/report'
 // a file on disk and restarting the server.
 //
 // The validation comes from POST /api/models/check, which runs the SAME checks
-// the save path runs. Writing a friendlier client-side validator was the
-// tempting shortcut and would have been the wrong one: an editor that accepts
-// what the save refuses teaches an author their model is fine and then loses
-// their work at the last step.
+// the save path runs, never a friendlier client-side copy: an editor that
+// accepts what the save refuses teaches an author their model is fine and then
+// loses their work at the last step.
 
 /** A starting point that validates, so the first thing someone sees is a
  *  working model rather than an empty box and a schema to guess at. */
@@ -41,7 +41,7 @@ description = "what this part is, in a few words"
 value_re = "^10k$"
 `
 
-export interface ModelAuthoringSuggestion {
+interface ModelAuthoringSuggestion {
   reference: string
   value: string
   lib_id?: string
@@ -130,22 +130,17 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
       : 'Preparing the conservative evidence-first scaffold …')
     void (async () => {
       try {
-        const response = await fetch('/api/models/draft', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            board_label: boardLabel ?? 'uploaded board',
-            reference: suggested.reference,
-            value: suggested.value,
-            lib_id: 'lib_id' in suggested ? suggested.lib_id ?? '' : '',
-            footprint: 'footprint' in suggested ? suggested.footprint ?? '' : '',
-            properties: 'properties' in suggested
-              ? (suggested.properties ?? []).map(property => [property.name, property.value])
-              : [],
-            model_id: 'model_id' in suggested ? suggested.model_id ?? '' : '',
-          }),
+        const result = await postJson<{ ok?: boolean; toml?: string; error?: string }>('/api/models/draft', {
+          board_label: boardLabel ?? 'uploaded board',
+          reference: suggested.reference,
+          value: suggested.value,
+          lib_id: 'lib_id' in suggested ? suggested.lib_id ?? '' : '',
+          footprint: 'footprint' in suggested ? suggested.footprint ?? '' : '',
+          properties: 'properties' in suggested
+            ? (suggested.properties ?? []).map(property => [property.name, property.value])
+            : [],
+          model_id: 'model_id' in suggested ? suggested.model_id ?? '' : '',
         })
-        const result = await response.json() as { ok?: boolean; toml?: string; error?: string }
         if (cancelled) return
         if (!result.ok || !result.toml) {
           setSaveMsg(result.error ?? 'the server could not prepare the resolved model')
@@ -160,7 +155,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
           : 'Prepared the same unresolved scaffold as models prepare. Choose a source-backed kind and behavior, validate, then choose Save.')
       } catch (error) {
         if (!cancelled) {
-          setSaveMsg(error instanceof Error ? error.message : String(error))
+          setSaveMsg(errorText(error))
           setDrafting(false)
         }
       }
@@ -179,27 +174,21 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
     setCheck({ phase: 'checking', body: checkedBody, format: checkedFormat })
     timer.current = window.setTimeout(() => {
       void (async () => {
+        type Verdict = { phase: 'ok'; summary: string } | { phase: 'bad'; error: string }
+        const settle = (next: Verdict) => {
+          // A result for text the author has already moved past is dropped:
+          // Save must never be enabled for bytes the server has not seen.
+          if (epoch === checkEpoch.current) setCheck({ ...next, body: checkedBody, format: checkedFormat })
+        }
         try {
-          const res = await fetch('/api/models/check', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ toml: checkedBody, format: checkedFormat }),
-          })
-          const j = (await res.json()) as { ok?: boolean; summary?: string; error?: string }
-          if (epoch !== checkEpoch.current) return
-          if (j.ok) {
-            setCheck({ phase: 'ok', summary: j.summary ?? 'valid', body: checkedBody, format: checkedFormat })
-          } else {
-            setCheck({ phase: 'bad', error: j.error ?? 'the check did not say why', body: checkedBody, format: checkedFormat })
-          }
+          const j = await postJson<{ ok?: boolean; summary?: string; error?: string }>(
+            '/api/models/check', { toml: checkedBody, format: checkedFormat },
+          )
+          settle(j.ok
+            ? { phase: 'ok', summary: j.summary ?? 'valid' }
+            : { phase: 'bad', error: j.error ?? 'the check did not say why' })
         } catch (e) {
-          if (epoch !== checkEpoch.current) return
-          setCheck({
-            phase: 'bad',
-            error: e instanceof Error ? e.message : String(e),
-            body: checkedBody,
-            format: checkedFormat,
-          })
+          settle({ phase: 'bad', error: errorText(e) })
         }
       })()
     }, 400)
@@ -213,10 +202,8 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
     ? check
     : { phase: 'checking', body, format }
 
-  // Escape closes the editor, the same key that dismisses every other
-  // in-page surface in this app (the layers panel, the fullscreen map, the add
-  // menu). It was the one panel that trapped you into finding the Close button
-  // with the mouse.
+  // Escape closes the editor, the same key that dismisses every other in-page
+  // surface in this app (the layers panel, the fullscreen map, the add menu).
   //
   // Bound on the document rather than the panel, because the panel is not a
   // focus trap: the file input, the format buttons and the textarea can all
@@ -237,19 +224,16 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
   const save = useCallback(async () => {
     setSaveMsg(null)
     try {
-      const res = await fetch('/api/models/save', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ part: part.trim() || 'model', kind: '', toml: body }),
+      const j = await postJson<{ ok?: boolean; path?: string; error?: string }>('/api/models/save', {
+        part: part.trim() || 'model', kind: '', toml: body,
       })
-      const j = (await res.json()) as { ok?: boolean; path?: string; error?: string }
       if (j.ok === false) setSaveMsg(j.error ?? 'the save failed and did not say why')
       else {
         setSaveMsg(`Saved to ${j.path ?? 'your model directory'}. Re-analyzing this board now.`)
         onSaved?.()
       }
     } catch (e) {
-      setSaveMsg(e instanceof Error ? e.message : String(e))
+      setSaveMsg(errorText(e))
     }
   }, [part, body, onSaved])
 

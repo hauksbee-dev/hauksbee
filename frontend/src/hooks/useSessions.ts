@@ -38,7 +38,7 @@ export interface SessionsState {
   dismissResume: () => void
 }
 
-export type ResumeResult =
+type ResumeResult =
   /** The server still had the board file, so this is a fresh, real run: every
    *  action (re-run checks, drive it live) works. */
   | { kind: 'reanalyzed'; boardName: string }

@@ -1,7 +1,7 @@
 import type { WebReport } from '../types/report'
 import { summarizeEvidence } from './evidence'
 
-export type ReportVerdictTone = 'ok' | 'warning' | 'error'
+type ReportVerdictTone = 'ok' | 'warning' | 'error'
 
 /** One verdict contract for the browser card and the standalone export. */
 export function reportVerdictTone(report: WebReport): ReportVerdictTone {

@@ -1,24 +1,20 @@
 // Named sessions in localStorage: what the app remembers between visits.
 //
-// A session is everything about one board that the browser CAN keep: the
-// report the engine returned, which firmware/schematic was staged beside it, the spec the
-// Checks builder composed, and the last run's counts. What it cannot keep is
-// the uploaded FILE. A `File` is a handle to bytes the page was granted for one
-// visit; nothing in web storage holds it, and re-obtaining it needs the user to
-// point at it again. Every affordance built on this store says that out loud
-// rather than restoring a report that looks live and then failing on the first
-// action that needs the bytes.
+// A session holds everything about one board that the browser CAN keep: the
+// report, which firmware/schematic was staged beside it, the composed spec and
+// the last run's counts. What it cannot keep is the uploaded FILE — a `File` is
+// a handle to bytes granted for one visit — so every affordance built on this
+// store says so rather than restoring a report that looks live and then fails
+// on the first action needing the bytes.
 //
-// Layout: a light index (one row per session, enough to draw the switcher) and
-// one record per session holding the heavy part. The switcher opens without
-// parsing a 50-finding report per row, and one oversized report cannot make the
-// whole list unreadable.
+// Layout: a light index (one row per session, enough to draw the switcher) plus
+// one record per session holding the heavy part, so the switcher opens without
+// parsing a 50-finding report per row.
 //
-// The composed spec is NOT duplicated here: ChecksView already autosaves it
-// under its own per-board key (`checksStorageKey`), and a session record carries
-// that key. Two copies of the builder state would drift the moment one was
-// written and the other was not; the session keeps a snapshot of the spec TEXT
-// only, which is what the export needs and is never read back into the builder.
+// The composed spec is NOT duplicated here: ChecksView autosaves it under its
+// own per-board key (`checksStorageKey`) and a record carries that key. The
+// session keeps a snapshot of the spec TEXT only, for the export; it is never
+// read back into the builder.
 
 import type { WebReport } from '../types/report'
 
@@ -29,10 +25,10 @@ const RECORD_PREFIX = 'hauksbee.session.v1.'
 /** How many sessions are kept. Past this the least recently updated is
  *  dropped: an unbounded list is a quota failure waiting for a big board, and
  *  a switcher nobody can read. */
-export const MAX_SESSIONS = 12
+const MAX_SESSIONS = 12
 
 /** The board a session is about, as the report described it. */
-export interface SessionBoard {
+interface SessionBoard {
   /** `report.file_name`: what was dropped. */
   fileName: string
   /** `report.board_name`: what the engine called it. */

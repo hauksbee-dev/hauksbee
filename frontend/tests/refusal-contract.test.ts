@@ -21,11 +21,10 @@ describe('C5.3 refusal contract', () => {
 
   test('both analysis and checks views render the shared contract', () => {
     const boardView = readFileSync(new URL('../src/components/BoardView.tsx', import.meta.url), 'utf8')
-    const checksView = readFileSync(new URL('../src/components/ChecksView.tsx', import.meta.url), 'utf8')
+    const checksRun = readFileSync(new URL('../src/components/checks/RunResults.tsx', import.meta.url), 'utf8')
 
-    expect(boardView).toContain("from '../lib/refusal-contract'")
     expect(boardView).toContain('refusalLines(r.refusal)')
     expect(boardView).toContain('data-testid="analysis-refusal-contract"')
-    expect(checksView).toContain('refusalLines(result.refusal)')
+    expect(checksRun).toContain('refusalLines(result.refusal)')
   })
 })

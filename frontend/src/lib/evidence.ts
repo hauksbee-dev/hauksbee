@@ -1,6 +1,6 @@
 import type { EvidenceAssumption, EvidenceMap, ModelOnPath } from '../types/report'
 
-export interface EvidenceSummary {
+interface EvidenceSummary {
   clean: number
   qualified: number
   undermined: number

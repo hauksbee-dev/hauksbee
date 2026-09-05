@@ -1,11 +1,11 @@
 // Bridge between the CSS theme tokens (index.css :root / [data-theme='light'])
-// and canvas/WebGL code, which cannot use var() in fillStyle or material
-// colors. Reads are cached per theme so per-frame draw loops pay a Map lookup,
-// not a getComputedStyle round-trip.
+// and canvas code, which cannot use var() in fillStyle. Reads are cached per
+// theme so per-frame draw loops pay a Map lookup, not a getComputedStyle
+// round-trip.
 
-export type ThemeName = 'dark' | 'light'
+type ThemeName = 'dark' | 'light'
 
-export function currentTheme(): ThemeName {
+function currentTheme(): ThemeName {
   return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'
 }
 

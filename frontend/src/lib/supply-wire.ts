@@ -59,10 +59,10 @@ export function toWireSupply(cfg: SupplyConfig): PowerSupplyWire {
  *  engine's chemistry curve (power_supply.rs, Chemistry::LiIon at SoC 1.0).
  *  Kept beside `toWireSupply`, which is what pins the battery to one li-ion
  *  cell in the first place. */
-export const LI_ION_FULL_V = 4.2
+const LI_ION_FULL_V = 4.2
 
 /** USB VBUS, whichever current spec `usbSpecFor` picks. */
-export const USB_VBUS_V = 5
+const USB_VBUS_V = 5
 
 /** The voltage this supply type will ACTUALLY apply, and, when the type sets
  *  its own voltage, the reason it ignores the box.

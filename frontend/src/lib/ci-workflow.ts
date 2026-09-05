@@ -1,9 +1,6 @@
-// The generated GitHub Actions workflow, in one place.
-//
-// It was composed inside ChecksView, which was fine while the Checks pane was
-// the only thing that could hand it to you. The Export menu offers it too, and
-// a second copy of the YAML file is exactly where an immutable Action commit
-// can drift back into a mutable tag.
+// The generated GitHub Actions workflow, in one place. Both the Checks pane
+// and the Export menu hand it out, and a second copy of the YAML is exactly
+// where an immutable Action commit drifts back into a mutable tag.
 
 import { ACTION_REPOSITORY, RELEASE_COMMIT, RELEASE_TAG } from './version'
 

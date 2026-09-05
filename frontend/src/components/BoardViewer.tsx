@@ -1,29 +1,19 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { parseKicadPcb, buildNetIndex, footprintHitBoxes, pickFootprintBox } from '../lib/kicad-parser'
+import { parseKicadPcb, buildNetIndex } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
-import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, panCamera, screenToWorld, maxScaleFor, MIN_SCALE } from '../lib/camera'
+import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, maxScaleFor, MIN_SCALE } from '../lib/camera'
 import type { Camera } from '../lib/camera'
-import { renderStaticBoard, renderDynamicOverlay, LABEL_MIN_PX } from '../lib/board-renderer'
+import { renderStaticBoard, renderDynamicOverlay } from '../lib/board-renderer'
 import type { OverlayData, RenderOptions } from '../lib/board-renderer'
 import { getLayerStyle, boardTheme } from '../lib/layer-colors'
 import { onThemeChange } from '../lib/theme-tokens'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
-import { FitIcon, LayersIcon, ExpandIcon, CollapseIcon } from './Icons'
+import { FitIcon, ExpandIcon, CollapseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
-
-interface FootprintInfo {
-  ref: string
-  value: string
-  lib_id: string
-  x: number
-  y: number
-  /** Net of the pad nearest the click, when one was in reach. On an unrouted
-   *  board pads are the ONLY copper, so a part click must still surface its
-   *  net or net checks become unreachable from the map. */
-  padNet?: string | null
-  /** All distinct nets on the part's pads, for the selection card. */
-  padNets?: string[]
-}
+import { LayersControl, useLayerControls } from './board/LayersPanel'
+import { useBoardHitTest } from '../hooks/useBoardHitTest'
+import type { FootprintInfo } from '../hooks/useBoardHitTest'
+import { useBoardPointer } from '../hooks/useBoardPointer'
 
 /** Pixels from the top of the viewer to clear the floating toolbar. The toolbar
  *  sits at top-3 (12px) and its controls are 28px tall inside a 1px border;
@@ -91,105 +81,6 @@ const PARTICLE_SPEED = 0.3 // t units per second
  *  about a net whose current the frame actually MEASURED above this floor. */
 const FLOW_CURRENT_FLOOR_A = 1e-6
 
-/** The Layers panel's rows, derived from what the parsed board actually
- *  contains: real copper/silk/fab layers only, never a fixed template. */
-function layersPresent(board: ParsedBoard): string[] {
-  const found = new Set<string>()
-  for (const s of board.segments) found.add(s.layer)
-  for (const a of board.arcs) found.add(a.layer)
-  const grLayers = [
-    ...board.gr_lines, ...board.gr_arcs, ...board.gr_circles,
-    ...board.gr_rects, ...board.gr_polys,
-  ]
-  for (const g of grLayers) found.add(g.layer)
-  for (const fp of board.footprints) {
-    for (const l of fp.fp_lines) found.add(l.layer)
-    for (const a of fp.fp_arcs) found.add(a.layer)
-    for (const c of fp.fp_circles) found.add(c.layer)
-    for (const r of fp.fp_rects) found.add(r.layer)
-  }
-  // Only layers the renderer would draw by default (palette-visible), in a
-  // stable copper-first order.
-  const order = [
-    'F.Cu', 'In1.Cu', 'In2.Cu', 'In3.Cu', 'In4.Cu', 'B.Cu',
-    'F.SilkS', 'F.Silkscreen', 'B.SilkS', 'B.Silkscreen',
-    'F.Fab', 'B.Fab', 'Edge.Cuts', 'Dwgs.User', 'User.Drawings',
-  ]
-  return order.filter(l => found.has(l) && getLayerStyle(l).visible)
-}
-
-/** Friendly display names for KiCad layer ids. */
-const LAYER_LABELS: Record<string, string> = {
-  'F.Cu': 'Copper · front',
-  'B.Cu': 'Copper · back',
-  'In1.Cu': 'Copper · inner 1',
-  'In2.Cu': 'Copper · inner 2',
-  'In3.Cu': 'Copper · inner 3',
-  'In4.Cu': 'Copper · inner 4',
-  'F.SilkS': 'Silkscreen · front',
-  'F.Silkscreen': 'Silkscreen · front',
-  'B.SilkS': 'Silkscreen · back',
-  'B.Silkscreen': 'Silkscreen · back',
-  'F.Fab': 'Fab outline · front',
-  'B.Fab': 'Fab outline · back',
-  'Edge.Cuts': 'Board edge',
-  'Dwgs.User': 'Drawings',
-  'User.Drawings': 'Drawings',
-}
-
-/** One row in the layers panel: swatch, name, and a real switch. */
-function LayerRow({ label, swatch, on, onToggle }: {
-  label: string
-  swatch?: string
-  on: boolean
-  onToggle: () => void
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      onClick={onToggle}
-      className="hb-press flex items-center gap-2 w-full text-left cursor-pointer"
-      style={{
-        background: 'none', border: 'none', padding: '7px 10px',
-        color: on ? 'var(--silk)' : 'var(--silk-faint)', fontSize: 12,
-        borderRadius: 7,
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 10, height: 10, borderRadius: 3, flexShrink: 0,
-          background: swatch ?? 'var(--silk-faint)',
-          opacity: on ? 1 : 0.25,
-          outline: '1px solid var(--image-outline)',
-          transition: 'opacity 0.15s',
-        }}
-      />
-      <span className="flex-1 truncate">{label}</span>
-      <span
-        aria-hidden
-        style={{
-          width: 26, height: 15, borderRadius: 8, position: 'relative', flexShrink: 0,
-          background: on ? 'var(--copper-tint-strong)' : 'var(--surface-3)',
-          border: `1px solid ${on ? 'var(--copper-deep)' : 'var(--hairline)'}`,
-          transition: 'background-color 0.15s, border-color 0.15s',
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute', top: 1.5, width: 10, height: 10, borderRadius: 5,
-            left: on ? 13 : 2,
-            background: on ? 'var(--copper)' : 'var(--silk-faint)',
-            transition: 'left 0.15s cubic-bezier(0.2,0,0,1), background-color 0.15s',
-          }}
-        />
-      </span>
-    </button>
-  )
-}
-
 export function BoardViewer({
   boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick,
   onEmptyBoard, faultedRefs, netOptions, focusPoint,
@@ -206,21 +97,16 @@ export function BoardViewer({
   const [board, setBoard] = useState<ParsedBoard | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [layersOpen, setLayersOpen] = useState(false)
-  const layersWrap = useRef<HTMLDivElement>(null)
-  const layersTrigger = useRef<HTMLButtonElement>(null)
   // `capture-on-focus` only: has the reader claimed the map by clicking it?
   // Until then the wheel belongs to the page. Cleared by a click anywhere else,
   // so the map gives the page back the moment attention moves on.
   const [zoomFocused, setZoomFocused] = useState(false)
   const [hovering, setHovering] = useState(false)
 
-  // Layers panel state: per-layer overrides plus the pads/labels/activity
-  // switches. Hidden layers also stop rendering activity on their copper.
-  const [hiddenLayers, setHiddenLayers] = useState<Set<string>>(new Set())
-  const [showPads, setShowPads] = useState(true)
-  const [showLabels, setShowLabels] = useState(true)
-  const [showActivity, setShowActivity] = useState(true)
+  // Per-layer overrides plus the pads/labels/activity switches. Hidden layers
+  // also stop rendering activity on their copper.
+  const layers = useLayerControls()
+  const { hiddenLayers, showPads, showLabels, showActivity } = layers
 
   const renderOpts = useMemo<RenderOptions>(() => ({
     layerVisible: (layer: string) => !hiddenLayers.has(layer) && getLayerStyle(layer).visible,
@@ -272,9 +158,6 @@ export function BoardViewer({
   // do not step visibly.
   const zoomTarget = useRef<{ scale: number; sx: number; sy: number } | null>(null)
 
-  // Interaction state
-  const dragging = useRef(false)
-  const lastMouse = useRef({ x: 0, y: 0 })
   const animFrame = useRef<number>(0)
   const particlePhases = useRef<Map<string, number>>(new Map())
   const hoveredNet = useRef<string | null>(null)
@@ -284,7 +167,6 @@ export function BoardViewer({
   const animTimeRef = useRef(0)
 
   const netIndex = useMemo(() => board ? buildNetIndex(board) : null, [board])
-  const boardLayers = useMemo(() => board ? layersPresent(board) : [], [board])
   // Real (named) nets only: the KiCad net table's synthetic id-0 "" bucket is
   // not a net, and counting it disagreed with the report's own net count.
   const namedNetCount = useMemo(
@@ -409,133 +291,7 @@ export function BoardViewer({
     return () => ro.disconnect()
   }, [board, setCamera])
 
-  // ── Find nearest net to a board coordinate ──
-  // `reachPx` is the screen-pixel pick radius: hover keeps the tight default
-  // so the readout tracks exactly what is under the cursor; a CLICK passes a
-  // coarser radius (clicking is a blunter gesture, and on an unrouted board
-  // the only copper is pads).
-  const findNearestNet = useCallback((bx: number, by: number, reachPx = 3, includePads = true): string | null => {
-    if (!board) return null
-    let best: string | null = null
-    let bestDist = Infinity
-    const threshold = reachPx / camRef.current.scale
-
-    for (const s of board.segments) {
-      if (!s.netName) continue
-      const dx = s.end.x - s.start.x
-      const dy = s.end.y - s.start.y
-      const len2 = dx * dx + dy * dy
-      if (len2 === 0) continue
-      const t = Math.max(0, Math.min(1, ((bx - s.start.x) * dx + (by - s.start.y) * dy) / len2))
-      const projX = s.start.x + t * dx
-      const projY = s.start.y + t * dy
-      const dist = Math.sqrt((bx - projX) ** 2 + (by - projY) ** 2)
-      if (dist < threshold && dist < bestDist) {
-        bestDist = dist
-        best = s.netName
-      }
-    }
-
-    if (includePads) {
-      for (const fp of board.footprints) {
-        for (const pad of fp.pads) {
-          if (!pad.netName) continue
-          const d = Math.sqrt((bx - pad.at.x) ** 2 + (by - pad.at.y) ** 2)
-          const padR = Math.max(pad.size.w, pad.size.h) / 2
-          if (d < padR + threshold && d < bestDist) {
-            bestDist = d
-            best = pad.netName
-          }
-        }
-      }
-    }
-
-    return best
-  }, [board])
-
-  // One FootprintInfo shape for every selection path (body/pad hit, label
-  // hit), so they cannot drift apart.
-  const describeFootprint = useCallback((fp: ParsedBoard['footprints'][number]): FootprintInfo => {
-    // Distinct pad nets in pad order, for the selection card's net list.
-    const nets: string[] = []
-    for (const pad of fp.pads) {
-      if (pad.netName && !nets.includes(pad.netName)) nets.push(pad.netName)
-    }
-    return { ref: fp.ref, value: fp.value, lib_id: fp.lib_id, x: fp.at.x, y: fp.at.y, padNets: nets }
-  }, [])
-
-  // Computed once per board: a 3,000-part flagship must not rebuild the part
-  // extents on every click.
-  const footprintBoxes = useMemo(() => (board ? footprintHitBoxes(board) : []), [board])
-
-  // ── Find footprint at board coordinate ──
-  // Pads and the part origin first (the precise targets), then the part BODY:
-  // clicking the plastic between an IC's pads, or the silkscreen box around a
-  // two-pad passive, is a click on that part and must select it.
-  const findFootprintAt = useCallback((bx: number, by: number): FootprintInfo | null => {
-    if (!board) return null
-    let best: FootprintInfo | null = null
-    let bestDist = Infinity
-    const threshold = 5 / camRef.current.scale
-
-    for (const fp of board.footprints) {
-      const d = Math.sqrt((bx - fp.at.x) ** 2 + (by - fp.at.y) ** 2)
-      if (d < threshold && d < bestDist) {
-        bestDist = d
-        best = describeFootprint(fp)
-      }
-      for (const pad of fp.pads) {
-        const pd = Math.sqrt((bx - pad.at.x) ** 2 + (by - pad.at.y) ** 2)
-        const padR = Math.max(pad.size.w, pad.size.h) / 2 + 0.5
-        if (pd < padR && pd < bestDist) {
-          bestDist = pd
-          best = describeFootprint(fp)
-        }
-      }
-    }
-    if (best) return best
-
-    const body = pickFootprintBox(footprintBoxes, bx, by)
-    return body ? describeFootprint(body) : null
-  }, [board, footprintBoxes, describeFootprint])
-
-  // ── Find the footprint whose reference LABEL is under screen coords ──
-  // The label is part of the part's visual identity, so clicking it selects
-  // the part exactly like clicking its body/pads. Mirrors the renderer's
-  // label placement rule (pad-bbox top center, size-gated) so the hit area is
-  // where the text actually is.
-  const findLabelAt = useCallback((sx: number, sy: number): FootprintInfo | null => {
-    if (!board || !showLabels) return null
-    const cam = camRef.current
-    for (const fp of board.footprints) {
-      if (fp.pads.length === 0) continue
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-      for (const pad of fp.pads) {
-        minX = Math.min(minX, pad.at.x - pad.size.w / 2)
-        maxX = Math.max(maxX, pad.at.x + pad.size.w / 2)
-        minY = Math.min(minY, pad.at.y - pad.size.h / 2)
-        maxY = Math.max(maxY, pad.at.y + pad.size.h / 2)
-      }
-      const extentPx = Math.max(maxX - minX, maxY - minY) * cam.scale
-      if (extentPx < LABEL_MIN_PX) continue
-      const sx1 = minX * cam.scale + cam.panX
-      const sx2 = maxX * cam.scale + cam.panX
-      const sy1 = minY * cam.scale + cam.panY
-      const sy2 = maxY * cam.scale + cam.panY
-      const cx = (sx1 + sx2) / 2
-      const topY = Math.min(sy1, sy2)
-      const fontPx = Math.min(13, Math.max(9, extentPx * 0.18))
-      // Monospace glyphs are ~0.6em wide; a small floor keeps 1-char refs
-      // clickable.
-      const w = Math.max(18, fp.ref.length * fontPx * 0.62)
-      const yBottom = topY - 3
-      const yTop = yBottom - fontPx - 2
-      if (sx >= cx - w / 2 && sx <= cx + w / 2 && sy >= yTop && sy <= yBottom) {
-        return describeFootprint(fp)
-      }
-    }
-    return null
-  }, [board, describeFootprint, showLabels])
+  const hit = useBoardHitTest(board, camRef, showLabels)
 
   // ── Animation loop ──
   // Per-frame data reaches the loop through refs, NOT effect deps: putting
@@ -689,22 +445,13 @@ export function BoardViewer({
       if (selectedNet) hlNets.add(selectedNet)
       if (hoveredNet.current) hlNets.add(hoveredNet.current)
 
-      // Which net, if any, has earned the flow animation.
-      //
-      // Deliberately not `selectedNet ?? Object.keys(frame.net_voltages)[0]`:
-      // whatever net comes first in the frame's map would get animated
-      // charge flowing down it, forever, on any board that reported voltages at
-      // all. A watchy with no firmware and every net sitting at 0.000 V still
-      // showed a net visibly running. That is the viewer inventing a
-      // measurement.
-      //
-      // The animation is now a statement about `net_currents`, and only about
-      // `net_currents`: a net flows when the frame MEASURED current through it
-      // above the noise floor. No current map (no co-sim, a backend that does
-      // not report currents) means no flow, rather than a guess. A net the
-      // backend cannot observe never qualifies, however its passive level
-      // reads. A selected net does not get flow for being selected; it gets the
-      // highlight, which is a statement about the cursor, not about physics.
+      // Which net, if any, has earned the flow animation. It is a statement
+      // about `net_currents` and nothing else: a net flows when the frame
+      // MEASURED current through it above the noise floor. No current map (no
+      // co-sim, a backend that does not report currents) means no flow rather
+      // than a guess, and a net the backend cannot observe never qualifies
+      // however its passive level reads. Selection does not earn flow; it earns
+      // the highlight, which is a claim about the cursor, not about physics.
       const currents = frame?.net_currents
       const flowNet = (() => {
         if (!currents) return null
@@ -836,172 +583,20 @@ export function BoardViewer({
     return () => document.removeEventListener('pointerdown', onDocDown, true)
   }, [wheelMode, zoomFocused])
 
-  // A "click" is a press that never travelled: dragging.current is armed on
-  // EVERY mousedown (it also drives pan), so it cannot distinguish click from
-  // drag; track actual movement instead.
-  const movedSinceDown = useRef(false)
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button === 0) {
-      // Touching the map is what claims the wheel from the page.
-      setZoomFocused(true)
-      dragging.current = true
-      movedSinceDown.current = false
-      lastMouse.current = { x: e.clientX, y: e.clientY }
-    }
-  }, [])
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    const rect = canvasRef.current!.getBoundingClientRect()
-    const sx = e.clientX - rect.left
-    const sy = e.clientY - rect.top
-
-    if (dragging.current) {
-      const dx = e.clientX - lastMouse.current.x
-      const dy = e.clientY - lastMouse.current.y
-      if (Math.abs(dx) + Math.abs(dy) > 2) {
-        movedSinceDown.current = true
-        userMovedCamera.current = true
-      }
-      lastMouse.current = { x: e.clientX, y: e.clientY }
-      setCamera(panCamera(camRef.current, dx, dy))
-    } else {
-      const { x, y } = screenToWorld(camRef.current, sx, sy)
-      probePos.current = { boardX: x, boardY: y }
-      // Hover resolves the cursor the SAME way the click does (see `selectAt`
-      // below): a bare trace first, then the footprint, then its label, then
-      // the nearest pad net. Testing only traces and pads leaves parts unlit,
-      // so the board reads as though only copper were live, and worse,
-      // hovering a part's body highlights nothing while clicking it
-      // selected the part. Both questions now get the same answer.
-      const traceNet = findNearestNet(x, y, 5, false)
-      if (traceNet) {
-        hoveredNet.current = traceNet
-        hoveredRef.current = null
-      } else {
-        const fp = findFootprintAt(x, y) ?? findLabelAt(sx, sy)
-        hoveredRef.current = fp?.ref ?? null
-        // The pad's net still feeds the probe tooltip, so reading a voltage off
-        // a part's pin keeps working exactly as before.
-        hoveredNet.current = findNearestNet(x, y, 8)
-      }
-    }
-  }, [findNearestNet, findFootprintAt, findLabelAt, setCamera])
-
-  // Shared hit-test for a tap/click that did not travel: resolves the footprint
-  // and nearest net under canvas-relative screen coords (sx, sy) and fires the
-  // consumer callbacks. Used by BOTH the mouse-up click and the touch tap so the
-  // two selection paths cannot drift apart.
-  //
-  // Layered, exclusive resolution (firing footprint AND net together made
-  // every part click collapse into a net selection, so the "click a part, see
-  // its bound model" flow was unreachable):
-  //   1. a routed TRACE within tight reach wins: the click was on bare copper;
-  //   2. otherwise a footprint hit wins, carrying the nearest pad's net along
-  //      (on an unrouted board pads are the only copper, so the part click
-  //      must still surface its net);
-  //   3. otherwise the nearest pad net within coarse reach (clicking is a
-  //      blunt gesture), or null to clear the selection.
-  const selectAt = useCallback((sx: number, sy: number) => {
-    const { x, y } = screenToWorld(camRef.current, sx, sy)
-    const traceNet = findNearestNet(x, y, 5, false)
-    if (traceNet) {
-      if (onNetClick) onNetClick(traceNet)
-      return
-    }
-    const fp = findFootprintAt(x, y)
-    if (fp && onFootprintClick) {
-      onFootprintClick({ ...fp, padNet: findNearestNet(x, y, 8) })
-      return
-    }
-    // The reference LABEL is part of the part's visual identity: clicking it
-    // selects the part like clicking its body/pads (label test in SCREEN
-    // space; the label's size is screen-fixed, not board-fixed).
-    const labelFp = findLabelAt(sx, sy)
-    if (labelFp && onFootprintClick) {
-      onFootprintClick({ ...labelFp, padNet: findNearestNet(labelFp.x, labelFp.y, 12) })
-      return
-    }
-    if (onNetClick) onNetClick(findNearestNet(x, y, 8))
-  }, [findFootprintAt, findLabelAt, onFootprintClick, onNetClick, findNearestNet])
-
-  const handleMouseUp = useCallback((e: React.MouseEvent) => {
-    if (e.button === 0) {
-      dragging.current = false
-      if (!movedSinceDown.current) {
-        const rect = canvasRef.current!.getBoundingClientRect()
-        selectAt(e.clientX - rect.left, e.clientY - rect.top)
-      }
-    }
-  }, [selectAt])
-
-  const handleMouseLeave = useCallback(() => {
-    dragging.current = false
-    hoveredNet.current = null
-    hoveredRef.current = null
-    probePos.current = null
-  }, [])
-
-  // Touch support
-  const lastTouchDist = useRef<number>(0)
-  // Where a single touch began, so touchend can tell a tap (stayed put) from a
-  // pan (travelled). Null once a second finger lands: a pinch is never a tap.
-  const touchStartPos = useRef<{ x: number; y: number } | null>(null)
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length === 1) {
-      dragging.current = true
-      lastMouse.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
-      touchStartPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
-    } else if (e.touches.length === 2) {
-      dragging.current = false
-      touchStartPos.current = null
-      const dx = e.touches[0].clientX - e.touches[1].clientX
-      const dy = e.touches[0].clientY - e.touches[1].clientY
-      lastTouchDist.current = Math.sqrt(dx * dx + dy * dy)
-    }
-  }, [])
-
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    e.preventDefault()
-    if (e.touches.length === 1 && dragging.current) {
-      const dx = e.touches[0].clientX - lastMouse.current.x
-      const dy = e.touches[0].clientY - lastMouse.current.y
-      if (Math.abs(dx) + Math.abs(dy) > 2) userMovedCamera.current = true
-      lastMouse.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
-      setCamera(panCamera(camRef.current, dx, dy))
-    } else if (e.touches.length === 2) {
-      const dx = e.touches[0].clientX - e.touches[1].clientX
-      const dy = e.touches[0].clientY - e.touches[1].clientY
-      const dist = Math.sqrt(dx * dx + dy * dy)
-      // True pinch semantics: the zoom factor IS the ratio of finger spreads,
-      // so the board tracks the fingers exactly (no tuning constant involved).
-      if (lastTouchDist.current > 0) {
-        userMovedCamera.current = true
-        const factor = dist / lastTouchDist.current
-        const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2
-        const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2
-        const rect = canvasRef.current!.getBoundingClientRect()
-        setCamera(zoomCamera(camRef.current, factor, cx - rect.left, cy - rect.top, maxScaleFor(fitScaleRef.current)))
-      }
-      lastTouchDist.current = dist
-    }
-  }, [setCamera])
-
-  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    dragging.current = false
-    const start = touchStartPos.current
-    touchStartPos.current = null
-    // Tap-to-select: a single touch that lifted without travelling (< 10px) runs
-    // the same hit-test the mouse-up click does.
-    if (start && e.touches.length === 0 && e.changedTouches.length === 1) {
-      const t = e.changedTouches[0]
-      const moved = Math.hypot(t.clientX - start.x, t.clientY - start.y)
-      if (moved <= 10) {
-        const rect = canvasRef.current!.getBoundingClientRect()
-        selectAt(t.clientX - rect.left, t.clientY - rect.top)
-      }
-    }
-  }, [selectAt])
+  const pointer = useBoardPointer({
+    canvasRef,
+    camRef,
+    fitScaleRef,
+    userMovedCamera,
+    setCamera,
+    hit,
+    hoveredNet,
+    hoveredRef,
+    probePos,
+    onClaimWheel: () => setZoomFocused(true),
+    onNetClick,
+    onFootprintClick,
+  })
 
   // Nets for the highlight picker: prefer the live protocol's list, fall back
   // to what the parser found on the copper.
@@ -1011,36 +606,6 @@ export function BoardViewer({
     if (!board) return []
     return [...board.nets.values()].filter(Boolean).sort()
   }, [netOptions, boardInfo, board])
-
-  // Same dismissal as the export menu and the session switcher: an outside
-  // click or Escape. The panel covers a third of the map, so re-finding the one
-  // button that closes it is not an acceptable way out. Escape hands focus back
-  // to the trigger, because a keyboard reader who dismissed the panel has to
-  // land somewhere, and the control they just used is the only sane place.
-  useEffect(() => {
-    if (!layersOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (!layersWrap.current?.contains(e.target as Node)) setLayersOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      // The expanded view listens for Escape on `window`, which bubbles LAST,
-      // after `document`. Stopping propagation here is what makes the panel the
-      // innermost dismissible surface: one Escape closes the panel and leaves
-      // the map expanded, a second collapses it. A guard on the other effect
-      // cannot do this, because within a single keydown React has not yet
-      // processed the state change and both listeners are still attached.
-      e.stopPropagation()
-      setLayersOpen(false)
-      layersTrigger.current?.focus()
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [layersOpen])
 
   // Escape leaves the expanded view, the way every other fullscreen surface
   // behaves. Only bound while expanded, so it never eats an Escape elsewhere.
@@ -1076,7 +641,7 @@ export function BoardViewer({
       className="relative w-full h-full overflow-hidden"
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
-      style={{ background: 'var(--instrument)', cursor: dragging.current ? 'grabbing' : 'crosshair' }}
+      style={{ background: 'var(--instrument)', cursor: pointer.dragging.current ? 'grabbing' : 'crosshair' }}
     >
       {/* Board canvas layer */}
       <canvas
@@ -1084,13 +649,13 @@ export function BoardViewer({
         role="img"
         aria-label="Board map: scroll to zoom, drag to pan, click a trace to select its net. Keyboard users can pick a net in the checks panel."
         className="absolute inset-0"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
+        onMouseDown={pointer.onMouseDown}
+        onMouseMove={pointer.onMouseMove}
+        onMouseUp={pointer.onMouseUp}
+        onMouseLeave={pointer.onMouseLeave}
+        onTouchStart={pointer.onTouchStart}
+        onTouchMove={pointer.onTouchMove}
+        onTouchEnd={pointer.onTouchEnd}
       />
       <canvas
         ref={overlayRef}
@@ -1197,83 +762,14 @@ export function BoardViewer({
         </div>
 
         {board && (
-          <div ref={layersWrap} className="flex flex-col items-end gap-2 ml-auto pointer-events-auto">
-            <button
-              type="button"
-              ref={layersTrigger}
-              data-testid="layers-toggle"
-              onClick={() => setLayersOpen(o => !o)}
-              aria-expanded={layersOpen}
-              aria-haspopup="dialog"
-              title={layersOpen ? 'Close the layer controls (Esc)' : 'Show and hide board layers'}
-              className="hb-press rounded-lg"
-              style={{
-                ...toolbarBtn(layersOpen),
-                border: '1px solid var(--hairline)',
-                background: layersOpen
-                  ? 'var(--copper-tint-strong)'
-                  : 'color-mix(in srgb, var(--surface) 88%, transparent)',
-                backdropFilter: 'blur(6px)',
-                boxShadow: 'var(--shadow-card)',
-              }}
-            >
-              <LayersIcon size={13} /> Layers
-            </button>
-
-            {/* ── Layers panel: only what this board actually has ── */}
-            {layersOpen && (
-              <div
-                data-testid="layers-panel"
-                className="hb-card view-enter overflow-y-auto"
-                style={{ width: 228, maxHeight: 'calc(100% - 8px)', padding: 6, boxShadow: 'var(--shadow-pop)' }}
-              >
-                {boardLayers.map(layer => (
-                  <LayerRow
-                    key={layer}
-                    label={LAYER_LABELS[layer] ?? layer}
-                    swatch={getLayerStyle(layer).color}
-                    on={!hiddenLayers.has(layer)}
-                    onToggle={() => setHiddenLayers(prev => {
-                      const next = new Set(prev)
-                      if (next.has(layer)) next.delete(layer)
-                      else next.add(layer)
-                      return next
-                    })}
-                  />
-                ))}
-                <div style={{ height: 1, background: 'var(--rule)', margin: '5px 8px' }} />
-                <LayerRow label="Pads" swatch={boardTheme().pad} on={showPads} onToggle={() => setShowPads(v => !v)} />
-                <LayerRow label="Reference labels" on={showLabels} onToggle={() => setShowLabels(v => !v)} />
-                <LayerRow
-                  label="Activity overlay"
-                  swatch={boardTheme().activity}
-                  on={showActivity}
-                  onToggle={() => setShowActivity(v => !v)}
-                />
-                {pickerNets.length > 0 && onNetClick && (
-                  <div style={{ padding: '7px 8px 5px' }}>
-                    <label className="block text-[10px] font-bold tracking-[0.1em] mb-1" style={{ color: 'var(--silk-faint)' }}>
-                      HIGHLIGHT A NET
-                    </label>
-                    <input
-                      className="hb-input w-full"
-                      list="viewer-net-options"
-                      placeholder="type a net name"
-                      value={selectedNet ?? ''}
-                      onChange={e => {
-                        const v = e.target.value
-                        if (v === '') onNetClick(null)
-                        else if (pickerNets.includes(v)) onNetClick(v)
-                      }}
-                    />
-                    <datalist id="viewer-net-options">
-                      {pickerNets.map(n => <option key={n} value={n} />)}
-                    </datalist>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <LayersControl
+            board={board}
+            controls={layers}
+            pickerNets={pickerNets}
+            selectedNet={selectedNet}
+            onNetClick={onNetClick}
+            buttonStyle={toolbarBtn}
+          />
         )}
       </div>
 
@@ -1298,12 +794,10 @@ export function BoardViewer({
       {board && !loading && (
         <div className="absolute bottom-2 right-2 text-[10px] px-2 py-1 rounded tnum"
           style={{ background: 'var(--overlay-chip-bg)', color: 'var(--overlay-chip-text)', pointerEvents: 'none', fontFamily: 'var(--font-mono)' }}>
-          {/* "fp" was a footgun as well as an abbreviation: the report banner
-              says "82 parts" and this chip said "86 fp", two numbers about the
-              same board with no way to tell whether one of them was wrong.
-              Neither was: the extra two are a test point and a mounting hole,
-              which are footprints and are not parts. Say the word, and name the
-              part count next to it when the embedding view has one. */}
+          {/* Footprints, said in full, with the part count beside it when the
+              embedding view has one: a test point and a mounting hole are
+              footprints and are not parts, so the two numbers differ on nearly
+              every real board and each has to explain the other. */}
           {board.footprints.length} footprint{board.footprints.length === 1 ? '' : 's'}
           {partCount !== undefined && partCount !== board.footprints.length && (
             <span title="Footprints include test points, mounting holes, fiducials and logos; parts are the components the analysis reasons about.">

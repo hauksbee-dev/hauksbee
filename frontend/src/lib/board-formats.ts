@@ -1,16 +1,11 @@
-// The accepted board formats, once.
-//
-// This list used to exist in four places: the file picker's `accept` attribute,
-// the drop card's small print, the rejection card's "accepted:" line, and the
-// oversize/unknown-extension refusal. They had already drifted. The rejection
-// card is the worst place for a list to be short, because it is the only one
-// read by someone whose file was just refused, and an Altium user reading a
-// list with no Altium in it concludes the tool cannot do their format at all.
-//
-// One array now, and every surface derives from it. Adding a format means
-// adding a row here.
+// The accepted board formats, once. Four surfaces name them: the file
+// picker's `accept` attribute, the drop card's small print, the rejection
+// card's "accepted:" line, and the oversize/unknown-extension refusal. All
+// four derive from the array below, because the rejection card is the worst
+// place for a list to be short: it is read only by someone whose file was just
+// refused, and a list with no Altium in it says the tool cannot read Altium.
 
-export interface BoardFormat {
+interface BoardFormat {
   /** The ECAD tool or standard that produces the file. */
   vendor: string
   /** Extensions, with the dot, in the casing a user would recognise. */
@@ -21,7 +16,7 @@ export interface BoardFormat {
   quiet?: boolean
 }
 
-export const BOARD_FORMATS: BoardFormat[] = [
+const BOARD_FORMATS: BoardFormat[] = [
   { vendor: 'KiCad', exts: ['.kicad_pcb', '.kicad_sch'] },
   { vendor: 'Eagle', exts: ['.brd'] },
   { vendor: 'Altium', exts: ['.PcbDoc'] },
@@ -53,27 +48,17 @@ export function acceptedFormatsSentence(): string {
     .join(', ')
 }
 
-/** The vendor names alone, for a line that has no room for extensions. */
-export function acceptedVendors(): string {
-  return BOARD_FORMATS.filter(f => !f.quiet).map(f => f.vendor).join(', ')
-}
-
 /**
  * Strip the engine's own trailing "Supported: ..." clause off a board-read
  * error, leaving the diagnostic.
  *
- * The engine's refusal (crates/hauksbee-engine/src/board_input.rs) ends with a
- * format list of its own that is one entry short: it names KiCad, Eagle,
- * IPC-D-356 and Board-as-Code, and not Altium, even though the same sentence's
- * diagnostic half reports having TRIED the altium reader. Rendered as-is it
- * landed directly above this app's complete list, so the card carried two
- * format lists that disagreed, and the shorter one came first.
- *
- * The diagnostic half ("unrecognized board format; tried altium, eagle, ...")
- * is the part worth reading and is kept verbatim. The list is dropped and the
- * card renders `acceptedFormatsSentence()` in its place, so there is one list
- * on screen and it is the right one. When the engine's message has no such
- * clause (any other read failure) this returns it untouched.
+ * The engine's list (crates/hauksbee-engine/src/board_input.rs) is one entry
+ * short — no Altium, even though the same sentence reports having TRIED the
+ * altium reader — and it renders directly above this app's complete list, so
+ * the card would carry two disagreeing lists with the shorter one first. The
+ * diagnostic half ("unrecognized board format; tried altium, eagle, ...") is
+ * kept verbatim; the list is dropped and `acceptedFormatsSentence()` takes its
+ * place. A message with no such clause is returned untouched.
  */
 export function withoutEngineFormatList(message: string): string {
   return message.replace(/\s*Supported:.*$/s, '').trim() || message

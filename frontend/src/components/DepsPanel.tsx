@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { CheckIcon } from './Icons'
+import { useCallback, useEffect, useState } from 'react'
 import { readSseStream } from '../lib/sse'
+import { errorText, getJson } from '../lib/api'
+import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 
 // The dependency panel (landing page): which optional co-sim backends and
 // oracles this machine has, what each unlocks, and a one-click install where
@@ -32,42 +33,6 @@ type InstallState =
   | { phase: 'running'; id: string; log: string[] }
   | { phase: 'ended'; id: string; ok: boolean; message: string; log: string[] }
 
-function CopyCmd({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  const copy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      try { document.execCommand('copy') } catch { /* nothing more to try */ }
-      document.body.removeChild(ta)
-    }
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }, [text])
-  return (
-    <button
-      type="button"
-      data-testid="dep-manual-copy"
-      onClick={() => void copy()}
-      className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold cursor-pointer transition-all hover:opacity-80"
-      style={{
-        background: copied ? 'var(--ok-bg)' : 'rgba(224,138,78,0.12)',
-        border: `1px solid ${copied ? 'var(--ok-border)' : 'var(--copper-deep)'}`,
-        color: copied ? 'var(--ok)' : 'var(--copper-hi)',
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {copied ? <span className="inline-flex items-center gap-1"><CheckIcon size={10} /> Copied</span> : 'Copy'}
-    </button>
-  )
-}
-
 type DepsFetch =
   | { phase: 'loading' }
   | { phase: 'ready'; deps: DepInfo[] }
@@ -76,38 +41,20 @@ type DepsFetch =
 export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) {
   const [fetchState, setFetchState] = useState<DepsFetch>({ phase: 'loading' })
   const [install, setInstall] = useState<InstallState>({ phase: 'idle' })
-  const logRef = useRef<HTMLPreElement>(null)
 
   const fetchDeps = useCallback(async () => {
     try {
-      const res = await fetch('/api/deps')
-      if (!res.ok) {
-        setFetchState({
-          phase: 'unavailable',
-          reason: `the server answered ${res.status} ${res.statusText} for /api/deps`,
-        })
-        return
-      }
-      const json = (await res.json()) as { deps?: DepInfo[] }
-      if (Array.isArray(json.deps)) setFetchState({ phase: 'ready', deps: json.deps })
-      else setFetchState({ phase: 'unavailable', reason: 'the server returned an unexpected shape for /api/deps' })
+      const json = await getJson<{ deps?: DepInfo[] }>('/api/deps')
+      if (!Array.isArray(json.deps)) throw new Error('it returned an unexpected shape')
+      setFetchState({ phase: 'ready', deps: json.deps })
     } catch (e) {
       // An older server / a serve mode without the dependency endpoints: say
       // so honestly instead of rendering a blank page.
-      setFetchState({
-        phase: 'unavailable',
-        reason: `the /api/deps request failed (${e instanceof Error ? e.message : String(e)})`,
-      })
+      setFetchState({ phase: 'unavailable', reason: `/api/deps failed: ${errorText(e)}` })
     }
   }, [])
 
   useEffect(() => { void fetchDeps() }, [fetchDeps])
-
-  // Keep the live log scrolled to the newest line.
-  useEffect(() => {
-    const el = logRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [install])
 
   const runInstall = useCallback(async (id: string) => {
     setInstall({ phase: 'running', id, log: [] })
@@ -134,7 +81,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
       })
       if (!ended) end(false, 'the connection closed before the install reported a result')
     } catch (e) {
-      end(false, `install request failed: ${e instanceof Error ? e.message : String(e)}`)
+      end(false, `install request failed: ${errorText(e)}`)
     }
   }, [fetchDeps])
 
@@ -175,25 +122,13 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
       </div>
 
       {fetchState.phase === 'loading' && (
-        <div
-          className="text-[13px] text-center mt-6 flex items-center justify-center gap-2"
-          role="status"
-          aria-live="polite"
-          style={{ color: 'var(--silk-dim)' }}
-        >
-          <span className="slot-spin" /> Probing the co-sim backends and oracles on this machine ...
-        </div>
+        <BusyLine className="justify-center mt-6" color="var(--silk-dim)">
+          Probing the co-sim backends and oracles on this machine ...
+        </BusyLine>
       )}
 
       {fetchState.phase === 'unavailable' && (
-        <div
-          data-testid="deps-unavailable"
-          className="rounded-xl px-4 py-3.5 mt-4 text-[13px]"
-          style={{ border: '1px solid var(--warn-border)', background: 'var(--warn-bg)', color: 'var(--silk)' }}
-        >
-          <span className="text-[10px] font-bold tracking-widest uppercase block mb-1" style={{ color: 'var(--warn-strong)' }}>
-            Dependency status unavailable
-          </span>
+        <Callout tone="warn" testId="deps-unavailable" className="mt-4" title="Dependency status unavailable">
           This server does not expose the dependency endpoints: {fetchState.reason}. Backend
           availability and one-click installs need a full <code className="hb-inline">hauksbee serve</code>{' '}
           (or <code className="hb-inline">hauksbee run --serve</code>) session. From a terminal,{' '}
@@ -208,7 +143,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
               Retry
             </button>
           </div>
-        </div>
+        </Callout>
       )}
 
       {fetchState.phase === 'ready' && (
@@ -307,15 +242,8 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                   </div>
                 )}
                 {!d.present && d.manual && (
-                  <div className="text-[11px] mt-1.5 flex items-center flex-wrap" style={{ color: 'var(--silk-faint)' }}>
-                    <span className="mr-1">Terminal:</span>
-                    <code
-                      className="px-1.5 py-0.5 rounded"
-                      style={{ background: 'var(--code-bg)', color: 'var(--silk-dim)', border: '1px solid var(--hairline)' }}
-                    >
-                      {d.manual}
-                    </code>
-                    <CopyCmd text={d.manual} />
+                  <div className="text-[11px] mt-1.5" style={{ color: 'var(--silk-faint)' }}>
+                    <TerminalCommand command={d.manual} testId="dep-manual-copy" />
                   </div>
                 )}
               </div>
@@ -348,40 +276,23 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
             {/* Live install progress + final state, under the row it belongs to */}
             {activeId === d.id && (
               <div className="mt-2.5">
-                {activeLog.length > 0 && (
-                  <pre
-                    ref={logRef}
-                    data-testid="dep-log"
-                    className="rounded-lg px-3 py-2 text-[11px] overflow-x-auto overflow-y-auto whitespace-pre-wrap"
-                    style={{
-                      maxHeight: 180,
-                      background: 'var(--instrument)',
-                      border: '1px solid var(--hairline)',
-                      color: 'var(--silk-dim)',
-                      fontFamily: 'var(--font-mono)',
-                    }}
-                  >
-                    {activeLog.join('\n')}
-                  </pre>
-                )}
+                <LogWell lines={activeLog} testId="dep-log" />
                 {install.phase === 'running' && (
-                  <div className="mt-1.5 text-[12px] flex items-center gap-2" role="status" aria-live="polite" style={{ color: 'var(--copper-hi)' }}>
-                    <span className="slot-spin" /> Installing; this can take a few minutes on a slow connection.
-                  </div>
+                  <BusyLine className="mt-1.5">
+                    Installing; this can take a few minutes on a slow connection.
+                  </BusyLine>
                 )}
                 {install.phase === 'ended' && (
-                  <div
-                    data-testid="dep-install-result"
-                    aria-live="polite"
-                    className="mt-1.5 rounded-lg px-3 py-2 text-[12px] whitespace-pre-wrap"
-                    style={install.ok
-                      ? { background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', color: 'var(--ok)' }
-                      : { background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}
+                  <Callout
+                    tone={install.ok ? 'ok' : 'err'}
+                    testId="dep-install-result"
+                    live
+                    className="mt-1.5 px-3 py-2 text-[12px] whitespace-pre-wrap"
                   >
                     {install.ok
                       ? 'Installed and verified. The status above is refreshed from a real re-probe.'
                       : install.message}
-                  </div>
+                  </Callout>
                 )}
               </div>
             )}

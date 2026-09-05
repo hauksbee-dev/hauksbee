@@ -2,30 +2,21 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { CROSSFADE, INSTANT } from './tokens'
 
-// Skeleton-to-content, adapted from interior.dev's `skeleton-swap`.
-//
-// Two rules from the original are the whole point of it, and both are about
-// honesty rather than looks:
+// Skeleton-to-content, vendored from interior.dev's `skeleton-swap`. Two rules
+// carry it, and both are about honesty rather than looks:
 //
 //  1. The skeleton does not appear for `delay` ms. A request that comes back in
 //     80 ms should never flash a loading state; the flash reads as slower than
 //     the wait it replaced.
 //  2. Once shown, it stays for at least `minVisible` ms. A skeleton that
-//     appears and vanishes inside one frame is a flicker, and a flicker is
-//     read as a fault.
+//     appears and vanishes inside one frame is a flicker, and a flicker reads
+//     as a fault.
 //
-// Point 1 is also why this never outlives its request: the visible state is
-// derived from `ready`, not from a timer that has to be cancelled. When the
-// request resolves (or fails), `ready` flips and the skeleton is on its way out
-// in the same tick.
-//
-// Adapted for this codebase: theme tokens instead of Tailwind stone/white
-// scales, the shared spring vocabulary from ./tokens, and no fixed-height
-// shell. The original reserved `lines * lineHeight` and scrolled inside it,
-// which suits a docs demo; here the caller supplies the skeleton whose shape
-// matches the report it is standing in for, and the surface grows to it.
+// The visible state is derived from `ready`, never from a timer that has to be
+// cancelled, so it can never outlive its request. The caller supplies the
+// skeleton whose shape matches the content it stands in for.
 
-export interface UseSkeletonSwapOptions {
+interface UseSkeletonSwapOptions {
   /** The request has resolved (either way). */
   ready: boolean
   /** Wait this long before showing a skeleton at all. */
@@ -77,7 +68,7 @@ export function SkeletonBar({ width = '100%', height = 10, className = '' }: {
   )
 }
 
-export interface SkeletonSwapProps {
+interface SkeletonSwapProps {
   ready: boolean
   children: ReactNode
   /** The stand-in. Required: a generic three-bar block where the reader knows

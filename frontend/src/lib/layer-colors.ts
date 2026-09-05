@@ -10,7 +10,7 @@
 
 import { isLightTheme } from './theme-tokens'
 
-export interface LayerStyle {
+interface LayerStyle {
   color: string
   /** For copper layers a slightly brighter glow color */
   glow?: string
@@ -120,7 +120,7 @@ export function isCopperLayer(layer: string): boolean {
 //    KiCad layer). One object per theme; boardTheme() hands the renderer the
 //    active one so no draw call ever branches on theme itself. ──────────────
 
-export interface BoardTheme {
+interface BoardTheme {
   /** Canvas ground behind the board (matches the --instrument token). */
   bg: string
   /** Radial vignette stops: center (transparent) and edge. */

@@ -11,17 +11,13 @@ import { APP_VERSION } from '../lib/version'
 // One Export menu, under the report's verdict, holding every file this report
 // can become.
 //
-// It is a menu rather than a row of buttons because the four files are one
-// decision ("I want to take this away") with four answers, and each item has to
-// say what the file IS, not just its extension: "a web page you can send
-// someone" and "the JSON the API returned" are different enough that a reader
-// should not have to open one to find out which they wanted.
+// A menu rather than a row of buttons: the four files are one decision ("I
+// want to take this away") with four answers, and each item says what the file
+// IS, not just its extension, so nobody has to open one to find out.
 //
-// It sits on the report rather than in the app header for a measured reason: a
-// third glyph button up there left the board name 16px of ellipsis on a 320px
-// phone, which is the exact defect the header's existing comments are about. On
-// the report it is beside the thing it exports and keeps its own word. The
-// Checks pane keeps its Download buttons where the spec is being composed.
+// It sits on the report, not in the app header: a third glyph up there leaves
+// the board name 16px of ellipsis on a 320px phone. The Checks pane keeps its
+// own Download buttons where the spec is being composed.
 
 export function ExportMenu({
   report, boardLabel, firmwareName, analyzedAt, engineVersion, spec, checks,

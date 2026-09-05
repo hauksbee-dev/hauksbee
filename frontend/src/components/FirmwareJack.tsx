@@ -13,7 +13,7 @@ import { readFirmwareInfo, formatBytes, type FirmwareInfo } from '../lib/firmwar
 // bytes. Without those two controls a staged firmware is a one-way door.
 
 /** Where the jack is being rendered, which is all that changes about the copy. */
-export type FirmwareJackPlacement = 'intake' | 'report'
+type FirmwareJackPlacement = 'intake' | 'report'
 
 interface FirmwareJackProps {
   /** The staged firmware, if any. */

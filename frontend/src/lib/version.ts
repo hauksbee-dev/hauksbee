@@ -2,10 +2,8 @@
 // which published artifacts belong to it.
 //
 // `__APP_VERSION__` is a build-time literal injected by vite.config.ts from
-// frontend/package.json, whose version tracks the workspace Cargo.toml. That
-// indirection is the point: the GitHub action reference below used to carry a
-// hand-typed tag, which is exactly the kind of string that survives three
-// releases after it stopped being true. A generated workflow that pins a tag
+// frontend/package.json, whose version tracks the workspace Cargo.toml. The
+// indirection is the point: a generated workflow that pins a hand-typed tag
 // nobody published fails on the user's first push, and the failure blames
 // their spec rather than our copy.
 

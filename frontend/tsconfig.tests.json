@@ -1,10 +1,9 @@
 {
   // The tests and the visual-lint harness, type-checked on the same settings as
-  // src (strict, no unused). They ran untyped for a while, which meant a rename
-  // in src/lib could leave a test importing a symbol that no longer exists and
-  // nothing said so until `bun test` ran. `bun` types cover `bun:test`, `Bun.serve`
-  // and `Bun.spawn`; DOM is here because the harness's audit function is
-  // serialized into a browser and talks to the real DOM API.
+  // src (strict, no unused), so a rename in src/lib cannot leave a test
+  // importing a symbol that no longer exists. `bun` types cover `bun:test`,
+  // `Bun.serve` and `Bun.spawn`; DOM is here because the harness's audit
+  // function is serialized into a browser and talks to the real DOM API.
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tests.tsbuildinfo",
     "target": "ES2023",

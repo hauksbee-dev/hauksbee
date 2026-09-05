@@ -19,7 +19,7 @@ import { refusalLines } from './refusal-contract'
 import { reportVerdictHeadline, reportVerdictPalette } from './report-verdict'
 import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from './cosim-coverage'
 
-export interface ReportExportInput {
+interface ReportExportInput {
   report: WebReport
   /** The board's display name in this session (the uploaded file's name). */
   boardLabel: string | null
@@ -128,6 +128,26 @@ const LEVEL_TEXT: Record<string, string> = {
   serious: 'var(--err-strong)', warning: 'var(--warn-strong)', note: 'var(--note)',
 }
 
+/** The report's one card shape: a coloured left bar, a small-caps tag, the
+ *  headline, and the why/what-to-do pair each rendered only when present. */
+function card(accent: string, tagColor: string, tag: string, body: string, why?: string, fix?: string): string {
+  return `<div class="card" style="border-left-color:${accent}">
+    <span class="tag" style="color:${tagColor}">${tag}</span>
+    ${body}
+    ${why ? `<div class="gloss"><b>Why it matters:</b> ${esc(why)}</div>` : ''}
+    ${fix ? `<div class="gloss"><b>What to do:</b> ${esc(fix)}</div>` : ''}
+  </div>`
+}
+
+/** A horizontally scrollable table, or nothing when there are no rows. */
+function table(headers: string[], rows: string): string {
+  if (!rows) return ''
+  return `<div class="scroll-x"><table>
+    <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`
+}
+
 function stamp(ms: number | null): string {
   const d = ms ? new Date(ms) : new Date()
   // A local, unambiguous stamp plus the offset, so a report read in another
@@ -139,29 +159,19 @@ function stamp(ms: number | null): string {
 
 function sectionHtml(s: WebSection): string {
   const groups = groupFindings(s.findings)
-  const cards = groups.map(g => {
-    const accent = LEVEL_ACCENT[g.level] ?? 'var(--note-accent)'
-    const tag = LEVEL_TEXT[g.level] ?? 'var(--note)'
-    const many = g.items.length > 1
-    const head = many
-      ? `<span class="tag" style="color:${tag}">${esc(g.level)} &middot; ${g.items.length} similar</span>
-         <div class="what">${g.items.length} similar findings, same cause, listed once below.</div>
+  const cards = groups.map(g => card(
+    LEVEL_ACCENT[g.level] ?? 'var(--note-accent)',
+    LEVEL_TEXT[g.level] ?? 'var(--note)',
+    g.items.length > 1 ? `${esc(g.level)} &middot; ${g.items.length} similar` : esc(g.level),
+    g.items.length > 1
+      ? `<div class="what">${g.items.length} similar findings, same cause, listed once below.</div>
          <ul>${g.items.map(i => `<li>${esc(i.what)}</li>`).join('')}</ul>`
-      : `<span class="tag" style="color:${tag}">${esc(g.level)}</span>
-         <div class="what">${esc(g.items[0].what)}</div>`
-    return `<div class="card" style="border-left-color:${accent}">
-      ${head}
-      ${g.why ? `<div class="gloss"><b>Why it matters:</b> ${esc(g.why)}</div>` : ''}
-      ${g.fix ? `<div class="gloss"><b>What to do:</b> ${esc(g.fix)}</div>` : ''}
-    </div>`
-  }).join('')
-  const headsUp = (s.heads_up ?? []).map(h => `
-    <div class="card" style="border-left-color:var(--copper)">
-      <span class="tag" style="color:var(--copper)">Heads up</span>
-      <div class="what">${esc(h.what)}</div>
-      ${h.why ? `<div class="gloss"><b>Why it matters:</b> ${esc(h.why)}</div>` : ''}
-      ${h.fix ? `<div class="gloss"><b>What to do:</b> ${esc(h.fix)}</div>` : ''}
-    </div>`).join('')
+      : `<div class="what">${esc(g.items[0].what)}</div>`,
+    g.why, g.fix,
+  )).join('')
+  const headsUp = (s.heads_up ?? []).map(h => card(
+    'var(--copper)', 'var(--copper)', 'Heads up', `<div class="what">${esc(h.what)}</div>`, h.why, h.fix,
+  )).join('')
   return `<section>
     <h2>${esc(s.title)}</h2>
     <p class="verdict-line">${esc(s.verdict)}</p>
@@ -194,12 +204,7 @@ function bindHtml(report: WebReport): string {
            live circuit; analog, AC and thermal results on their nets are not trustworthy.</span>`
         : 'Nothing was left open on the live circuit.'}
     </p>
-    ${rows
-      ? `<div class="scroll-x"><table>
-          <thead><tr><th>Ref</th><th>Value</th><th>Why</th><th>Role</th><th>State</th><th>Consequence</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table></div>`
-      : ''}
+    ${table(['Ref', 'Value', 'Why', 'Role', 'State', 'Consequence'], rows)}
   </section>`
 }
 
@@ -228,6 +233,7 @@ function evidenceHtml(report: WebReport): string {
       <div class="gloss"><b>Effect:</b> ${esc(assumption.consequence)}</div>
       <div class="gloss"><b>What closes it:</b> ${esc(assumption.replacement)}</div>
     </div>`).join('')
+
   const artifacts = inventory.map(artifact => `<tr>
       <td>${esc(artifact.path)}</td>
       <td class="mono">${esc(artifact.kind)}</td>
@@ -241,18 +247,8 @@ function evidenceHtml(report: WebReport): string {
       ${count('clean')} clean, ${count('qualified')} qualified, ${count('undermined')} undermined.
       The machine-readable JSON retains the full artifact, model, parameter and error-budget fields.
     </p>
-    ${rows
-      ? `<div class="scroll-x"><table>
-          <thead><tr><th>Assertion</th><th>Status</th><th>Rests on</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table></div>`
-      : ''}
-    ${artifacts
-      ? `<h3>Input artifacts</h3><div class="scroll-x"><table>
-          <thead><tr><th>Path</th><th>Kind</th><th>Digest</th></tr></thead>
-          <tbody>${artifacts}</tbody>
-        </table></div>`
-      : ''}
+    ${table(['Assertion', 'Status', 'Rests on'], rows)}
+    ${artifacts ? `<h3>Input artifacts</h3>${table(['Path', 'Kind', 'Digest'], artifacts)}` : ''}
     ${cards}
   </section>`
 }
@@ -275,12 +271,12 @@ function importDiagnosticsHtml(report: WebReport): string {
   const diagnostics = report.import_diagnostics
   if (!diagnostics) return ''
   const issues = diagnostics.issues ?? []
-  const issueCards = issues.map(issue => `<div class="card" style="border-left-color:var(--warn)">
-      <span class="tag" style="color:var(--warn-strong)">${esc(issue.title)}</span>
-      <div class="what">${esc(issue.explanation)}</div>
-      <div class="gloss"><b>What fixes it:</b> ${esc(issue.suggested_fix)}</div>
-      ${issue.net ? `<div class="gloss"><b>Named net:</b> <span class="mono">${esc(issue.net)}</span></div>` : ''}
-    </div>`).join('')
+  const issueCards = issues.map(issue => card(
+    'var(--warn)', 'var(--warn-strong)', esc(issue.title),
+    `<div class="what">${esc(issue.explanation)}</div>
+     <div class="gloss"><b>What fixes it:</b> ${esc(issue.suggested_fix)}</div>
+     ${issue.net ? `<div class="gloss"><b>Named net:</b> <span class="mono">${esc(issue.net)}</span></div>` : ''}`,
+  )).join('')
   const objects = diagnostics.objects.map(object => `<tr>
       <td class="mono">${esc(object.id)}</td>
       <td>${esc(object.status)}</td>
@@ -300,12 +296,7 @@ function importDiagnosticsHtml(report: WebReport): string {
       actually recovered; it is not a claim about the physical board.
     </p>
     ${issueCards}
-    ${objects
-      ? `<div class="scroll-x"><table>
-          <thead><tr><th>Object</th><th>Status</th><th>Confidence</th><th>Basis</th><th>Board location</th></tr></thead>
-          <tbody>${objects}</tbody>
-        </table></div>`
-      : ''}
+    ${table(['Object', 'Status', 'Confidence', 'Basis', 'Board location'], objects)}
   </section>`
 }
 
@@ -318,13 +309,13 @@ function cosimHtml(report: WebReport): string {
       <p class="verdict-line">Co-sim did not run. ${esc(why || 'No co-sim was available for this board.')}</p>
     </section>`
   }
-  const findings = groupFindings(c.findings ?? []).map(g => `
-    <div class="card" style="border-left-color:${LEVEL_ACCENT[g.level] ?? 'var(--note-accent)'}">
-      <span class="tag" style="color:${LEVEL_TEXT[g.level] ?? 'var(--note)'}">${esc(g.level)}</span>
-      <div class="what">${g.items.map(i => esc(i.what)).join('; ')}</div>
-      ${g.why ? `<div class="gloss"><b>Why it matters:</b> ${esc(g.why)}</div>` : ''}
-      ${g.fix ? `<div class="gloss"><b>What to do:</b> ${esc(g.fix)}</div>` : ''}
-    </div>`).join('')
+  const findings = groupFindings(c.findings ?? []).map(g => card(
+    LEVEL_ACCENT[g.level] ?? 'var(--note-accent)',
+    LEVEL_TEXT[g.level] ?? 'var(--note)',
+    esc(g.level),
+    `<div class="what">${g.items.map(i => esc(i.what)).join('; ')}</div>`,
+    g.why, g.fix,
+  )).join('')
   const gpio = (c.gpio_nets ?? []).map(g => `<tr>
       <td class="mono">${esc(g.name)}</td>
       <td class="mono num">${(g.volts || 0).toFixed(3)}</td>
@@ -346,11 +337,7 @@ function cosimHtml(report: WebReport): string {
     ${timingRefusals ? `<h3>TIMING INVALID</h3><div class="card" style="border-left-color:var(--err)">${timingRefusals}</div>` : ''}
     ${fallbackWindows ? `<h3>Fallback-qualified windows</h3><div class="card" style="border-left-color:var(--warn)">${fallbackWindows}</div>` : ''}
     ${c.uart_output ? `<h3>UART output</h3><pre class="instrument">${esc(c.uart_output)}</pre>` : ''}
-    ${gpio
-      ? `<h3>GPIO nets</h3><div class="scroll-x"><table>
-          <thead><tr><th>Net</th><th>Volts</th><th>Activity</th></tr></thead>
-          <tbody>${gpio}</tbody></table></div>`
-      : ''}
+    ${gpio ? `<h3>GPIO nets</h3>${table(['Net', 'Volts', 'Activity'], gpio)}` : ''}
   </section>`
 }
 

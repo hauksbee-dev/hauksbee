@@ -51,7 +51,7 @@ export function screenToWorld(cam: Camera, sx: number, sy: number): { x: number;
 }
 
 export const MIN_SCALE = 0.05
-export const MAX_SCALE = 3000
+const MAX_SCALE = 3000
 
 /** How far past zoom-to-fit the map is allowed to go, as a multiple of the fit
  *  scale. The readout is expressed against fit ("100%" IS fit), so 16x reads as

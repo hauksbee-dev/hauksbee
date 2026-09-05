@@ -55,7 +55,7 @@ export function useSimulation(): SimulationState {
 }
 
 /** Today's path, unchanged: the live session on /ws. */
-export function useLiveSimulation(): SimulationState {
+function useLiveSimulation(): SimulationState {
   const [connected, setConnected] = useState(false)
   const [boardInfo, setBoardInfo] = useState<BoardInfoMsg | null>(null)
   const [frame, setFrame] = useState<SimFrame | null>(null)
