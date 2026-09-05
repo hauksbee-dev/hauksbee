@@ -470,4 +470,47 @@ impl ReactiveState {
             xb: [bank(), bank(), bank()],
         }
     }
+
+    /// `(x1, x2)` of bank `k`: 0 is the primary, 1..=3 the secondaries.
+    pub(crate) fn bank(&self, k: usize) -> (&[f64], &[f64]) {
+        match k {
+            0 => (&self.x1, &self.x2),
+            k => (&self.xb[k - 1].x1, &self.xb[k - 1].x2),
+        }
+    }
+
+    fn bank_mut(&mut self, k: usize) -> (&mut [f64], &mut [f64], &mut [f64]) {
+        match k {
+            0 => (&mut self.x1, &mut self.dx1, &mut self.x2),
+            k => {
+                let b = &mut self.xb[k - 1];
+                (&mut b.x1, &mut b.dx1, &mut b.x2)
+            }
+        }
+    }
+
+    /// Flat history at `v` for device `i` in bank `k`: both back samples equal
+    /// and no derivative (an operating point).
+    pub(crate) fn seed(&mut self, k: usize, i: usize, v: f64) {
+        let (x1, dx1, x2) = self.bank_mut(k);
+        x1[i] = v;
+        x2[i] = v;
+        dx1[i] = 0.0;
+    }
+
+    /// Roll bank `k` of device `i` forward after an accepted step of `h`:
+    /// `x2 <- x1`, `x1 <- new`, and `dx1 <-` the derivative backed out with
+    /// the rule that ran the step (trapezoidal when `trapz`, else backward
+    /// Euler), which the next trapezoidal history term needs.
+    pub(crate) fn roll(&mut self, k: usize, i: usize, new: f64, h: f64, trapz: bool) {
+        let (x1, dx1, x2) = self.bank_mut(k);
+        let old = x1[i];
+        dx1[i] = if trapz {
+            2.0 * (new - old) / h - dx1[i]
+        } else {
+            (new - old) / h
+        };
+        x2[i] = old;
+        x1[i] = new;
+    }
 }

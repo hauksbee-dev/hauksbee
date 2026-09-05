@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 
 use forge_sexpr::{Document, List};
 
+use crate::dsu::Dsu;
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 
 /// Coordinates are snapped to this grid (in mm) before comparison so that
@@ -215,46 +216,6 @@ fn hierarchy_reaches(root: &Path, target: &Path) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Union-find over connection points
-// ---------------------------------------------------------------------------
-
-#[derive(Default)]
-struct UnionFind {
-    parent: Vec<usize>,
-    rank: Vec<usize>,
-}
-
-impl UnionFind {
-    fn make(&mut self) -> usize {
-        let id = self.parent.len();
-        self.parent.push(id);
-        self.rank.push(0);
-        id
-    }
-    fn find(&mut self, mut x: usize) -> usize {
-        while self.parent[x] != x {
-            self.parent[x] = self.parent[self.parent[x]];
-            x = self.parent[x];
-        }
-        x
-    }
-    fn union(&mut self, a: usize, b: usize) {
-        let (ra, rb) = (self.find(a), self.find(b));
-        if ra == rb {
-            return;
-        }
-        if self.rank[ra] < self.rank[rb] {
-            self.parent[ra] = rb;
-        } else if self.rank[ra] > self.rank[rb] {
-            self.parent[rb] = ra;
-        } else {
-            self.parent[rb] = ra;
-            self.rank[ra] += 1;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Intermediate representation while building the netlist
 // ---------------------------------------------------------------------------
 
@@ -323,7 +284,7 @@ impl AnchorKind {
 }
 
 struct NetlistBuilder {
-    uf: UnionFind,
+    uf: Dsu,
     components: Vec<Component>,
     pin_sites: Vec<PinSite>,
     anchors: Vec<NamedAnchor>,
@@ -415,7 +376,7 @@ struct BusBoundary {
 impl NetlistBuilder {
     fn new() -> Self {
         NetlistBuilder {
-            uf: UnionFind::default(),
+            uf: Dsu::new(0),
             components: Vec::new(),
             pin_sites: Vec::new(),
             anchors: Vec::new(),
@@ -1882,30 +1843,15 @@ fn ps_pin_number(components: &[Component], ps: &PinSite) -> String {
 #[cfg(test)]
 mod tests {
     use super::{expand_bus, expand_bus_aliased, merge_units, point_strictly_inside};
+    use crate::testutil::part;
     use crate::{Component, Pin};
 
     fn pin(number: &str, net: i64) -> Pin {
-        Pin {
-            number: number.into(),
-            net: Some(net),
-            function: String::new(),
-            kind: String::new(),
-            position: None,
-        }
+        crate::testutil::pin(number, Some(net))
     }
 
     fn comp(reference: &str, pins: Vec<Pin>) -> Component {
-        Component {
-            reference: reference.into(),
-            value: String::new(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins,
-        }
+        part(reference, "", "", "", pins)
     }
 
     #[test]

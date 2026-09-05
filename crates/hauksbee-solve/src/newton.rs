@@ -284,113 +284,35 @@ impl Workspace {
         use_ic: bool,
         empty: &ReactiveState,
     ) -> f64 {
-        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
-        self.matrix.clear_values();
-        for v in self.rhs.iter_mut() {
-            *v = 0.0;
-        }
-        let ctx = StampCtx {
-            circuit,
-            layout: &self.layout,
-            opts,
-            x: &self.x,
-            x_prev: &self.x,
-            time: 0.0,
-            coeffs,
-            state: empty,
-            dc: true,
-            use_ic,
-            gmin: opts.gmin,
-            src_scale: 1.0,
-            branch_reg: 0.0,
-            cmp_freeze: None,
-            switch_freeze: None,
-            // Under SwitchModel::Hysteretic the LATCHED relay IS the device, so a
-            // residual measured with the switches self-deciding across their whole
-            // band would be the residual of a circuit the caller never asked for.
-            // Honouring the latch here is what lets the in-loop false-convergence
-            // guard and `.op`'s post-hoc refusal both apply to a hysteretic deck.
-            switch_latch: hyst_latch(opts, &self.switch_latch),
-            spdt_sibling: &self.spdt_sibling,
-            junction_eval: None,
-        };
-        stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
-        // A faulting behavioral expression stamped nothing: the residual of an
-        // incomplete system is meaningless, and a poisoned point is not a root.
-        if crate::stamp::take_behavioral_fault().is_some() {
-            return f64::INFINITY;
-        }
-        // F = g*x - rhs, infinity norm over node rows.
-        let mut worst = 0.0f64;
-        for i in 0..self.layout.n_nodes {
-            let row = self.matrix.row(i);
-            let mut acc = 0.0;
-            for &(col, val) in row {
-                acc += val * self.x[col];
-            }
-            let f = acc - self.rhs[i];
-            if !f.is_finite() {
-                return f64::INFINITY;
-            }
-            if f.abs() > worst {
-                worst = f.abs();
-            }
-        }
-        worst
+        self.dc_residual_argmax_with(circuit, opts, use_ic, empty).0
     }
 
     /// Argmax companion of [`Self::dc_residual_inf_norm`]: returns
     /// `(max|F|, node_index)` so callers can name the worst-balanced node.
     pub fn dc_residual_argmax(&mut self, circuit: &Circuit, opts: &SolverOptions) -> (f64, usize) {
-        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(circuit.devices.len());
-        self.matrix.clear_values();
-        for v in self.rhs.iter_mut() {
-            *v = 0.0;
-        }
-        let ctx = StampCtx {
-            circuit,
-            layout: &self.layout,
-            opts,
-            x: &self.x,
-            x_prev: &self.x,
-            time: 0.0,
-            coeffs,
-            state: &empty,
-            dc: true,
-            use_ic: false,
-            gmin: opts.gmin,
-            src_scale: 1.0,
-            branch_reg: 0.0,
-            cmp_freeze: None,
-            switch_freeze: None,
-            // Under SwitchModel::Hysteretic the LATCHED relay IS the device, so a
-            // residual measured with the switches self-deciding across their whole
-            // band would be the residual of a circuit the caller never asked for.
-            // Honouring the latch here is what lets the in-loop false-convergence
-            // guard and `.op`'s post-hoc refusal both apply to a hysteretic deck.
-            switch_latch: hyst_latch(opts, &self.switch_latch),
-            spdt_sibling: &self.spdt_sibling,
-            junction_eval: None,
-        };
-        stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
-        // Same poisoned-point rule as `dc_residual_inf_norm`.
-        if crate::stamp::take_behavioral_fault().is_some() {
-            return (f64::INFINITY, 0);
-        }
-        let mut worst = (0.0f64, 0usize);
-        for i in 0..self.layout.n_nodes {
-            let row = self.matrix.row(i);
-            let mut acc = 0.0;
-            for &(col, val) in row {
-                acc += val * self.x[col];
-            }
-            let f = (acc - self.rhs[i]).abs();
-            if f > worst.0 {
-                worst = (f, i);
-            }
-        }
-        worst
+        self.dc_residual_argmax_with(circuit, opts, false, &empty)
+    }
+
+    /// The PRISTINE DC system (reactive elements open/short, or IC-pinned
+    /// under `use_ic`; default gmin, full sources, no regularizer, no frozen
+    /// discrete states) stamped at `self.x`, and its worst node's `|F|` with
+    /// that node's index. Any frozen states an outer loop holds are set aside
+    /// for the probe, so it measures the circuit the caller asked about.
+    fn dc_residual_argmax_with(
+        &mut self,
+        circuit: &Circuit,
+        opts: &SolverOptions,
+        use_ic: bool,
+        empty: &ReactiveState,
+    ) -> (f64, usize) {
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
+        let frozen = (self.cmp_freeze.take(), self.switch_freeze.take());
+        let r = residual_argmax_at(
+            self, circuit, opts, 0.0, coeffs, empty, true, use_ic, opts.gmin, 1.0, 0.0,
+        );
+        (self.cmp_freeze, self.switch_freeze) = frozen;
+        r
     }
 
     /// Absolute equation residual at an accepted transient point, evaluated
@@ -481,10 +403,6 @@ impl Workspace {
         self.behavioral_fault.as_deref()
     }
 
-    pub(crate) fn last_solve_was_singular(&self) -> bool {
-        self.last_singular
-    }
-
     /// The blame clause for the most recent FAILED solve: the unknown that
     /// refused to settle, the devices on it, and any near-zero-ohm links that
     /// are the obvious matrix suspects. `None` when nothing can honestly be
@@ -493,6 +411,52 @@ impl Workspace {
     /// (E29). Meaningless after a converged solve; callers only ask on failure.
     pub fn stall_blame(&self, circuit: &Circuit) -> Option<String> {
         crate::blame::blame_clause(circuit, &self.layout, self.stall_site)
+    }
+
+    /// The refusal for an attempt that gave up, naming the smallest
+    /// identifiable thing: a behavioral-expression fault (device-named:
+    /// "ln of a negative node voltage" is actionable, "Newton failed" is not),
+    /// a matrix that would not factor, or the unknown that refused to settle
+    /// with the devices on it and any near-zero-ohm link poisoning the matrix
+    /// (E29). `message` is the phase's own text; the fault and blame clauses
+    /// are appended to it, so a driver never emits a bare failure that leaves
+    /// the user bisecting a 259-part board by model class.
+    pub(crate) fn failure(
+        &self,
+        circuit: &Circuit,
+        mut message: String,
+        phase: SolvePhase,
+        time: Option<f64>,
+        dt: Option<f64>,
+        iterations: Option<usize>,
+    ) -> SolveError {
+        let blame = self.stall_blame(circuit);
+        if let Some(fault) = &self.behavioral_fault {
+            message.push_str(&format!("; {fault}"));
+        }
+        if let Some(blame) = &blame {
+            message.push_str(&format!(" [{blame}]"));
+        }
+        if let Some(fault) = &self.behavioral_fault {
+            SolveError::behavioral(message, crate::error::behavioral_device(fault), phase)
+        } else if self.last_singular {
+            SolveError::Singular {
+                message,
+                unknown: self.stall_site.map(|(_, unknown)| unknown),
+                net: crate::blame::source_conflicts(circuit)
+                    .first()
+                    .map(|conflict| conflict.net.clone()),
+            }
+        } else {
+            SolveError::NonConvergence {
+                message,
+                phase,
+                time,
+                dt,
+                iterations,
+                blame,
+            }
+        }
     }
 }
 
@@ -1739,18 +1703,16 @@ fn dc_solve(
             ws, circuit, opts, 0.0, 1.0, coeffs, &empty, true, use_ic, gmin, scale,
         )
     };
+    let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
 
     // Attempt 0 (warm start): if a seed of the right size is given, try plain
     // Newton from it. Near the previous operating point this converges in a few
     // iterations; a failure simply falls through to the cold path, so the root
     // found is identical either way.
-    if let Some(s) = seed {
-        if s.len() == ws.x.len() {
-            ws.x.copy_from_slice(s);
-            let r = solve(ws, opts.gmin, 1.0);
-            if r.converged {
-                return Ok(());
-            }
+    if let Some(s) = seed.filter(|s| s.len() == ws.x.len()) {
+        ws.x.copy_from_slice(s);
+        if solve(ws, opts.gmin, 1.0).converged {
+            return Ok(());
         }
     }
 
@@ -1760,9 +1722,7 @@ fn dc_solve(
     // pinned), so on a well-posed circuit the root is unchanged, while on a
     // multi-stable one the seed selects which root is found. Every other node
     // stays zero, exactly as before.
-    for v in ws.x.iter_mut() {
-        *v = 0.0;
-    }
+    ws.x.fill(0.0);
     for &(nid, val) in &circuit.nodesets {
         if let Some(i) = ws.layout.node(nid) {
             ws.x[i] = val;
@@ -1771,7 +1731,6 @@ fn dc_solve(
     seed_bjt_internal_nodes(ws, circuit);
     seed_mosfet_internal_nodes(ws, circuit);
     seed_diode_internal_nodes(ws, circuit);
-    let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
     let r = solve(ws, opts.gmin, 1.0);
     if dbg {
         eprintln!(
@@ -1783,88 +1742,38 @@ fn dc_solve(
         return Ok(());
     }
     if !opts.dc_homotopy {
-        let fault = ws.behavioral_fault.clone();
-        let fault_suffix = fault
-            .as_ref()
-            .map(|fault| format!("; {fault}"))
-            .unwrap_or_default();
-        let blame = ws.stall_blame(circuit);
-        let blame_suffix = blame
-            .as_ref()
-            .map(|blame| format!(" [{blame}]"))
-            .unwrap_or_default();
-        let message = format!(
-            "DC Newton did not converge in {} iters{fault_suffix}{blame_suffix}",
-            r.iters
-        );
-        return Err(if let Some(fault) = fault {
-            SolveError::behavioral(
-                message,
-                crate::error::behavioral_device(&fault),
-                SolvePhase::Dc,
-            )
-        } else if ws.last_solve_was_singular() {
-            singular_error(message, circuit, ws)
-        } else {
-            SolveError::NonConvergence {
-                message,
-                phase: SolvePhase::Dc,
-                time: None,
-                dt: None,
-                iterations: Some(r.iters),
-                blame,
-            }
-        });
+        return Err(ws.failure(
+            circuit,
+            format!("DC Newton did not converge in {} iters", r.iters),
+            SolvePhase::Dc,
+            None,
+            None,
+            Some(r.iters),
+        ));
     }
 
     // Attempt 2: gmin stepping, start with a large shunt and ramp it down.
-    for v in ws.x.iter_mut() {
-        *v = 0.0;
-    }
-    let mut gmin = 1e-2;
-    let mut ok = true;
-    while gmin > opts.gmin {
-        let r = solve(ws, gmin, 1.0);
-        if !r.converged {
-            if dbg {
-                eprintln!("[dc] gmin-step stalled at gmin={gmin:e} iters={}", r.iters);
-            }
-            ok = false;
-            break;
-        }
-        gmin *= 0.1;
-    }
-    if ok && solve(ws, opts.gmin, 1.0).converged {
+    ws.x.fill(0.0);
+    if gmin_ladder(ws, &solve, 1e-2, opts.gmin, dbg) {
         return Ok(());
-    }
-    if dbg {
-        eprintln!("[dc] gmin ladder failed (ok={ok})");
     }
 
     // Attempt 3: source stepping, ramp every source from 0 to full.
-    for v in ws.x.iter_mut() {
-        *v = 0.0;
-    }
+    ws.x.fill(0.0);
     let steps = 50;
-    let mut src_ok = true;
-    let mut last_scale = 0.0;
-    let mut last_iters = 0;
-    for s in 1..=steps {
+    let mut last = (0.0, 0);
+    let src_ok = (1..=steps).all(|s| {
         let scale = s as f64 / steps as f64;
         let r = solve(ws, opts.gmin, scale);
-        last_scale = scale;
-        last_iters = r.iters;
-        if !r.converged {
-            if dbg {
-                eprintln!(
-                    "[dc] source-step stalled at scale={scale:.3} iters={}",
-                    r.iters
-                );
-            }
-            src_ok = false;
-            break;
+        last = (scale, r.iters);
+        if !r.converged && dbg {
+            eprintln!(
+                "[dc] source-step stalled at scale={scale:.3} iters={}",
+                r.iters
+            );
         }
-    }
+        r.converged
+    });
     if src_ok {
         return Ok(());
     }
@@ -1882,209 +1791,68 @@ fn dc_solve(
     // state, a large linear leak resistor, what a reverse-biased junction is to
     // first order), then warm-start the FULL circuit from that operating point
     // while holding gmin at a floor that anchors the otherwise-floating high-Z
-    // nodes.
+    // nodes (see `staged_dc` for the rungs).
     //
     // EXACT to solver tolerance: the relaxed solve only seeds the starting
     // guess (the final root is set by the full, unmodified diode equations).
-    // The gmin floor is STAGED_GMIN = 1e-9 S; that injects at most ~1e-9 S * 5 V
-    // = 5 nA of leakage per node, orders of magnitude below the µA-scale synapse
-    // / mirror currents that set every meaningful node, and well inside reltol +
-    // vntol. Nodes that are genuinely floating at DC (cap + reverse diode only)
-    // have no physically-defined DC voltage anyway; the gmin floor pins them to
-    // ~0, exactly as gmin always does. Removing the diodes never changes the
-    // unknown layout (a diode owns no branch current; the relaxation keeps every
-    // node present via the leak resistor), so the relaxed `x` maps 1:1 onto the
-    // full system's unknowns. This path triggers ONLY after plain + gmin + source
-    // stepping have all failed, so circuits that already converge are untouched.
-    const STAGED_GMIN: f64 = 1e-7;
-    let staged_gmin = STAGED_GMIN.max(opts.gmin);
-    let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
+    // The gmin floor STAGED_GMIN injects at most ~1e-7 S * 5 V of leakage per
+    // node, orders of magnitude below the µA-scale synapse / mirror currents
+    // that set every meaningful node, and well inside reltol + vntol. Nodes
+    // that are genuinely floating at DC (cap + reverse diode only) have no
+    // physically-defined DC voltage anyway; the gmin floor pins them to ~0,
+    // exactly as gmin always does. This path triggers ONLY after plain + gmin +
+    // source stepping have all failed, so circuits that already converge are
+    // untouched.
+    //
     // The staged path solves a diode-laden board whose conducting junctions can
     // make the frozen elimination order hit a singular pivot. The dynamic
-    // re-pivot fallback dissolves that LU singularity. On a board whose
-    // spike-output nodes are defined only dynamically (a DC-open stretch cap, so
-    // the node has no static DC voltage and must be anchored every iteration) it
-    // cannot reach a static root and just adds cost, so it is OPT-IN
-    // (Strategy::DynamicPivot). The default staged path keeps the original behaviour
-    // (frozen-singular -> adopt the relaxed power-on point) bit-for-bit and at
-    // the original speed, so no existing test changes value or timing. It is
-    // restored to off before every return so the workspace-reused transient
-    // keeps frozen-only semantics.
+    // re-pivot fallback dissolves that LU singularity, but on a board whose
+    // spike-output nodes are defined only dynamically it cannot reach a static
+    // root and just adds cost, so it is OPT-IN (Strategy::DynamicPivot); the
+    // default keeps the frozen-singular -> adopt-the-relaxed-point behaviour
+    // bit-for-bit. Restored to off before every return so the workspace-reused
+    // transient keeps frozen-only semantics.
+    const STAGED_GMIN: f64 = 1e-7;
+    // A negligible series resistance on every Vsource/Inductor branch so the
+    // frozen sparse ordering keeps a nonzero pivot on those rows even as
+    // conducting diodes reshape the elimination: far below the 50-ohm driver
+    // output impedance and any meaningful series element, so it does not move
+    // the operating point within solver tolerance. It also arms the
+    // "converged-then-singular" acceptance and the per-node damping in
+    // newton_solve (at the true root every signal diode is reverse-biased, so
+    // the next Jacobian can be singular even though the root is well-defined).
+    const STAGED_BRANCH_REG: f64 = 1e-2;
+    let staged_gmin = STAGED_GMIN.max(opts.gmin);
     let dc_dyn = opts.ladder.has(Strategy::DynamicPivot);
     if dc_dyn {
         crate::diagnostics::note(Strategy::DynamicPivot);
     }
     ws.symbolic.set_allow_dynamic(dc_dyn);
-    if let Some(seed) = solve_relaxed_no_diodes(circuit, opts) {
-        if dbg {
-            eprintln!(
-                "[staged] relaxed converged, seeding full (len {})",
-                seed.len()
-            );
+    let relaxed = solve_relaxed_no_diodes(circuit, opts);
+    if dbg {
+        match &relaxed {
+            Some(s) => eprintln!("[staged] relaxed converged, seeding full (len {})", s.len()),
+            None => eprintln!("[staged] relaxed (no-diode) solve did NOT converge"),
         }
-        if seed.len() == ws.x.len() {
-            // Warm-start the full nonlinear solve from the relaxed operating
-            // point, with two regularizers active:
-            //   * a gmin floor (staged_gmin) anchoring high-impedance nodes that
-            //     sit behind a reverse-biased diode plus a (DC-open) cap, and
-            //   * a negligible series resistance on every Vsource/Inductor branch
-            //     (STAGED_BRANCH_REG ohms) so the frozen sparse ordering keeps a
-            //     nonzero pivot on those branch rows even as conducting diodes
-            //     reshape the elimination.
-            // STAGED_BRANCH_REG = 1e-4 ohm is far below the 50-ohm driver output
-            // impedance and any meaningful series element, so it does not move
-            // the operating point within solver tolerance. The branch_reg also
-            // arms the "converged-then-singular" acceptance in newton_solve: at
-            // the true root every signal diode is reverse-biased (tangent ~1e-10
-            // S) so the next Jacobian can be numerically singular even though the
-            // root is well-defined; Newton then accepts the converged iterate.
-            const STAGED_BRANCH_REG: f64 = 1e-2;
-            ws.staged_branch_reg = STAGED_BRANCH_REG;
-            ws.x.copy_from_slice(&seed);
-            let r = solve(ws, staged_gmin, 1.0);
-            if dbg {
-                eprintln!(
-                    "[staged] full from seed @gmin={staged_gmin:e}: converged={} iters={}",
-                    r.converged, r.iters
-                );
-            }
-            if r.converged {
-                ws.staged_branch_reg = 0.0;
-                ws.symbolic.set_allow_dynamic(false);
-                ws.used_staged_dc = true;
-                return Ok(());
-            }
-
-            // EVENT-DRIVEN COMPARATOR LOOP. The plain staged solve above stalls
-            // because the LMV7219 comparators are bang-bang: as Newton settles
-            // the analog core, a comparator input crosses threshold, its output
-            // swings rail-to-rail, and that swing destabilizes the inputs feeding
-            // it, a limit cycle (verified: the per-iteration node delta pins at
-            // the damping cap once the analog part has converged). The cure is to
-            // FREEZE each comparator's decision for an inner solve (making the
-            // circuit smooth so Newton converges), then re-evaluate the decisions
-            // from the converged solution and re-solve if any flipped. This is a
-            // Gauss-Seidel / event-driven outer loop over the comparator states;
-            // at its fixed point every comparator output is consistent with its
-            // own inputs, so the result is a TRUE root of the full circuit (not
-            // the relaxed bias). The dynamic-pivot LU keeps each inner solve
-            // factorable even as the conducting diodes reshape the elimination.
-            // The event loop is expensive and only pays off on a board that
-            // actually has a consistent all-comparator DC fixed point. On a board
-            // whose spike-output nodes are defined dynamically (a stretch cap that
-            // is open at DC, so the node has no DC voltage at all), it cannot
-            // converge and just burns time, so it is gated behind
-            // Strategy::EventFreeze rather than run on the default path. The
-            // dynamic-pivot LU (the structural fix) stays on regardless.
-            if opts.ladder.has(Strategy::EventFreeze) {
-                crate::diagnostics::note(Strategy::EventFreeze);
-                if let Some(root) = staged_event_solve(
-                    ws,
-                    circuit,
-                    opts,
-                    &seed,
-                    staged_gmin,
-                    STAGED_BRANCH_REG,
-                    dbg,
-                ) {
-                    ws.x.copy_from_slice(&root);
-                    ws.staged_branch_reg = 0.0;
-                    ws.cmp_freeze = None;
-                    ws.switch_freeze = None;
-                    ws.symbolic.set_allow_dynamic(false);
-                    ws.used_staged_dc = true;
-                    return Ok(());
-                }
-            }
-            ws.cmp_freeze = None;
-            ws.switch_freeze = None;
-            ws.staged_branch_reg = STAGED_BRANCH_REG;
-
-            // Diode saturation-current homotopy: the cold full solve stalls in a
-            // limit cycle on the comparator-driven stretch nodes, but the relaxed
-            // (diodes-off) point converged. Walk the diode `is` from near-zero up
-            // to its real value in log steps, warm-starting each from the last
-            // converged point. Each small change moves the operating point a
-            // little, so Newton tracks the solution branch smoothly to the TRUE
-            // full-circuit DC root (the final step uses the real `is`, so it is
-            // exact). This is the principled continuation for a stiff junction
-            // network; it reaches the real root, not the relaxed approximation.
-            if let Some(s) =
-                solve_diode_is_homotopy(circuit, opts, &seed, staged_gmin, STAGED_BRANCH_REG)
-            {
-                if dbg {
-                    eprintln!("[staged] diode-Is homotopy reached the full root");
-                }
-                ws.x.copy_from_slice(&s);
-                ws.staged_branch_reg = 0.0;
-                ws.symbolic.set_allow_dynamic(false);
-                ws.used_staged_dc = true;
-                return Ok(());
-            }
-            // If the direct warm start stalls, walk gmin down to the floor from a
-            // stiffer start (helps when the relaxed seed is far on some
-            // junctions), keeping the branch regularizer on throughout.
-            ws.x.copy_from_slice(&seed);
-            let mut gmin = 1e-3;
-            let mut staged_ok = true;
-            while gmin > staged_gmin {
-                if !solve(ws, gmin, 1.0).converged {
-                    staged_ok = false;
-                    break;
-                }
-                gmin *= 0.1;
-            }
-            if dbg {
-                eprintln!("[staged] gmin-ramp staged_ok={staged_ok}");
-            }
-            if staged_ok && solve(ws, staged_gmin, 1.0).converged {
-                ws.staged_branch_reg = 0.0;
-                ws.symbolic.set_allow_dynamic(false);
-                ws.used_staged_dc = true;
-                return Ok(());
-            }
-            ws.staged_branch_reg = 0.0;
-
-            // Optional last resort: pseudo-transient continuation (settle the
-            // full circuit forward from the relaxed seed with a pseudo-cap on
-            // every node). It is the textbook robust method, but on a board whose
-            // per-step nonlinear solve itself does not converge (the Tarski
-            // synapse core) it is both slow and unproductive, so it is gated
-            // behind Strategy::Ptc rather than run on the hot path.
-            if opts.ladder.has(Strategy::Ptc) {
-                crate::diagnostics::note(Strategy::Ptc);
-                if let Some(s) = ptc_settle_from_seed(circuit, opts, &seed) {
-                    if dbg {
-                        eprintln!("[staged] PTC settled to a full operating point");
-                    }
-                    ws.x.copy_from_slice(&s);
-                    ws.symbolic.set_allow_dynamic(false);
-                    ws.used_staged_dc = true;
-                    return Ok(());
-                }
-            }
-
-            // Final fallback: adopt the relaxed (all-diodes-OFF) operating point
-            // as the t=0 seed. It is a genuinely converged DC solution of the
-            // relaxed circuit AND the physically correct power-on state (every
-            // pulse-stretcher cap discharged, every signal diode reverse-biased
-            // before the first spike). The caller's transient then integrates the
-            // full nonlinear circuit forward: the real stretch caps define the
-            // otherwise-floating diode-anode nodes through dv/dt (so the per-step
-            // matrix is well-conditioned where the static DC was not), and the
-            // operating point relaxes to its true steady state over the march.
-            if dbg {
-                eprintln!("[staged] adopting relaxed power-on operating point as seed");
-            }
-            ws.x.copy_from_slice(&seed);
-            ws.symbolic.set_allow_dynamic(false);
-            ws.used_staged_dc = true;
-            return Ok(());
-        }
-    } else if dbg {
-        eprintln!("[staged] relaxed (no-diode) solve did NOT converge");
     }
-
+    if let Some(seed) = relaxed.filter(|s| s.len() == ws.x.len()) {
+        staged_dc(
+            ws,
+            circuit,
+            opts,
+            &solve,
+            &seed,
+            staged_gmin,
+            STAGED_BRANCH_REG,
+            dbg,
+        );
+        ws.staged_branch_reg = 0.0;
+        ws.cmp_freeze = None;
+        ws.switch_freeze = None;
+        ws.symbolic.set_allow_dynamic(false);
+        ws.used_staged_dc = true;
+        return Ok(());
+    }
     ws.symbolic.set_allow_dynamic(false);
 
     // Residual-acceptance backstop (opt-in, gated; default path unchanged).
@@ -2113,57 +1881,132 @@ fn dc_solve(
             if dbg {
                 eprintln!("[staged] residual-accept: KCL residual {res:e} A < {tol:e} A, accepting iterate as DC root");
             }
-            ws.symbolic.set_allow_dynamic(false);
             ws.used_staged_dc = true;
             return Ok(());
         }
     }
 
-    // If the LAST attempt died on a behavioral-expression fault, say so by
-    // device name: "ln of a negative node voltage" is actionable, "homotopy
-    // failed" is not.
-    let fault = ws.behavioral_fault.clone();
-    let fault_suffix = fault
-        .as_ref()
-        .map(|fault| format!("; {fault}"))
-        .unwrap_or_default();
-    let blame = ws.stall_blame(circuit);
-    let blame_suffix = blame
-        .as_ref()
-        .map(|blame| format!(" [{blame}]"))
-        .unwrap_or_default();
-    let message = format!(
-        "DC homotopy failed (source scale {last_scale:.3}, {last_iters} iters; \
-         staged-DC relaxation did not recover){fault_suffix}{blame_suffix}"
-    );
-    Err(if let Some(fault) = fault {
-        SolveError::behavioral(
-            message,
-            crate::error::behavioral_device(&fault),
-            SolvePhase::Dc,
-        )
-    } else if ws.last_solve_was_singular() {
-        singular_error(message, circuit, ws)
-    } else {
-        SolveError::NonConvergence {
-            message,
-            phase: SolvePhase::Dc,
-            time: None,
-            dt: None,
-            iterations: Some(last_iters),
-            blame,
-        }
-    })
+    Err(ws.failure(
+        circuit,
+        format!(
+            "DC homotopy failed (source scale {:.3}, {} iters; \
+             staged-DC relaxation did not recover)",
+            last.0, last.1
+        ),
+        SolvePhase::Dc,
+        None,
+        None,
+        Some(last.1),
+    ))
 }
 
-fn singular_error(message: String, circuit: &Circuit, ws: &Workspace) -> SolveError {
-    SolveError::Singular {
-        message,
-        unknown: ws.stall_site.map(|(_, unknown)| unknown),
-        net: crate::blame::source_conflicts(circuit)
-            .first()
-            .map(|conflict| conflict.net.clone()),
+/// Gmin stepping: solve with a large shunt `start` and walk it down a decade
+/// at a time to just above `floor`, each rung warm-starting from the last, then
+/// solve at `floor` itself. True iff every rung converged (a stalled rung ends
+/// the walk where it is).
+fn gmin_ladder(
+    ws: &mut Workspace,
+    solve: &impl Fn(&mut Workspace, f64, f64) -> NewtonResult,
+    start: f64,
+    floor: f64,
+    dbg: bool,
+) -> bool {
+    let mut gmin = start;
+    while gmin > floor {
+        let r = solve(ws, gmin, 1.0);
+        if !r.converged {
+            if dbg {
+                eprintln!("[dc] gmin-step stalled at gmin={gmin:e} iters={}", r.iters);
+            }
+            return false;
+        }
+        gmin *= 0.1;
     }
+    solve(ws, floor, 1.0).converged
+}
+
+/// The staged rescue ladder from a converged relaxed (diodes-off) `seed`, every
+/// rung warm-started from it with the regularizers armed (`staged_gmin` floor,
+/// `branch_reg` on every branch row; see `dc_solve`). Leaves the best operating
+/// point it reached in `ws.x`: the full root when a rung converges, else the
+/// relaxed power-on point, which is a genuinely converged DC solution of the
+/// relaxed circuit AND the physically correct power-on state (every stretch
+/// cap discharged, every signal diode reverse-biased before the first spike);
+/// the caller's transient then integrates the full circuit forward from it and
+/// the operating point relaxes to its true steady state over the march.
+///
+/// Rungs, in order:
+/// 1. the full circuit warm-started from the seed;
+/// 2. (`Strategy::EventFreeze`) the event-driven comparator/switch loop: the
+///    plain solve stalls when bang-bang comparators limit-cycle as the analog
+///    core settles, so each discrete state is frozen per inner solve and
+///    re-derived Gauss-Seidel until consistent, a TRUE root of the full
+///    circuit. Gated because on a board whose spike-output nodes are defined
+///    only dynamically it cannot converge and just burns time;
+/// 3. the diode saturation-current continuation (warm-started log ramp of
+///    `is`, tracking the solution branch to the real device);
+/// 4. a gmin walk from 1e-3 down to the floor, branch regularizer on;
+/// 5. (`Strategy::Ptc`) pseudo-transient continuation, the textbook robust
+///    method, gated because a board whose per-step solve itself fails makes
+///    it slow and unproductive.
+#[allow(clippy::too_many_arguments)]
+fn staged_dc(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    solve: &impl Fn(&mut Workspace, f64, f64) -> NewtonResult,
+    seed: &[f64],
+    staged_gmin: f64,
+    branch_reg: f64,
+    dbg: bool,
+) {
+    ws.staged_branch_reg = branch_reg;
+    ws.x.copy_from_slice(seed);
+    let r = solve(ws, staged_gmin, 1.0);
+    if dbg {
+        eprintln!(
+            "[staged] full from seed @gmin={staged_gmin:e}: converged={} iters={}",
+            r.converged, r.iters
+        );
+    }
+    if r.converged {
+        return;
+    }
+    if opts.ladder.has(Strategy::EventFreeze) {
+        crate::diagnostics::note(Strategy::EventFreeze);
+        if staged_event_solve(ws, circuit, opts, seed, staged_gmin, branch_reg) {
+            return;
+        }
+    }
+    ws.cmp_freeze = None;
+    ws.switch_freeze = None;
+    ws.staged_branch_reg = branch_reg;
+    if let Some(s) = solve_diode_is_homotopy(circuit, opts, seed, staged_gmin, branch_reg) {
+        if dbg {
+            eprintln!("[staged] diode-Is homotopy reached the full root");
+        }
+        ws.x.copy_from_slice(&s);
+        return;
+    }
+    ws.x.copy_from_slice(seed);
+    if gmin_ladder(ws, solve, 1e-3, staged_gmin, dbg) {
+        return;
+    }
+    ws.staged_branch_reg = 0.0;
+    if opts.ladder.has(Strategy::Ptc) {
+        crate::diagnostics::note(Strategy::Ptc);
+        if let Some(s) = ptc_settle_from_seed(circuit, opts, seed) {
+            if dbg {
+                eprintln!("[staged] PTC settled to a full operating point");
+            }
+            ws.x.copy_from_slice(&s);
+            return;
+        }
+    }
+    if dbg {
+        eprintln!("[staged] adopting relaxed power-on operating point as seed");
+    }
+    ws.x.copy_from_slice(seed);
 }
 
 /// Evaluate every comparator's output decision (`high` = output at the high
@@ -2352,13 +2195,11 @@ fn eval_switch_states(
     on
 }
 
-/// Event-driven staged DC solve. Freezes each comparator's decision, solves the
-/// resulting smooth circuit with the dynamic-pivot LU, re-evaluates the
-/// decisions from that solution, and repeats until the decision set stops
-/// changing (a consistent fixed point) AND the inner Newton converged. The
-/// returned vector is then a TRUE root of the full nonlinear circuit: every
-/// diode equation holds and every comparator output is consistent with its own
-/// inputs. Returns `None` if it cannot reach a consistent converged state.
+/// Event-driven staged DC solve: [`event_solve`] from the relaxed `seed` with
+/// the staged regularizers armed. True iff a consistent converged state was
+/// reached, in which case `ws.x` is a TRUE root of the full nonlinear circuit:
+/// every diode equation holds and every comparator/switch state is consistent
+/// with its own inputs.
 fn staged_event_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -2366,138 +2207,56 @@ fn staged_event_solve(
     seed: &[f64],
     staged_gmin: f64,
     branch_reg: f64,
-    dbg: bool,
-) -> Option<Vec<f64>> {
+) -> bool {
     let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
-    // The event-driven inner solves converge LINEARLY in their tail (the decayed
-    // damping that breaks the diode/comparator oscillation also slows the final
-    // approach), so allow more Newton iterations than the default before giving
-    // up on an inner solve.
-    let mut inner_opts = *opts;
-    inner_opts.max_newton = opts.max_newton.max(400);
-    let opts = &inner_opts;
-
-    // Initial comparator AND analog-switch decisions from the relaxed
-    // (diodes-off) seed. The discrete state of BOTH device classes is frozen in
-    // the inner solve: the comparators are bang-bang and the 4320 analog
-    // switches each carry a tanh conductance whose control sits near transition
-    // for the coupled core, so both must be held fixed for the inner circuit to
-    // be smooth (otherwise a flipping switch flips the synapse current that
-    // flips a comparator that flips the switch; the measured limit cycle on the
-    // switch-control / BJT-base nodes).
-    let spdt = SpdtPairs::analyze(circuit);
-    let mut cmp_states = eval_comparator_states(circuit, &ws.layout, seed, &Default::default());
-    let mut sw_states = eval_switch_states(
-        circuit,
-        &ws.layout,
-        seed,
-        &Default::default(),
-        &spdt,
-        opts.effects.switch_transition_frac,
-    );
-    if cmp_states.is_empty() && sw_states.is_empty() {
-        return None; // nothing discrete to freeze: this path adds nothing.
-    }
-
+    let mut inner = *opts;
+    inner.max_newton = opts.max_newton.max(400);
     ws.staged_branch_reg = branch_reg;
-    let mut x = seed.to_vec();
-    const MAX_EVENT_PASSES: usize = 40;
-    for pass in 0..MAX_EVENT_PASSES {
-        ws.cmp_freeze = Some(cmp_states.clone());
-        ws.switch_freeze = Some(sw_states.clone());
-        ws.x.copy_from_slice(&x);
-        let r = newton_solve(
-            ws,
-            circuit,
-            opts,
-            0.0,
-            1.0,
-            coeffs,
-            &empty,
-            true,
-            false,
-            staged_gmin,
-            1.0,
-        );
-        if !r.converged {
-            if dbg {
-                eprintln!(
-                    "[staged-event] pass {pass}: inner Newton did NOT converge (iters {})",
-                    r.iters
-                );
-            }
-            ws.switch_freeze = None;
-            return None;
-        }
-        x.copy_from_slice(&ws.x);
-        // Re-evaluate BOTH decision sets from the converged inner solution
-        // (Gauss-Seidel over the discrete comparator + switch states).
-        let next_cmp = eval_comparator_states(circuit, &ws.layout, &x, &cmp_states);
-        let next_sw = eval_switch_states(
-            circuit,
-            &ws.layout,
-            &x,
-            &sw_states,
-            &spdt,
-            opts.effects.switch_transition_frac,
-        );
-        let cmp_flips = next_cmp
-            .iter()
-            .filter(|(k, v)| cmp_states.get(k) != Some(*v))
-            .count();
-        let sw_flips = next_sw
-            .iter()
-            .filter(|(k, v)| sw_states.get(k) != Some(*v))
-            .count();
-        if dbg {
-            eprintln!(
-                "[staged-event] pass {pass}: inner converged in {} iters, {cmp_flips} comparator flips, {sw_flips} switch flips",
-                r.iters
-            );
-        }
-        if cmp_flips == 0 && sw_flips == 0 {
-            // Fixed point: every comparator AND every switch state is consistent
-            // with its own (control) inputs at the converged smooth solution.
-            // The returned vector is then a genuine root of the FULL circuit
-            // (real diodes, self-deciding comparators, self-deciding switches),
-            // not just of the frozen surrogate.
-            ws.switch_freeze = None;
-            return Some(x);
-        }
-        cmp_states = next_cmp;
-        sw_states = next_sw;
-    }
-    ws.switch_freeze = None;
-    None
+    ws.x.copy_from_slice(seed);
+    let ev = EventSolve {
+        time: 0.0,
+        dt: 1.0,
+        coeffs,
+        state: &empty,
+        dc: true,
+        gmin: staged_gmin,
+        cmp_smooth: false,
+        flip_budget: usize::MAX,
+        max_passes: 40,
+    };
+    event_solve(ws, circuit, &inner, ev) == Some(true)
 }
 
-/// Event-driven TRANSIENT step solve: the per-step analogue of
-/// [`staged_event_solve`]. Where the bare per-step [`newton_solve`] limit-cycles
-/// at a comparator/switch flip (the synapse spike-gate SPDT snapping multiple
-/// conductance decades while it carries real mirror current, "Newton failed at
-/// t~133us"), this freezes BOTH the comparator and the analog-switch discrete
-/// states for each inner solve (making the step a smooth circuit Newton can
-/// converge), re-derives every state from the converged inner solution
-/// (Gauss-Seidel), and re-solves until no state flips. The break-before-make in
-/// [`eval_switch_states`] keeps the summing bus from ever being low-Z to both
-/// SPDT throws at once.
+/// Event-driven TRANSIENT step solve: [`event_solve`] at `t+dt` with the real
+/// integration step's reactive companion, so the converged fixed point is a
+/// genuine root of the FULL nonlinear circuit AT t+dt. Where the bare per-step
+/// [`newton_solve`] limit-cycles at a comparator/switch flip (the synapse
+/// spike-gate SPDT snapping multiple conductance decades while it carries real
+/// mirror current), this converges the step; `false` (with `ws.x` left at the
+/// last inner iterate) sends the caller to a step cut.
 ///
-/// Unlike the DC event loop, the transient step has the reactive companion
-/// (`state`, `coeffs`, `dt`) of the real integration step, so the converged
-/// fixed point is a genuine root of the FULL nonlinear circuit AT t+dt: every
-/// diode/BJT equation holds, every cap/inductor companion holds, and every
-/// comparator+switch state is consistent with its own control. Returns the
-/// converged `ws.x` in place + `true` on success; `false` (and `ws.x` left at
-/// the last inner iterate) when it cannot reach a consistent converged state, so
-/// the caller falls back to a step cut.
+/// `cmp_smooth` picks the comparator regime, and the caller tries both. Frozen
+/// comparators (the DC loop's regime) converge a hidden switch-gate flip, but a
+/// comparator with adaptation feedback (its output capacitively coupled back to
+/// its own threshold node) stalls right at the crossing when pinned to a rail;
+/// left SELF-DECIDING through the smooth high-gain logistic transfer (the
+/// branch_reg>0 path, which has a real tangent) it tracks its flip
+/// continuously while the switch mesh stays frozen. A refractory reset is the
+/// opposite regime: the smooth comparator's ~2000 V^-1 gain couples the
+/// collapsing membrane straight back into the fast positive-feedback discharge
+/// loop and diverges, so there the comparator must be frozen.
 ///
-/// DAMPED PARTIAL FLIP: the bare DC event loop flips every disagreeing state at
-/// once and can cycle (the brief's "fails at pass 1, 369 flips don't settle").
-/// Here the re-derivation is bounded, at most `MAX_FLIPS_PER_PASS` switches are
-/// allowed to change state per Gauss-Seidel pass, chosen by largest control
-/// over/under-drive, so the discrete state walks toward consistency instead of
-/// thrashing. Comparators (few, and the spike driver) are not throttled.
+/// GMIN FLOOR: high-impedance mesh nodes (mirror bases, off-switch internal
+/// nodes coupled only through reverse-biased junctions and DC-open caps) have
+/// no defined operating point at `opts.gmin` (1e-12) and the inner Newton
+/// limit-cycles on them, so gmin is floored to the staged DC path's 1e-7 (a
+/// 1e-7 S leak across 5 V is 0.5 uA, below the signal currents, so only the
+/// genuinely-floating nodes are pinned). Frozen regime only: the smooth pass
+/// converges on the bare `opts.gmin`, and the floor there perturbs a
+/// membrane-near-threshold operating point enough to break the crossing it is
+/// meant to resolve.
+#[allow(clippy::too_many_arguments)]
 pub fn newton_solve_event(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -2509,118 +2268,128 @@ pub fn newton_solve_event(
     gmin: f64,
     cmp_smooth: bool,
 ) -> bool {
-    let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
-    let spdt = SpdtPairs::analyze(circuit);
-    // Seed the discrete states from the entry iterate (the accepted previous
-    // step, already in ws.x), anchored on the previous decisions if any (so a
-    // control sitting in a hysteresis band holds, not chatters).
-    let seed = ws.x.clone();
-    let mut cmp_states = eval_comparator_states(circuit, &ws.layout, &seed, &Default::default());
-    let mut sw_states = eval_switch_states(
-        circuit,
-        &ws.layout,
-        &seed,
-        &Default::default(),
-        &spdt,
-        opts.effects.switch_transition_frac,
-    );
-    if cmp_states.is_empty() && sw_states.is_empty() {
-        // Nothing discrete to freeze: a plain step is already smooth. Caller
-        // should not have routed here, but stay correct: one ordinary solve.
-        let r = newton_solve(
-            ws, circuit, opts, time, dt, coeffs, state, false, false, gmin, 1.0,
-        );
-        return r.converged;
-    }
-
-    // Allow more inner Newton iterations: the frozen inner circuit converges
-    // linearly in its tail (the damping that breaks the diode chatter slows the
-    // final approach), as in the DC event loop.
-    let mut inner_opts = *opts;
-    inner_opts.max_newton = opts
+    // The frozen inner circuit converges linearly in its tail (the damping
+    // that breaks the diode chatter slows the final approach), so it
+    // legitimately needs more Newton iterations than the outer budget.
+    let mut inner = *opts;
+    inner.max_newton = opts
         .event_retry
         .inner_max_newton
         .unwrap_or_else(|| opts.max_newton.max(400));
-    let inner = &inner_opts;
+    let ev = EventSolve {
+        time,
+        dt,
+        coeffs,
+        state,
+        dc: false,
+        gmin: if cmp_smooth { gmin } else { gmin.max(1e-7) },
+        cmp_smooth,
+        flip_budget: opts.event_retry.flip_budget,
+        max_passes: 60,
+    };
+    match event_solve(ws, circuit, &inner, ev) {
+        Some(ok) => ok,
+        // Nothing discrete to freeze: a plain step is already smooth. Caller
+        // should not have routed here, but stay correct: one ordinary solve.
+        None => {
+            newton_solve(
+                ws, circuit, opts, time, dt, coeffs, state, false, false, gmin, 1.0,
+            )
+            .converged
+        }
+    }
+}
 
-    const MAX_EVENT_PASSES: usize = 60;
-    // Switch flip budget per Gauss-Seidel pass. A throttle keeps the discrete
-    // state from thrashing, but too small a budget splits a single fired
-    // neuron's ganged spike-gates (one V_out drives ~10 output gates) across
-    // passes, leaving an inconsistent intermediate the inner solve fights. The
-    // budget is typed tuning (event_retry.flip_budget); the default is high
-    // enough to flip a neuron's whole gate fan-out in one pass.
-    let max_flips_per_pass: usize = opts.event_retry.flip_budget;
-    // Comparator handling in the inner solve, and why it is a two-mode retry.
-    //
-    // Frozen comparators (the DC event loop's regime) converge a hidden
-    // switch-gate flip, but a comparator with adaptation feedback (its output
-    // capacitively coupled back to its own threshold node) cannot be resolved
-    // while pinned to a constant rail: the inner Newton stalls right at the
-    // crossing instant. `cmp_smooth` instead leaves comparators SELF-DECIDING
-    // through the smooth high-gain logistic transfer (the branch_reg>0 path,
-    // which has a real tangent), so a comparator tracks its flip continuously
-    // while the switch mesh stays frozen.
-    //
-    // A refractory reset is the opposite regime: once a spike climbs through a
-    // reset switch's control threshold the switch shorts the membrane to GND in
-    // a fast positive-feedback discharge (membrane -> comparator -> spike ->
-    // switch -> membrane), and a smooth comparator's ~2000 V^-1 logistic gain
-    // couples the collapsing membrane straight back into that loop, diverging.
-    // There the comparator must be frozen so the inner circuit is a smooth
-    // resistor network. The caller therefore tries `cmp_smooth = true` first and
-    // falls back to `false`, picking whichever regime converges this step.
-    //
-    // GMIN FLOOR for the inner solves. High-impedance mesh nodes (mirror bases,
-    // off-switch internal nodes coupled only through reverse-biased junctions
-    // and DC-open caps) have no defined operating point at `opts.gmin` (1e-12)
-    // and the inner Newton limit-cycles on them, so floor gmin to the same 1e-7
-    // the staged DC path uses. Pure-resistor inner conductances dwarf 1e-7 S
-    // (a 1e-7 S leak across 5 V is 0.5 uA, below the signal currents), so only
-    // the genuinely-floating nodes are pinned. Applied ONLY in the frozen
-    // regime: the smooth pass converges on the bare `opts.gmin`, and the floor
-    // there perturbs a membrane-near-threshold operating point enough to break
-    // the crossing it is meant to resolve.
-    let inner_gmin = if cmp_smooth { gmin } else { gmin.max(1e-7) };
-    let mut x = seed.clone();
-    for pass in 0..MAX_EVENT_PASSES {
-        ws.cmp_freeze = if cmp_smooth {
-            None
-        } else {
-            Some(cmp_states.clone())
-        };
+/// What one event-driven solve freezes and integrates (see [`event_solve`]).
+struct EventSolve<'a> {
+    time: f64,
+    dt: f64,
+    coeffs: IntegCoeffs,
+    state: &'a ReactiveState,
+    dc: bool,
+    gmin: f64,
+    /// Leave the comparators self-deciding (smooth logistic transfer) and
+    /// freeze only the switches.
+    cmp_smooth: bool,
+    /// Switch flips allowed per Gauss-Seidel pass. Flipping every disagreeing
+    /// state at once can cycle (the measured "369 flips don't settle"); a
+    /// bounded re-derivation, taking the most-committed switches first, walks
+    /// the discrete state toward consistency instead of thrashing. Too small
+    /// a budget splits a fired neuron's ganged spike-gates across passes and
+    /// leaves an inconsistent intermediate the inner solve fights, so the
+    /// default (typed tuning, `event_retry.flip_budget`) covers a neuron's
+    /// whole gate fan-out; the DC loop flips unboundedly. Comparators (few,
+    /// and the spike driver) are never throttled.
+    flip_budget: usize,
+    max_passes: usize,
+}
+
+/// The event-driven (Gauss-Seidel over discrete states) solve shared by the
+/// staged DC loop and the transient step retry. Both comparator and analog-
+/// switch states are frozen for each inner Newton solve (the comparators are
+/// bang-bang and every analog switch carries a tanh conductance whose control
+/// sits near transition for the coupled core, so both must be held for the
+/// inner circuit to be smooth: otherwise a flipping switch flips the synapse
+/// current that flips a comparator that flips the switch, the measured limit
+/// cycle), then every state is re-derived from the converged inner solution
+/// (`eval_comparator_states`, `eval_switch_states` with break-before-make) and
+/// the circuit re-solved until nothing flips. At that fixed point every state
+/// is consistent with its own control, so the solution is a genuine root of
+/// the FULL self-deciding circuit, not of the frozen surrogate.
+///
+/// Starts from `ws.x` and leaves the root there on success (`Some(true)`);
+/// `Some(false)` when no consistent converged state was reached within
+/// `max_passes` (`ws.x` is then the last inner iterate); `None` when the
+/// circuit has nothing discrete to freeze, so this path would add nothing.
+/// `opts` are the INNER solve's options (the caller sizes its Newton budget).
+fn event_solve(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    ev: EventSolve<'_>,
+) -> Option<bool> {
+    let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
+    let spdt = SpdtPairs::analyze(circuit);
+    let frac = opts.effects.switch_transition_frac;
+    // Seed the discrete states from the entry iterate, anchored on no previous
+    // decision (a control sitting in a hysteresis band takes its raw side).
+    let mut x = ws.x.clone();
+    let mut cmp_states = eval_comparator_states(circuit, &ws.layout, &x, &Default::default());
+    let mut sw_states =
+        eval_switch_states(circuit, &ws.layout, &x, &Default::default(), &spdt, frac);
+    if cmp_states.is_empty() && sw_states.is_empty() {
+        return None;
+    }
+    let done = |ws: &mut Workspace| {
+        ws.cmp_freeze = None;
+        ws.switch_freeze = None;
+    };
+    for pass in 0..ev.max_passes {
+        ws.cmp_freeze = (!ev.cmp_smooth).then(|| cmp_states.clone());
         ws.switch_freeze = Some(sw_states.clone());
         ws.x.copy_from_slice(&x);
         let r = newton_solve(
-            ws, circuit, inner, time, dt, coeffs, state, false, false, inner_gmin, 1.0,
+            ws, circuit, opts, ev.time, ev.dt, ev.coeffs, ev.state, ev.dc, false, ev.gmin, 1.0,
         );
         if !r.converged {
             if dbg {
-                eprintln!("[tran-event] t={time:.6e} pass {pass}: inner Newton did NOT converge (iters {})", r.iters);
+                eprintln!(
+                    "[event] t={:.6e} dc={} pass {pass}: inner Newton did NOT converge (iters {})",
+                    ev.time, ev.dc, r.iters
+                );
             }
-            ws.cmp_freeze = None;
-            ws.switch_freeze = None;
-            return false;
+            done(ws);
+            return Some(false);
         }
         x.copy_from_slice(&ws.x);
 
         // Re-derive both discrete state sets from the converged inner solution.
+        // Self-deciding comparators (`cmp_smooth`) always agree with their own
+        // inputs, so there is no frozen-vs-derived flip to count and the fixed
+        // point is governed by the switch set alone.
         let next_cmp = eval_comparator_states(circuit, &ws.layout, &x, &cmp_states);
-        let want_sw = eval_switch_states(
-            circuit,
-            &ws.layout,
-            &x,
-            &sw_states,
-            &spdt,
-            opts.effects.switch_transition_frac,
-        );
-
-        // Comparators flip freely (few, and they DRIVE the event). When the
-        // comparators are self-deciding (cmp_smooth), their state isn't frozen so
-        // there is no frozen-vs-derived flip to count, consistency is automatic
-        // (the smooth transfer always agrees with its own inputs), so the loop's
-        // fixed point is governed by the switch set alone.
-        let cmp_flips = if cmp_smooth {
+        let want_sw = eval_switch_states(circuit, &ws.layout, &x, &sw_states, &spdt, frac);
+        let cmp_flips = if ev.cmp_smooth {
             0
         } else {
             next_cmp
@@ -2628,13 +2397,10 @@ pub fn newton_solve_event(
                 .filter(|(k, v)| cmp_states.get(k) != Some(*v))
                 .count()
         };
-
-        // Switches: bound how many flip this pass. Rank the disagreeing switches
-        // by how far their control has moved past the relevant threshold and flip
-        // only the most-committed handful, a damped Gauss-Seidel that walks
-        // toward the consistent state instead of flipping all 369 at once (which
-        // cycles). The break-before-make in want_sw already guarantees no SPDT
-        // pair is both-on, so flipping a subset never shorts the summing bus.
+        // Disagreeing switches ranked by how far their control has moved past
+        // the band centre (commitment); only the most-committed `flip_budget`
+        // flip this pass. The break-before-make in `want_sw` already guarantees
+        // no SPDT pair is both-on, so flipping a subset never shorts the bus.
         let mut disagree: Vec<(DeviceId, bool, f64)> = Vec::new();
         for (id, dev) in circuit.iter() {
             if let Device::VSwitch {
@@ -2649,40 +2415,33 @@ pub fn newton_solve_event(
                 if sw_states.get(&id).copied() != Some(want) {
                     let vp = ws.layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
                     let vn = ws.layout.node(*ctrl_n).map(|i| x[i]).unwrap_or(0.0);
-                    let vmid = 0.5 * (von + voff);
-                    // Over/under-drive magnitude past the band centre = commitment.
-                    disagree.push((id, want, (vp - vn - vmid).abs()));
+                    disagree.push((id, want, (vp - vn - 0.5 * (von + voff)).abs()));
                 }
             }
         }
         let sw_flips = disagree.len();
         disagree.sort_by(|a, b| b.2.total_cmp(&a.2));
-        for (id, want, _) in disagree.iter().take(max_flips_per_pass) {
+        for (id, want, _) in disagree.iter().take(ev.flip_budget) {
             sw_states.insert(*id, *want);
         }
         cmp_states = next_cmp;
-
         if dbg {
             eprintln!(
-                "[tran-event] t={time:.6e} pass {pass}: inner converged in {} iters, {cmp_flips} cmp flips, {sw_flips} sw disagreements (flipped {})",
+                "[event] t={:.6e} dc={} pass {pass}: inner converged in {} iters, {cmp_flips} cmp flips, {sw_flips} sw disagreements (flipped {})",
+                ev.time,
+                ev.dc,
                 r.iters,
-                sw_flips.min(max_flips_per_pass)
+                sw_flips.min(ev.flip_budget)
             );
         }
-
         if cmp_flips == 0 && sw_flips == 0 {
-            // Fixed point at t+dt: every comparator + switch state is consistent
-            // with its own control at the converged smooth solution, so ws.x is a
-            // true root of the full self-deciding circuit at this step.
-            ws.cmp_freeze = None;
-            ws.switch_freeze = None;
+            done(ws);
             ws.x.copy_from_slice(&x);
-            return true;
+            return Some(true);
         }
     }
-    ws.cmp_freeze = None;
-    ws.switch_freeze = None;
-    false
+    done(ws);
+    Some(false)
 }
 
 /// Diode saturation-current continuation. Starting from the relaxed (diodes-off)
@@ -3160,8 +2919,11 @@ mod tests {
         let mut ws = Workspace::new(&c);
         ws.symbolic.set_allow_dynamic(true);
         let seed = solve_relaxed_no_diodes(&c, &opts).expect("relaxed seed converges");
-        let root =
-            staged_event_solve(&mut ws, &c, &opts, &seed, 1e-9, 1e-2, false).expect("settles");
+        assert!(
+            staged_event_solve(&mut ws, &c, &opts, &seed, 1e-9, 1e-2),
+            "settles"
+        );
+        let root = ws.x.clone();
         let v_on = root[ws.layout.node(out_on).unwrap()];
         let v_off = root[ws.layout.node(out_off).unwrap()];
         assert!((2.0..=2.5).contains(&v_on), "ON switch conducts: {v_on}");

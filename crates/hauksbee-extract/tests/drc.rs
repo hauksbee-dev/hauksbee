@@ -47,24 +47,174 @@ fn assert_short(report: &hauksbee_extract::DrcReport, want_a: &str, want_b: &str
     );
 }
 
-#[test]
-fn segment_segment_overlap_is_a_short() {
-    // Two crossing 0.5 mm-wide tracks on F.Cu, different nets: they intersect,
-    // a true short.
-    let items = r#"
+/// One copper kind overlapping foreign copper: (name, four-layer board, items,
+/// the two nets, the layer and the pad owner the finding must name).
+// Two crossing 0.5 mm tracks on F.Cu, different nets.
+const SEGMENT_SEGMENT: &str = r#"
   (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
   (segment (start 5 -5) (end 5 5) (width 0.5) (layer "F.Cu") (net 2))
 "#;
-    let report = drc(items);
-    assert_eq!(report.short_count(), 1, "exactly one short");
-    assert_short(&report, "A", "B");
-    let f = report.shorts().next().unwrap();
-    assert_eq!(f.layer, "F.Cu");
-    assert!(
-        f.gap_mm <= 0.0,
-        "overlap gap is non-positive ({})",
-        f.gap_mm
-    );
+// A track driven straight through a footprint pad; the owner is recorded.
+const SEGMENT_PAD: &str = r#"
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 1))
+  (footprint "lib:fp" (layer "F.Cu") (at 5 0)
+    (property "Reference" "U1" (at 0 0))
+    (pad "1" smd rect (at 0 0) (size 1.5 1.5) (layers "F.Cu") (net 2))
+  )
+"#;
+// Two 2 mm SMD pads of different footprints centred 1 mm apart.
+const PAD_PAD: &str = r#"
+  (footprint "lib:fp" (layer "F.Cu") (at 5 5)
+    (property "Reference" "U1" (at 0 0))
+    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1))
+  )
+  (footprint "lib:fp" (layer "F.Cu") (at 6 5)
+    (property "Reference" "U2" (at 0 0))
+    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 2))
+  )
+"#;
+// A via dropped inside a filled GND pour: the containment short.
+const VIA_ZONE: &str = r#"
+  (via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
+  (zone (net 3) (net_name "GND") (layer "B.Cu")
+    (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10)))
+    (filled_polygon (layer "B.Cu")
+      (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))
+    )
+  )
+"#;
+// A via spans both layers, so a single-layer track of another net hits it.
+const VIA_SEGMENT: &str = r#"
+  (via (at 5 0) (size 1.0) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 2))
+"#;
+// A through via named only (layers "F.Cu" "B.Cu") passes through the
+// inner layers too; bucketing it onto the two named ends missed this.
+const THROUGH_VIA_INNER_TRACK: &str = r#"
+  (via (at 5 0) (size 1.0) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "In1.Cu") (net 2))
+"#;
+// A blind via F.Cu->In2.Cu passes through In1.Cu.
+const BLIND_VIA_INNER_TRACK: &str = r#"
+  (via blind (at 5 0) (size 1.0) (drill 0.4) (layers "F.Cu" "In2.Cu") (net 1))
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "In1.Cu") (net 2))
+"#;
+// A trapezoid pad (size 4 x 2, rect_delta (0 2)) has corners (-3, 1),
+// (-1, -1), (1, -1), (3, 1): its wide edge extends 0.7 mm OUTSIDE the
+// size box, where a bounding-rectangle model cleared the track by 0.6 mm.
+const TRAPEZOID_WING_SEGMENT: &str = r#"
+  (segment (start -2.7 -3) (end -2.7 3) (width 0.2) (layer "F.Cu") (net 1))
+  (footprint "lib:trap" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U1")
+    (pad "1" smd trapezoid (at 0 0) (size 4 2) (rect_delta 0 2) (layers "F.Cu") (net 2))
+  )
+"#;
+// A custom pad is its anchor plus EVERY primitive: a track through the
+// second gr_poly lobe, which a first-poly-only model never stamped.
+const CUSTOM_PAD_SECOND_POLYGON_SEGMENT: &str = r#"
+  (segment (start -2.5 -2) (end -2.5 2) (width 0.2) (layer "F.Cu") (net 1))
+  (footprint "lib:cust" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U2")
+    (pad "1" smd custom (at 0 0) (size 1 1) (layers "F.Cu") (net 2)
+      (options (clearance outline) (anchor circle))
+      (primitives
+        (gr_poly (pts (xy 2 -0.5) (xy 3 -0.5) (xy 3 0.5) (xy 2 0.5)) (width 0))
+        (gr_poly (pts (xy -3 -0.5) (xy -2 -0.5) (xy -2 0.5) (xy -3 0.5)) (width 0))
+      ))
+  )
+"#;
+
+#[rustfmt::skip]
+const OVERLAPS: &[(&str, bool, &str, (&str, &str), Option<&str>, Option<&str>)] = &[
+    ("segment/segment", false, SEGMENT_SEGMENT, ("A", "B"), Some("F.Cu"), None),
+    ("segment/pad", false, SEGMENT_PAD, ("A", "B"), None, Some("U1")),
+    ("pad/pad", false, PAD_PAD, ("A", "B"), None, None),
+    ("via/zone", false, VIA_ZONE, ("A", "GND"), Some("B.Cu"), None),
+    ("via/segment", false, VIA_SEGMENT, ("A", "B"), None, None),
+    ("through via/inner track", true, THROUGH_VIA_INNER_TRACK, ("A", "B"), Some("In1.Cu"), None),
+    ("blind via/inner track", true, BLIND_VIA_INNER_TRACK, ("A", "B"), None, None),
+    ("trapezoid wing/segment", false, TRAPEZOID_WING_SEGMENT, ("A", "B"), None, None),
+    ("custom pad second polygon/segment", false, CUSTOM_PAD_SECOND_POLYGON_SEGMENT, ("A", "B"), None, None),
+];
+
+#[test]
+fn each_copper_kind_overlapping_foreign_copper_is_one_short() {
+    for &(name, four_layer, items, (a, b), layer, owner) in OVERLAPS {
+        let report = if four_layer { drc4(items) } else { drc(items) };
+        assert_eq!(report.short_count(), 1, "{name}: exactly one short");
+        assert_short(&report, a, b);
+        let f = report.shorts().next().unwrap();
+        assert!(
+            f.gap_mm <= 0.0,
+            "{name}: overlap gap {} is non-positive",
+            f.gap_mm
+        );
+        if let Some(layer) = layer {
+            assert_eq!(f.layer, layer, "{name}: layer");
+        }
+        if let Some(owner) = owner {
+            let owners = [f.item_a.owner.as_str(), f.item_b.owner.as_str()];
+            assert!(
+                owners.contains(&owner),
+                "{name}: owner recorded: {owners:?}"
+            );
+        }
+    }
+}
+
+/// Copper arrangements that must report nothing at all.
+const SILENT: &[(&str, &str)] = &[
+    (
+        "tracks 5 mm apart",
+        r#"
+  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
+  (segment (start 0 5) (end 10 5) (width 0.25) (layer "F.Cu") (net 2))
+"#,
+    ),
+    (
+        // Copper edges exactly the 0.2 mm rule apart (centres 0.25 + 0.2 mm):
+        // routing-to-rule, which used to produce a carpet of boundary notes.
+        "gap at the rule",
+        r#"
+  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
+  (segment (start 0 0.45) (end 10 0.45) (width 0.25) (layer "F.Cu") (net 2))
+"#,
+    ),
+    (
+        "crossing tracks on opposite layers",
+        r#"
+  (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
+  (segment (start 5 -5) (end 5 5) (width 0.5) (layer "B.Cu") (net 2))
+"#,
+    ),
+    (
+        // A pad on non-copper layers only (a fiducial's mask window) has no copper
+        // and must not be stamped onto every copper layer.
+        "mask-only pad over a track",
+        r#"
+  (footprint "Fiducial" (at 5 0)
+    (property "Reference" "FID1")
+    (pad "" smd rect (at 0 0) (size 2 2) (layers "F.Mask") (net 1 "A"))
+  )
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 2))
+"#,
+    ),
+];
+
+#[test]
+fn separated_or_copperless_arrangements_report_nothing() {
+    for (name, items) in SILENT {
+        let report = drc(items);
+        assert!(
+            report.findings.is_empty(),
+            "{name}: nothing reported, got {:?}",
+            report
+                .findings
+                .iter()
+                .map(|f| (f.kind, f.gap_mm))
+                .collect::<Vec<_>>()
+        );
+    }
 }
 
 #[test]
@@ -144,76 +294,6 @@ fn a_gap_inside_the_touching_band_is_a_short_not_a_clearance_note() {
 }
 
 #[test]
-fn well_separated_tracks_report_nothing() {
-    // 5 mm apart: no finding at all.
-    let items = r#"
-  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
-  (segment (start 0 5) (end 10 5) (width 0.25) (layer "F.Cu") (net 2))
-"#;
-    let report = drc(items);
-    assert!(
-        report.findings.is_empty(),
-        "nothing reported: {:?}",
-        report.findings.len()
-    );
-}
-
-#[test]
-fn gap_at_the_rule_is_not_a_clearance_violation() {
-    // Two 0.25 mm tracks whose copper edges are *exactly* the 0.2 mm rule apart
-    // (centres 0.25 + 0.2 = 0.45 mm): routing-to-rule, not a defect. The old
-    // code reported every such boundary gap, producing 137/66 spurious notes on
-    // the hunt boards. It must now be silent.
-    let items = r#"
-  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
-  (segment (start 0 0.45) (end 10 0.45) (width 0.25) (layer "F.Cu") (net 2))
-"#;
-    let report = drc(items);
-    assert!(
-        report.findings.is_empty(),
-        "a gap at the rule is not a violation: {:?}",
-        report.findings.iter().map(|f| f.gap_mm).collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn segment_pad_overlap_is_a_short() {
-    // A track on net A driven straight through a footprint pad on net B.
-    let items = r#"
-  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 1))
-  (footprint "lib:fp" (layer "F.Cu") (at 5 0)
-    (property "Reference" "U1" (at 0 0))
-    (pad "1" smd rect (at 0 0) (size 1.5 1.5) (layers "F.Cu") (net 2))
-  )
-"#;
-    let report = drc(items);
-    assert_short(&report, "A", "B");
-    let f = report.shorts().next().unwrap();
-    // The pad owner is captured.
-    let owners = [f.item_a.owner.as_str(), f.item_b.owner.as_str()];
-    assert!(owners.contains(&"U1"), "pad owner U1 recorded: {owners:?}");
-}
-
-#[test]
-fn pad_pad_overlap_is_a_short() {
-    // Two SMD pads on different nets, in different footprints, overlapping.
-    let items = r#"
-  (footprint "lib:fp" (layer "F.Cu") (at 5 5)
-    (property "Reference" "U1" (at 0 0))
-    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1))
-  )
-  (footprint "lib:fp" (layer "F.Cu") (at 6 5)
-    (property "Reference" "U2" (at 0 0))
-    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 2))
-  )
-"#;
-    // Pads centred 1 mm apart, each 2 mm wide → overlap by 1 mm.
-    let report = drc(items);
-    assert_eq!(report.short_count(), 1);
-    assert_short(&report, "A", "B");
-}
-
-#[test]
 fn native_net_tie_groups_work_with_house_footprint_names_and_stay_local() {
     let items = r#"
   (footprint "Acme:KelvinBridge" (layer "F.Cu") (at 20 20)
@@ -264,25 +344,6 @@ fn native_net_tie_pad_groups_never_exempt_cross_group_contacts() {
 }
 
 #[test]
-fn via_zone_overlap_is_a_short() {
-    // A via on net A dropped into a filled GND pour on B.Cu: the via lands
-    // inside the pour polygon (containment short).
-    let items = r#"
-  (via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
-  (zone (net 3) (net_name "GND") (layer "B.Cu")
-    (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10)))
-    (filled_polygon (layer "B.Cu")
-      (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))
-    )
-  )
-"#;
-    let report = drc(items);
-    assert_short(&report, "A", "GND");
-    let f = report.shorts().next().unwrap();
-    assert_eq!(f.layer, "B.Cu");
-}
-
-#[test]
 fn kicad_10_keyhole_antipad_keeps_the_isolated_pad_silent() {
     let report = ExtractedBoard::drc(KICAD_10_KEYHOLE_ANTIPAD_BOARD).expect("drc runs");
 
@@ -293,30 +354,6 @@ fn kicad_10_keyhole_antipad_keeps_the_isolated_pad_silent() {
         "the pad enclosed by a real KiCad-10 keyhole antipad remains isolated: {:?}",
         report.findings
     );
-}
-
-#[test]
-fn different_layers_do_not_short() {
-    // Two overlapping tracks but on opposite copper layers: no short (they are
-    // separated by the dielectric).
-    let items = r#"
-  (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
-  (segment (start 5 -5) (end 5 5) (width 0.5) (layer "B.Cu") (net 2))
-"#;
-    let report = drc(items);
-    assert!(report.is_clean(), "cross-layer crossings are not shorts");
-}
-
-#[test]
-fn via_spans_layers_and_shorts_on_either() {
-    // A via spans F.Cu and B.Cu; a track on a *different* net on F.Cu hitting
-    // the via is a short even though the track is single-layer.
-    let items = r#"
-  (via (at 5 0) (size 1.0) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
-  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 2))
-"#;
-    let report = drc(items);
-    assert_short(&report, "A", "B");
 }
 
 #[test]
@@ -452,6 +489,7 @@ fn board4(items: &str) -> String {
   (net 0 "")
   (net 1 "A")
   (net 2 "B")
+  (net 3 "GND")
 {items}
 )
 "#
@@ -460,53 +498,6 @@ fn board4(items: &str) -> String {
 
 fn drc4(items: &str) -> hauksbee_extract::DrcReport {
     ExtractedBoard::drc(&board4(items)).expect("drc runs")
-}
-
-#[test]
-fn through_via_shorts_inner_layer_copper_on_4_layer_board() {
-    // A through via named only (layers "F.Cu" "B.Cu") physically passes
-    // through In1.Cu/In2.Cu too: a different-net track on In1.Cu hitting the
-    // barrel is a short (this was silently missed when the via was bucketed
-    // only onto the two named end layers).
-    let items = r#"
-  (via (at 5 0) (size 1.0) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
-  (segment (start 0 0) (end 10 0) (width 0.4) (layer "In1.Cu") (net 2))
-"#;
-    let report = drc4(items);
-    assert_short(&report, "A", "B");
-    let f = report.shorts().next().unwrap();
-    assert_eq!(f.layer, "In1.Cu", "the short is found on the inner layer");
-}
-
-#[test]
-fn blind_via_fills_its_inner_span() {
-    // A blind via F.Cu→In2.Cu passes through In1.Cu: a different-net In1.Cu
-    // track through it is a short.
-    let items = r#"
-  (via blind (at 5 0) (size 1.0) (drill 0.4) (layers "F.Cu" "In2.Cu") (net 1))
-  (segment (start 0 0) (end 10 0) (width 0.4) (layer "In1.Cu") (net 2))
-"#;
-    assert_short(&drc4(items), "A", "B");
-}
-
-#[test]
-fn mask_only_pad_carries_no_copper() {
-    // A pad whose (layers ...) names only non-copper layers (a mask opening,
-    // e.g. a fiducial window) has NO copper: it must not be stamped onto every
-    // copper layer and shorted against a track running underneath.
-    let items = r#"
-  (footprint "Fiducial" (at 5 0)
-    (property "Reference" "FID1")
-    (pad "" smd rect (at 0 0) (size 2 2) (layers "F.Mask") (net 1 "A"))
-  )
-  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 2))
-"#;
-    let report = drc(items);
-    assert!(
-        report.is_clean(),
-        "mask-only pad is not copper: {:?}",
-        report.findings
-    );
 }
 
 /// The PolyKybd Kailh-socket proof geometry: pad `2` of SW_K_2 (2.55 x 1.54,
@@ -567,66 +558,6 @@ fn chamfered_pad_notch_is_not_a_short() {
 }
 
 // ---------------------------------------------------------------------------
-// Trapezoid pads. `(rect_delta dx dy)` makes one parallel edge size + delta
-// long and the other size - delta: the true outline both extends BEYOND the
-// size box (the wide edge) and recedes inside it (the narrow edge), so neither
-// direction survives a bounding-rectangle approximation.
-// ---------------------------------------------------------------------------
-
-/// A trapezoid pad at the origin: size 4 x 2, rect_delta (0 2). True corners
-/// (pad-local, y-down): (-3, 1), (-1, -1), (1, -1), (3, 1): the y = +1 edge
-/// is 6 mm wide, the y = -1 edge 2 mm.
-const TRAPEZOID_PAD: &str = r#"
-  (footprint "lib:trap" (layer "F.Cu") (at 0 0)
-    (property "Reference" "U1")
-    (pad "1" smd trapezoid (at 0 0) (size 4 2) (rect_delta 0 2) (layers "F.Cu") (net 2))
-  )
-"#;
-
-#[test]
-fn trapezoid_wing_beyond_the_size_box_is_a_short() {
-    // A vertical track at x = -2.7 crosses the trapezoid's wide-edge wing,
-    // which extends to x = -3, i.e. 0.7 mm OUTSIDE the (size 4 2) box. The old
-    // bounding-rectangle model cleared this by 0.6 mm and stayed silent.
-    let track = r#"
-  (segment (start -2.7 -3) (end -2.7 3) (width 0.2) (layer "F.Cu") (net 1))
-"#;
-    let items = format!("{track}{TRAPEZOID_PAD}");
-    assert_short(&drc(&items), "A", "B");
-}
-
-// ---------------------------------------------------------------------------
-// Custom pads: the copper is the anchor shape plus EVERY primitive. The old
-// code kept only the first gr_poly, silently un-checking the anchor disc and
-// all further primitives.
-// ---------------------------------------------------------------------------
-
-/// A custom pad: 1 mm circle anchor at the origin plus two 1 x 1 polygon
-/// lobes at x in [2, 3] and x in [-3, -2] (y in [-0.5, 0.5]).
-const CUSTOM_TWO_LOBE_PAD: &str = r#"
-  (footprint "lib:cust" (layer "F.Cu") (at 0 0)
-    (property "Reference" "U2")
-    (pad "1" smd custom (at 0 0) (size 1 1) (layers "F.Cu") (net 2)
-      (options (clearance outline) (anchor circle))
-      (primitives
-        (gr_poly (pts (xy 2 -0.5) (xy 3 -0.5) (xy 3 0.5) (xy 2 0.5)) (width 0))
-        (gr_poly (pts (xy -3 -0.5) (xy -2 -0.5) (xy -2 0.5) (xy -3 0.5)) (width 0))
-      ))
-  )
-"#;
-
-#[test]
-fn custom_pad_second_polygon_is_copper() {
-    // A track through the SECOND gr_poly lobe: the old first-poly-only model
-    // never stamped it.
-    let track = r#"
-  (segment (start -2.5 -2) (end -2.5 2) (width 0.2) (layer "F.Cu") (net 1))
-"#;
-    let items = format!("{track}{CUSTOM_TWO_LOBE_PAD}");
-    assert_short(&drc(&items), "A", "B");
-}
-
-// ---------------------------------------------------------------------------
 // Custom-pad primitive kinds beyond gr_poly: stroked lines, arcs, unfilled
 // rings and rectangles are copper only along their strokes; filled rects are
 // solid.
@@ -640,26 +571,6 @@ fn custom_pad_second_polygon_is_copper() {
 // never touches: a keyboard with ~400 stitching vias produced 7 false
 // SERIOUS shorts and a carpet of identical 0.150 mm warnings. On a
 // ring-removed layer only the barrel (drill radius) owns spacing.
-
-/// A 4-layer wrapper: F.Cu / In1.Cu / In2.Cu / B.Cu.
-fn board4_ring(items: &str) -> String {
-    format!(
-        r#"(kicad_pcb (version 20221018) (generator pcbnew)
-  (layers
-    (0 "F.Cu" signal)
-    (1 "In1.Cu" signal)
-    (2 "In2.Cu" signal)
-    (31 "B.Cu" signal)
-  )
-  (net 0 "")
-  (net 1 "A")
-  (net 2 "B")
-  (net 3 "GND")
-{items}
-)
-"#
-    )
-}
 
 /// GND fill on `layer` whose left edge sits `edge_x` mm from the origin; the
 /// via under test sits at (5,5), so edge_x = 5.45 puts the fill 0.45 mm from
@@ -686,7 +597,7 @@ const UNUSED_RING_VIA: &str = r#"
 #[test]
 fn ring_removed_inner_layer_via_is_silent_at_real_kicad_spacing() {
     let items = format!("{UNUSED_RING_VIA}{}", gnd_fill("In1.Cu", 5.45));
-    let report = hauksbee_extract::ExtractedBoard::drc(&board4_ring(&items)).expect("drc runs");
+    let report = drc4(&items);
     assert_eq!(report.shorts().count(), 0, "no phantom short");
     assert!(
         !report.clearance_violations().any(|v| v.layer == "In1.Cu"),

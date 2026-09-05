@@ -136,51 +136,38 @@ pub struct AssemblyVariant {
 
 impl AssemblyVariant {
     pub(crate) fn load(path: &Path) -> Result<(Self, Vec<u8>), SpecError> {
-        let raw = std::fs::read(path).map_err(|error| {
-            SpecError::Io(format!(
-                "reading assembly variant '{}': {error}",
-                path.display()
-            ))
-        })?;
-        let text = std::str::from_utf8(&raw).map_err(|error| {
-            SpecError::Invalid(format!(
-                "assembly variant '{}' is not UTF-8 TOML: {error}",
-                path.display()
-            ))
-        })?;
+        let shown = path.display();
+        let raw = std::fs::read(path)
+            .map_err(SpecError::io(format!("reading assembly variant '{shown}'")))?;
+        let text = std::str::from_utf8(&raw).map_err(SpecError::invalid(format!(
+            "assembly variant '{shown}' is not UTF-8 TOML"
+        )))?;
         let variant: Self = toml::from_str(text).map_err(|error| SpecError::Toml {
-            file: path.display().to_string(),
+            file: shown.to_string(),
             message: crate::error::cap_context_width(&error.to_string()),
         })?;
-        variant.validate(path)?;
+        need(
+            !variant.name.trim().is_empty(),
+            format!("assembly variant '{shown}' needs a non-empty `name`"),
+        )?;
+        need(
+            !(variant.fit.is_empty() && variant.no_fit.is_empty()),
+            format!("assembly variant '{shown}' names no `fit` or `no_fit` references; an empty variant changes no assembly"),
+        )?;
+        validate_fit_lists(
+            &variant.fit,
+            &variant.no_fit,
+            &format!("assembly variant '{shown}'"),
+        )?;
         Ok((variant, raw))
     }
 
-    fn validate(&self, path: &Path) -> Result<(), SpecError> {
-        if self.name.trim().is_empty() {
-            return Err(SpecError::Invalid(format!(
-                "assembly variant '{}' needs a non-empty `name`",
-                path.display()
-            )));
-        }
-        if self.fit.is_empty() && self.no_fit.is_empty() {
-            return Err(SpecError::Invalid(format!(
-                "assembly variant '{}' names no `fit` or `no_fit` references; an empty variant changes no assembly",
-                path.display()
-            )));
-        }
-        validate_fit_lists(
-            &self.fit,
-            &self.no_fit,
-            &format!("assembly variant '{}'", path.display()),
-        )
-    }
-
     pub(crate) fn apply_to(&self, spec: &mut Spec, path: &Path) -> Result<(), SpecError> {
-        spec.fit.extend(self.fit.iter().cloned());
-        spec.no_fit.extend(self.no_fit.iter().cloned());
-        dedup_refs(&mut spec.fit);
-        dedup_refs(&mut spec.no_fit);
+        for (into, from) in [(&mut spec.fit, &self.fit), (&mut spec.no_fit, &self.no_fit)] {
+            into.extend(from.iter().cloned());
+            let mut seen = std::collections::HashSet::new();
+            into.retain(|reference| seen.insert(reference.clone()));
+        }
         validate_fit_lists(
             &spec.fit,
             &spec.no_fit,
@@ -189,41 +176,35 @@ impl AssemblyVariant {
     }
 }
 
-fn dedup_refs(refs: &mut Vec<String>) {
-    let mut seen = std::collections::HashSet::new();
-    refs.retain(|reference| seen.insert(reference.clone()));
+/// `Ok(())` when `ok`, else the invalid-spec error carrying `msg`. The one
+/// shape every structural check below reduces to.
+fn need(ok: bool, msg: String) -> Result<(), SpecError> {
+    if ok {
+        Ok(())
+    } else {
+        Err(SpecError::Invalid(msg))
+    }
 }
 
 fn validate_fit_lists(fit: &[String], no_fit: &[String], context: &str) -> Result<(), SpecError> {
-    let mut seen = std::collections::HashSet::new();
-    for reference in fit.iter().chain(no_fit) {
-        if reference.trim().is_empty() {
+    need(
+        fit.iter().chain(no_fit).all(|r| !r.trim().is_empty()),
+        format!("{context} contains an empty fit/no_fit reference"),
+    )?;
+    for (list, name) in [(fit, "fit"), (no_fit, "no_fit")] {
+        let mut seen = std::collections::HashSet::new();
+        if let Some(reference) = list.iter().find(|r| !seen.insert(*r)) {
             return Err(SpecError::Invalid(format!(
-                "{context} contains an empty fit/no_fit reference"
+                "{context} names '{reference}' more than once in `{name}`"
             )));
         }
     }
-    for reference in fit {
-        if !seen.insert(("fit", reference)) {
-            return Err(SpecError::Invalid(format!(
-                "{context} names '{reference}' more than once in `fit`"
-            )));
-        }
-    }
-    seen.clear();
-    for reference in no_fit {
-        if !seen.insert(("no_fit", reference)) {
-            return Err(SpecError::Invalid(format!(
-                "{context} names '{reference}' more than once in `no_fit`"
-            )));
-        }
-    }
-    if let Some(reference) = fit.iter().find(|reference| no_fit.contains(reference)) {
-        return Err(SpecError::Invalid(format!(
+    match fit.iter().find(|reference| no_fit.contains(reference)) {
+        Some(reference) => Err(SpecError::Invalid(format!(
             "{context} names '{reference}' as both fitted and left open; pick one"
-        )));
+        ))),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Timing coverage a strict check requires from the MCU/co-sim bridge.
@@ -249,18 +230,15 @@ impl TimingSpec {
             ("min_pulse_us", self.min_pulse_us),
             ("max_edge_error_us", self.max_edge_error_us),
         ] {
-            if value.is_some_and(|v| !v.is_finite() || v <= 0.0) {
-                return Err(SpecError::Invalid(format!(
-                    "timing.{name} must be a positive, finite number"
-                )));
-            }
+            need(
+                !value.is_some_and(|v| !v.is_finite() || v <= 0.0),
+                format!("timing.{name} must be a positive, finite number"),
+            )?;
         }
-        if self.min_pulse_us.is_none() && self.max_edge_error_us.is_none() {
-            return Err(SpecError::Invalid(
-                "timing needs `min_pulse_us` or `max_edge_error_us`".into(),
-            ));
-        }
-        Ok(())
+        need(
+            self.min_pulse_us.is_some() || self.max_edge_error_us.is_some(),
+            "timing needs `min_pulse_us` or `max_edge_error_us`".into(),
+        )
     }
 
     pub fn requirement(self) -> hauksbee_engine::scheduler::TimingRequirement {
@@ -498,10 +476,11 @@ where
         toml::Value::Table(table) => {
             // A key legal in BOTH places (`name`) must not trip the hint: in an
             // [mcu] table it is simply the MCU note the user asked for.
-            let mcu_fields = struct_fields::<McuConfig>();
-            if let Some(key) = table.keys().find(|k| {
-                spec_top_level_keys().contains(&k.as_str()) && !mcu_fields.contains(&k.as_str())
-            }) {
+            let (spec_keys, mcu_keys) = (struct_fields::<Spec>(), struct_fields::<McuConfig>());
+            if let Some(key) = table
+                .keys()
+                .find(|k| spec_keys.contains(k) && !mcu_keys.contains(k))
+            {
                 return Err(D::Error::custom(format!(
                     "`{key}` is a top-level key; move it above the [mcu] table \
                      (everything below an [mcu] header belongs to that table)"
@@ -519,62 +498,15 @@ where
     }
 }
 
-/// The [`Spec`] struct's own top-level TOML keys, so the swallowed-key hint
-/// above can never drift from the struct definition.
-fn spec_top_level_keys() -> &'static [&'static str] {
-    struct_fields::<Spec>()
-}
-
-/// A derived-Deserialize struct's field names, read off serde's own derived
-/// deserializer (the FIELDS list it hands to `deserialize_struct`) rather than
-/// a hand-maintained copy. Serde offers no direct reflection, so the list is
-/// captured by aborting a deserialization at the first callback. The names are
-/// the serialized ones: renames applied, `#[serde(skip)]` fields absent.
-fn struct_fields<'de, T: Deserialize<'de>>() -> &'static [&'static str] {
-    use serde::de::{self, Visitor};
-
-    /// The "error" that smuggles the field list out of the aborted run.
-    #[derive(Debug)]
-    struct Captured(Option<&'static [&'static str]>);
-    impl std::fmt::Display for Captured {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("field-name capture")
-        }
-    }
-    impl std::error::Error for Captured {}
-    impl de::Error for Captured {
-        fn custom<T: std::fmt::Display>(_msg: T) -> Self {
-            Captured(None)
-        }
-    }
-
-    struct Capture;
-    impl<'de> serde::Deserializer<'de> for Capture {
-        type Error = Captured;
-        fn deserialize_struct<V: Visitor<'de>>(
-            self,
-            _name: &'static str,
-            fields: &'static [&'static str],
-            _visitor: V,
-        ) -> Result<V::Value, Captured> {
-            Err(Captured(Some(fields)))
-        }
-        fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, Captured> {
-            Err(Captured(None))
-        }
-        serde::forward_to_deserialize_any! {
-            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-            bytes byte_buf option unit unit_struct newtype_struct seq tuple
-            tuple_struct map enum identifier ignored_any
-        }
-    }
-
-    match T::deserialize(Capture) {
-        Err(Captured(Some(fields))) => fields,
-        // Unreachable while T stays a derived struct; an empty list only
-        // costs the hint, never a parse.
-        _ => &[],
-    }
+/// A struct's serialized field names (renames applied, `#[serde(skip)]` fields
+/// absent), read off the JSON schema it already derives, so the swallowed-key
+/// hint above can never drift from the struct definition.
+fn struct_fields<T: JsonSchema>() -> Vec<String> {
+    schemars::schema_for!(T)
+        .as_object()
+        .and_then(|s| s.get("properties")?.as_object())
+        .map(|p| p.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 fn default_name() -> String {
@@ -717,24 +649,23 @@ impl AcConfig {
         // usize::MAX, a `with_capacity` overflow panic (debug) or a bogus
         // inf-Hz sweep (release). Reject non-finite bounds up front, matching the
         // finiteness guards on duration_ms/frame_ms/after_ms/freq_hz.
-        if !self.fstart.is_finite() || !self.fstop.is_finite() {
-            return Err(SpecError::Invalid(
-                "[ac] fstart and fstop must be finite".into(),
-            ));
-        }
-        if self.fstart <= 0.0 || self.fstop <= self.fstart {
-            return Err(SpecError::Invalid("[ac] needs 0 < fstart < fstop".into()));
-        }
-        if self.points == 0 {
-            return Err(SpecError::Invalid("[ac] points must be >= 1".into()));
-        }
-        match self.sweep.as_str() {
-            "dec" | "lin" => Ok(()),
-            other => Err(SpecError::Invalid(format!(
-                "[ac] sweep must be 'dec' or 'lin', got '{other}'{}",
-                crate::error::did_you_mean_hint(other, &["dec", "lin"])
-            ))),
-        }
+        need(
+            self.fstart.is_finite() && self.fstop.is_finite(),
+            "[ac] fstart and fstop must be finite".into(),
+        )?;
+        need(
+            self.fstart > 0.0 && self.fstop > self.fstart,
+            "[ac] needs 0 < fstart < fstop".into(),
+        )?;
+        need(self.points > 0, "[ac] points must be >= 1".into())?;
+        need(
+            matches!(self.sweep.as_str(), "dec" | "lin"),
+            format!(
+                "[ac] sweep must be 'dec' or 'lin', got '{}'{}",
+                self.sweep,
+                crate::error::did_you_mean_hint(&self.sweep, &["dec", "lin"])
+            ),
+        )
     }
 }
 
@@ -897,6 +828,16 @@ pub struct TimelineEventSpec {
     pub value: f64,
 }
 
+/// The "unknown token" error for a closed vocabulary: names what was written,
+/// the nearest legal spelling, and the whole list.
+fn unknown_token(what: &str, got: &str, options: &[&str]) -> String {
+    format!(
+        "{what} '{got}'{} (expected one of {})",
+        crate::error::did_you_mean_hint(got, options),
+        options.join("|")
+    )
+}
+
 impl PeripheralSpec {
     fn validate(&self) -> Result<(), SpecError> {
         const KINDS: &[&str] = &[
@@ -911,72 +852,73 @@ impl PeripheralSpec {
             "spi_mcp3008",
             "vcd_sink",
         ];
-        if !KINDS.contains(&self.kind.as_str()) {
-            return Err(SpecError::Invalid(format!(
-                "peripheral '{}': unknown type '{}'{} (expected one of {})",
-                self.id,
-                self.kind,
-                crate::error::did_you_mean_hint(&self.kind, KINDS),
-                KINDS.join("|")
-            )));
-        }
+        const WAVEFORMS: &[&str] = &["dc", "sine", "pwl", "noise"];
+        let id = &self.id;
+        need(
+            KINDS.contains(&self.kind.as_str()),
+            format!(
+                "peripheral '{id}': {}",
+                unknown_token("unknown type", &self.kind, KINDS)
+            ),
+        )?;
         // Net-attached controls need an attachment.
         let needs_net = matches!(
             self.kind.as_str(),
             "pushbutton" | "toggle" | "potentiometer" | "encoder" | "stimulus"
         );
-        if needs_net
-            && self.net.is_none()
-            && self.reference.is_none()
-            && self.nets.is_none()
-            && self.net_a.is_none()
-        {
-            return Err(SpecError::Invalid(format!(
-                "peripheral '{}' ({}) needs a `net`, a `ref`+`pin`, or `nets`",
-                self.id, self.kind
-            )));
-        }
+        need(
+            !needs_net
+                || [&self.net, &self.reference, &self.net_a]
+                    .iter()
+                    .any(|f| f.is_some())
+                || self.nets.is_some(),
+            format!(
+                "peripheral '{id}' ({}) needs a `net`, a `ref`+`pin`, or `nets`",
+                self.kind
+            ),
+        )?;
         // A vcd_sink logs the signals named in `nets`, and the runtime reads
         // ONLY `p.nets` (never `net`/`ref`/`net_a`). A singular `net = "CLK"` (the
         // natural mistake, since every other control uses `net`) would validate
         // here and then log an EMPTY waveform with no diagnostic. Require `nets`.
-        if self.kind == "vcd_sink" && self.nets.as_ref().map_or(true, |n| n.is_empty()) {
-            return Err(SpecError::Invalid(format!(
-                "peripheral '{}' (vcd_sink) needs `nets = [...]` (the signals to log); a singular `net` is not read by the sink",
-                self.id
-            )));
-        }
+        need(
+            self.kind != "vcd_sink" || self.nets.as_ref().is_some_and(|n| !n.is_empty()),
+            format!("peripheral '{id}' (vcd_sink) needs `nets = [...]` (the signals to log); a singular `net` is not read by the sink"),
+        )?;
         // Schema-vs-validate parity: the published editor schema documents
         // these bounds, so the runtime validate path must enforce the same
         // ones (an editor-green spec must not fail differently at run time,
         // and a CLI-only author gets the same protection the editor gives).
-        if let Some(a) = self.address {
-            if a > 127 {
-                return Err(SpecError::Invalid(format!(
-                    "peripheral '{}': `address` must be a 7-bit I2C address (0..=127), got {a}",
-                    self.id
-                )));
-            }
+        need(
+            self.address.is_none_or(|a| a <= 127),
+            format!(
+                "peripheral '{id}': `address` must be a 7-bit I2C address (0..=127), got {}",
+                self.address.unwrap_or(0)
+            ),
+        )?;
+        need(
+            self.size != Some(0),
+            format!("peripheral '{id}': `size` must be at least 1 byte"),
+        )?;
+        match &self.waveform {
+            Some(w) if !WAVEFORMS.contains(&w.as_str()) => Err(SpecError::Invalid(format!(
+                "peripheral '{id}': {}",
+                unknown_token("unknown waveform", w, WAVEFORMS)
+            ))),
+            _ => Ok(()),
         }
-        if self.size == Some(0) {
-            return Err(SpecError::Invalid(format!(
-                "peripheral '{}': `size` must be at least 1 byte",
-                self.id
-            )));
-        }
-        if let Some(w) = &self.waveform {
-            const WAVEFORMS: &[&str] = &["dc", "sine", "pwl", "noise"];
-            if !WAVEFORMS.contains(&w.as_str()) {
-                return Err(SpecError::Invalid(format!(
-                    "peripheral '{}': unknown waveform '{}'{} (expected one of {})",
-                    self.id,
-                    w,
-                    crate::error::did_you_mean_hint(w, WAVEFORMS),
-                    WAVEFORMS.join("|")
-                )));
-            }
-        }
-        Ok(())
+    }
+}
+
+/// `rel` as an absolute path: itself when already absolute, else joined onto
+/// `base`. Every spec-relative path (board, firmware, sensor and trace files,
+/// capture data) resolves through here.
+pub(crate) fn resolve_in(base: &Path, rel: impl AsRef<Path>) -> PathBuf {
+    let rel = rel.as_ref();
+    if rel.is_absolute() {
+        rel.to_path_buf()
+    } else {
+        base.join(rel)
     }
 }
 
@@ -1010,18 +952,12 @@ impl SensorAttach {
             .spec_file
             .as_deref()
             .expect("validated: one must be set");
-        let path = if Path::new(rel).is_absolute() {
-            PathBuf::from(rel)
-        } else {
-            base_dir.join(rel)
-        };
-        std::fs::read_to_string(&path).map_err(|e| {
-            SpecError::Io(format!(
-                "sensor '{}': reading spec_file '{}': {e}",
-                self.id,
-                path.display()
-            ))
-        })
+        let path = resolve_in(base_dir, rel);
+        std::fs::read_to_string(&path).map_err(SpecError::io(format!(
+            "sensor '{}': reading spec_file '{}'",
+            self.id,
+            path.display()
+        )))
     }
 }
 
@@ -1447,34 +1383,34 @@ impl Spec {
 
     /// The board file path, resolved against the spec's directory.
     pub fn board_path(&self) -> PathBuf {
-        self.resolve(&self.board)
+        resolve_in(&self.base_dir, &self.board)
     }
 
     pub fn bom_path(&self) -> Option<PathBuf> {
-        self.bom.as_ref().map(|path| self.resolve(path))
+        self.resolve(&self.bom)
     }
 
     pub fn placement_path(&self) -> Option<PathBuf> {
-        self.placement.as_ref().map(|path| self.resolve(path))
+        self.resolve(&self.placement)
     }
 
     pub fn variant_path(&self) -> Option<PathBuf> {
-        self.variant.as_ref().map(|path| self.resolve(path))
+        self.resolve(&self.variant)
     }
 
     /// The optional Eagle companion path, resolved against the spec directory.
     pub fn schematic_path(&self) -> Option<PathBuf> {
-        self.schematic.as_ref().map(|path| self.resolve(path))
+        self.resolve(&self.schematic)
     }
 
     /// The firmware path, resolved against the spec's directory.
     pub fn firmware_path(&self) -> Option<PathBuf> {
-        self.firmware.as_ref().map(|f| self.resolve(f))
+        self.resolve(&self.firmware)
     }
 
     /// The as-built overlay path, resolved against the spec's directory.
     pub fn asbuilt_path(&self) -> Option<PathBuf> {
-        self.asbuilt.as_ref().map(|f| self.resolve(f))
+        self.resolve(&self.asbuilt)
     }
 
     /// The informational MCU-kind note, whichever spelling carried it
@@ -1494,17 +1430,14 @@ impl Spec {
     /// set env var wins over this field.
     pub fn mcu_descriptor_dir(&self) -> Option<PathBuf> {
         match &self.mcu {
-            Some(McuField::Config(c)) => c.descriptor_dir.as_ref().map(|d| self.resolve(d)),
+            Some(McuField::Config(c)) => self.resolve(&c.descriptor_dir),
             _ => None,
         }
     }
 
-    fn resolve(&self, p: &Path) -> PathBuf {
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.base_dir.join(p)
-        }
+    /// An optional spec-relative path, resolved against the spec's directory.
+    fn resolve(&self, p: &Option<PathBuf>) -> Option<PathBuf> {
+        p.as_ref().map(|p| resolve_in(&self.base_dir, p))
     }
 }
 
@@ -1538,12 +1471,7 @@ impl Spec {
     /// come back as one [`SpecError::Many`], so callers holding a `Result` see
     /// every independent finding in one invocation.
     fn validate(&self) -> Result<(), SpecError> {
-        let mut errs = self.validate_all();
-        match errs.len() {
-            0 => Ok(()),
-            1 => Err(errs.remove(0)),
-            _ => Err(SpecError::Many(errs)),
-        }
+        SpecError::from_many(self.validate_all())
     }
 
     /// Every board-independent validation error in the spec, collected in one
@@ -1552,76 +1480,44 @@ impl Spec {
     /// all at once instead of one per invocation. An empty vec = a valid spec.
     pub fn validate_all(&self) -> Vec<SpecError> {
         let mut errs: Vec<SpecError> = Vec::new();
-        if self.asserts.is_empty() {
-            errs.push(SpecError::Invalid(
-                "spec has no [[assert]] blocks: a check with no assertions always passes vacuously"
-                    .into(),
-            ));
-        }
-        if let Err(error) = validate_fit_lists(&self.fit, &self.no_fit, "spec") {
-            errs.push(error);
-        }
-        if self.bom.is_none() && !self.bom_columns.is_empty() {
-            errs.push(SpecError::Invalid(
-                "`bom_columns` needs `bom = ...`; there is no BOM to map".into(),
-            ));
-        }
-        for mapping in &self.bom_columns {
-            if let Err(error) = hauksbee_extract::bom::ColumnOverrides::parse_pair(mapping) {
-                errs.push(SpecError::Invalid(format!(
-                    "invalid `bom_columns` entry {mapping:?}: {error}"
-                )));
-            }
-        }
+        let mut check = |ok: bool, msg: String| errs.extend(need(ok, msg).err());
+        check(
+            !self.asserts.is_empty(),
+            "spec has no [[assert]] blocks: a check with no assertions always passes vacuously"
+                .into(),
+        );
+        check(
+            self.bom.is_some() || self.bom_columns.is_empty(),
+            "`bom_columns` needs `bom = ...`; there is no BOM to map".into(),
+        );
         // TOML accepts `inf`/`nan` floats, so a non-finite time field must be
         // rejected explicitly: `duration_ms = inf` passes `<= 0.0` yet makes the
         // frame loop `t < total_s` always true, an infinite CI hang, and `nan`
         // runs zero frames so every assertion fails "never sampled" (confusing
-        // all-RED). Check finiteness before the sign.
-        if !self.duration_ms.is_finite() || self.duration_ms <= 0.0 {
-            errs.push(SpecError::Invalid(
-                "duration_ms must be a positive, finite number".into(),
-            ));
-        }
-        // A non-positive frame_ms (a typo, or "as fine as possible") was silently
-        // clamped to 1 µs downstream, running ~1000x more frames than any real
-        // cadence and hanging a fast CI check with no explanation. Name it.
-        if !self.frame_ms.is_finite() || self.frame_ms <= 0.0 {
-            errs.push(SpecError::Invalid(
-                "frame_ms must be a positive, finite number".into(),
-            ));
-        }
-        if let Some(timing) = &self.timing {
-            if let Err(e) = timing.validate() {
-                errs.push(e);
-            }
-        }
-        for s in &self.supplies {
-            if let Err(e) = s.validate() {
-                errs.push(e);
-            }
-        }
-        for p in &self.peripherals {
-            if let Err(e) = p.validate() {
-                errs.push(e);
-            }
-        }
-        for a in &self.asserts {
-            if let Err(e) = a.validate() {
-                errs.push(e);
-            }
-        }
+        // all-RED). Check finiteness before the sign. A non-positive frame_ms
+        // (a typo, or "as fine as possible") was silently clamped to 1 µs
+        // downstream, running ~1000x more frames than any real cadence.
+        let duration_ok = self.duration_ms.is_finite() && self.duration_ms > 0.0;
+        check(
+            duration_ok,
+            "duration_ms must be a positive, finite number".into(),
+        );
+        check(
+            self.frame_ms.is_finite() && self.frame_ms > 0.0,
+            "frame_ms must be a positive, finite number".into(),
+        );
         // Transient scenarios: the schema documents start_ms >= 0, so the
         // runtime validate path must hold the same line (schema-vs-validate
         // parity); a negative or non-finite start would otherwise slide the
         // window silently.
         for s in &self.scenarios {
-            if !s.start_ms.is_finite() || s.start_ms < 0.0 {
-                errs.push(SpecError::Invalid(format!(
+            check(
+                s.start_ms.is_finite() && s.start_ms >= 0.0,
+                format!(
                     "[[scenario]] on part '{}': `start_ms` must be zero or positive, got {}",
                     s.part, s.start_ms
-                )));
-            }
+                ),
+            );
         }
         // Time windows that cannot overlap the run. Each of these fields is
         // individually in bounds, so per-field validation lets them through, and
@@ -1633,51 +1529,57 @@ impl Spec {
         //
         // Only meaningful against a usable duration; a bad `duration_ms` already
         // has its own error above and would turn every window into noise.
-        if self.duration_ms.is_finite() && self.duration_ms > 0.0 {
+        if duration_ok {
             let duration = self.duration_ms;
             for a in &self.asserts {
                 if let Some(after) = a.after_ms.filter(|v| v.is_finite() && *v >= duration) {
-                    errs.push(SpecError::Invalid(format!(
-                        "assertion '{}': `after_ms` ({after}) must be less than `duration_ms` \
+                    check(
+                        false,
+                        format!(
+                            "assertion '{}': `after_ms` ({after}) must be less than `duration_ms` \
                          ({duration}); the sample window would start at or after the end of \
                          the run, so nothing would ever be measured",
-                        a.label()
-                    )));
+                            a.label()
+                        ),
+                    );
                 }
                 if let Some(deadline) = a.deadline_ms.filter(|v| v.is_finite() && *v > duration) {
-                    errs.push(SpecError::Invalid(format!(
-                        "assertion '{}': `deadline_ms` ({deadline}) must be at or before \
+                    check(
+                        false,
+                        format!(
+                            "assertion '{}': `deadline_ms` ({deadline}) must be at or before \
                          `duration_ms` ({duration}); the window would extend past the end of \
                          the run, so it could never be confirmed",
-                        a.label()
-                    )));
+                            a.label()
+                        ),
+                    );
                 }
             }
             for s in &self.scenarios {
-                if s.start_ms.is_finite() && s.start_ms >= duration {
-                    errs.push(SpecError::Invalid(format!(
+                check(
+                    !(s.start_ms.is_finite() && s.start_ms >= duration),
+                    format!(
                         "[[scenario]] on part '{}': `start_ms` ({}) must be less than \
                          `duration_ms` ({duration}); the scenario would never fire inside \
                          the run",
                         s.part, s.start_ms
-                    )));
-                }
+                    ),
+                );
             }
         }
         // Decoupling ESR/ESL overrides: same parity rule, the schema documents
         // both as >= 0 (a negative parasitic is not physical and would be
         // stamped into the solve as-is).
-        if let Some(dec) = &self.decoupling {
-            for ov in &dec.overrides {
-                for (field, v) in [("esr_ohms", ov.esr_ohms), ("esl_henries", ov.esl_henries)] {
-                    if let Some(x) = v {
-                        if !x.is_finite() || x < 0.0 {
-                            errs.push(SpecError::Invalid(format!(
-                                "decoupling override on '{}': `{field}` must be zero or positive, got {x}",
-                                ov.reference
-                            )));
-                        }
-                    }
+        for ov in self.decoupling.iter().flat_map(|d| &d.overrides) {
+            for (field, v) in [("esr_ohms", ov.esr_ohms), ("esl_henries", ov.esl_henries)] {
+                if let Some(x) = v {
+                    check(
+                        x.is_finite() && x >= 0.0,
+                        format!(
+                            "decoupling override on '{}': `{field}` must be zero or positive, got {x}",
+                            ov.reference
+                        ),
+                    );
                 }
             }
         }
@@ -1688,19 +1590,18 @@ impl Spec {
         // supply divider settling) - exactly the vacuous pass the check exists
         // to prevent. Refuse at load, like the empty-asserts rejection above.
         if self.firmware.is_none() {
-            if let Some(a) = self
-                .asserts
-                .iter()
-                .find(|a| a.kind == "boot_coverage" || a.kind == "boot-coverage")
-            {
-                errs.push(SpecError::Invalid(format!(
-                    "boot_coverage assertion '{}' needs `firmware = ...`: with no firmware \
+            if let Some(a) = self.asserts.iter().find(|a| a.is_boot_coverage()) {
+                check(
+                    false,
+                    format!(
+                        "boot_coverage assertion '{}' needs `firmware = ...`: with no firmware \
                      loaded, nothing in the run can drive the net, so it could only reach \
                      its level passively (a board pull / bias), and the check would pass \
                      without measuring anything; if the level is meant to be reached \
                      passively, assert it with a `voltage` check instead",
-                    a.label()
-                )));
+                        a.label()
+                    ),
+                );
             }
         }
         // An assertion's `scenario` scope must name a declared [[scenario]] id.
@@ -1708,168 +1609,154 @@ impl Spec {
         // starting at t=0 and the assertion would be measured over the WHOLE
         // run instead of the scenario window it claims to judge, a check that
         // never fails the way the spec author intended. Same fail-loud pattern
-        // as the unknown-net / unknown-profile validation.
+        // as the unknown-net / unknown-profile validation. An explicit ""
+        // means the run-wide window, same as leaving it unset.
+        let scenario_ids: Vec<&str> = self
+            .scenarios
+            .iter()
+            .filter_map(|s| s.id.as_deref())
+            .collect();
         for a in &self.asserts {
-            let Some(scope) = a.scenario.as_deref() else {
-                continue;
-            };
-            if scope.is_empty() {
-                // Explicit "" means the run-wide window, same as leaving it unset.
-                continue;
-            }
-            if !self
-                .scenarios
-                .iter()
-                .any(|s| s.id.as_deref() == Some(scope))
-            {
-                let ids: Vec<&str> = self
-                    .scenarios
-                    .iter()
-                    .filter_map(|s| s.id.as_deref())
-                    .collect();
+            if let Some(scope) = a.scenario.as_deref().filter(|s| !s.is_empty()) {
                 let hint = if self.scenarios.is_empty() {
                     "the spec declares no [[scenario]] blocks".to_string()
-                } else if ids.is_empty() {
+                } else if scenario_ids.is_empty() {
                     "the declared [[scenario]] blocks have no `id`; give the scenario an \
                      `id` and reference it here"
                         .to_string()
                 } else {
-                    format!("declared scenario ids: {}", ids.join(", "))
+                    format!("declared scenario ids: {}", scenario_ids.join(", "))
                 };
-                errs.push(SpecError::Invalid(format!(
-                    "{} assertion '{}' is scoped to scenario '{scope}', but no [[scenario]] \
-                     declares that id ({hint}); an unknown scope would silently be measured \
-                     over the whole run instead of the scenario window",
-                    a.kind,
-                    a.label(),
-                )));
+                check(
+                    scenario_ids.contains(&scope),
+                    format!(
+                        "{} assertion '{}' is scoped to scenario '{scope}', but no [[scenario]] \
+                         declares that id ({hint}); an unknown scope would silently be measured \
+                         over the whole run instead of the scenario window",
+                        a.kind,
+                        a.label(),
+                    ),
+                );
             }
         }
         // A `peripheral` assertion's `id` must name a declared [[peripheral]] or
         // [[sensor]], otherwise a typo fails only after a full co-sim runs (or
         // silently reads nothing), the same class the scenario-scope check closes.
-        for a in &self.asserts {
-            if a.kind != "peripheral" {
-                continue;
-            }
-            let Some(id) = a.id.as_deref() else {
-                // Assertion::validate already rejected the missing id; nothing
-                // more to resolve for this assertion.
-                continue;
-            };
-            let known: Vec<&str> = self
-                .peripherals
-                .iter()
-                .map(|p| p.id.as_str())
-                .chain(self.sensors.iter().map(|s| s.id.as_str()))
-                .collect();
-            if !known.contains(&id) {
-                let hint = if known.is_empty() {
+        // A missing id was already rejected by Assertion::validate.
+        let known_ids: Vec<&str> = (self.peripherals.iter().map(|p| p.id.as_str()))
+            .chain(self.sensors.iter().map(|s| s.id.as_str()))
+            .collect();
+        for a in self.asserts.iter().filter(|a| a.kind == "peripheral") {
+            if let Some(id) = a.id.as_deref() {
+                let hint = if known_ids.is_empty() {
                     "the spec declares no [[peripheral]] or [[sensor]] blocks".to_string()
                 } else {
-                    format!("declared ids: {}", known.join(", "))
+                    format!("declared ids: {}", known_ids.join(", "))
                 };
-                errs.push(SpecError::Invalid(format!(
-                    "{} assertion '{}' reads id '{id}', but no [[peripheral]] or [[sensor]] \
-                     declares it ({hint})",
-                    a.kind,
-                    a.label()
-                )));
-            }
-        }
-        for s in &self.sensors {
-            if let Err(e) = s.validate() {
-                errs.push(e);
-            }
-        }
-        if let Some(ac) = &self.ac {
-            if let Err(e) = ac.validate() {
-                errs.push(e);
+                check(
+                    known_ids.contains(&id),
+                    format!(
+                        "{} assertion '{}' reads id '{id}', but no [[peripheral]] or [[sensor]] \
+                         declares it ({hint})",
+                        a.kind,
+                        a.label()
+                    ),
+                );
             }
         }
         // AC assertions need the [ac] sweep block to drive them.
-        let needs_ac = self
-            .asserts
-            .iter()
-            .any(|a| matches!(a.kind.as_str(), "phase_margin" | "ac_gain"));
-        if needs_ac && self.ac.is_none() {
-            errs.push(SpecError::Invalid(
-                "a phase_margin / ac_gain assertion needs an [ac] sweep block (fstart, fstop, points)".into(),
-            ));
-        }
-        if let Some(f) = &self.fuzz {
-            if f.seeds == 0 {
-                errs.push(SpecError::Invalid("[fuzz] seeds must be >= 1".into()));
-            }
-        }
+        check(
+            self.ac.is_some()
+                || !self
+                    .asserts
+                    .iter()
+                    .any(|a| matches!(a.kind.as_str(), "phase_margin" | "ac_gain")),
+            "a phase_margin / ac_gain assertion needs an [ac] sweep block (fstart, fstop, points)"
+                .into(),
+        );
+        check(
+            self.fuzz.as_ref().is_none_or(|f| f.seeds > 0),
+            "[fuzz] seeds must be >= 1".into(),
+        );
         // Tolerance-ensemble structural checks (board-independent; pattern
-        // matching against real components happens in the runner).
+        // matching against real components happens in the runner). Upper bound
+        // < 100: the min corner is `nominal * (1 - percent/100)`, so percent ==
+        // 100 stamps a 0-value part (dead short / open) and percent > 100 a
+        // NEGATIVE component value, both solved as an ordinary pass/fail over a
+        // physically-impossible circuit rather than rejected.
+        let in_band = |p: f64| p > 0.0 && p < 100.0 && p.is_finite();
         for t in &self.tolerances {
-            // Upper bound < 100: the min corner is `nominal * (1 - percent/100)`,
-            // so percent == 100 stamps a 0-value part (dead short / open) and
-            // percent > 100 a NEGATIVE component value, both solved as an ordinary
-            // pass/fail over a physically-impossible circuit rather than rejected.
-            if !(t.percent > 0.0 && t.percent < 100.0 && t.percent.is_finite()) {
-                errs.push(SpecError::Invalid(format!(
+            check(
+                in_band(t.percent),
+                format!(
                     "[[tolerance]] on '{}': percent must be in (0, 100), got {}",
                     t.reference, t.percent
-                )));
-            }
-            if let Some(d) = &t.distribution {
-                if let Err(e) = crate::tolerance::Distribution::parse(d) {
-                    errs.push(e);
-                }
-            }
+                ),
+            );
         }
         for ov in &self.overrides {
             if let Some(p) = ov.tolerance {
-                if !(p > 0.0 && p < 100.0 && p.is_finite()) {
-                    errs.push(SpecError::Invalid(format!(
+                check(
+                    in_band(p),
+                    format!(
                         "override on '{}': tolerance must be a percentage in (0, 100), got {p}",
                         ov.reference
-                    )));
-                }
+                    ),
+                );
             }
-            if ov.distribution.is_some() && ov.tolerance.is_none() {
-                errs.push(SpecError::Invalid(format!(
+            check(
+                ov.distribution.is_none() || ov.tolerance.is_some(),
+                format!(
                     "override on '{}': `distribution` is only meaningful with `tolerance`",
                     ov.reference
-                )));
-            }
-            if let Some(d) = &ov.distribution {
-                if let Err(e) = crate::tolerance::Distribution::parse(d) {
-                    errs.push(e);
-                }
-            }
+                ),
+            );
         }
         if let Some(e) = &self.ensemble {
-            if e.seeds == 0 {
-                errs.push(SpecError::Invalid("[ensemble] seeds must be >= 1".into()));
-            }
-            if !self.has_tolerances() {
-                errs.push(SpecError::Invalid(
-                    "[ensemble] without any [[tolerance]] rules (or an override with a \
-                     `tolerance`) has nothing to sample"
-                        .into(),
-                ));
-            }
-            // The corners/fuzz composition check depends on the mode parsing;
-            // an unparseable mode IS the error, the composition question does
-            // not arise until it is fixed (a genuine cascade, not independence).
-            match crate::tolerance::Mode::parse(&e.mode) {
-                Err(err) => errs.push(err),
-                Ok(mode) => {
-                    if mode == crate::tolerance::Mode::Corners && self.fuzz.is_some() {
-                        errs.push(SpecError::Invalid(
-                            "[ensemble] mode = \"corners\" does not compose with [fuzz] (the corner \
-                             index enumerates min/max combinations, not fuzz seeds); use \
-                             mode = \"monte-carlo\" to run tolerances and net fuzz together"
-                                .into(),
-                        ));
-                    }
-                }
-            }
+            check(e.seeds > 0, "[ensemble] seeds must be >= 1".into());
+            check(
+                self.has_tolerances(),
+                "[ensemble] without any [[tolerance]] rules (or an override with a \
+                 `tolerance`) has nothing to sample"
+                    .into(),
+            );
         }
+        // Per-section validators, each its own independent finding. The
+        // corners/fuzz composition check rides on the mode parse: an
+        // unparseable mode IS the error, and the composition question does not
+        // arise until it is fixed (a genuine cascade, not independence).
+        let distributions = (self.tolerances.iter().map(|t| &t.distribution))
+            .chain(self.overrides.iter().map(|o| &o.distribution))
+            .flatten()
+            .map(|d| crate::tolerance::Distribution::parse(d).map(drop));
+        let ensemble = self.ensemble.as_ref().map(|e| {
+            crate::tolerance::Mode::parse(&e.mode).and_then(|mode| {
+                need(
+                    mode != crate::tolerance::Mode::Corners || self.fuzz.is_none(),
+                    "[ensemble] mode = \"corners\" does not compose with [fuzz] (the corner \
+                     index enumerates min/max combinations, not fuzz seeds); use \
+                     mode = \"monte-carlo\" to run tolerances and net fuzz together"
+                        .into(),
+                )
+            })
+        });
+        let sections = std::iter::once(validate_fit_lists(&self.fit, &self.no_fit, "spec"))
+            .chain(self.bom_columns.iter().map(|mapping| {
+                hauksbee_extract::bom::ColumnOverrides::parse_pair(mapping)
+                    .map(drop)
+                    .map_err(SpecError::invalid(format!(
+                        "invalid `bom_columns` entry {mapping:?}"
+                    )))
+            }))
+            .chain(self.timing.iter().map(TimingSpec::validate))
+            .chain(self.supplies.iter().map(SupplySpec::validate))
+            .chain(self.peripherals.iter().map(PeripheralSpec::validate))
+            .chain(self.asserts.iter().map(Assertion::validate))
+            .chain(self.sensors.iter().map(SensorAttach::validate))
+            .chain(self.ac.iter().map(AcConfig::validate))
+            .chain(distributions)
+            .chain(ensemble);
+        errs.extend(sections.filter_map(Result::err));
         errs
     }
 
@@ -1906,73 +1793,59 @@ impl Spec {
 
     /// Every net name the spec references, for board-aware validation.
     pub fn referenced_nets(&self) -> Vec<(String, &'static str)> {
-        let mut out = Vec::new();
-        for s in &self.supplies {
-            out.push((s.net.clone(), "supply"));
-        }
-        for d in &self.net_drives {
-            out.push((d.net.clone(), "net_drive"));
-        }
-        for p in &self.peripherals {
-            // Validate explicit net references (ref+pin is checked at attach).
-            // cs_net is included: a typo there silently degrades exact SPI
-            // chip-select framing to the chunk-boundary heuristic at runtime
-            // (resolve_cs_pin misses the net map and returns None) with no error,
-            // so it must fail loud at load like every other net reference.
-            for n in [
+        // Explicit peripheral net references (ref+pin is checked at attach).
+        // cs_net is included: a typo there silently degrades exact SPI
+        // chip-select framing to the chunk-boundary heuristic at runtime
+        // (resolve_cs_pin misses the net map and returns None) with no error,
+        // so it must fail loud at load like every other net reference.
+        let peripheral_nets = self.peripherals.iter().flat_map(|p| {
+            [
                 &p.net, &p.to, &p.a, &p.wiper, &p.b, &p.net_a, &p.net_b, &p.cs_net,
             ]
             .into_iter()
             .flatten()
-            {
-                out.push((n.clone(), "peripheral"));
-            }
-            if let Some(nets) = &p.nets {
-                for n in nets {
-                    out.push((n.clone(), "peripheral"));
-                }
-            }
-        }
-        for sensor in &self.sensors {
-            if let Some(net) = &sensor.cs_net {
-                out.push((net.clone(), "sensor"));
-            }
-        }
-        for n in &self.suppress_rail {
-            out.push((n.clone(), "suppress_rail"));
-        }
-        if let Some(f) = &self.fuzz {
-            for n in &f.nets {
-                out.push((n.clone(), "fuzz"));
-            }
-        }
-        for a in &self.asserts {
-            if let Some(n) = &a.net {
-                out.push((n.clone(), "assert"));
-            }
-            if let Some(n) = &a.supply_net {
-                out.push((n.clone(), "assert"));
-            }
-        }
-        for s in &self.scenarios {
-            if let Some(n) = &s.supply_net {
-                out.push((n.clone(), "scenario"));
-            }
-        }
-        out
+            .chain(p.nets.iter().flatten())
+        });
+        let tag = |ctx: &'static str| move |n: &String| (n.clone(), ctx);
+        (self.supplies.iter().map(|s| &s.net).map(tag("supply")))
+            .chain(self.net_drives.iter().map(|d| &d.net).map(tag("net_drive")))
+            .chain(peripheral_nets.map(tag("peripheral")))
+            .chain(
+                self.sensors
+                    .iter()
+                    .filter_map(|s| s.cs_net.as_ref())
+                    .map(tag("sensor")),
+            )
+            .chain(self.suppress_rail.iter().map(tag("suppress_rail")))
+            .chain(self.fuzz.iter().flat_map(|f| &f.nets).map(tag("fuzz")))
+            .chain(
+                self.asserts
+                    .iter()
+                    .flat_map(|a| [&a.net, &a.supply_net].into_iter().flatten())
+                    .map(tag("assert")),
+            )
+            .chain(
+                self.scenarios
+                    .iter()
+                    .filter_map(|s| s.supply_net.as_ref())
+                    .map(tag("scenario")),
+            )
+            .collect()
     }
 
     /// Validate that every referenced net exists on the bound board; produce a
     /// helpful error (with near-matches) for any that do not.
     pub fn check_nets(&self, known: &[String]) -> Result<(), SpecError> {
-        let set: HashMap<&str, ()> = known.iter().map(|n| (n.as_str(), ())).collect();
-        let mut unknown = Vec::new();
-        for (net, ctx) in self.referenced_nets() {
-            if !set.contains_key(net.as_str()) {
+        let set: std::collections::HashSet<&str> = known.iter().map(String::as_str).collect();
+        let unknown: Vec<_> = self
+            .referenced_nets()
+            .into_iter()
+            .filter(|(net, _)| !set.contains(net.as_str()))
+            .map(|(net, ctx)| {
                 let suggestions = near_matches(&net, known, 5);
-                unknown.push((net, ctx, suggestions));
-            }
-        }
+                (net, ctx, suggestions)
+            })
+            .collect();
         if unknown.is_empty() {
             Ok(())
         } else {
@@ -2014,146 +1887,194 @@ pub fn builtin_model_id_for_spi_kind(kind: &str) -> Option<&'static str> {
     }
 }
 
+/// The engine USB profile a spec `usb = "..."` token names (underscore
+/// spellings accepted), or `None` for a token nothing matches.
+pub(crate) fn usb_profile(token: &str) -> Option<hauksbee_engine::power_supply::UsbSpec> {
+    use hauksbee_engine::power_supply::UsbSpec;
+    match token {
+        "5v0.5a" | "5v_0.5a" => Some(UsbSpec::V5_0_5A),
+        "5v1.5a" | "5v_1.5a" => Some(UsbSpec::V5_1_5A),
+        "5v3a" | "5v_3a" => Some(UsbSpec::V5_3A),
+        _ => None,
+    }
+}
+
+/// The engine battery chemistry a spec `chemistry = "..."` token names
+/// (`lipo` / `lfp` aliases accepted), or `None` for a token nothing matches.
+pub(crate) fn chemistry(token: &str) -> Option<hauksbee_engine::power_supply::Chemistry> {
+    use hauksbee_engine::power_supply::Chemistry;
+    match token {
+        "liion" | "lipo" => Some(Chemistry::LiIon),
+        "alkaline" => Some(Chemistry::Alkaline),
+        "nimh" => Some(Chemistry::NiMh),
+        "lifepo4" | "lfp" => Some(Chemistry::LiFePO4),
+        _ => None,
+    }
+}
+
+/// The message for a supply token nothing matches, with the did-you-mean hint
+/// and the canonical spellings; shared by load-time validation and the
+/// run-time builder so the two cannot disagree.
+pub(crate) fn unknown_supply_token(net: &str, what: &str, got: &str, options: &[&str]) -> String {
+    // The hint may name an alias (`lipo`, `lfp`); the list shows the canonical
+    // spellings only, so an alias never reads as the documented form.
+    let canonical: Vec<&str> = options
+        .iter()
+        .copied()
+        .filter(|o| !ALIASES.contains(o))
+        .collect();
+    format!(
+        "supply on '{net}': unknown {what} '{got}'{} (expected {})",
+        crate::error::did_you_mean_hint(got, options),
+        canonical.join("|")
+    )
+}
+
+pub(crate) const USB_PROFILES: &[&str] = &["5v0.5a", "5v1.5a", "5v3a"];
+pub(crate) const CHEMISTRIES: &[&str] = &["liion", "lipo", "alkaline", "nimh", "lifepo4", "lfp"];
+const ALIASES: &[&str] = &["lipo", "lfp"];
+
 impl SupplySpec {
     fn validate(&self) -> Result<(), SpecError> {
         const KINDS: [&str; 5] = ["ideal", "bench", "wall", "usb", "battery"];
-        let kind = self.kind.as_str();
-        if !KINDS.contains(&kind) {
-            let hint = crate::error::did_you_mean_hint(kind, &KINDS);
-            return Err(SpecError::Invalid(format!(
-                "supply on net '{}': unknown kind '{kind}'{hint} (expected {})",
-                self.net,
+        let (kind, net) = (self.kind.as_str(), &self.net);
+        need(
+            KINDS.contains(&kind),
+            format!(
+                "supply on net '{net}': unknown kind '{kind}'{} (expected {})",
+                crate::error::did_you_mean_hint(kind, &KINDS),
                 KINDS.join("|"),
-            )));
-        }
+            ),
+        )?;
 
         // Numeric fields flow straight into the behavioral PowerSupply, where a
         // non-finite volts poisons every node it touches, a `soc` outside 0..1
         // reads a bogus point off the OCV curve, and `cells = 0` silently
         // collapses the pack to 0 V. TOML accepts `nan`/`inf`, so guard the
         // range here at load, fail-loud, rather than shipping garbage into a
-        // run. Errors name the field and net so a spec typo is obvious.
-        let net = &self.net;
-        let finite = |field: &str, v: Option<f64>| -> Result<(), SpecError> {
-            match v {
-                Some(x) if !x.is_finite() => Err(SpecError::Invalid(format!(
-                    "supply on '{net}': `{field}` must be a finite number"
-                ))),
-                _ => Ok(()),
-            }
-        };
-        let positive = |field: &str, v: Option<f64>| -> Result<(), SpecError> {
-            match v {
-                Some(x) if !x.is_finite() || x <= 0.0 => Err(SpecError::Invalid(format!(
-                    "supply on '{net}': `{field}` must be a positive number"
-                ))),
-                _ => Ok(()),
-            }
-        };
-        let non_negative = |field: &str, v: Option<f64>| -> Result<(), SpecError> {
-            match v {
-                Some(x) if !x.is_finite() || x < 0.0 => Err(SpecError::Invalid(format!(
-                    "supply on '{net}': `{field}` must be zero or positive"
-                ))),
-                _ => Ok(()),
-            }
-        };
-
-        finite("volts", self.volts)?; // a rail may be negative (e.g. -12 V), only non-finite is illegal
-        positive("current_limit_a", self.current_limit_a)?;
-        non_negative("r_out_ohms", self.r_out_ohms)?;
-        non_negative("ripple_vpp", self.ripple_vpp)?;
-        positive("ripple_hz", self.ripple_hz)?;
-        positive("capacity_mah", self.capacity_mah)?;
-        non_negative("r_internal_ohms", self.r_internal_ohms)?;
-        positive("protection_trip_a", self.protection_trip_a)?;
-        non_negative("protection_delay_ms", self.protection_delay_ms)?;
-        positive("protection_reset_a", self.protection_reset_a)?;
-
-        if let Some(soc) = self.soc {
-            if !soc.is_finite() || !(0.0..=1.0).contains(&soc) {
-                return Err(SpecError::Invalid(format!(
-                    "supply on '{net}': `soc` must be a state-of-charge fraction in 0..1"
-                )));
-            }
+        // run. Errors name the field and net so a spec typo is obvious. A rail
+        // may be negative (e.g. -12 V): only a non-finite `volts` is illegal.
+        let finite = |x: f64| x.is_finite();
+        let positive = |x: f64| x.is_finite() && x > 0.0;
+        let non_negative = |x: f64| x.is_finite() && x >= 0.0;
+        let ranges: [(&str, Option<f64>, &dyn Fn(f64) -> bool, &str); 10] = [
+            ("volts", self.volts, &finite, "a finite number"),
+            (
+                "current_limit_a",
+                self.current_limit_a,
+                &positive,
+                "a positive number",
+            ),
+            (
+                "r_out_ohms",
+                self.r_out_ohms,
+                &non_negative,
+                "zero or positive",
+            ),
+            (
+                "ripple_vpp",
+                self.ripple_vpp,
+                &non_negative,
+                "zero or positive",
+            ),
+            ("ripple_hz", self.ripple_hz, &positive, "a positive number"),
+            (
+                "capacity_mah",
+                self.capacity_mah,
+                &positive,
+                "a positive number",
+            ),
+            (
+                "r_internal_ohms",
+                self.r_internal_ohms,
+                &non_negative,
+                "zero or positive",
+            ),
+            (
+                "protection_trip_a",
+                self.protection_trip_a,
+                &positive,
+                "a positive number",
+            ),
+            (
+                "protection_delay_ms",
+                self.protection_delay_ms,
+                &non_negative,
+                "zero or positive",
+            ),
+            (
+                "protection_reset_a",
+                self.protection_reset_a,
+                &positive,
+                "a positive number",
+            ),
+        ];
+        for (field, value, ok, wants) in ranges {
+            need(
+                value.is_none_or(ok),
+                format!("supply on '{net}': `{field}` must be {wants}"),
+            )?;
         }
-        if let Some(cells) = self.cells {
-            if cells == 0 {
-                return Err(SpecError::Invalid(format!(
-                    "supply on '{net}': `cells` must be at least 1"
-                )));
-            }
-        }
+        need(
+            self.soc
+                .is_none_or(|soc| soc.is_finite() && (0.0..=1.0).contains(&soc)),
+            format!("supply on '{net}': `soc` must be a state-of-charge fraction in 0..1"),
+        )?;
+        need(
+            self.cells != Some(0),
+            format!("supply on '{net}': `cells` must be at least 1"),
+        )?;
 
         // No silent electrical assumptions: a supply's defining parameter must
         // be written down. Defaulting a missing `volts` to 5.0 on a 3.3 V board
         // would manufacture phantom overcurrent faults the author then debugs
         // on a healthy design. Same class for a usb leg's profile and a
         // battery's chemistry: both set the source's voltage/limit behaviour.
-        match self.kind.as_str() {
-            "ideal" | "bench" | "wall" => {
-                if self.volts.is_none() {
-                    return Err(SpecError::Invalid(format!(
-                        "supply on '{net}': `{}` needs an explicit `volts`; add the rail's \
-                         real voltage (e.g. `volts = 3.3`). Nothing is assumed: a wrong \
-                         guess here would fabricate faults on a healthy board",
-                        self.kind
-                    )));
-                }
-            }
-            "usb" => {
-                if self.usb.is_none() {
-                    return Err(SpecError::Invalid(format!(
-                        "supply on '{net}': `usb` needs an explicit profile; add \
-                         `usb = \"5v0.5a\"` (or 5v1.5a | 5v3a) to say what the port can \
-                         actually deliver"
-                    )));
-                }
-            }
-            "battery" => {
-                if self.chemistry.is_none() {
-                    return Err(SpecError::Invalid(format!(
-                        "supply on '{net}': `battery` needs an explicit `chemistry`; add \
-                         `chemistry = \"liion\"` (or alkaline | nimh | lifepo4), it sets \
-                         the pack's voltage curve"
-                    )));
-                }
-            }
+        // The usb / chemistry tokens are validated here too, so a typo fails
+        // at load like every other spec error, not only once a run starts.
+        match kind {
+            "ideal" | "bench" | "wall" => need(
+                self.volts.is_some(),
+                format!(
+                    "supply on '{net}': `{kind}` needs an explicit `volts`; add the rail's \
+                     real voltage (e.g. `volts = 3.3`). Nothing is assumed: a wrong \
+                     guess here would fabricate faults on a healthy board"
+                ),
+            )?,
+            "usb" => need(
+                self.usb.is_some(),
+                format!(
+                    "supply on '{net}': `usb` needs an explicit profile; add \
+                     `usb = \"5v0.5a\"` (or 5v1.5a | 5v3a) to say what the port can \
+                     actually deliver"
+                ),
+            )?,
+            "battery" => need(
+                self.chemistry.is_some(),
+                format!(
+                    "supply on '{net}': `battery` needs an explicit `chemistry`; add \
+                     `chemistry = \"liion\"` (or alkaline | nimh | lifepo4), it sets \
+                     the pack's voltage curve"
+                ),
+            )?,
             _ => {}
         }
-
-        // The `usb` / `chemistry` enum tokens are mapped (and rejected) in
-        // build_supply at run time; validate them here too so a typo fails at
-        // load like every other spec error, not only once a run starts.
-        if let Some(usb) = &self.usb {
-            match usb.as_str() {
-                "5v0.5a" | "5v_0.5a" | "5v1.5a" | "5v_1.5a" | "5v3a" | "5v_3a" => {}
-                other => {
-                    return Err(SpecError::Invalid(format!(
-                        "supply on '{net}': unknown usb profile '{other}'{} (expected 5v0.5a|5v1.5a|5v3a)",
-                        crate::error::did_you_mean_hint(
-                            other,
-                            &["5v0.5a", "5v1.5a", "5v3a"]
-                        )
-                    )))
-                }
-            }
+        if let Some(usb) = self.usb.as_deref().filter(|t| usb_profile(t).is_none()) {
+            return Err(SpecError::Invalid(unknown_supply_token(
+                net,
+                "usb profile",
+                usb,
+                USB_PROFILES,
+            )));
         }
-        if let Some(chem) = &self.chemistry {
-            match chem.as_str() {
-                "liion" | "lipo" | "alkaline" | "nimh" | "lifepo4" | "lfp" => {}
-                other => {
-                    return Err(SpecError::Invalid(format!(
-                        "supply on '{net}': unknown chemistry '{other}'{} (expected liion|alkaline|nimh|lifepo4)",
-                        crate::error::did_you_mean_hint(
-                            other,
-                            &["liion", "lipo", "alkaline", "nimh", "lifepo4", "lfp"]
-                        )
-                    )))
-                }
-            }
+        if let Some(chem) = self.chemistry.as_deref().filter(|t| chemistry(t).is_none()) {
+            return Err(SpecError::Invalid(unknown_supply_token(
+                net,
+                "chemistry",
+                chem,
+                CHEMISTRIES,
+            )));
         }
-
         Ok(())
     }
 }
@@ -2179,306 +2100,246 @@ const ASSERTION_KINDS: &[&str] = &[
 ];
 
 impl Assertion {
+    /// Is this the boot-coverage kind, under either accepted spelling?
+    /// `Spec::load` folds the alias, but a directly-constructed Assertion
+    /// (tests, library callers) may still carry it.
+    pub fn is_boot_coverage(&self) -> bool {
+        matches!(self.kind.as_str(), "boot_coverage" | "boot-coverage")
+    }
+
     fn validate(&self) -> Result<(), SpecError> {
+        let kind = self.kind.as_str();
+        let net = self.net.as_deref().unwrap_or("?");
+        let has_bound = self.min.is_some() || self.max.is_some();
         // A non-finite time window must be rejected loud: TOML accepts `nan`, and
         // a NaN `after_ms` makes the threshold-bucket sort's `partial_cmp` return
         // None, so its `.unwrap()` PANICS (a crash, not the crate's fail-loud
-        // SpecError). Check both window fields up front.
+        // SpecError). Check every window field up front.
         for (field, val) in [
             ("after_ms", self.after_ms),
             ("deadline_ms", self.deadline_ms),
             ("hold_ms", self.hold_ms),
         ] {
-            if let Some(v) = val {
-                if !v.is_finite() {
-                    return Err(SpecError::Invalid(format!(
-                        "{} assertion `{field}` must be a finite number",
-                        self.kind
-                    )));
-                }
-            }
+            need(
+                val.is_none_or(f64::is_finite),
+                format!("{kind} assertion `{field}` must be a finite number"),
+            )?;
         }
-        match self.kind.as_str() {
+        match kind {
             "voltage" => {
-                if self.net.is_none() {
-                    return Err(SpecError::Invalid("voltage assertion needs a `net`".into()));
-                }
-                if self.min.is_none() && self.max.is_none() {
-                    return Err(SpecError::Invalid(format!(
-                        "voltage assertion on '{}' needs a `min` and/or `max`",
-                        self.net.as_deref().unwrap_or("?")
-                    )));
-                }
+                need(self.net.is_some(), "voltage assertion needs a `net`".into())?;
+                need(
+                    has_bound,
+                    format!("voltage assertion on '{net}' needs a `min` and/or `max`"),
+                )?;
             }
             "uart" => {
-                if self.contains.is_none() && self.matches.is_none() {
-                    return Err(SpecError::Invalid(
-                        "uart assertion needs `contains` or `matches`".into(),
-                    ));
-                }
+                need(
+                    self.contains.is_some() || self.matches.is_some(),
+                    "uart assertion needs `contains` or `matches`".into(),
+                )?;
                 if let Some(re) = &self.matches {
-                    regex::Regex::new(re).map_err(|e| {
-                        SpecError::Invalid(format!("uart `matches` is not a valid regex: {e}"))
-                    })?;
+                    regex::Regex::new(re)
+                        .map_err(SpecError::invalid("uart `matches` is not a valid regex"))?;
                 }
             }
             "toggle" => {
-                if self.net.is_none() {
-                    return Err(SpecError::Invalid("toggle assertion needs a `net`".into()));
-                }
-                if self.freq_hz.is_none() && self.min_toggles.is_none() {
-                    return Err(SpecError::Invalid(format!(
-                        "toggle assertion on '{}' needs `freq_hz` or `min_toggles`",
-                        self.net.as_deref().unwrap_or("?")
-                    )));
-                }
-                if self.freq_hz.is_some() && self.min_toggles.is_some() {
-                    // The two forms are mutually exclusive ("freq_hz OR
-                    // min_toggles"): check_toggle evaluates min_toggles first and
-                    // ignores freq_hz, yet the label reports the frequency form, so
-                    // a spec with both is silently evaluated as a count check while
-                    // claiming to be a ~N Hz check. Reject it rather than mislead.
-                    return Err(SpecError::Invalid(format!(
-                        "toggle assertion on '{}' sets both `freq_hz` and `min_toggles`; use one (frequency OR count)",
-                        self.net.as_deref().unwrap_or("?")
-                    )));
-                }
-                if self.after_ms.is_some() {
-                    // Toggle counts accumulate from t=0 (scheduler stats), so an
-                    // `after_ms` window would be silently ignored. Reject it
-                    // rather than mislead.
-                    return Err(SpecError::Invalid(format!(
-                        "toggle assertion on '{}' does not support `after_ms` (toggles are counted over the whole run)",
-                        self.net.as_deref().unwrap_or("?")
-                    )));
-                }
+                need(self.net.is_some(), "toggle assertion needs a `net`".into())?;
+                need(
+                    self.freq_hz.is_some() || self.min_toggles.is_some(),
+                    format!("toggle assertion on '{net}' needs `freq_hz` or `min_toggles`"),
+                )?;
+                // The two forms are mutually exclusive ("freq_hz OR
+                // min_toggles"): check_toggle evaluates min_toggles first and
+                // ignores freq_hz, yet the label reports the frequency form, so
+                // a spec with both is silently evaluated as a count check while
+                // claiming to be a ~N Hz check. Reject it rather than mislead.
+                need(
+                    self.freq_hz.is_none() || self.min_toggles.is_none(),
+                    format!("toggle assertion on '{net}' sets both `freq_hz` and `min_toggles`; use one (frequency OR count)"),
+                )?;
+                // Toggle counts accumulate from t=0 (scheduler stats), so an
+                // `after_ms` window would be silently ignored.
+                need(
+                    self.after_ms.is_none(),
+                    format!("toggle assertion on '{net}' does not support `after_ms` (toggles are counted over the whole run)"),
+                )?;
                 // `tolerance` is a FRACTION of freq_hz (0.25 = +-25%), and the
                 // check widens the accepted band by it. A value like 10 (someone
                 // thinking in percent) accepts 5 Hz +-1000%, greening a net that
                 // never toggles at all; a zero/negative value accepts nothing or
                 // inverts the band. Only (0, 1] is meaningful.
                 if let Some(tol) = self.tolerance {
-                    if !tol.is_finite() || tol <= 0.0 || tol > 1.0 {
-                        return Err(SpecError::Invalid(format!(
-                            "toggle assertion on '{}': tolerance is a fraction \
+                    need(
+                        tol.is_finite() && tol > 0.0 && tol <= 1.0,
+                        format!(
+                            "toggle assertion on '{net}': tolerance is a fraction \
                              (0.25 = +-25%), got {tol}; did you mean {}?",
-                            self.net.as_deref().unwrap_or("?"),
                             if tol > 1.0 {
                                 format!("{}", tol / 100.0)
                             } else {
                                 "a value in (0, 1]".to_string()
                             }
-                        )));
-                    }
+                        ),
+                    )?;
                 }
             }
             "no_faults" => {}
-            "max_current" => {
-                if self.reference.is_none() || self.amps.is_none() {
-                    return Err(SpecError::Invalid(
-                        "max_current assertion needs `ref` and `amps`".into(),
-                    ));
-                }
-            }
-            "max_temp" => {
-                if self.reference.is_none() {
-                    return Err(SpecError::Invalid(
-                        "max_temp assertion needs a `ref` (the component to check)".into(),
-                    ));
-                }
-                // `celsius` is optional: absent means "use the device's own max
-                // junction temperature".
-            }
+            "max_current" => need(
+                self.reference.is_some() && self.amps.is_some(),
+                "max_current assertion needs `ref` and `amps`".into(),
+            )?,
+            // `celsius` is optional: absent means "use the device's own max
+            // junction temperature".
+            "max_temp" => need(
+                self.reference.is_some(),
+                "max_temp assertion needs a `ref` (the component to check)".into(),
+            )?,
             "peripheral" => {
-                if self.id.is_none() {
-                    return Err(SpecError::Invalid(
-                        "peripheral assertion needs an `id`".into(),
-                    ));
-                }
-                let has_check = self.bytes.is_some()
-                    || (self.field.is_some() && (self.min.is_some() || self.max.is_some()));
-                if !has_check {
-                    return Err(SpecError::Invalid(format!(
-                        "peripheral assertion on '{}' needs `bytes` or a `field` with `min`/`max`",
-                        self.id.as_deref().unwrap_or("?")
-                    )));
-                }
+                need(
+                    self.id.is_some(),
+                    "peripheral assertion needs an `id`".into(),
+                )?;
+                let id = self.id.as_deref().unwrap_or("?");
+                need(
+                    self.bytes.is_some() || (self.field.is_some() && has_bound),
+                    format!("peripheral assertion on '{id}' needs `bytes` or a `field` with `min`/`max`"),
+                )?;
                 // The `bytes` and `field` forms are mutually exclusive:
                 // check_peripheral evaluates `bytes` first and RETURNS, so a
                 // spec that sets both silently drops the field/min/max constraint
                 // (and label() reports only the bytes check), a false green if
                 // the field bound is violated. Reject it, like toggle's
                 // freq_hz+min_toggles rejection above.
-                if self.bytes.is_some() && self.field.is_some() {
-                    return Err(SpecError::Invalid(format!(
-                        "peripheral assertion on '{}' sets both `bytes` and `field`; use one (EEPROM-bytes OR a field range); a combined spec silently drops the field check",
-                        self.id.as_deref().unwrap_or("?")
-                    )));
-                }
+                need(
+                    self.bytes.is_none() || self.field.is_none(),
+                    format!("peripheral assertion on '{id}' sets both `bytes` and `field`; use one (EEPROM-bytes OR a field range); a combined spec silently drops the field check"),
+                )?;
             }
             "rail_window" => {
-                if self.net.is_none() {
-                    return Err(SpecError::Invalid(
-                        "rail_window assertion needs a `net`".into(),
-                    ));
-                }
-                let has_check = self.min.is_some()
-                    || self.max.is_some()
-                    || (self.dip_below.is_some()
-                        && (self.for_max_ms.is_some() || self.recover_within_ms.is_some()));
-                if !has_check {
-                    return Err(SpecError::Invalid(format!(
-                        "rail_window on '{}' needs at least one of: `min`, `max`, or `dip_below` with `for_max_ms`/`recover_within_ms`",
-                        self.net.as_deref().unwrap_or("?")
-                    )));
-                }
-                if self.recover_within_ms.is_some()
-                    && (self.dip_below.is_none() || self.recover_to.is_none())
-                {
-                    return Err(SpecError::Invalid(
-                        "rail_window `recover_within_ms` needs both `dip_below` and `recover_to`"
-                            .into(),
-                    ));
-                }
+                need(
+                    self.net.is_some(),
+                    "rail_window assertion needs a `net`".into(),
+                )?;
+                let dip_partnered = self.for_max_ms.is_some() || self.recover_within_ms.is_some();
+                need(
+                    has_bound || (self.dip_below.is_some() && dip_partnered),
+                    format!("rail_window on '{net}' needs at least one of: `min`, `max`, or `dip_below` with `for_max_ms`/`recover_within_ms`"),
+                )?;
+                need(
+                    self.recover_within_ms.is_none()
+                        || (self.dip_below.is_some() && self.recover_to.is_some()),
+                    "rail_window `recover_within_ms` needs both `dip_below` and `recover_to`"
+                        .into(),
+                )?;
                 // The converse: a `recover_to` (recovery intent) is only evaluated
                 // by check_rail_window when `recover_within_ms` is also present
                 // (its match binds all three). Without it the recovery check is a
                 // silent no-op, accepted only because a `min`/`max` also happens
                 // to be set, so the author's recovery constraint never runs. Fail
                 // loud instead of passing a spec whose recovery clause does nothing.
-                if self.recover_to.is_some() && self.recover_within_ms.is_none() {
-                    return Err(SpecError::Invalid(
-                        "rail_window `recover_to` needs `recover_within_ms` (and `dip_below`) or it is never evaluated"
-                            .into(),
-                    ));
-                }
+                need(
+                    self.recover_to.is_none() || self.recover_within_ms.is_some(),
+                    "rail_window `recover_to` needs `recover_within_ms` (and `dip_below`) or it is never evaluated"
+                        .into(),
+                )?;
                 // Same silent-no-op class for `dip_below`: check_rail_window only
                 // reads it inside guards that require `for_max_ms` or
-                // `recover_within_ms` as a partner. A bare `dip_below` alongside a
-                // `min`/`max` (which satisfies has_check) is therefore never
-                // evaluated; the author's dip threshold does nothing. Require it
-                // to carry a partner that actually consumes it.
-                if self.dip_below.is_some()
-                    && self.for_max_ms.is_none()
-                    && self.recover_within_ms.is_none()
-                {
-                    return Err(SpecError::Invalid(
-                        "rail_window `dip_below` needs `for_max_ms` or `recover_within_ms` or it is never evaluated"
-                            .into(),
-                    ));
-                }
+                // `recover_within_ms` as a partner.
+                need(
+                    self.dip_below.is_none() || dip_partnered,
+                    "rail_window `dip_below` needs `for_max_ms` or `recover_within_ms` or it is never evaluated"
+                        .into(),
+                )?;
             }
             "protection_trip" => {
-                if self.supply_net.is_none() {
-                    return Err(SpecError::Invalid(
-                        "protection_trip assertion needs a `supply_net`".into(),
-                    ));
-                }
-                if self.expect_trip.is_none() {
-                    return Err(SpecError::Invalid(
-                        "protection_trip assertion needs `expect_trip = true|false`".into(),
-                    ));
-                }
+                need(
+                    self.supply_net.is_some(),
+                    "protection_trip assertion needs a `supply_net`".into(),
+                )?;
+                need(
+                    self.expect_trip.is_some(),
+                    "protection_trip assertion needs `expect_trip = true|false`".into(),
+                )?;
             }
             "phase_margin" => {
-                if self.net.is_none() {
-                    return Err(SpecError::Invalid(
-                        "phase_margin assertion needs a `net` (the loop break/output net)".into(),
-                    ));
-                }
-                if self.min.is_none() && self.max.is_none() {
-                    return Err(SpecError::Invalid(format!(
-                        "phase_margin on '{}' needs a `min` (and/or `max`) in degrees, e.g. min = 45",
-                        self.net.as_deref().unwrap_or("?")
-                    )));
-                }
+                need(
+                    self.net.is_some(),
+                    "phase_margin assertion needs a `net` (the loop break/output net)".into(),
+                )?;
+                need(
+                    has_bound,
+                    format!("phase_margin on '{net}' needs a `min` (and/or `max`) in degrees, e.g. min = 45"),
+                )?;
             }
             "ac_gain" => {
-                if self.net.is_none() {
-                    return Err(SpecError::Invalid("ac_gain assertion needs a `net`".into()));
-                }
-                if self.min.is_none() && self.max.is_none() {
-                    return Err(SpecError::Invalid(format!(
-                        "ac_gain on '{}' needs a `min` and/or `max` in dB",
-                        self.net.as_deref().unwrap_or("?")
-                    )));
-                }
+                need(self.net.is_some(), "ac_gain assertion needs a `net`".into())?;
+                need(
+                    has_bound,
+                    format!("ac_gain on '{net}' needs a `min` and/or `max` in dB"),
+                )?;
             }
-            "hwtrace" => {
-                if self.trace.is_none() {
-                    return Err(SpecError::Invalid(
-                        "hwtrace assertion needs a `trace` (path to the trace.toml, relative \
-                         to the spec file)"
-                            .into(),
-                    ));
-                }
-            }
-            // `boot-coverage` is the accepted legacy alias; Spec::load folds it
-            // onto `boot_coverage`, and this arm keeps a directly-constructed
-            // Assertion (tests, library callers) working on either spelling.
+            "hwtrace" => need(
+                self.trace.is_some(),
+                "hwtrace assertion needs a `trace` (path to the trace.toml, relative \
+                 to the spec file)"
+                    .into(),
+            )?,
             "boot_coverage" | "boot-coverage" => {
-                if self.net.is_none() {
-                    return Err(SpecError::Invalid(
-                        "boot_coverage assertion needs a `net` (the control net to watch)".into(),
-                    ));
-                }
-                if self.min.is_none() {
-                    return Err(SpecError::Invalid(format!(
-                        "boot_coverage assertion on '{}' needs a `min` (the driven level in volts the firmware must reach)",
-                        self.net.as_deref().unwrap_or("?")
-                    )));
-                }
-                if self.deadline_ms.is_none() {
-                    return Err(SpecError::Invalid(format!(
-                        "boot_coverage assertion on '{}' needs a `deadline_ms` (the boot deadline)",
-                        self.net.as_deref().unwrap_or("?")
-                    )));
-                }
-                if let Some(h) = self.hold_ms {
-                    if h < 0.0 {
-                        return Err(SpecError::Invalid(format!(
-                            "boot_coverage assertion on '{}': `hold_ms` must be >= 0 \
-                             (0 = the level only needs to be reached; absent = hold \
-                             through the whole deadline)",
-                            self.net.as_deref().unwrap_or("?")
-                        )));
-                    }
-                }
+                need(
+                    self.net.is_some(),
+                    "boot_coverage assertion needs a `net` (the control net to watch)".into(),
+                )?;
+                need(
+                    self.min.is_some(),
+                    format!("boot_coverage assertion on '{net}' needs a `min` (the driven level in volts the firmware must reach)"),
+                )?;
+                need(
+                    self.deadline_ms.is_some(),
+                    format!("boot_coverage assertion on '{net}' needs a `deadline_ms` (the boot deadline)"),
+                )?;
+                need(
+                    self.hold_ms.is_none_or(|h| h >= 0.0),
+                    format!(
+                        "boot_coverage assertion on '{net}': `hold_ms` must be >= 0 \
+                         (0 = the level only needs to be reached; absent = hold \
+                         through the whole deadline)"
+                    ),
+                )?;
             }
             "model_coverage" => {
                 // Caught here rather than at run time: an assertion with no
                 // threshold would otherwise sit in a spec looking like a
                 // coverage gate while checking nothing, which is the exact
                 // failure this assertion exists to prevent.
-                if self.min_critical.is_none()
-                    && self.min_resolved.is_none()
-                    && self.max_active_unresolved.is_none()
-                {
-                    return Err(SpecError::Invalid(
-                        "model_coverage assertion needs at least one of `min_critical` \
-                         (fraction of active ICs bound), `min_resolved` (fraction of all \
-                         parts bound) or `max_active_unresolved` (unresolved parts on \
-                         connected nets)"
-                            .into(),
-                    ));
-                }
+                need(
+                    self.min_critical.is_some()
+                        || self.min_resolved.is_some()
+                        || self.max_active_unresolved.is_some(),
+                    "model_coverage assertion needs at least one of `min_critical` \
+                     (fraction of active ICs bound), `min_resolved` (fraction of all \
+                     parts bound) or `max_active_unresolved` (unresolved parts on \
+                     connected nets)"
+                        .into(),
+                )?;
                 for (name, v) in [
                     ("min_critical", self.min_critical),
                     ("min_resolved", self.min_resolved),
                 ] {
-                    if let Some(v) = v {
-                        if !(0.0..=1.0).contains(&v) {
-                            return Err(SpecError::Invalid(format!(
-                                "model_coverage `{name}` is a fraction between 0.0 and 1.0, got {v}"
-                            )));
-                        }
-                    }
+                    need(
+                        v.is_none_or(|v| (0.0..=1.0).contains(&v)),
+                        format!(
+                            "model_coverage `{name}` is a fraction between 0.0 and 1.0, got {}",
+                            v.unwrap_or(0.0)
+                        ),
+                    )?;
                 }
             }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}'{} (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot_coverage|phase_margin|ac_gain|hwtrace|model_coverage)",
-                    crate::error::did_you_mean_hint(other, ASSERTION_KINDS)
+                    "unknown assertion kind '{other}'{} (expected {})",
+                    crate::error::did_you_mean_hint(other, ASSERTION_KINDS),
+                    ASSERTION_KINDS.join("|")
                 )));
             }
         }
@@ -2486,22 +2347,18 @@ impl Assertion {
         // a hardware RED (exit 1) blaming the board for a bound no measurement
         // could satisfy. It is a spec error (exit 2): name both values here at
         // load, for every kind that takes a [min, max] window.
-        if matches!(
-            self.kind.as_str(),
+        let windowed = matches!(
+            kind,
             "voltage" | "rail_window" | "phase_margin" | "ac_gain" | "peripheral"
-        ) {
-            if let (Some(lo), Some(hi)) = (self.min, self.max) {
-                if lo > hi {
-                    return Err(SpecError::Invalid(format!(
-                        "{} assertion '{}': min ({lo}) is greater than max ({hi}), a window \
-                         nothing can satisfy; swap the bounds or fix the typo",
-                        self.kind,
-                        self.label()
-                    )));
-                }
-            }
+        );
+        match (self.min, self.max) {
+            (Some(lo), Some(hi)) if windowed && lo > hi => Err(SpecError::Invalid(format!(
+                "{kind} assertion '{}': min ({lo}) is greater than max ({hi}), a window \
+                 nothing can satisfy; swap the bounds or fix the typo",
+                self.label()
+            ))),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     /// A human label for this assertion.
@@ -2509,20 +2366,15 @@ impl Assertion {
         if let Some(n) = &self.name {
             return n.clone();
         }
+        let net = self.net.clone().unwrap_or_default();
+        let bound = |unit: &str, none: &str| bound_label(self.min, self.max, unit, none);
         match self.kind.as_str() {
             "voltage" => {
-                let net = self.net.clone().unwrap_or_default();
-                let bound = match (self.min, self.max) {
-                    (Some(lo), Some(hi)) => format!("in [{lo}, {hi}] V"),
-                    (Some(lo), None) => format!(">= {lo} V"),
-                    (None, Some(hi)) => format!("<= {hi} V"),
-                    (None, None) => "voltage".into(),
-                };
                 let when = self
                     .after_ms
                     .map(|t| format!(" after {t}ms"))
                     .unwrap_or_default();
-                format!("{net} {bound}{when}")
+                format!("{net} {}{when}", bound(" V", "voltage"))
             }
             "uart" => {
                 if let Some(c) = &self.contains {
@@ -2533,14 +2385,10 @@ impl Assertion {
                     "UART".into()
                 }
             }
-            "toggle" => {
-                let net = self.net.clone().unwrap_or_default();
-                if let Some(f) = self.freq_hz {
-                    format!("{net} toggles at ~{f} Hz")
-                } else {
-                    format!("{net} toggles >= {} times", self.min_toggles.unwrap_or(0))
-                }
-            }
+            "toggle" => match self.freq_hz {
+                Some(f) => format!("{net} toggles at ~{f} Hz"),
+                None => format!("{net} toggles >= {} times", self.min_toggles.unwrap_or(0)),
+            },
             "no_faults" => "no stress faults raised".into(),
             "max_current" => format!(
                 "I({}) <= {} A",
@@ -2559,19 +2407,12 @@ impl Assertion {
                 if let Some(b) = &self.bytes {
                     format!("peripheral {id} contains bytes {b}")
                 } else if let Some(f) = &self.field {
-                    let bound = match (self.min, self.max) {
-                        (Some(lo), Some(hi)) => format!("in [{lo}, {hi}]"),
-                        (Some(lo), None) => format!(">= {lo}"),
-                        (None, Some(hi)) => format!("<= {hi}"),
-                        (None, None) => "set".into(),
-                    };
-                    format!("peripheral {id}.{f} {bound}")
+                    format!("peripheral {id}.{f} {}", bound("", "set"))
                 } else {
                     format!("peripheral {id}")
                 }
             }
             "rail_window" => {
-                let net = self.net.clone().unwrap_or_default();
                 let mut parts = Vec::new();
                 if let Some(lo) = self.min {
                     parts.push(format!("min >= {lo} V"));
@@ -2594,20 +2435,19 @@ impl Assertion {
                     .unwrap_or_default();
                 format!("{net} window: {}{scope}", parts.join(", "))
             }
-            "protection_trip" => {
-                let net = self.supply_net.clone().unwrap_or_default();
-                let want = if self.expect_trip.unwrap_or(false) {
+            "protection_trip" => format!(
+                "{} protection {}",
+                self.supply_net.clone().unwrap_or_default(),
+                if self.expect_trip.unwrap_or(false) {
                     "trips"
                 } else {
                     "does NOT trip"
-                };
-                format!("{net} protection {want}")
-            }
+                }
+            ),
             "hwtrace" => {
                 format!("hardware trace {}", self.trace.clone().unwrap_or_default())
             }
             "boot_coverage" | "boot-coverage" => {
-                let net = self.net.clone().unwrap_or_default();
                 let hold = match self.hold_ms {
                     None => String::new(),
                     Some(h) if h > 0.0 => format!(", held {h} ms"),
@@ -2619,32 +2459,27 @@ impl Assertion {
                     self.deadline_ms.unwrap_or(0.0)
                 )
             }
-            "phase_margin" => {
-                let net = self.net.clone().unwrap_or_default();
-                let bound = match (self.min, self.max) {
-                    (Some(lo), Some(hi)) => format!("in [{lo}, {hi}] deg"),
-                    (Some(lo), None) => format!(">= {lo} deg"),
-                    (None, Some(hi)) => format!("<= {hi} deg"),
-                    (None, None) => "phase margin".into(),
-                };
-                format!("loop {net} phase margin {bound}")
-            }
+            "phase_margin" => format!("loop {net} phase margin {}", bound(" deg", "phase margin")),
             "ac_gain" => {
-                let net = self.net.clone().unwrap_or_default();
-                let bound = match (self.min, self.max) {
-                    (Some(lo), Some(hi)) => format!("in [{lo}, {hi}] dB"),
-                    (Some(lo), None) => format!(">= {lo} dB"),
-                    (None, Some(hi)) => format!("<= {hi} dB"),
-                    (None, None) => "gain".into(),
-                };
                 let at = self
                     .freq_hz
                     .map(|f| format!(" at {f} Hz"))
                     .unwrap_or_default();
-                format!("{net} gain {bound}{at}")
+                format!("{net} gain {}{at}", bound(" dB", "gain"))
             }
             other => other.to_string(),
         }
+    }
+}
+
+/// `in [lo, hi]<unit>` / `>= lo<unit>` / `<= hi<unit>`, or `none` when the
+/// assertion carries no bound at all.
+fn bound_label(min: Option<f64>, max: Option<f64>, unit: &str, none: &str) -> String {
+    match (min, max) {
+        (Some(lo), Some(hi)) => format!("in [{lo}, {hi}]{unit}"),
+        (Some(lo), None) => format!(">= {lo}{unit}"),
+        (None, Some(hi)) => format!("<= {hi}{unit}"),
+        (None, None) => none.to_string(),
     }
 }
 

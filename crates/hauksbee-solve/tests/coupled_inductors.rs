@@ -30,6 +30,8 @@ use hauksbee_solve::{
 };
 use num_complex::Complex64;
 
+use crate::shared::max_deviation;
+
 /// The shared transformer fixture: `V1(sin) -> Rs -> L1 || (K) || L2 -> RL`,
 /// primary and secondary sharing ONLY ground. Returns the circuit and the
 /// (l1, l2) device ids.
@@ -252,19 +254,6 @@ fn linear_island_with_coupling_forces_mna() {
 
 // --- assembly / partition parity ------------------------------------------------
 
-fn max_deviation(a: &Waveforms, b: &Waveforms, reltol: f64, vntol: f64) -> f64 {
-    assert_eq!(a.time.len(), b.time.len(), "different sample grids");
-    let mut worst = 0.0f64;
-    for (wa, wb) in a.node_voltages.iter().zip(b.node_voltages.iter()) {
-        for (&va, &vb) in wa.iter().zip(wb.iter()) {
-            assert!(va.is_finite() && vb.is_finite());
-            let bound = reltol * va.abs().max(vb.abs()) + vntol;
-            worst = worst.max((va - vb).abs() / bound);
-        }
-    }
-    worst
-}
-
 /// Planned two-tier assembly (−M folded into the reactive backbone, history
 /// through the windings' RhsOnly restamps) vs the interpreted reference.
 #[test]
@@ -277,7 +266,7 @@ fn planned_assembly_matches_interpreted_on_coupled_deck() {
     let planned = Transient::new(tran_opts(Partitioning::Off, AssemblyMode::Planned))
         .run(&c, tstop)
         .expect("planned converged");
-    let ratio = max_deviation(&interp, &planned, 1e-9, 1e-9);
+    let ratio = max_deviation(&interp, &planned, 1e-9, 1e-9).1;
     println!("coupled planned-vs-interpreted worst tol ratio = {ratio:.3e}");
     assert!(ratio <= 1.0, "planned assembly out of tolerance: {ratio}");
 }
@@ -294,7 +283,7 @@ fn partitioned_auto_matches_monolithic_on_coupled_deck() {
     let auto = Transient::new(tran_opts(Partitioning::Auto, AssemblyMode::Interpreted))
         .run(&c, tstop)
         .expect("partitioned converged");
-    let ratio = max_deviation(&mono, &auto, 1e-9, 1e-9);
+    let ratio = max_deviation(&mono, &auto, 1e-9, 1e-9).1;
     println!("coupled auto-vs-monolithic worst tol ratio = {ratio:.3e}");
     assert!(ratio <= 1.0, "partitioned path out of tolerance: {ratio}");
 }

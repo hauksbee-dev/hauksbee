@@ -39,10 +39,13 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+
+use crate::schema::{ComponentKind, ModelEntry};
+use crate::sensor_spec::{Bus, SensorSpec};
 
 /// How long to let a single agent-CLI run (codex or claude) go before we kill
 /// it and (maybe) retry.
@@ -183,42 +186,43 @@ fn prepare_workspace(pdf: &Path) -> Result<Workspace> {
     if which("pdftoppm") {
         for selection in selections {
             let stem = dir.path().join(format!("page-{:03}", selection.number));
+            let page = selection.number.to_string();
             let out = Command::new("pdftoppm")
                 .args([
                     "-png",
                     "-r",
                     &RENDER_DPI.to_string(),
                     "-f",
-                    &selection.number.to_string(),
+                    &page,
                     "-l",
-                    &selection.number.to_string(),
-                    "-singlefile",
+                    &page,
                 ])
+                .arg("-singlefile")
                 .arg(&copied)
                 .arg(&stem)
                 .output();
-            if let Ok(o) = out {
-                if o.status.success() {
+            match out {
+                Ok(o) if o.status.success() => {
                     let rendered = stem.with_extension("png");
                     if rendered.is_file() {
                         pages.push(rendered);
                         selected_pages.push(selection);
                     }
-                    continue;
                 }
-                eprintln!(
-                    "[model-extract] PDF page {} failed to render, continuing without it: {}",
-                    selection.number,
-                    String::from_utf8_lossy(&o.stderr)
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                );
+                Ok(o) => {
+                    eprintln!(
+                    "[model-extract] PDF page {page} failed to render, continuing without it: {}",
+                    String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("")
+                )
+                }
+                Err(_) => {}
             }
         }
     } else {
         eprintln!(
-            "[model-extract] pdftoppm not found, so the model sees text only.              Install poppler for page images: the pinout and the ratings table              survive a render far better than a text dump."
+            "[model-extract] pdftoppm not found, so the model sees text only. Install poppler \
+             for page images: the pinout and the ratings table survive a render far better \
+             than a text dump."
         );
     }
 
@@ -239,45 +243,36 @@ fn prepare_workspace(pdf: &Path) -> Result<Workspace> {
 
 /// Run one extraction end to end, as the CLI does.
 pub fn run(args: Args) -> Result<PathBuf> {
-    // 0. PDF precheck, BEFORE any backend is chosen or anything is sent: a
-    // non-PDF file (a saved HTML page, a .docx) would otherwise be text-dumped
-    // and shipped to the LLM, producing a confidently wrong model. Magic
-    // bytes rather than extension, so a downloaded datasheet with no
-    // extension still passes and a renamed HTML file still fails.
-    {
-        let mut head = [0u8; 5];
-        use std::io::Read;
-        let is_pdf = std::fs::File::open(&args.pdf)
-            .and_then(|mut f| f.read_exact(&mut head))
-            .map(|_| &head == b"%PDF-")
-            .unwrap_or(false);
-        if !is_pdf {
-            anyhow::bail!(
-                "'{}' is not a PDF (no %PDF header); the extractor reads PDF \
-                 datasheets only. Nothing was sent.",
-                args.pdf.display()
-            );
-        }
+    // Magic bytes rather than extension, and BEFORE any backend is chosen: a
+    // non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
+    // shipped to the LLM, producing a confidently wrong model; a downloaded
+    // datasheet with no extension still passes.
+    let mut head = [0u8; 5];
+    let is_pdf = std::fs::File::open(&args.pdf)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+        .is_ok_and(|()| &head == b"%PDF-");
+    if !is_pdf {
+        bail!(
+            "'{}' is not a PDF (no %PDF header); the extractor reads PDF datasheets only. \
+             Nothing was sent.",
+            args.pdf.display()
+        );
     }
-    // 1. Extract text from PDF
     let pdf_text = extract_pdf_text(&args.pdf)?;
 
     // An empty kind means "you work it out". Being made to classify a part
     // before the tool will look at it is a barrier at exactly the wrong
-    // moment: the datasheet says what the part is on its first page, the model
-    // is about to read that page, and the person asking for a model is
-    // precisely the one who may not know which of our categories their part
-    // falls into.
+    // moment: the datasheet says what the part is on its first page, and the
+    // person asking for a model is precisely the one who may not know which
+    // of our categories their part falls into.
     let mut args = args;
     if args.kind_str.trim().is_empty() {
-        let chosen = identify_kind(&args, &pdf_text)?;
+        args.kind_str = identify_kind(&args, &pdf_text)?;
         eprintln!(
             "[model-extract] identified {} as kind '{}'",
-            args.part, chosen
+            args.part, args.kind_str
         );
-        args.kind_str = chosen;
     }
-
     eprintln!(
         "[model-extract] part={} kind={} pdf={}",
         args.part,
@@ -285,68 +280,43 @@ pub fn run(args: Args) -> Result<PathBuf> {
         args.pdf.display()
     );
 
-    // Declarative register-map sensor kinds (`i2c_sensor` / `spi_sensor`) emit a
-    // `[sensor]` spec validated against hauksbee-models::sensor_spec, NOT the
-    // SPICE `[[models]]` schema, so they take a separate prompt + validation
-    // path that round-trips through `SensorSpec`.
-    if is_sensor_kind(&args.kind_str) {
-        let prompt = build_sensor_prompt(&args.part, &args.kind_str, &pdf_text);
-        let raw = call_backend(&prompt, &args)?;
-        let spec = validate_sensor_reply(&raw, &args.part, &args.kind_str)?;
+    let (part, kind) = (args.part.as_str(), args.kind_str.as_str());
+    // Declarative register-map sensor kinds emit a `[sensor]` spec validated
+    // as a `SensorSpec`, NOT the SPICE `[[models]]` schema.
+    let (raw, id, suffix) = if is_sensor_kind(kind) {
+        let prompt = build_sensor_prompt(part, kind, &pdf_text);
+        let raw = call_backend(&prompt, &args, Reply::Sensor { part, kind })?;
+        let name = validate_sensor_reply(&raw, part, kind)?.sensor.name;
+        (raw, name, ".sensor.toml")
+    } else {
+        // An explicit kind the schema cannot accept fails HERE, before any
+        // datasheet text is sent anywhere. A behavioural FAMILY (charger/pmic
+        // on vreg, balancer on digital) is legal: the prompt appends the
+        // `[models.behavioral]` guidance and the draft comes back under the
+        // base kind, which the schema accepts.
+        if !kind_is_legal(kind) && behavioral_family_base_kind(kind).is_none() {
+            bail!(
+                "hauksbee has no '{kind}' model kind. Legal kinds: {}; behavioral families \
+                 (drafted on a base kind with a [models.behavioral] block): charger, pmic, \
+                 balancer. Pick the closest and declare the unmodeled behavior in the \
+                 description, or omit --kind and let the extraction choose.",
+                legal_kinds().join(", ")
+            );
+        }
+        let prompt = build_prompt(part, kind, &pdf_text);
+        let raw = call_backend(&prompt, &args, Reply::Model { part, kind })?;
+        let id = parse_and_validate_reply(&raw, part, kind)?.id;
+        (raw, id, ".toml")
+    };
 
-        let default_dir = default_out_dir();
-        let out_dir: &Path = args.out_dir.as_deref().unwrap_or(&default_dir);
-        std::fs::create_dir_all(out_dir)
-            .with_context(|| format!("creating output directory {}", out_dir.display()))?;
-        let out_path = out_dir.join(format!("{}.sensor.toml", sanitise_filename(&args.part)));
-        std::fs::write(&out_path, &raw)
-            .with_context(|| format!("writing output to {}", out_path.display()))?;
-
-        println!("[model-extract] written: {}", out_path.display());
-        println!("{}", spec.sensor.name);
-        return Ok(out_path);
-    }
-
-    // 2. An explicit kind the schema cannot accept fails HERE, before any
-    //    datasheet text is sent anywhere: burning consented LLM attempts
-    //    against a parser that can never accept the result helps nobody, and
-    //    the refusal can name the nearest expressible route.
-    // Legal = a schema kind, or a behavioral FAMILY the prompt knows how to
-    // express on a base kind (charger/pmic on vreg, balancer on digital):
-    // those append the [models.behavioral] guidance and the draft comes back
-    // under the base kind, which the schema accepts.
-    if !args.kind_str.is_empty()
-        && !kind_is_legal(&args.kind_str)
-        && behavioral_family_base_kind(&args.kind_str).is_none()
-    {
-        bail!(
-            "hauksbee has no '{}' model kind. Legal kinds: {}; behavioral families \
-             (drafted on a base kind with a [models.behavioral] block): charger, pmic, \
-             balancer. Pick the closest and declare the unmodeled behavior in the \
-             description, or omit --kind and let the extraction choose.",
-            args.kind_str,
-            legal_kinds().join(", ")
-        );
-    }
-    let prompt = build_prompt(&args.part, &args.kind_str, &pdf_text);
-
-    // 3. Call backend and get raw TOML reply
-    let raw = call_backend(&prompt, &args)?;
-
-    // 4. Parse and validate
-    let entry = parse_and_validate_reply(&raw, &args.part, &args.kind_str)?;
-
-    // 5. Write to output directory
-    let default_dir = default_out_dir();
-    let out_dir: &Path = args.out_dir.as_deref().unwrap_or(&default_dir);
-    std::fs::create_dir_all(out_dir)
+    let out_dir = args.out_dir.clone().unwrap_or_else(default_out_dir);
+    std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
-    let out_path = out_dir.join(format!("{}.toml", sanitise_filename(&args.part)));
+    let out_path = out_dir.join(format!("{}{suffix}", sanitise_filename(part)));
     std::fs::write(&out_path, &raw)
         .with_context(|| format!("writing output to {}", out_path.display()))?;
-
     println!("[model-extract] written: {}", out_path.display());
-    println!("{}", entry.id);
+    println!("{id}");
     Ok(out_path)
 }
 
@@ -360,7 +330,6 @@ fn is_sensor_kind(kind: &str) -> bool {
 /// Build the LLM prompt that instructs the model to read a sensor datasheet and
 /// emit a `[sensor]` declarative register-map spec (the format defined in
 /// hauksbee-models::sensor_spec). The reply is validated by parsing it as a
-/// `SensorSpec` and round-tripping it through TOML.
 fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     let bus = if kind.trim() == "spi_sensor" {
         "spi"
@@ -449,39 +418,27 @@ OUTPUT (TOML only, starting with [sensor]):
     )
 }
 
-/// Validate a sensor-spec reply: it must start with `[sensor]`, parse as a
-/// `SensorSpec` (which validates structure), round-trip losslessly through TOML,
-/// and agree with the requested bus.
-fn validate_sensor_reply(
-    raw: &str,
-    part: &str,
-    kind: &str,
-) -> Result<crate::sensor_spec::SensorSpec> {
-    use crate::sensor_spec::{Bus, SensorSpec};
-
+/// Validate a sensor-spec reply: it must carry a `[sensor]` table, parse as a
+/// `SensorSpec` (which validates structure), round-trip losslessly through
+/// TOML, and agree with the requested bus.
+fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         bail!("empty reply for {part}: the backend returned no TOML at all");
     }
     if !trimmed.contains("[sensor]") {
         bail!(
-            "reply for {part} contains no [sensor] table; the backend likely \
-             answered with prose instead of TOML. First 200 chars: {:.200}",
-            trimmed
+            "reply for {part} contains no [sensor] table; the backend likely answered with \
+             prose instead of TOML. First 200 chars: {trimmed:.200}"
         );
     }
-
     let spec = SensorSpec::from_toml(trimmed)
         .with_context(|| format!("parsing/validating sensor spec for {part}"))?;
-
-    // Round-trip: serialise back and re-parse, ensuring the spec is stable.
     let back = spec
         .to_toml()
         .with_context(|| format!("serialising sensor spec for {part}"))?;
     SensorSpec::from_toml(&back)
         .with_context(|| format!("round-trip re-parse of sensor spec for {part} failed"))?;
-
-    // Bus must match the requested kind.
     let want_bus = if kind.trim() == "spi_sensor" {
         Bus::Spi
     } else {
@@ -489,12 +446,10 @@ fn validate_sensor_reply(
     };
     if spec.sensor.bus != want_bus {
         bail!(
-            "bus mismatch for {part}: requested '{kind}' but the spec declares \
-             bus = {:?}",
+            "bus mismatch for {part}: requested '{kind}' but the spec declares bus = {:?}",
             spec.sensor.bus
         );
     }
-
     Ok(spec)
 }
 
@@ -641,73 +596,45 @@ pub fn parse_args() -> Result<Args> {
 }
 
 /// The flag parser, over any argument source so tests can drive it without a
+/// The flag parser, over any argument source so tests can drive it without a
 /// process spawn. `--help` still exits: it is a terminal answer, not a value.
 pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
     let mut args = args.into_iter();
-    let mut pdf: Option<PathBuf> = None;
-    let mut part: Option<String> = None;
-    // Empty means "the model works it out from the datasheet". Defaulting to
-    // bjt_npn silently produced a transistor model for whatever was handed in.
-    let mut kind_str = String::new();
-    let mut out_dir: Option<PathBuf> = None;
-    let mut model: Option<String> = None;
-    let mut backend: Option<Backend> = None;
-    let mut api_base: Option<String> = None;
-    let mut api_key_env: Option<String> = None;
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--pdf" => {
-                pdf = Some(args.next().context("--pdf requires a value")?.into());
-            }
-            "--part" => {
-                part = Some(args.next().context("--part requires a value")?);
-            }
-            "--kind" => {
-                kind_str = args.next().context("--kind requires a value")?;
-            }
-            "--out-dir" => {
-                out_dir = Some(args.next().context("--out-dir requires a value")?.into());
-            }
-            "--model" => {
-                model = Some(args.next().context("--model requires a value")?);
-            }
+    // An empty kind means "the model works it out from the datasheet";
+    // defaulting to bjt_npn silently produced a transistor model for whatever
+    // was handed in.
+    let mut out = Args::new(PathBuf::new(), String::new(), String::new());
+    let (mut pdf, mut part) = (None, None);
+    while let Some(flag) = args.next() {
+        if matches!(flag.as_str(), "--help" | "-h") {
+            print_help();
+            std::process::exit(0);
+        }
+        let mut value = |what: &str| {
+            args.next()
+                .with_context(|| format!("{flag} requires {what}"))
+        };
+        match flag.as_str() {
+            "--pdf" => pdf = Some(PathBuf::from(value("a value")?)),
+            "--part" => part = Some(value("a value")?),
+            "--kind" => out.kind_str = value("a value")?,
+            "--out-dir" => out.out_dir = Some(PathBuf::from(value("a value")?)),
+            "--model" => out.model = Some(value("a value")?),
             "--backend" => {
-                backend = Some(
-                    args.next()
-                        .context("--backend requires a value (codex, claude-code, or api)")?
-                        .parse()?,
-                );
+                out.backend = Some(value("a value (codex, claude-code, or api)")?.parse()?)
             }
-            "--api-base" => {
-                api_base = Some(args.next().context("--api-base requires a value")?);
-            }
+            "--api-base" => out.api_base = Some(value("a value")?),
             "--api-key-env" => {
-                let name = args
-                    .next()
-                    .context("--api-key-env requires an environment variable NAME")?;
+                let name = value("an environment variable NAME")?;
                 validate_api_key_env_name(&name)?;
-                api_key_env = Some(name);
+                out.api_key_env = Some(name);
             }
-            "--help" | "-h" => {
-                print_help();
-                std::process::exit(0);
-            }
-            other => bail!("unknown argument: {}", other),
+            other => bail!("unknown argument: {other}"),
         }
     }
-
-    Ok(Args {
-        pdf: pdf.context("--pdf is required")?,
-        part: part.context("--part is required")?,
-        kind_str,
-        out_dir,
-        retries: 2,
-        model,
-        backend,
-        api_base,
-        api_key_env,
-    })
+    out.pdf = pdf.context("--pdf is required")?;
+    out.part = part.context("--part is required")?;
+    Ok(out)
 }
 
 pub fn print_help() {
@@ -751,42 +678,21 @@ ENVIRONMENT:
 
 // ── PDF text extraction ───────────────────────────────────────────────────────
 
-fn extract_pdf_text(path: &Path) -> Result<String> {
-    // Try pdftotext first
-    if which("pdftotext") {
-        let output = Command::new("pdftotext")
-            .arg(path)
-            .arg("-") // output to stdout
-            .output()
-            .context("running pdftotext")?;
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout).into_owned();
-            if !text.trim().is_empty() {
-                return Ok(truncate_to_chars(&text, 60_000));
-            }
-        }
-    }
-
-    // Fallback: read raw bytes and let the LLM handle it (works with codex)
-    // Return a placeholder that tells the prompt to read the PDF directly
-    eprintln!("[model-extract] pdftotext not found; LLM backend will read the PDF directly");
-    Ok(format!(
-        "<pdf_path>{}</pdf_path>\n\
-         [Note: pdftotext not available. The LLM should read the PDF at the path above directly.]",
-        path.display()
-    ))
-}
-
-fn extract_pdf_pages_text(path: &Path) -> Result<Vec<PdfPageText>> {
+/// The PDF's text layer via poppler's `pdftotext` (`-layout` keeps table
+/// columns aligned, which page selection wants and the prompt does not).
+fn pdftotext(path: &Path, layout: bool) -> Result<String> {
     if !which("pdftotext") {
         bail!("pdftotext is unavailable");
     }
-    let output = Command::new("pdftotext")
-        .args(["-layout"])
+    let mut cmd = Command::new("pdftotext");
+    if layout {
+        cmd.arg("-layout");
+    }
+    let output = cmd
         .arg(path)
         .arg("-")
         .output()
-        .context("extracting the PDF text layer page by page")?;
+        .context("running pdftotext")?;
     if !output.status.success() {
         bail!(
             "pdftotext failed: {}",
@@ -796,7 +702,28 @@ fn extract_pdf_pages_text(path: &Path) -> Result<Vec<PdfPageText>> {
                 .unwrap_or("unknown error")
         );
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The prompt's datasheet text. Without poppler (or a text layer) the
+/// extraction still runs: the agent backends read the PDF themselves, so the
+/// placeholder tells them to.
+fn extract_pdf_text(path: &Path) -> Result<String> {
+    if let Ok(text) = pdftotext(path, false) {
+        if !text.trim().is_empty() {
+            return Ok(truncate_to_chars(&text, 60_000));
+        }
+    }
+    eprintln!("[model-extract] pdftotext unavailable or produced no text; LLM backend will read the PDF directly");
+    Ok(format!(
+        "<pdf_path>{}</pdf_path>\n\
+         [Note: pdftotext not available. The LLM should read the PDF at the path above directly.]",
+        path.display()
+    ))
+}
+
+fn extract_pdf_pages_text(path: &Path) -> Result<Vec<PdfPageText>> {
+    let text = pdftotext(path, true)?;
     let pages: Vec<PdfPageText> = text
         .split('\u{000c}')
         .enumerate()
@@ -1103,17 +1030,10 @@ fn format_page_numbers(numbers: &[usize]) -> String {
     }
 }
 
-fn number_word(number: usize) -> String {
-    match number {
-        0 => "no".to_string(),
-        1 => "one".to_string(),
-        2 => "two".to_string(),
-        3 => "three".to_string(),
-        4 => "four".to_string(),
-        5 => "five".to_string(),
-        6 => "six".to_string(),
-        value => value.to_string(),
-    }
+fn number_word(n: usize) -> String {
+    ["no", "one", "two", "three", "four", "five", "six"]
+        .get(n)
+        .map_or_else(|| n.to_string(), |w| w.to_string())
 }
 
 fn which(cmd: &str) -> bool {
@@ -1122,16 +1042,11 @@ fn which(cmd: &str) -> bool {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
 }
 
 fn truncate_to_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max).collect()
-    }
+    s.chars().take(max).collect()
 }
 
 // ── Prompt construction ───────────────────────────────────────────────────────
@@ -1714,130 +1629,91 @@ fn required_params_for_kind(kind: &str) -> &'static str {
 
 // ── Backend dispatch ──────────────────────────────────────────────────────────
 
-fn call_backend(prompt: &str, args: &Args) -> Result<String> {
-    // Test / offline hook: HAUKSBEE_EXTRACT_MOCK_REPLY points to a file holding a
-    // canned backend reply. This exercises the full parse + validate + retry
-    // path with no codex and no network, so CI can run it deterministically.
+/// What one backend call must come back with, and how to check it before the
+/// reply is accepted or quoted back to the model for a retry.
+///
+/// The validator is part of the request because the three prompts want three
+/// different answers: a full `[[models]]` entry, a `[sensor]` spec, or the one
+/// word the kind-identification prompt asks for. One validator for all of them
+/// would refuse two of them on every attempt.
+#[derive(Clone, Copy)]
+enum Reply<'a> {
+    /// A complete `[[models]]` entry for `part` under `kind`.
+    Model { part: &'a str, kind: &'a str },
+    /// A `[sensor]` register-map spec for `part` on the bus `kind` implies.
+    Sensor { part: &'a str, kind: &'a str },
+    /// One bare identifier.
+    Word,
+}
+
+impl Reply<'_> {
+    /// The TOML table the answer starts with (empty for a bare word).
+    fn table(self) -> &'static str {
+        match self {
+            Reply::Model { .. } => "[[models]]",
+            Reply::Sensor { .. } => "[sensor]",
+            Reply::Word => "",
+        }
+    }
+
+    fn check(self, raw: &str) -> Result<()> {
+        match self {
+            Reply::Model { part, kind } => parse_and_validate_reply(raw, part, kind).map(drop),
+            Reply::Sensor { part, kind } => validate_sensor_reply(raw, part, kind).map(drop),
+            Reply::Word if raw.trim().is_empty() => bail!("the backend returned nothing"),
+            Reply::Word => Ok(()),
+        }
+    }
+}
+
+fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
+    // Test / offline hook: HAUKSBEE_EXTRACT_MOCK_REPLY points to a file holding
+    // a canned backend reply. This exercises the full parse + validate path
+    // with no codex and no network, and the reply is validated exactly like a
+    // real one so the hook cannot smuggle garbage past the pipeline.
     if let Ok(path) = std::env::var("HAUKSBEE_EXTRACT_MOCK_REPLY") {
-        let reply = std::fs::read_to_string(&path)
+        let canned = std::fs::read_to_string(&path)
             .with_context(|| format!("reading mock reply from {path}"))?;
-        let raw = extract_toml_block(&reply);
-        // Validate just like a real backend reply so the hook can't smuggle
-        // garbage past the pipeline.
-        parse_and_validate_reply(&raw, &args.part, &args.kind_str)?;
+        let raw = extract_toml_block(&canned, reply.table());
+        reply.check(&raw)?;
         return Ok(raw);
     }
 
     // No explicit --backend keeps the pre-flag behaviour: an exported
     // HAUKSBEE_LLM_API_KEY selects the api backend, codex otherwise.
-    let chosen = args.backend.unwrap_or_else(|| {
-        if std::env::var("HAUKSBEE_LLM_API_KEY").is_ok() {
-            Backend::Api
-        } else {
-            Backend::Codex
+    let chosen = args
+        .backend
+        .unwrap_or(match std::env::var_os("HAUKSBEE_LLM_API_KEY") {
+            Some(_) => Backend::Api,
+            None => Backend::Codex,
+        });
+    let (tool, install) = match chosen {
+        Backend::Api => {
+            let request = ApiRequest::prepare(args)?;
+            return validated_attempts(args, prompt, reply, "api", |p| {
+                Ok(extract_toml_block(&request.send(p)?, reply.table()))
+            });
         }
-    });
-
-    match chosen {
-        Backend::Api => call_api_backend(prompt, args),
-        Backend::Codex => {
-            if !which("codex") {
-                bail!(
-                    "the codex backend needs the `codex` CLI, which is not in PATH. \
-                     Install it (`npm install -g @openai/codex` or `brew install codex`) \
-                     and sign in, or pick another backend: --backend claude-code \
-                     (needs `claude` in PATH) or --backend api (set OPENAI_API_KEY)."
-                );
-            }
-            call_agent_backend(prompt, args, "codex", run_codex_once)
-        }
-        Backend::ClaudeCode => {
-            if !which("claude") {
-                bail!(
-                    "the claude-code backend needs the `claude` CLI, which is not in \
-                     PATH. Install Claude Code (`npm install -g @anthropic-ai/claude-code`) \
-                     and sign in, or pick another backend: --backend codex (needs \
-                     `codex` in PATH) or --backend api (set OPENAI_API_KEY)."
-                );
-            }
-            call_agent_backend(prompt, args, "claude", run_claude_once)
-        }
-    }
-}
-
-/// Is a failed reply visibly only a classification or another tiny fragment?
-///
-/// The length check catches the measured `digital`, `model = "digital"`, and
-/// `answer = "digital"` failures. The shape checks also catch a longer bare
-/// scalar or single-key TOML document without misclassifying a malformed full
-/// `[[models]]` entry as a classification.
-fn reply_is_kind_or_fragment(raw: &str) -> bool {
-    let trimmed = raw.trim();
-    if trimmed.chars().count() < 200 {
-        return true;
-    }
-    if trimmed.contains("[[models]]") {
-        return false;
-    }
-    let bare_scalar = !trimmed.contains('\n') && !trimmed.contains('=');
-    let one_key_table = toml::from_str::<toml::Table>(trimmed)
-        .map(|table| table.len() <= 1)
-        .unwrap_or(false);
-    bare_scalar || one_key_table
-}
-
-/// Build one retry appendix from the latest failure only.
-///
-/// Quoting a short reply back to the model makes the classification-vs-card
-/// mistake concrete. Keeping this as an appendix to `base_prompt` preserves
-/// non-compounding feedback across attempts.
-fn retry_feedback(raw: &str, validation_error: &str) -> String {
-    let fragment_correction = if reply_is_kind_or_fragment(raw) {
-        format!(
-            "YOUR PREVIOUS REPLY, QUOTED VERBATIM:\n--- BEGIN REPLY ---\n{raw}\n\
-             --- END REPLY ---\n\
-             That reply is only the component kind (or another fragment), not the answer. \
-             The kind is only the `kind = \"...\"` FIELD inside the answer. The answer is \
-             the WHOLE `[[models]]` table, with every required section shown in the FORMAT \
-             EXAMPLE.\n\n"
-        )
-    } else {
-        String::new()
+        Backend::Codex => (
+            "codex",
+            "Install it (`npm install -g @openai/codex` or `brew install codex`) and sign in, \
+             or pick another backend: --backend claude-code (needs `claude` in PATH) or \
+             --backend api (set OPENAI_API_KEY).",
+        ),
+        Backend::ClaudeCode => (
+            "claude",
+            "Install Claude Code (`npm install -g @anthropic-ai/claude-code`) and sign in, or \
+             pick another backend: --backend codex (needs `codex` in PATH) or --backend api \
+             (set OPENAI_API_KEY).",
+        ),
     };
-    format!(
-        "{fragment_correction}YOUR PREVIOUS ANSWER FAILED VALIDATION WITH:\n\
-         {validation_error}\n\n\
-         Fix exactly those issues and write the corrected WHOLE `[[models]]` TOML table \
-         to model.toml."
-    )
-}
+    if !which(tool) {
+        bail!(
+            "the {} backend needs the `{tool}` CLI, which is not in PATH. {install}",
+            chosen.name()
+        );
+    }
 
-/// Call codex non-interactively and return its (validated) TOML reply.
-///
-/// Invocation notes learned the hard way:
-///   * `--sandbox workspace-write` (`--full-auto` is deprecated).
-///   * `--skip-git-repo-check`, codex otherwise refuses to run outside a repo.
-///   * `--cd <pdf_dir>` so codex can open the datasheet PDF / extracted text
-///     directly when pdftotext was unavailable.
-///   * stdin must be closed/empty or codex blocks "Reading additional input
-///     from stdin..." forever. We give it an empty stdin and read only stdout;
-///     the answer itself comes from --output-last-message.
-///   * the prompt goes in a FILE inside the sandbox, not in argv. It embeds up
-///     to 40,000 characters of the datasheet, and argv is world-readable on
-///     Linux via /proc/<pid>/cmdline and visible to `ps -ww` on macOS. Putting
-///     the very text the user consented to send to OpenAI where any local user
-///     can read it would undo the consent. It also kept a large datasheet
-///     clear of ARG_MAX, which would otherwise fail as a generic spawn error.
-///
-/// The claude-code backend shares this loop with the same contract: one
-/// sandboxed run per attempt, the answer preferred from `model.toml`, and a
-/// validation failure fed back verbatim for the retry.
-fn call_agent_backend(
-    prompt: &str,
-    args: &Args,
-    tool: &str,
-    run_once: fn(&str, &Workspace, Option<&str>) -> Result<String>,
-) -> Result<String> {
     // The sandbox is a scratch copy, never the user's own directory. See
     // `Workspace`: the agent runs full-auto, so what it can reach is the whole
     // of the security story.
@@ -1847,58 +1723,109 @@ fn call_agent_backend(
         ws.path().display(),
         ws.pages.len()
     );
-
     let base_prompt = format!("{prompt}\n\n{}", verification_clause(&ws));
-    let mut prompt = base_prompt.clone();
-    for attempt in 0..=args.retries {
-        let started = Instant::now();
-        let raw_stdout = run_once(&prompt, &ws, args.model.as_deref())?;
+    validated_attempts(args, &base_prompt, reply, tool, |p| {
+        let _ = std::fs::remove_file(ws.answer_path());
+        let stdout = match chosen {
+            Backend::Codex => run_codex_once(p, &ws, args.model.as_deref())?,
+            _ => run_claude_once(p, &ws, args.model.as_deref())?,
+        };
         // Prefer the file we asked for. Falling back to stdout keeps a model
         // that answered in prose from failing outright, but the file is the
         // reliable path: stdout also carries the agent's narration, and one
         // that says "here is the TOML" twice yields two candidates.
-        let raw = match std::fs::read_to_string(ws.answer_path()) {
-            Ok(t) if !t.trim().is_empty() => extract_toml_block(&t),
-            _ => extract_toml_block(&raw_stdout),
-        };
+        let text = std::fs::read_to_string(ws.answer_path())
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or(stdout);
+        Ok(extract_toml_block(&text, reply.table()))
+    })
+}
+
+/// Fetch, validate, and retry with feedback: one loop for every backend.
+///
+/// Each attempt sends `base_prompt` plus an appendix quoting only the LATEST
+/// failure (accumulating every prior failure grew the prompt without bound
+/// and timed out the final attempt of a long extraction). The error is
+/// rendered as its whole cause chain (`{e:#}`): the outer context alone told
+/// a retrying model "is it valid TOML?" when the real error was `missing
+/// field id` with a line number, so it repeated the same shape mistake.
+fn validated_attempts(
+    args: &Args,
+    base_prompt: &str,
+    reply: Reply<'_>,
+    tool: &str,
+    mut fetch: impl FnMut(&str) -> Result<String>,
+) -> Result<String> {
+    let mut prompt = base_prompt.to_string();
+    for attempt in 1..=args.retries + 1 {
+        let started = Instant::now();
+        let raw = fetch(&prompt)?;
         eprintln!(
-            "[model-extract] {tool} attempt {} returned {} chars in {:.0}s",
-            attempt + 1,
+            "[model-extract] {tool} attempt {attempt} returned {} chars in {:.0}s",
             raw.len(),
             started.elapsed().as_secs_f64()
         );
-
-        match parse_and_validate_reply(&raw, &args.part, &args.kind_str) {
-            Ok(_) => return Ok(raw),
-            Err(e) if attempt < args.retries => {
-                // {e:#} = the whole cause chain: the outer context alone told
-                // a retrying model "is it valid TOML?" when the real error
-                // was `missing field id` with a line number, so it repeated
-                // the same shape mistake verbatim. The chain is the feedback.
+        match reply.check(&raw) {
+            Ok(()) => return Ok(raw),
+            Err(e) if attempt <= args.retries => {
                 eprintln!(
-                    "[model-extract] attempt {} failed: {:#}; retrying with feedback...",
-                    attempt + 1,
-                    e
+                    "[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback..."
                 );
-                let _ = std::fs::remove_file(ws.answer_path());
-                // Base + the LATEST failure only: accumulating every prior
-                // failure grew the prompt without bound and timed out the
-                // final attempt of a long extraction.
                 prompt = format!(
                     "{base_prompt}\n\n{}",
-                    retry_feedback(&raw, &format!("{e:#}"))
+                    retry_feedback(&raw, &format!("{e:#}"), reply.table())
                 );
-                continue;
             }
             Err(e) => bail!(
-                "{tool} produced a model that failed validation after {} attempt(s): {e:#}\n\
-                 Raw reply was:\n{raw}",
-                attempt + 1
+                "{tool} produced an answer that failed validation after {attempt} attempt(s): \
+                 {e:#}\nRaw reply was:\n{raw}"
             ),
         }
     }
+    unreachable!("the loop returns or bails on its last attempt")
+}
 
-    unreachable!()
+/// Is a failed reply visibly only a classification or another tiny fragment?
+///
+/// The length check catches the measured `digital`, `model = "digital"`, and
+/// `answer = "digital"` failures. The shape checks also catch a longer bare
+/// scalar or single-key TOML document without misclassifying a malformed full
+/// entry as a classification.
+fn reply_is_kind_or_fragment(raw: &str, table: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.chars().count() < 200 {
+        return true;
+    }
+    if trimmed.contains(table) {
+        return false;
+    }
+    let bare_scalar = !trimmed.contains('\n') && !trimmed.contains('=');
+    let one_key_table = toml::from_str::<toml::Table>(trimmed).is_ok_and(|t| t.len() <= 1);
+    bare_scalar || one_key_table
+}
+
+/// The retry appendix for the latest failure. Quoting a short reply back to
+/// the model makes the classification-vs-card mistake concrete.
+fn retry_feedback(raw: &str, validation_error: &str, table: &str) -> String {
+    let fragment_correction = if !table.is_empty() && reply_is_kind_or_fragment(raw, table) {
+        format!(
+            "YOUR PREVIOUS REPLY, QUOTED VERBATIM:\n--- BEGIN REPLY ---\n{raw}\n\
+             --- END REPLY ---\n\
+             That reply is only the component kind (or another fragment), not the answer. \
+             The kind is only the `kind = \"...\"` FIELD inside the answer. The answer is \
+             the WHOLE `{table}` table, with every required section shown in the FORMAT \
+             EXAMPLE.\n\n"
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{fragment_correction}YOUR PREVIOUS ANSWER FAILED VALIDATION WITH:\n\
+         {validation_error}\n\n\
+         Fix exactly those issues and write the corrected WHOLE `{table}` TOML table \
+         to model.toml."
+    )
 }
 
 /// Ask the backend what kind of part this is, from the kinds we support.
@@ -1912,7 +1839,6 @@ fn call_agent_backend(
 fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
     // The front of the datasheet is where the part describes itself. Sending
     // the whole thing to answer one question would cost far more for no gain.
-    let head = truncate_to_chars(pdf_text, 6000);
     let prompt = format!(
         "You are identifying what kind of electronic part a datasheet describes, so a \
          simulator can pick the right model schema.\n\n\
@@ -1924,12 +1850,11 @@ fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
          Datasheet (first pages):\n{}",
         args.part,
         SUPPORTED_KINDS.join("\n"),
-        head
+        truncate_to_chars(pdf_text, 6000)
     );
-    let raw = call_backend(&prompt, args)?;
+    let reply = call_backend(&prompt, args, Reply::Word)?.to_ascii_lowercase();
     // The model may answer with surrounding prose despite the instruction, so
     // look for a supported kind rather than trusting the whole reply.
-    let reply = raw.to_ascii_lowercase();
     let found: Vec<&str> = SUPPORTED_KINDS
         .iter()
         .copied()
@@ -2101,8 +2026,69 @@ pub fn codex_model(explicit: Option<&str>) -> (String, String) {
     (model, effort)
 }
 
-/// One codex invocation with a hard timeout. Returns stdout (the agent's final
-/// message) on success.
+/// Run one sandboxed agent invocation to completion and return its stdout.
+///
+/// The contract both agent CLIs share: the sandbox is the working directory,
+/// the full prompt goes in a FILE inside it (argv is world-readable on Linux
+/// via /proc/<pid>/cmdline and visible to `ps -ww` on macOS, and a 40,000
+/// character datasheet excerpt would undo the consent the user gave to send it
+/// to one vendor; it would also brush ARG_MAX), stdin carries only a pointer to
+/// that file, and the answer is expected in `model.toml`.
+///
+/// stderr goes to `log`, a FILE: not a pipe, because nothing reads a pipe until
+/// the child has exited, so a ten-minute agentic run overflows the 64 KiB
+/// buffer, the child blocks in write(2), and the loop burns the whole timeout
+/// with the blame pointing at the model; and not /dev/null, because a refused
+/// model name or a rate limit is the whole diagnosis and discarding it leaves
+/// `exited with status 1: ` and nothing after the colon.
+fn run_cli_agent(
+    tool: &str,
+    cmd: &mut Command,
+    ws: &Workspace,
+    prompt: &str,
+    log: &Path,
+    retry_hint: &str,
+) -> Result<String> {
+    std::fs::write(ws.path().join("prompt.md"), prompt)
+        .context("writing the prompt into the sandbox")?;
+    let stderr = std::fs::File::create(log)
+        .map(Stdio::from)
+        .unwrap_or_else(|_| Stdio::null());
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(stderr)
+        .spawn()
+        .with_context(|| format!("spawning {tool} (is it installed and on PATH?)"))?;
+    // The pointer on stdin, then EOF (dropping `stdin` sends it): codex reads
+    // its prompt from stdin when no positional one survived arg parsing, and
+    // blocks waiting for EOF if the pipe is left open. Never a trailing
+    // positional argument: codex's `--image` takes many values, so a trailing
+    // `<prompt>` parsed as one more image path and codex reported "No prompt
+    // provided via stdin".
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(AGENT_POINTER);
+    }
+    wait_for_cli_backend(child, tool, retry_hint, log)
+}
+
+/// The stdin instruction every agent run receives. The pages are on disk
+/// beside the PDF (codex also gets them attached with `--image`), so one
+/// pointer serves both CLIs.
+const AGENT_POINTER: &[u8] = b"Read prompt.md in your working directory and follow it exactly. \
+    The rendered datasheet pages (page-*.png) and datasheet.pdf are in the same directory; \
+    read values off the page images for anything that lives in a table or a pinout. \
+    Write your answer to model.toml.";
+
+/// One codex invocation. Invocation notes learned the hard way:
+///   * `--sandbox workspace-write` (`--full-auto` is deprecated): writes are
+///     confined to the writable roots, reads are NOT (see `Workspace`).
+///   * `--skip-git-repo-check`, codex otherwise refuses to run outside a repo,
+///     and the sandbox deliberately is not one.
+///   * `--cd <sandbox>` so codex can open the datasheet PDF / extracted text
+///     directly when pdftotext was unavailable.
+///   * the model is named rather than inherited: codex's default varies by the
+///     user's plan and config and silently decides how good the extraction is.
 fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<String> {
     let (model, effort) = codex_model(model);
     let mut cmd = Command::new("codex");
@@ -2111,30 +2097,20 @@ fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<S
     // configured in ~/.codex/config.toml) rides in via the environment: the
     // personal ChatGPT account is rate-limited exactly when extraction runs
     // are heaviest, and a profile flag is codex's own mechanism for that.
-    if let Ok(profile) = std::env::var("HAUKSBEE_CODEX_PROFILE") {
-        if !profile.trim().is_empty() {
-            cmd.args(["-p", profile.trim()]);
-        }
+    if let Some(profile) = std::env::var("HAUKSBEE_CODEX_PROFILE")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+    {
+        cmd.args(["-p", profile.trim()]);
     }
+    let effort = format!("model_reasoning_effort=\"{effort}\"");
     cmd.args([
-        // Pick the model rather than inheriting codex's default, which varies
-        // by the user's plan and config and silently decides how good the
-        // extraction is.
         "--model",
-    ])
-    .arg(&model)
-    .arg("-c")
-    .arg(format!("model_reasoning_effort=\"{effort}\""))
-    .args([
-        // Writes are confined to the writable roots: --cd plus $TMPDIR and
-        // /tmp. The agent needs to write, since it renders, greps and
-        // re-checks its own answer in there. Reads are NOT confined by this
-        // profile; see the Workspace doc for what that means and why the rest
-        // of the contract carries the weight.
+        &model,
+        "-c",
+        &effort,
         "--sandbox",
         "workspace-write",
-        // Without this codex refuses to run outside a git repo, and the
-        // sandbox deliberately is not one.
         "--skip-git-repo-check",
         "--cd",
     ])
@@ -2142,76 +2118,25 @@ fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<S
     // The answer goes to a file we name, so a reply that also narrates does
     // not leave two candidate TOML blocks to choose between.
     .arg("--output-last-message")
-    .arg(ws.dir.path().join("last-message.txt"));
-    // Page renders, in page order. A table or a pinout survives a render and
+    .arg(ws.path().join("last-message.txt"));
+    // Page renders, in page order: a table or a pinout survives a render and
     // does not survive a text dump.
     for page in &ws.pages {
         cmd.arg("--image").arg(page);
     }
-    // See the note above: the prompt is a file, and argv carries only its name.
-    let prompt_path = ws.dir.path().join("prompt.md");
-    std::fs::write(&prompt_path, prompt).context("writing the prompt into the sandbox")?;
-    let log_path = ws.dir.path().join("codex-stderr.log");
-    let log = std::fs::File::create(&log_path)
-        .map(Stdio::from)
-        .unwrap_or_else(|_| Stdio::null());
-    // The instruction goes in on STDIN, never as a trailing positional argument.
-    //
-    // codex's `--image` takes many values, and an extraction passes one per
-    // rendered page, so a trailing `<prompt>` parses as one more image path and
-    // codex then reports "No prompt provided via stdin". A `--` separator also
-    // avoids that, but stdin cannot be broken by the next flag that learns to
-    // take many values.
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        // NOT a pipe. codex logs its whole session to stderr, and the poll loop
-        // below reads no pipe until the child has exited. A ten-minute agentic
-        // run overflows the 64 KiB pipe buffer, codex blocks in write(2),
-        // try_wait never reports an exit, and the loop burns the entire
-        // CODEX_TIMEOUT before killing it. The failure then reads "codex timed
-        // out with no answer", which points the blame at the model rather than
-        // at us.
-        //
-        // A file, not /dev/null: codex explains itself on stderr, and a refused
-        // model name or a rate limit is the whole diagnosis. Discarding it
-        // leaves `codex exited with status 1: ` and nothing after the colon.
-        // Its tail goes into the error below.
-        .stderr(log)
-        .spawn()
-        .context(
-            "spawning codex (is it installed and on PATH? `brew install codex` or set \
-             HAUKSBEE_LLM_API_KEY)",
-        )?;
-
-    // Feed the instruction, then EOF. codex reads its prompt from stdin when no
-    // positional one survived arg parsing, and it blocks waiting for EOF if the
-    // pipe is left open.
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(
-            b"Read prompt.md in your working directory and follow it exactly. \
-              Write your answer to model.toml.",
-        );
-        // dropping `stdin` here sends EOF
-    }
-
-    wait_for_cli_backend(
-        child,
+    run_cli_agent(
         "codex",
+        &mut cmd,
+        ws,
+        prompt,
+        &ws.path().join("codex-stderr.log"),
         "retry with a tighter prompt or set HAUKSBEE_LLM_API_KEY",
-        &log_path,
     )
 }
 
-/// One headless `claude -p` invocation, holding the same contract as the codex
-/// run: the sandbox is the working directory, the full prompt goes in a FILE
-/// inside it (argv is world-readable, and stdin carries only the pointer),
-/// the rendered pages and the PDF are readable beside it, and the answer is
-/// expected in `model.toml` with stdout as the fallback.
-///
+/// One headless `claude -p` invocation under the same contract as codex.
 /// `--permission-mode acceptEdits` lets the agent write `model.toml` without
-/// an interactive prompt; the sandbox directory bounds what those edits can
-/// touch, exactly as it does for codex.
+/// an interactive prompt; the sandbox directory bounds what those edits touch.
 fn run_claude_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<String> {
     let mut cmd = Command::new("claude");
     cmd.args([
@@ -2225,116 +2150,73 @@ fn run_claude_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<
     // An explicit --model only: claude's model names are its own, so the codex
     // env defaults must not leak into it.
     if let Some(m) = model {
-        cmd.arg("--model").arg(m);
+        cmd.args(["--model", m]);
     }
-
-    let prompt_path = ws.dir.path().join("prompt.md");
-    std::fs::write(&prompt_path, prompt).context("writing the prompt into the sandbox")?;
-    let log_path = ws.dir.path().join("claude-stderr.log");
-    let log = std::fs::File::create(&log_path)
-        .map(Stdio::from)
-        .unwrap_or_else(|_| Stdio::null());
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        // A file, not a pipe, for the same reason as codex: nothing reads the
-        // pipe until the child exits, and a filled pipe buffer deadlocks the
-        // run into the timeout. The tail goes into the error below.
-        .stderr(log)
-        .spawn()
-        .context(
-            "spawning claude (is Claude Code installed and on PATH? \
-             `npm install -g @anthropic-ai/claude-code`)",
-        )?;
-
-    // The instruction on stdin, then EOF. The pages are on disk rather than
-    // attached: claude reads files itself, so the pointer names them.
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(
-            b"Read prompt.md in your working directory and follow it exactly. \
-              The rendered datasheet pages (page-*.png) and datasheet.pdf are \
-              in the same directory; read values off the page images for \
-              anything that lives in a table or a pinout. Write your answer \
-              to model.toml.",
-        );
-        // dropping `stdin` here sends EOF
-    }
-
-    wait_for_cli_backend(
-        child,
+    run_cli_agent(
         "claude",
+        &mut cmd,
+        ws,
+        prompt,
+        &ws.path().join("claude-stderr.log"),
         "retry with a tighter prompt or another --backend",
-        &log_path,
     )
 }
 
 /// Poll a spawned CLI agent to completion, killing it at `CLI_BACKEND_TIMEOUT`,
-/// and return its stdout.
-///
-/// On a non-zero exit the error quotes the last few non-empty lines of BOTH
-/// stdout and the captured stderr log: a CLI agent puts the reason it gave up
-/// (a refused model, a rate limit, a bad config key) on stderr, so a failure
-/// with an empty stdout would otherwise read as "exited with status 1: " and
-/// nothing after the colon.
+/// and return its stdout. On a non-zero exit the error quotes the last few
+/// non-empty lines of BOTH stdout and the captured stderr log: a CLI agent puts
+/// the reason it gave up (a refused model, a rate limit, a bad config key) on
+/// stderr, so a failure with an empty stdout would otherwise read as "exited
+/// with status 1: " and nothing after the colon.
 fn wait_for_cli_backend(
-    mut child: std::process::Child,
+    mut child: Child,
     tool: &str,
     retry_hint: &str,
     log_path: &Path,
 ) -> Result<String> {
     let deadline = Instant::now() + CLI_BACKEND_TIMEOUT;
-    loop {
-        match child
-            .try_wait()
-            .with_context(|| format!("polling {tool}"))?
-        {
-            Some(_status) => break,
-            None => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    bail!(
-                        "{tool} timed out after {}s with no answer; {retry_hint}",
-                        CLI_BACKEND_TIMEOUT.as_secs()
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
+    while child
+        .try_wait()
+        .with_context(|| format!("polling {tool}"))?
+        .is_none()
+    {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "{tool} timed out after {}s with no answer; {retry_hint}",
+                CLI_BACKEND_TIMEOUT.as_secs()
+            );
         }
+        std::thread::sleep(Duration::from_millis(500));
     }
-
     let output = child
         .wait_with_output()
         .with_context(|| format!("collecting {tool} output"))?;
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
-    let last_lines = |text: &str| {
-        let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-        lines.reverse();
-        lines.truncate(5);
-        lines.reverse();
-        lines.join(" | ")
+    let tail = |text: &str| {
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        lines[lines.len().saturating_sub(5)..].join(" | ")
     };
     let detail = [
-        last_lines(&String::from_utf8_lossy(&output.stdout)),
+        tail(&String::from_utf8_lossy(&output.stdout)),
         std::fs::read_to_string(log_path)
-            .map(|t| last_lines(&t))
+            .map(|t| tail(&t))
             .unwrap_or_default(),
     ]
     .into_iter()
-    .filter(|s| !s.trim().is_empty())
+    .filter(|s| !s.is_empty())
     .collect::<Vec<_>>()
     .join(" || ");
-    bail!(
-        "{tool} exited with status {}{}",
-        output.status,
-        if detail.is_empty() {
-            " and said nothing on stdout or stderr".to_string()
-        } else {
-            format!(": {detail}")
-        }
-    );
+    if detail.is_empty() {
+        bail!(
+            "{tool} exited with status {} and said nothing on stdout or stderr",
+            output.status
+        );
+    }
+    bail!("{tool} exited with status {}: {detail}", output.status)
 }
 
 /// The default base URL for the api backend.
@@ -2345,86 +2227,87 @@ pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 /// is set (that variable selected the backend before `--backend` existed),
 /// else `OPENAI_API_KEY`.
 fn api_key_env_name(args: &Args) -> String {
-    if let Some(name) = &args.api_key_env {
-        return name.clone();
-    }
-    if std::env::var("HAUKSBEE_LLM_API_KEY").is_ok() {
-        return "HAUKSBEE_LLM_API_KEY".to_string();
-    }
-    "OPENAI_API_KEY".to_string()
+    args.api_key_env.clone().unwrap_or_else(|| {
+        if std::env::var_os("HAUKSBEE_LLM_API_KEY").is_some() {
+            "HAUKSBEE_LLM_API_KEY"
+        } else {
+            "OPENAI_API_KEY"
+        }
+        .to_string()
+    })
 }
 
-/// Call an OpenAI-compatible chat-completions endpoint via `curl`.
+/// One prepared OpenAI-compatible chat-completions request: everything but
+/// the prompt, resolved once so every retry hits the same endpoint, model and
+/// key.
 ///
 /// The key is read from the environment at call time and appears nowhere the
 /// system can echo it: not in argv (world-readable via `ps` / /proc), not in
 /// a log line, not in an error. curl gets it through `--config -` on stdin,
 /// and the request body travels as a private temp file rather than an
-/// argument.
-fn call_api_backend(prompt: &str, args: &Args) -> Result<String> {
-    let key_env = api_key_env_name(args);
-    let api_key = std::env::var(&key_env)
-        .ok()
-        .filter(|k| !k.trim().is_empty())
-        .with_context(|| {
-            format!(
-                "the api backend reads its key from ${key_env}, which is unset or \
-                 empty. Fix: set {key_env} (export {key_env}=<your key>), or name \
-                 the variable that holds your key with --api-key-env NAME. The key \
-                 is never accepted as a flag value and never stored."
-            )
-        })?;
-    if !which("curl") {
-        bail!("the api backend needs `curl`, which is not in PATH; install curl");
+/// argument (it embeds the datasheet text, and can outgrow ARG_MAX anyway).
+struct ApiRequest {
+    url: String,
+    model: String,
+    api_key: String,
+}
+
+impl ApiRequest {
+    fn prepare(args: &Args) -> Result<Self> {
+        let key_env = api_key_env_name(args);
+        let api_key = std::env::var(&key_env)
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+            .with_context(|| {
+                format!(
+                    "the api backend reads its key from ${key_env}, which is unset or \
+                     empty. Fix: set {key_env} (export {key_env}=<your key>), or name \
+                     the variable that holds your key with --api-key-env NAME. The key \
+                     is never accepted as a flag value and never stored."
+                )
+            })?;
+        if !which("curl") {
+            bail!("the api backend needs `curl`, which is not in PATH; install curl");
+        }
+        let setting = |flag: &Option<String>, var: &str, default: &str| {
+            flag.clone()
+                .or_else(|| std::env::var(var).ok())
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| default.to_string())
+        };
+        let base = setting(&args.api_base, "HAUKSBEE_LLM_BASE_URL", DEFAULT_API_BASE);
+        Ok(ApiRequest {
+            url: format!("{}/chat/completions", base.trim_end_matches('/')),
+            model: setting(&args.model, "HAUKSBEE_LLM_MODEL", DEFAULT_CODEX_MODEL),
+            api_key,
+        })
     }
-    let model = args
-        .model
-        .clone()
-        .or_else(|| std::env::var("HAUKSBEE_LLM_MODEL").ok())
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string());
-    let base_url = args
-        .api_base
-        .clone()
-        .or_else(|| std::env::var("HAUKSBEE_LLM_BASE_URL").ok())
-        .filter(|b| !b.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_API_BASE.to_string());
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "You are a SPICE model extraction assistant. Output TOML only."},
-            {"role": "user", "content": prompt}
-        ],
-        "max_tokens": 2048,
-        "temperature": 0.0
-    });
-    let body_str = serde_json::to_string(&body)?;
-
-    // The body in a private temp file: it embeds the datasheet text, which is
-    // exactly what must stay off a world-readable argv, and it can outgrow
-    // ARG_MAX anyway.
-    let staging = tempfile::Builder::new()
-        .prefix("hauksbee-api-")
-        .tempdir()
-        .context("creating the api request staging directory")?;
-    let body_path = staging.path().join("request.json");
-    std::fs::write(&body_path, &body_str).context("writing the api request body")?;
-
-    // curl reads its config (with the Authorization header) from stdin.
-    let curl_config = format!(
-        "url = \"{url}\"\n\
-         request = \"POST\"\n\
-         header = \"Content-Type: application/json\"\n\
-         header = \"Authorization: Bearer {api_key}\"\n\
-         data = \"@{body}\"\n\
-         silent\n\
-         show-error\n",
-        body = body_path.display()
-    );
-
-    for attempt in 0..=args.retries {
+    /// POST `prompt` and return the assistant's content.
+    fn send(&self, prompt: &str) -> Result<String> {
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "You are a SPICE model extraction assistant. Output TOML only."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 2048,
+            "temperature": 0.0
+        });
+        let staging = tempfile::Builder::new()
+            .prefix("hauksbee-api-")
+            .tempdir()
+            .context("creating the api request staging directory")?;
+        let body_path = staging.path().join("request.json");
+        std::fs::write(&body_path, serde_json::to_string(&body)?)
+            .context("writing the api request body")?;
+        let curl_config = format!(
+            "url = \"{}\"\nrequest = \"POST\"\nheader = \"Content-Type: application/json\"\n\
+             header = \"Authorization: Bearer {}\"\ndata = \"@{}\"\nsilent\nshow-error\n",
+            self.url,
+            self.api_key,
+            body_path.display()
+        );
         let mut child = Command::new("curl")
             .args(["--config", "-"])
             .stdin(Stdio::piped())
@@ -2436,83 +2319,55 @@ fn call_api_backend(prompt: &str, args: &Args) -> Result<String> {
             stdin
                 .write_all(curl_config.as_bytes())
                 .context("passing the request config to curl")?;
-            // dropping `stdin` here sends EOF
         }
         let output = child
             .wait_with_output()
             .context("collecting the api response")?;
         if !output.status.success() {
             bail!(
-                "curl failed against {url}: {}",
+                "curl failed against {}: {}",
+                self.url,
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
-
-        let resp_str = String::from_utf8_lossy(&output.stdout);
-        let resp: serde_json::Value = serde_json::from_str(&resp_str)
-            .with_context(|| format!("parsing the reply from {url} as JSON"))?;
-
+        let resp: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .with_context(|| format!("parsing the reply from {} as JSON", self.url))?;
         // An error object instead of choices is the endpoint explaining
         // itself (bad model name, exhausted quota); surface that message.
         if let Some(err_msg) = resp["error"]["message"].as_str() {
-            bail!("{url} answered with an error: {err_msg}");
+            bail!("{} answered with an error: {err_msg}", self.url);
         }
-
-        let content = resp["choices"][0]["message"]["content"]
+        resp["choices"][0]["message"]["content"]
             .as_str()
-            .context("missing content in API response")?
-            .to_string();
-
-        let raw = extract_toml_block(&content);
-
-        match parse_and_validate_reply(&raw, &args.part, &args.kind_str) {
-            Ok(_) => return Ok(raw),
-            Err(e) if attempt < args.retries => {
-                eprintln!(
-                    "[model-extract] attempt {} failed: {:#}; retrying...",
-                    attempt + 1,
-                    e
-                );
-            }
-            Err(e) => return Err(e),
-        }
+            .map(str::to_owned)
+            .context("missing content in API response")
     }
-
-    unreachable!()
 }
 
 // ── TOML parsing and validation ───────────────────────────────────────────────
 
-/// Extract a TOML block from potentially prose-wrapped LLM output.
-fn extract_toml_block(s: &str) -> String {
-    // If the reply contains a ```toml ... ``` fence, extract the content
-    if let Some(start) = s.find("```toml") {
-        let after = &s[start + 7..];
-        if let Some(end) = after.find("```") {
-            return after[..end].trim().to_string();
+/// Extract a TOML block from potentially prose-wrapped LLM output: the body of
+/// a ```toml / ``` fence when there is one, else everything from the first
+/// `table` header (a stray greeting line must not break the parse).
+fn extract_toml_block(s: &str, table: &str) -> String {
+    for fence in ["```toml", "```"] {
+        if let Some(start) = s.find(fence) {
+            let after = &s[start + fence.len()..];
+            if let Some(end) = after.find("```") {
+                return after[..end].trim().to_string();
+            }
         }
     }
-    // If the reply contains a plain ``` ... ``` fence
-    if let Some(start) = s.find("```") {
-        let after = &s[start + 3..];
-        if let Some(end) = after.find("```") {
-            return after[..end].trim().to_string();
-        }
-    }
-    // No fences: drop any chatter before the first `[[models]]` table header so
-    // a stray greeting line doesn't break the TOML parse.
-    if let Some(pos) = s.find("[[models]]") {
-        return s[pos..].trim().to_string();
-    }
-    s.trim().to_string()
+    let start = if table.is_empty() {
+        None
+    } else {
+        s.find(table)
+    };
+    s[start.unwrap_or(0)..].trim().to_string()
 }
 
 /// Parse raw TOML and validate the first model entry.
-fn parse_and_validate_reply(
-    raw: &str,
-    part: &str,
-    kind_str: &str,
-) -> Result<crate::schema::ModelEntry> {
+fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<ModelEntry> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         bail!("empty reply for {part}: the backend returned no TOML at all");
@@ -2521,39 +2376,32 @@ fn parse_and_validate_reply(
     // `id = ...` / `kind = ...` opening) is a near-miss worth recovering:
     // prepending the header changes no content, and burning a whole LLM
     // attempt on a missing two-token line helps nobody.
-    let wrapped;
-    let trimmed = if !trimmed.contains("[[models]]") {
-        let looks_like_bare_entry = trimmed
+    let text = if trimmed.contains("[[models]]") {
+        trimmed.to_string()
+    } else {
+        let bare_entry = trimmed
             .lines()
-            .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            .map(str::trim_start)
+            .find(|l| !l.is_empty() && !l.starts_with('#'))
             .is_some_and(|l| {
-                let l = l.trim_start();
-                l.starts_with("id ")
-                    || l.starts_with("id=")
-                    || l.starts_with("kind ")
-                    || l.starts_with("kind=")
+                ["id ", "id=", "kind ", "kind="]
+                    .iter()
+                    .any(|p| l.starts_with(p))
             });
-        if looks_like_bare_entry {
-            wrapped = format!("[[models]]\n{trimmed}");
-            wrapped.as_str()
-        } else {
+        if !bare_entry {
             bail!(
-                "reply for {part} contains no [[models]] table; the backend likely \
-                 answered with prose instead of TOML. First 200 chars: {:.200}",
-                trimmed
+                "reply for {part} contains no [[models]] table; the backend likely answered \
+                 with prose instead of TOML. First 200 chars: {trimmed:.200}"
             );
         }
-    } else {
-        trimmed
+        format!("[[models]]\n{trimmed}")
     };
-
-    let db: crate::schema::DbFile = toml::from_str(trimmed).with_context(|| {
+    let db: crate::schema::DbFile = toml::from_str(&text).with_context(|| {
         format!(
-            "the reply for {part} did not deserialize as a hauksbee [[models]] db file \
-                 (the cause below names the exact field and line)"
+            "the reply for {part} did not deserialize as a hauksbee [[models]] db file (the \
+             cause below names the exact field and line)"
         )
     })?;
-
     let entry = db
         .models
         .into_iter()
@@ -2561,100 +2409,43 @@ fn parse_and_validate_reply(
         .with_context(|| format!("no [[models]] entry in reply for {part}"))?;
 
     // Guard against the backend returning the wrong device kind, which would
-    // bind nonsense (e.g. a diode card stamped as a BJT). A behavioural family
-    // kind (charger/pmic/balancer) is satisfied by its BASE kind in the TOML
-    // (vreg/digital), since the family lives in the [models.behavioral] block.
+    // bind nonsense (a diode card stamped as a BJT). A behavioural family
+    // (charger/pmic/balancer) is satisfied by its BASE kind in the TOML, and
+    // must then actually carry the behavioural block it was asked for.
     let want = kind_str.trim();
-    if !want.is_empty() {
-        let got = kind_discriminant(entry.kind);
-        let want_base = behavioral_family_base_kind(want).unwrap_or(want);
-        if got != want_base {
-            bail!(
-                "kind mismatch for {part}: requested '{want}' (base '{want_base}') \
-                 but the reply is '{got}'"
-            );
-        }
-    }
-
-    // A behavioural-family extraction must carry a non-empty behavioural block,
-    // or it is just an ordinary kind mislabelled.
-    if behavioral_family_base_kind(want).is_some() && entry.behavioral.is_empty() {
+    let want_base = behavioral_family_base_kind(want).unwrap_or(want);
+    let got = kind_discriminant(entry.kind);
+    if !want.is_empty() && got != want_base {
         bail!(
-            "behavioural extraction for {part} (kind '{want}') produced no \
-             [models.behavioral] block; the prompt asked for one"
+            "kind mismatch for {part}: requested '{want}' (base '{want_base}') but the reply \
+             is '{got}'"
         );
     }
-
-    // Validate physical ranges.
+    if behavioral_family_base_kind(want).is_some() && entry.behavioral.is_empty() {
+        bail!(
+            "behavioural extraction for {part} (kind '{want}') produced no [models.behavioral] \
+             block; the prompt asked for one"
+        );
+    }
     crate::validation::validate(&entry).map_err(|errs| {
-        let msg = errs
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("; ");
-        anyhow::anyhow!("validation failed: {msg}")
+        let msg: Vec<String> = errs.iter().map(ToString::to_string).collect();
+        anyhow::anyhow!("validation failed: {}", msg.join("; "))
     })?;
-
     Ok(entry)
 }
 
-/// snake_case discriminant for a kind (mirrors the serde `rename_all`).
-/// Whether a kind string names something the extractor can bind.
-///
-/// The inverse of `kind_discriminant`, derived from it rather than restated,
-/// so the offered list and the accepted set cannot drift apart.
-#[cfg(test)]
-fn kind_accepts(kind: &str) -> bool {
-    use crate::ComponentKind::*;
-    [
-        Passive,
-        Diode,
-        BjtNpn,
-        BjtPnp,
-        Nmos,
-        Pmos,
-        Vreg,
-        Opamp,
-        Comparator,
-        AnalogSwitch,
-        Digital,
-        Dac,
-        Adc,
-        ShiftRegister,
-        Mcu,
-        Connector,
-    ]
-    .iter()
-    .any(|k| kind_discriminant(*k) == kind)
-}
-
-fn kind_discriminant(kind: crate::ComponentKind) -> &'static str {
-    use crate::ComponentKind::*;
-    match kind {
-        Passive => "passive",
-        Diode => "diode",
-        BjtNpn => "bjt_npn",
-        BjtPnp => "bjt_pnp",
-        Nmos => "nmos",
-        Pmos => "pmos",
-        Vreg => "vreg",
-        Opamp => "opamp",
-        Comparator => "comparator",
-        AnalogSwitch => "analog_switch",
-        Digital => "digital",
-        Dac => "dac",
-        Adc => "adc",
-        ShiftRegister => "shift_register",
-        Mcu => "mcu",
-        Connector => "connector",
-        Ignore => "ignore",
-    }
+/// The snake_case name a kind serialises as (the serde `rename_all`).
+fn kind_discriminant(kind: ComponentKind) -> String {
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 fn sanitise_filename(s: &str) -> String {
     s.chars()
         .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
+            if c.is_alphanumeric() || "-_".contains(c) {
                 c
             } else {
                 '_'
@@ -2664,13 +2455,11 @@ fn sanitise_filename(s: &str) -> String {
 }
 
 fn default_out_dir() -> PathBuf {
-    dirs_next().join(".hauksbee").join("models")
-}
-
-fn dirs_next() -> PathBuf {
-    std::env::var("HOME")
+    std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".hauksbee")
+        .join("models")
 }
 
 #[cfg(test)]
@@ -2742,7 +2531,10 @@ mod tests {
             "[[models]]\nid = \"test\"\nkind = \"diode\"\n",
             "Sure! Here is the TOML:\n[[models]]\nid = \"z\"\nkind = \"diode\"\n",
         ] {
-            assert!(extract_toml_block(s).starts_with("[[models]]"), "{s:?}");
+            assert!(
+                extract_toml_block(s, "[[models]]").starts_with("[[models]]"),
+                "{s:?}"
+            );
         }
     }
 
@@ -2782,11 +2574,21 @@ mod tests {
 
     #[test]
     fn fragment_replies_are_recognised() {
-        assert!(reply_is_kind_or_fragment("digital"));
-        assert!(reply_is_kind_or_fragment("model = \"digital\""));
-        assert!(reply_is_kind_or_fragment("answer = \"digital\""));
-        assert!(!reply_is_kind_or_fragment(FORMAT_EXAMPLES[0].card));
-        assert!(retry_feedback("digital", "no table").contains("--- BEGIN REPLY ---\ndigital\n"));
+        assert!(reply_is_kind_or_fragment("digital", "[[models]]"));
+        assert!(reply_is_kind_or_fragment(
+            "model = \"digital\"",
+            "[[models]]"
+        ));
+        assert!(reply_is_kind_or_fragment(
+            "answer = \"digital\"",
+            "[[models]]"
+        ));
+        assert!(!reply_is_kind_or_fragment(
+            FORMAT_EXAMPLES[0].card,
+            "[[models]]"
+        ));
+        assert!(retry_feedback("digital", "no table", "[[models]]")
+            .contains("--- BEGIN REPLY ---\ndigital\n"));
     }
 
     #[test]
@@ -2821,8 +2623,12 @@ vprog_ref = 0.0316
 prog_ref_ohms = 7150.0
 v_sense_full = 0.0463
 ```"#;
-        let entry =
-            parse_and_validate_reply(&extract_toml_block(reply), "LTC4020", "charger").unwrap();
+        let entry = parse_and_validate_reply(
+            &extract_toml_block(reply, "[[models]]"),
+            "LTC4020",
+            "charger",
+        )
+        .unwrap();
         assert_eq!(entry.kind, crate::ComponentKind::Vreg);
         assert!(entry.behavioral.converter.is_some());
 
@@ -2907,7 +2713,11 @@ max_current_a = 0.1\n\
         )
         .out_dir(Some(dir.clone()));
         let prompt = build_prompt(&args.part, &args.kind_str, "irrelevant");
-        let raw = call_backend(&prompt, &args).expect("mock backend should succeed");
+        let reply = Reply::Model {
+            part: &args.part,
+            kind: &args.kind_str,
+        };
+        let raw = call_backend(&prompt, &args, reply).expect("mock backend should succeed");
         let entry = parse_and_validate_reply(&raw, &args.part, &args.kind_str).unwrap();
         std::env::remove_var("HAUKSBEE_EXTRACT_MOCK_REPLY");
 
@@ -2934,7 +2744,11 @@ max_current_a = 0.1\n\
         let prompt = build_prompt("BC847", "bjt_npn", &text);
         let args =
             Args::new(pdf, "BC847".into(), "bjt_npn".into()).out_dir(Some(std::env::temp_dir()));
-        let raw = call_backend(&prompt, &args).expect("backend call");
+        let reply = Reply::Model {
+            part: "BC847",
+            kind: "bjt_npn",
+        };
+        let raw = call_backend(&prompt, &args, reply).expect("backend call");
         let entry = parse_and_validate_reply(&raw, "BC847", "bjt_npn").unwrap();
         let bf = entry.params.get_f64("bf").expect("bf present");
         assert!(
@@ -2956,7 +2770,11 @@ max_current_a = 0.1\n\
         let prompt = build_prompt("LTC4020", "charger", &text);
         let args =
             Args::new(src, "LTC4020".into(), "charger".into()).out_dir(Some(std::env::temp_dir()));
-        let raw = call_backend(&prompt, &args).expect("backend call");
+        let reply = Reply::Model {
+            part: "LTC4020",
+            kind: "charger",
+        };
+        let raw = call_backend(&prompt, &args, reply).expect("backend call");
         let entry = parse_and_validate_reply(&raw, "LTC4020", "charger").unwrap();
         assert_eq!(entry.kind, crate::ComponentKind::Vreg);
         let c = entry.behavioral.converter.expect("converter block");
@@ -3068,7 +2886,7 @@ addr_mask = 0x7f
             }
             let base = behavioral_family_base_kind(kind).unwrap_or(kind);
             assert!(
-                kind_accepts(base),
+                kind_is_legal(base),
                 "{kind} does not resolve to a component kind"
             );
             assert_ne!(

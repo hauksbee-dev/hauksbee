@@ -53,6 +53,13 @@ use std::path::Path;
 
 use hauksbee_extract::{ExtractError, ExtractedBoard};
 
+/// Whether `text` starts like a Board-as-Code file: a tiny sniff on the first
+/// 256 characters, shared by the input classifier and the watch loop.
+pub fn is_board_code_header(text: &str) -> bool {
+    let head: String = text.chars().take(256).collect();
+    head.contains("Board-as-Code") || head.contains("board version ")
+}
+
 /// What kind of input the normalizer recognised. Call sites use this where
 /// they would otherwise keep `is_binary` / `is_gerber` flags; the
 /// `layout_text == None` kinds (Altium, Gerber, Odb, Ipc2581) need different DRC
@@ -370,7 +377,7 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     // was uploaded.
     let is_board_code = zip_code.is_some()
         || Path::new(file_name).extension().and_then(|e| e.to_str()) == Some("board")
-        || crate::commands::common::is_board_code_header(&text);
+        || crate::board_input::is_board_code_header(&text);
     let text: String = if is_board_code {
         crate::boardcode::code_to_board_text(&text)
             .map_err(|e| BoardInputError::BoardCode(e.to_string()))?
@@ -621,7 +628,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     // Parse the DSL, recompile it to `.kicad_pcb` text, then feed the same
     // analysis path the layout formats use.
     let is_board_code = path.extension().and_then(|e| e.to_str()) == Some("board")
-        || crate::commands::common::is_board_code_header(&text);
+        || crate::board_input::is_board_code_header(&text);
     if is_board_code {
         return board_code_input(&file_name, &text, raw, path);
     }

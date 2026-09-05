@@ -76,7 +76,7 @@ fn installer_script_mirrors_match_the_repo_scripts() {
 #[test]
 fn embedded_sensor_spec_mirror_matches_testdata() {
     assert_mirror(
-        include_bytes!("../assets/sensor-specs/mcp4728.toml"),
+        include_bytes!("../../hauksbee-cosim/assets/sensor-specs/mcp4728.toml"),
         "testdata/sensor-specs/mcp4728.toml",
     );
 }

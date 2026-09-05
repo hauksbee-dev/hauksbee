@@ -57,9 +57,7 @@ use hauksbee_ir::Circuit;
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
 use std::time::Instant;
 
-#[path = "../benches/fixtures.rs"]
-mod fixtures;
-use fixtures::{build_rc_ladder, build_shunt_array};
+use crate::fixtures::{build_rc_ladder, build_shunt_array};
 
 // --- workload, identical to benches/graded_boards.rs ------------------------
 

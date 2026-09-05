@@ -32,7 +32,7 @@ use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ModelLibrary};
 
-use crate::binder::resolve;
+use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 
 /// Switching topology recovered from the layout.

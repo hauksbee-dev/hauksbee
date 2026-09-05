@@ -16,9 +16,10 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
+use crate::external::{connect_loopback, read_step};
 use anyhow::{bail, Context, Result};
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::io::Write;
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 /// A connected QMP session, already out of capabilities-negotiation mode.
@@ -38,31 +39,14 @@ pub struct Qmp {
 }
 
 impl Qmp {
-    /// Connect to a QMP server on `addr`, retrying until `connect_timeout`
-    /// elapses (QEMU takes a moment to bind), then perform the capabilities
-    /// handshake so the session is ready for commands.
-    pub fn connect<A: ToSocketAddrs + Clone>(addr: A, connect_timeout: Duration) -> Result<Self> {
-        let deadline = Instant::now() + connect_timeout;
-        let stream = loop {
-            let mut resolved = addr
-                .clone()
-                .to_socket_addrs()
-                .context("resolving QMP address")?;
-            let sock = resolved.next().context("no socket address for QMP")?;
-            match TcpStream::connect_timeout(&sock, Duration::from_millis(500)) {
-                Ok(s) => break s,
-                Err(e) => {
-                    if Instant::now() >= deadline {
-                        return Err(e).context("connecting to QEMU QMP socket");
-                    }
-                    std::thread::sleep(Duration::from_millis(150));
-                }
-            }
-        };
+    /// Connect to a QMP server on `127.0.0.1:port`, retrying until
+    /// `connect_timeout` elapses (QEMU takes a moment to bind), then perform
+    /// the capabilities handshake so the session is ready for commands.
+    pub fn connect(port: u16, connect_timeout: Duration) -> Result<Self> {
+        let stream = connect_loopback("QEMU QMP", port, connect_timeout, || None)?;
         stream
             .set_read_timeout(Some(Duration::from_millis(200)))
             .ok();
-        stream.set_nodelay(true).ok();
         let mut q = Qmp {
             stream,
             carry: Vec::new(),
@@ -268,33 +252,24 @@ impl Qmp {
         let mut buf = std::mem::take(&mut self.carry);
         loop {
             if let Some(end) = first_json_object_end(&buf) {
-                let msg = buf[..=end].to_vec();
-                self.carry = buf[end + 1..].to_vec();
-                return Ok(String::from_utf8_lossy(&msg).into_owned());
+                let msg = String::from_utf8_lossy(&buf[..=end]).into_owned();
+                self.carry = buf.split_off(end + 1);
+                return Ok(msg);
             }
-            if Instant::now() >= deadline {
+            match read_step(&mut self.stream, &mut buf, deadline, "QEMU QMP") {
+                Ok(true) => {}
                 // Put the partial message BACK before bailing: timeouts are
-                // routine (event drains use near-zero deadlines), and dropping
-                // a half-read message here would desync every later frame.
-                let partial = String::from_utf8_lossy(&buf[..buf.len().min(200)]).into_owned();
-                self.carry = buf;
-                bail!("QMP read timed out with no complete message; partial: {partial:?}");
-            }
-            let mut chunk = [0u8; 4096];
-            match self.stream.read(&mut chunk) {
-                Ok(0) => bail!("QMP connection closed"),
-                Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    std::thread::sleep(Duration::from_millis(3));
+                // routine (event drains use near-zero deadlines) and transient
+                // socket errors recover, so dropping a half-read message here
+                // would desync every later frame.
+                Ok(false) => {
+                    let partial = String::from_utf8_lossy(&buf[..buf.len().min(200)]).into_owned();
+                    self.carry = buf;
+                    bail!("QMP read timed out with no complete message; partial: {partial:?}");
                 }
                 Err(e) => {
-                    // Same discipline for transient socket errors: whatever was
-                    // read so far stays queued for the next call.
                     self.carry = buf;
-                    return Err(e).context("reading QMP socket");
+                    return Err(e);
                 }
             }
         }

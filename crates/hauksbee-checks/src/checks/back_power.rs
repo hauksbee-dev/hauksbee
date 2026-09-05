@@ -58,7 +58,7 @@ use hauksbee_extract::{
 };
 use hauksbee_models::ModelLibrary;
 
-use crate::binder::power_rail_voltage;
+use hauksbee_bind::binder::power_rail_voltage;
 use hauksbee_extract::assembly::AssemblyState;
 
 /// Margin (V) a rail must exceed the part's supply by before the finding

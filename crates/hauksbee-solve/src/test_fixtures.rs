@@ -260,21 +260,7 @@ pub fn monolith(c: &Circuit, opts: &SolverOptions, tstop: f64) -> Waveforms {
     Transient::new(mono_opts).run(c, tstop).expect("monolith")
 }
 
-pub fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
-    if times.is_empty() {
-        return 0.0;
-    }
-    match times.binary_search_by(|x| x.partial_cmp(&t).expect("non-finite sample time")) {
-        Ok(i) => vals[i],
-        Err(0) => vals[0],
-        Err(i) if i >= times.len() => *vals.last().unwrap(),
-        Err(i) => {
-            let (t0, t1) = (times[i - 1], times[i]);
-            let f = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
-            vals[i - 1] + f * (vals[i] - vals[i - 1])
-        }
-    }
-}
+pub(crate) use crate::orchestrate::lerp_at;
 
 /// Max |sample - reference| over every node (ground excluded) at every sample
 /// time of `time`, interpolating the reference.

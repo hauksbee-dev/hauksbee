@@ -14,15 +14,7 @@ use hauksbee_ir::{Circuit, Device, NodeId};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
 use std::time::Instant;
 
-// The `build_shunt_array` fixture is shared verbatim with the S2 benchmark
-// harness so the topology the exactness gate below checks and the one the
-// benchmark times cannot drift apart. Single source of truth lives in
-// `benches/fixtures.rs` (see its header for why it is a by-path include rather
-// than a library module). `build_rc_ladder` in that file is unused here.
-#[path = "../benches/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
-use fixtures::build_shunt_array;
+use crate::fixtures::build_shunt_array;
 
 fn run(
     c: &Circuit,

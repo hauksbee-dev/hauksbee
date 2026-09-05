@@ -28,10 +28,11 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 use crate::children::{home_dir, which};
+use crate::external::{env_override, first_accepted, EmulatorProcess};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// Which Espressif QEMU system binary an architecture needs.
@@ -63,67 +64,34 @@ impl QemuArch {
     /// The binary file name on this platform: the Espressif Windows builds
     /// ship `qemu-system-*.exe`, everywhere else the bare name.
     fn file_name(self) -> String {
-        if cfg!(windows) {
-            format!("{}.exe", self.binary_name())
-        } else {
-            self.binary_name().to_string()
-        }
+        let ext = if cfg!(windows) { ".exe" } else { "" };
+        format!("{}{ext}", self.binary_name())
     }
 }
 
 /// Locate an Espressif QEMU binary for `arch`, or describe how to install it.
 pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
-    // 1. Explicit per-arch override (full path to the binary).
-    if let Some(p) = std::env::var_os(arch.env_override()) {
-        let p = PathBuf::from(p);
-        if p.exists() {
-            return Ok(p);
-        }
-        bail!(
-            "{} is set to '{}' but it does not exist",
-            arch.env_override(),
-            p.display()
-        );
+    if let Some(p) = env_override(arch.env_override())? {
+        return Ok(p);
     }
-
-    let name = arch.binary_name();
     let file = arch.file_name();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    // 2. Generic dir override pointing at the fork's bin/.
-    if let Some(dir) = std::env::var_os("HAUKSBEE_QEMU_DIR") {
-        candidates.push(PathBuf::from(dir).join(&file));
-    }
-
+    let mut candidates: Vec<PathBuf> = std::env::var_os("HAUKSBEE_QEMU_DIR")
+        .map(|dir| PathBuf::from(dir).join(&file))
+        .into_iter()
+        .collect();
     if let Some(home) = home_dir() {
-        // 3. Hauksbee's exact-source GPIO-patched build first, then ordinary
-        //    unpacked locations. The backend still probes the live QOM object;
-        //    path priority alone never claims the patch is present.
-        //    `.hauksbee-qemu-esp` is the current name; `.galvani-qemu-esp` is
-        //    kept as a fallback for installs predating the galvani->hauksbee
-        //    rename, so an existing unpacked fork keeps resolving.
         candidates.extend(home_candidates(&home, &file));
     }
-    // 4. esp-idf idf_tools installs, whichever roots this environment has.
     for root in idf_tools_roots() {
         candidates.extend(idf_tools_candidates(&root, &file));
     }
-
-    for c in &candidates {
-        if c.is_file() && is_esp_fork(c) {
-            return Ok(c.clone());
-        }
+    // PATH last, and only if it is the fork (mainline has no esp32 machine).
+    candidates.extend(which(arch.binary_name()).ok());
+    if let Some(found) = first_accepted(candidates, is_esp_fork) {
+        return Ok(found);
     }
-
-    // 5. PATH, but only if it is the Espressif fork (mainline has no esp32).
-    if let Ok(path) = which(name) {
-        if is_esp_fork(&path) {
-            return Ok(path);
-        }
-    }
-
     bail!(
-        "Espressif QEMU ({name}) not found. One-click installs exist: run \
+        "Espressif QEMU ({}) not found. One-click installs exist: run \
          `hauksbee install esp-qemu`, or in the app use Install on the \
          Environment page. Manual routes: unpack the fork's prebuilt binary \
          (https://github.com/espressif/qemu/releases) to \
@@ -132,19 +100,26 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
          binary, or install it via \
          esp-idf `idf_tools.py install qemu-xtensa qemu-riscv32`. Homebrew's \
          mainline qemu-system-xtensa has no esp32 machine and will not work.",
+        arch.binary_name(),
         arch.env_override()
     )
 }
 
-/// The conventional unpacked locations for the fork under one home directory.
-/// Takes the file name as a parameter (not `cfg!`-derived inside) so the unit
-/// tests can exercise the Windows `.exe` shape on any OS.
-fn home_candidates(home: &std::path::Path, file: &str) -> Vec<PathBuf> {
-    vec![
-        home.join(".hauksbee-qemu-esp-patched/qemu/bin").join(file),
-        home.join(".hauksbee-qemu-esp/qemu/bin").join(file),
-        home.join(".galvani-qemu-esp/qemu/bin").join(file),
+/// The conventional unpacked locations for the fork under one home directory:
+/// Hauksbee's exact-source GPIO-patched build first (the backend still probes
+/// the live QOM object; path priority alone never claims the patch is
+/// present), then the current name, then the pre-rename `.galvani-qemu-esp`
+/// so an existing unpacked fork keeps resolving. Takes the file name as a
+/// parameter so the unit tests can exercise the Windows `.exe` shape anywhere.
+fn home_candidates(home: &Path, file: &str) -> Vec<PathBuf> {
+    [
+        ".hauksbee-qemu-esp-patched/qemu/bin",
+        ".hauksbee-qemu-esp/qemu/bin",
+        ".galvani-qemu-esp/qemu/bin",
     ]
+    .iter()
+    .map(|dir| home.join(dir).join(file))
+    .collect()
 }
 
 /// The idf-tools roots this environment could have, in priority order:
@@ -152,13 +127,11 @@ fn home_candidates(home: &std::path::Path, file: &str) -> Vec<PathBuf> {
 /// per-user default `~/.espressif`, and on Windows the ESP-IDF Windows
 /// installer's default root `C:\Espressif`.
 fn idf_tools_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(p) = std::env::var_os("IDF_TOOLS_PATH") {
-        roots.push(PathBuf::from(p));
-    }
-    if let Some(home) = home_dir() {
-        roots.push(home.join(".espressif"));
-    }
+    let mut roots: Vec<PathBuf> = std::env::var_os("IDF_TOOLS_PATH")
+        .map(PathBuf::from)
+        .into_iter()
+        .collect();
+    roots.extend(home_dir().map(|h| h.join(".espressif")));
     #[cfg(windows)]
     roots.push(PathBuf::from("C:\\Espressif"));
     roots
@@ -168,26 +141,16 @@ fn idf_tools_roots() -> Vec<PathBuf> {
 /// `<root>/tools/qemu-*/<ver>/qemu/bin/<file>`. The tool directory carries a
 /// version, so the `qemu-*` dirs are globbed. Platform-neutral so the unit
 /// tests can build this tree (Windows file names included) in a temp dir.
-fn idf_tools_candidates(root: &std::path::Path, file: &str) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(root.join("tools")) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("qemu-"))
-                .unwrap_or(false)
-            {
-                // .../qemu-xtensa/<ver>/qemu/bin/<file>
-                if let Ok(vers) = std::fs::read_dir(&p) {
-                    for v in vers.flatten() {
-                        out.push(v.path().join("qemu/bin").join(file));
-                    }
-                }
-            }
-        }
-    }
-    out
+fn idf_tools_candidates(root: &Path, file: &str) -> Vec<PathBuf> {
+    let Ok(tools) = std::fs::read_dir(root.join("tools")) else {
+        return Vec::new();
+    };
+    tools
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("qemu-"))
+        .filter_map(|e| std::fs::read_dir(e.path()).ok())
+        .flat_map(|vers| vers.flatten().map(|v| v.path().join("qemu/bin").join(file)))
+        .collect()
 }
 
 /// True if a usable Espressif QEMU for `arch` can be located. Used to skip
@@ -201,33 +164,23 @@ pub fn is_available(arch: QemuArch) -> bool {
 /// Homebrew mainline binary on `PATH` from being mistaken for the fork.
 /// `pub(crate)` so the installer (`qemu::install`) accepts a freshly unpacked
 /// binary through the exact same check discovery uses.
-pub(crate) fn is_esp_fork(bin: &std::path::Path) -> bool {
-    let out = Command::new(bin)
-        .arg("-machine")
-        .arg("help")
+pub(crate) fn is_esp_fork(bin: &Path) -> bool {
+    Command::new(bin)
+        .args(["-machine", "help"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output();
-    match out {
-        Ok(o) => {
-            let text = String::from_utf8_lossy(&o.stdout).to_lowercase();
-            text.contains("esp32")
-        }
-        Err(_) => false,
-    }
+        .output()
+        .is_ok_and(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .to_lowercase()
+                .contains("esp32")
+        })
 }
 
 /// A spawned, headless Espressif QEMU instance with a QMP socket.
 pub struct QemuProcess {
-    child: Child,
-    _tree_guard: crate::children::ProcessTreeGuard,
+    inner: EmulatorProcess,
     pub qmp_port: u16,
-    /// QEMU's stderr, redirected to a temp file so that when the process dies
-    /// (bad image, bad machine, bad drive size) the caller can surface QEMU's
-    /// own words instead of a bare "exited" or a downstream socket error. A
-    /// pipe would need a drain thread to avoid blocking a chatty process; a
-    /// file needs nothing and is read only on failure.
-    stderr_log: Option<tempfile::NamedTempFile>,
 }
 
 impl QemuProcess {
@@ -245,80 +198,47 @@ impl QemuProcess {
     ///     memory reads/writes (GPIO mailbox) and run/stop stepping.
     ///   - `-serial tcp:127.0.0.1:<uart_port>,server,nowait`: UART0 as a raw
     ///     socket, bridged the same way the Renode backend bridges its UART.
-    ///   - watchdogs disabled so a paused guest is not reset out from under us.
+    ///   - the main timer-group watchdog disabled (`-global ... wdt_disable`) so
+    ///     a paused guest is not reset out from under us.
     ///
-    /// NOTE: deliberately NO `-icount`. We measured that `-icount` (any shift,
-    /// with or without `sleep=off`) prevents the Espressif esp32 / esp32s3
-    /// Xtensa machines from booting at all (15 s wall: zero UART output, vs ~1 s
-    /// to "hello" without icount). icount on these Xtensa machines is undocumented
-    /// and, empirically, broken. So the lockstep uses QMP stop/cont over the
-    /// free-running virtual clock instead (see the backend's lockstep notes). The
-    /// `_icount_shift` argument is retained in the signature for forward
-    /// compatibility but not passed to QEMU.
+    /// NOTE: deliberately NO `-icount`. Measured: `-icount` (any shift, with or
+    /// without `sleep=off`) prevents the Espressif esp32 / esp32s3 Xtensa
+    /// machines from booting at all (15 s wall: zero UART output, vs ~1 s to
+    /// "hello" without it). The lockstep uses QMP stop/cont over the
+    /// free-running virtual clock instead; `_icount_shift` is retained in the
+    /// signature for forward compatibility but not passed to QEMU.
     pub fn spawn(
         arch: QemuArch,
         machine: &str,
-        flash_image: &std::path::Path,
+        flash_image: &Path,
         _icount_shift: u8,
         qmp_port: u16,
         uart_port: u16,
     ) -> Result<Self> {
         let bin = find_qemu(arch)?;
         let flash = flash_image.to_str().context("non-UTF-8 flash image path")?;
-
         let mut cmd = Command::new(&bin);
-        cmd.arg("-nographic")
-            .arg("-machine")
-            .arg(machine)
-            .arg("-drive")
+        cmd.args(["-nographic", "-machine", machine, "-drive"])
             .arg(format!("file={flash},if=mtd,format=raw,snapshot=on"))
             .arg("-qmp")
             .arg(format!("tcp:127.0.0.1:{qmp_port},server,nowait"))
             .arg("-serial")
-            .arg(format!("tcp:127.0.0.1:{uart_port},server,nowait"));
-        // Disable the main timer-group watchdog so a paused guest is not reset
-        // out from under us. The driver name is per-SoC (timer.<machine>.timg).
-        cmd.arg("-global").arg(format!(
-            "driver=timer.{machine}.timg,property=wdt_disable,value=true"
-        ));
-        // stderr goes to a temp file (not /dev/null) so a failed boot can be
-        // explained with QEMU's actual complaint; see the struct field note.
-        let stderr_log = tempfile::Builder::new()
-            .prefix("hauksbee-qemu-stderr-")
-            .suffix(".log")
-            .tempfile()
-            .ok();
-        let stderr_sink = stderr_log
-            .as_ref()
-            .and_then(|t| t.reopen().ok())
-            .map(Stdio::from)
-            .unwrap_or_else(Stdio::null);
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(stderr_sink);
-
-        let (child, tree_guard) = crate::children::spawn_emulator(&mut cmd)
-            .with_context(|| format!("spawning owned Espressif QEMU from {}", bin.display()))?;
-
+            .arg(format!("tcp:127.0.0.1:{uart_port},server,nowait"))
+            .arg("-global")
+            .arg(format!(
+                "driver=timer.{machine}.timg,property=wdt_disable,value=true"
+            ));
+        // stderr captured (not /dev/null) so a failed boot can be explained
+        // with QEMU's actual complaint (bad image, bad machine, bad drive size).
         Ok(QemuProcess {
-            child,
-            _tree_guard: tree_guard,
+            inner: EmulatorProcess::spawn("Espressif QEMU", &mut cmd, true)?,
             qmp_port,
-            stderr_log,
         })
     }
 
     /// What QEMU wrote to stderr so far, trimmed, capped to its last 2 KiB.
-    /// Empty string when there is nothing (or the log could not be created).
     pub fn stderr_output(&self) -> String {
-        let Some(log) = &self.stderr_log else {
-            return String::new();
-        };
-        let Ok(bytes) = std::fs::read(log.path()) else {
-            return String::new();
-        };
-        let tail = &bytes[bytes.len().saturating_sub(2048)..];
-        String::from_utf8_lossy(tail).trim().to_string()
+        self.inner.stderr_output()
     }
 
     /// How long to wait for the QMP port to come up after spawn.
@@ -329,43 +249,19 @@ impl QemuProcess {
     /// True if the child has already exited (QEMU rejected its arguments or the
     /// image), so the caller can fail fast instead of waiting for a QMP timeout.
     pub fn has_exited(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(Some(_)))
+        self.inner.exit_reason().is_some()
     }
 
     /// Refuse an operation once the emulator child has exited, retaining the
-    /// exit status and QEMU's captured stderr. This is intentionally safe to
-    /// call again on every later chunk: `Child::try_wait` keeps returning the
-    /// same status, so a terminal QEMU failure never degrades into a stream of
-    /// bare QMP BrokenPipe / connection-closed errors.
+    /// exit status and QEMU's captured stderr; safe to call on every later
+    /// chunk, so a terminal QEMU failure never degrades into bare QMP errors.
     pub fn ensure_running(&mut self, operation: &str) -> Result<()> {
-        match self.child.try_wait() {
-            Ok(None) => Ok(()),
-            Ok(Some(status)) => {
-                let stderr = self.stderr_output();
-                bail!(
-                    "Espressif QEMU exited while {operation} ({status}). QEMU said: {}",
-                    if stderr.is_empty() {
-                        "(nothing on stderr)"
-                    } else {
-                        &stderr
-                    }
-                )
-            }
-            Err(e) => Err(e).with_context(|| {
-                format!("checking whether Espressif QEMU is still running while {operation}")
-            }),
-        }
+        self.inner.ensure_running(operation)
     }
 
     /// The spawned QEMU's OS process id (diagnostics and the reaping tests).
     pub fn pid(&self) -> u32 {
-        self.child.id()
-    }
-}
-
-impl Drop for QemuProcess {
-    fn drop(&mut self) {
-        crate::children::terminate_emulator(&mut self.child, &self._tree_guard);
+        self.inner.pid()
     }
 }
 
@@ -374,7 +270,7 @@ mod discovery_tests {
     use super::*;
 
     /// Create an empty file, parents included.
-    fn touch(path: &std::path::Path) {
+    fn touch(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"").unwrap();
     }

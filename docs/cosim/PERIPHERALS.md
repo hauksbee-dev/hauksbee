@@ -136,7 +136,7 @@ physical inputs through `evalexpr` value expressions into datasheet register
 packings. LM75 is the one part with a hand-coded counterpart to check against,
 and the declarative spec comes out byte-identical to it
 (`declarative_lm75_is_byte_identical_to_handcoded` in
-`crates/hauksbee-engine/src/peripherals/register_map.rs`). BME280 and MPU6050
+`crates/hauksbee-cosim/src/peripherals/register_map.rs`). BME280 and MPU6050
 have no hand-coded twin, so they are anchored to datasheet worked examples
 instead (`declarative_bme280_decodes_datasheet_worked_example`,
 `declarative_mpu6050_decodes_driven_quantities`); the `Bme280` name exported
@@ -216,7 +216,7 @@ all consumed inside a single `run_micros` chunk. So:
   its returned input-pin drives before the firmware's next instruction, so a
   soft bus routes into the same byte-level slave models the hardware path
   uses. `BitBangSpiResponder` and `SoftI2cResponder`
-  (`crates/hauksbee-engine/src/responders.rs`) are the two shipped protocol
+  (`crates/hauksbee-cosim/src/responders.rs`) are the two shipped protocol
   responders, multiplexed onto that single hook by a `ResponderRegistry`
   keyed on watched output pin. On **poll** backends (Renode, QEMU) the hook
   keeps its no-op default, so soft-bus edges alias at the chunk poll rate
@@ -401,7 +401,7 @@ costs a run rather than being caught up front:
 
 (For `i2c_eeprom` / `spi_eeprom` contents, prefer the `bytes = "..."` form
 above over a `field`.) Each peripheral's `state()` in
-`crates/hauksbee-engine/src/peripherals/` produces these keys.
+`crates/hauksbee-cosim/src/peripherals/` produces these keys.
 
 ## Proofs (integration tests)
 

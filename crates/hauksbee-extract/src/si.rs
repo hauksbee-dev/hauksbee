@@ -38,6 +38,7 @@ use std::collections::HashMap;
 use forge_sexpr::List;
 
 use crate::assembly::AssemblyState;
+use crate::gerber::geo::{point_in_polygon, polygon_bounds};
 use crate::netlint::{
     i2c_role, is_capacitor, is_ground, is_resistor, is_unconnected_net, norm,
     numeric_rail_magnitude, parse_ohms,
@@ -1186,44 +1187,6 @@ fn keepout_polygon(pos: (f64, f64, f64), k: &KeepoutRect) -> [(f64, f64); 4] {
     ]
 }
 
-/// Point-in-convex-polygon test (the keepout is a rotated rectangle, convex).
-fn point_in_poly(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
-    // Winding sign test: the point is inside iff it is on the same side of every
-    // edge. For a convex CCW/CW polygon all cross products share a sign.
-    let n = poly.len();
-    let mut pos = false;
-    let mut neg = false;
-    for i in 0..n {
-        let (ax, ay) = poly[i];
-        let (bx, by) = poly[(i + 1) % n];
-        let cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-        if cross > 1e-9 {
-            pos = true;
-        } else if cross < -1e-9 {
-            neg = true;
-        }
-        if pos && neg {
-            return false;
-        }
-    }
-    true
-}
-
-/// Axis-aligned bounds of a polygon, for a cheap pre-filter.
-fn poly_bounds(poly: &[(f64, f64)]) -> (f64, f64, f64, f64) {
-    let mut minx = f64::INFINITY;
-    let mut miny = f64::INFINITY;
-    let mut maxx = f64::NEG_INFINITY;
-    let mut maxy = f64::NEG_INFINITY;
-    for &(x, y) in poly {
-        minx = minx.min(x);
-        miny = miny.min(y);
-        maxx = maxx.max(x);
-        maxy = maxy.max(y);
-    }
-    (minx, miny, maxx, maxy)
-}
-
 /// A copper point intruding into a keepout, with its net id and a label.
 struct Intrusion {
     net: i64,
@@ -1246,7 +1209,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
         let Some(pos) = ant.position else { continue };
         let poly = keepout_polygon(pos, &k);
         let poly_v: Vec<(f64, f64)> = poly.to_vec();
-        let (bminx, bminy, bmaxx, bmaxy) = poly_bounds(&poly_v);
+        let [bminx, bminy, bmaxx, bmaxy] = polygon_bounds(&poly_v);
 
         // Resolve name-only net refs (KiCad 10 `(net "GND")`) via the board's
         // declarations; without this every track/via/zone on such a board has
@@ -1298,7 +1261,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                 let mx = (sx + ex) / 2.0;
                 let my = (sy + ey) / 2.0;
                 for (x, y) in [(sx, sy), (ex, ey), (mx, my)] {
-                    if in_box(x, y) && point_in_poly(x, y, &poly_v) {
+                    if in_box(x, y) && point_in_polygon(x, y, &poly_v) {
                         intrusions.push(Intrusion {
                             net: id,
                             x,
@@ -1321,7 +1284,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
             }
             let Some(at) = via.find("at") else { continue };
             let (x, y) = (at.arg_f64(0).unwrap_or(0.0), at.arg_f64(1).unwrap_or(0.0));
-            if in_box(x, y) && point_in_poly(x, y, &poly_v) {
+            if in_box(x, y) && point_in_polygon(x, y, &poly_v) {
                 intrusions.push(Intrusion {
                     net: id,
                     x,
@@ -1342,7 +1305,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                 if own_nets.contains(&id) {
                     continue;
                 }
-                if in_box(x, y) && point_in_poly(x, y, &poly_v) {
+                if in_box(x, y) && point_in_polygon(x, y, &poly_v) {
                     intrusions.push(Intrusion {
                         net: id,
                         x,
@@ -1400,21 +1363,15 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                         .collect();
                     // (a) fill vertex inside the keepout.
                     for &(x, y) in &fill {
-                        if in_box(x, y) && point_in_poly(x, y, &poly_v) {
+                        if in_box(x, y) && point_in_polygon(x, y, &poly_v) {
                             hit = Some((x, y));
                             break;
                         }
                     }
                     // (b) keepout corner inside the pour (containment / engulf).
-                    // A real KiCad pour outline is deeply NON-convex (it weaves
-                    // around every via / pad / thermal relief), so the convex
-                    // `point_in_poly` winding test returns false for interior
-                    // points the moment two edges disagree, silently missing the
-                    // engulf it was written to catch. Use the even-odd ray cast,
-                    // which is correct for arbitrary (non-convex) polygons.
                     if hit.is_none() && fill.len() >= 3 {
                         for &(kx, ky) in &keepout_corners {
-                            if crate::gerber::geo::point_in_polygon(kx, ky, &fill) {
+                            if point_in_polygon(kx, ky, &fill) {
                                 hit = Some((kx, ky));
                                 break;
                             }
@@ -1676,8 +1633,8 @@ fn net_is_over_a_plane(root: &List, net_id: i64) -> bool {
             let (mx, my) = ((sx + ex) / 2.0, (sy + ey) / 2.0);
             any_segment = true;
             if !pours.iter().any(|poly| {
-                let (x0, y0, x1, y1) = poly_bounds(poly);
-                mx >= x0 && mx <= x1 && my >= y0 && my <= y1 && point_in_poly(mx, my, poly)
+                let [x0, y0, x1, y1] = polygon_bounds(poly);
+                mx >= x0 && mx <= x1 && my >= y0 && my <= y1 && point_in_polygon(mx, my, poly)
             }) {
                 return false;
             }

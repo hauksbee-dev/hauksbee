@@ -63,8 +63,10 @@ use crate::decompose::conduction::ConductionGraph;
 use crate::decompose::rails::fragment_blocks;
 use crate::newton::{dc_operating_point, Workspace};
 use crate::options::{Partitioning, SolverOptions, StepControl};
+use crate::orchestrate::{resample, uniform_grid};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
+use crate::subcircuit::SubCircuit;
 use crate::transient::{Transient, Waveforms};
 use crate::{SolveError, SolveResult};
 
@@ -195,36 +197,10 @@ pub fn execute_stiff_group(
     tstop: f64,
     refusal_report: &mut Vec<StiffOutcome>,
 ) -> SolveResult<Option<StiffExecution>> {
-    execute_stiff_group_held(
-        sub,
-        candidates,
-        &HashMap::new(),
-        opts,
-        tstop,
-        refusal_report,
-    )
-}
-
-/// [`execute_stiff_group`] with a set of EXTRA nodes HELD (not relaxed): each
-/// `held` node is treated as a boundary during fragmentation (so the candidate
-/// capture groups stay small even when the held node is a heavily-connected
-/// hub) and pinned at its supplied train in every capture solve. The composed
-/// executor uses this to relax signal cuts while holding the rails at their
-/// balance-solved trains: a signal captured on its small adjacent-block group
-/// with the rails held stays small, where freeing it in the whole rail-torn
-/// group would re-fuse the hub it belongs to.
-pub fn execute_stiff_group_held(
-    sub: &Circuit,
-    candidates: &[NodeId],
-    held: &HashMap<u32, Vec<f64>>,
-    opts: &SolverOptions,
-    tstop: f64,
-    refusal_report: &mut Vec<StiffOutcome>,
-) -> SolveResult<Option<StiffExecution>> {
     execute_stiff_group_held_capped(
         sub,
         candidates,
-        held,
+        &HashMap::new(),
         &CapturePolicy::default(),
         opts,
         tstop,
@@ -232,10 +208,15 @@ pub fn execute_stiff_group_held(
     )
 }
 
-/// [`execute_stiff_group_held`] with an explicit [`CapturePolicy`] governing the
-/// generator-inclusive capture pre-pass. The convenience wrappers pass the
-/// default; a caller (or a gate) that needs to size or disable the growth calls
-/// this directly.
+/// [`execute_stiff_group`] with a set of EXTRA nodes HELD (not relaxed) and an
+/// explicit [`CapturePolicy`] for the generator-inclusive capture pre-pass.
+/// Each `held` node is treated as a boundary during fragmentation (so the
+/// candidate capture groups stay small even when the held node is a
+/// heavily-connected hub) and pinned at its supplied train in every capture
+/// solve. The composed executor uses this to relax signal cuts while holding
+/// the rails at their balance-solved trains: a signal captured on its small
+/// adjacent-block group with the rails held stays small, where freeing it in
+/// the whole rail-torn group would re-fuse the hub it belongs to.
 pub fn execute_stiff_group_held_capped(
     sub: &Circuit,
     candidates: &[NodeId],
@@ -534,6 +515,16 @@ pub fn execute_stiff_group_held_capped(
     }
 
     // ---- rest estimates ---------------------------------------------------
+    let group = CaptureGroup {
+        sub,
+        frag: &frag,
+        conducts_cand: &conducts_cand,
+        companions: &companions,
+        candidates,
+        held,
+        opts,
+        tstop,
+    };
     let mut rest: HashMap<u32, f64> = HashMap::new();
     let mut bootstrapped = false;
     let whole_dc = {
@@ -549,31 +540,18 @@ pub fn execute_stiff_group_held_capped(
         }
         None => {
             // Bootstrap: per-cluster capture-group DC with the external
-            // candidates at 0; every member's rest reads from the joint point.
+            // candidates at 0 (the pins' construction value) and held rails at
+            // their train's t=0 estimate; every member's rest reads from the
+            // joint point.
             bootstrapped = true;
             for cluster in &clusters {
                 let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
-                // Pins default to Dc(0.0): exactly the zeros bootstrap, except
-                // held rails, which start at their train's t=0 estimate.
-                let (mut cap, g2l) = capture_circuit(
-                    sub,
-                    &frag,
-                    &cluster_blocks[&cluster[0].0],
-                    &members,
-                    &conducts_cand,
-                    &companions,
-                    candidates,
-                    held,
-                );
-                for dev in cap.devices.iter_mut() {
-                    if let Device::Vsource { name, kind, .. } = dev {
-                        if let Some(net) = name.strip_prefix("VRAIL_") {
-                            if let Some((_, train)) =
-                                held.iter().find(|(k, _)| sub.node_name(NodeId(**k)) == net)
-                            {
-                                *kind = SourceKind::Dc(train.first().copied().unwrap_or(0.0));
-                            }
-                        }
+                let (mut cap, g2l, pins) = group.circuit(&cluster_blocks[&cluster[0].0], &members);
+                for &(sid, pin) in &pins {
+                    if let (Pin::Rail(gn), Device::Vsource { kind, .. }) =
+                        (pin, &mut cap.devices[sid.0 as usize])
+                    {
+                        *kind = SourceKind::Dc(held[&gn].first().copied().unwrap_or(0.0));
                     }
                 }
                 let mut ws = Workspace::new(&cap);
@@ -594,24 +572,27 @@ pub fn execute_stiff_group_held_capped(
     }
 
     // ---- waveform relaxation: rest-seeded, then train-driven rounds -------
-    // True Gauss-Seidel: within a round each candidate is solved against the
+    // True Gauss-Seidel: within a round each cluster is solved against the
     // LATEST trains (in-place update), so a feedforward chain converges in
-    // about one round instead of one round per chain link. Convergence is
-    // per candidate: max |train_new - train_old| against its tolerance; the
-    // LAST round's residual is what the certificate carries.
-    let grid = uniform_grid(dt, tstop);
+    // about one round instead of one round per chain link. Round 0 is
+    // rest-seeded (later clusters already see earlier clusters' round-0 trains
+    // instead of bare rest values); the train rounds warm-start each cluster
+    // from its previous run. Convergence is per candidate: the residual
+    // between consecutive train-driven iterates against its tolerance, and
+    // the LAST round's residual is what the certificate carries.
+    //
     // The convergence bar scales with the CALLER'S requested accuracy: the
     // certified tol_v must be a function of the tolerance the user selected,
     // never a literal that happens to match the default (review finding).
+    let grid = uniform_grid(dt, tstop);
     let reltol = opts.reltol;
     let max_rounds = 6usize;
     let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
+    let tol_of =
+        |c: &NodeId| 10.0 * reltol * rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
 
     let mut trains: HashMap<u32, Vec<f64>> = HashMap::new();
     let mut runs: HashMap<u32, CaptureRun> = HashMap::new();
-    // Round 0: rest-seeded. Solved in order with in-place updates, so later
-    // candidates already see earlier candidates' round-0 trains instead of
-    // bare rest values.
     let rest_trains: HashMap<u32, Vec<f64>> = candidates
         .iter()
         .map(|c| {
@@ -621,107 +602,40 @@ pub fn execute_stiff_group_held_capped(
             )
         })
         .collect();
-    for cluster in &clusters {
-        let rep = cluster[0];
-        let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
-        let cluster_grown = cluster
-            .iter()
-            .any(|c| grew.get(&c.0).copied().unwrap_or(0) > 0);
-        // Merge: already-captured candidates by train, the rest by rest.
-        let mut boundary = rest_trains.clone();
-        for (k, v) in &trains {
-            boundary.insert(*k, v.clone());
-        }
-        let t_solve = std::time::Instant::now();
-        let wf = match solve_capture(
-            sub,
-            &frag,
-            &cluster_blocks[&rep.0],
-            &members,
-            &conducts_cand,
-            &companions,
-            rep,
-            candidates,
-            &rest,
-            held,
-            Some((&boundary, &grid)),
-            None,
-            cluster_grown,
-            opts,
-            tstop,
-        ) {
-            Ok(wf) => wf,
-            Err(_) => {
-                refusal_report.extend(dead_capture_outcomes(
-                    candidates,
-                    rep,
-                    &rest,
-                    opts.reltol,
-                    bootstrapped,
-                ));
-                return Ok(None);
-            }
-        };
-        if dbg {
-            eprintln!(
-                "  ROUND 0 {} ({} joint): {:.2}s",
-                sub.node_name(rep),
-                cluster.len(),
-                t_solve.elapsed().as_secs_f64()
-            );
-        }
-        for c in cluster {
-            let s = sample_node(&wf.0, &wf.1, *c, &grid);
-            trains.insert(c.0, s);
-        }
-        runs.insert(rep.0, wf);
-    }
-
     let mut sag: HashMap<u32, f64> = HashMap::new();
     let mut converged = false;
-    // A SINGLE cluster covering every candidate has no replayed candidate
-    // boundaries at all: the only inputs to its solve are the held trains,
-    // which are fixed for the whole call. The relaxation map is therefore
-    // CONSTANT (no member's train feeds back into any solve), so round 0
-    // already sits at the fixed point EXACTLY, not approximately: a train
-    // round would re-solve the identical problem (the flagship measured the
-    // round-1 residual at exactly 0.0 for all 16 members, ~750s of pure
-    // repetition). Zero sag is the structural truth here, the same class of
-    // claim as balance's round-off: nothing was replayed, so nothing sags.
-    if clusters.len() == 1 {
-        converged = true;
-        for c in candidates {
-            sag.insert(c.0, 0.0);
-        }
-    }
-    for _round in 0..max_rounds {
-        if converged {
+    for round in 0..=max_rounds {
+        if round > 0 && converged {
             break;
         }
-        converged = true;
+        converged = round > 0;
         for cluster in &clusters {
             let rep = cluster[0];
             let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
-            let cluster_grown = cluster
+            let grown = cluster
                 .iter()
                 .any(|c| grew.get(&c.0).copied().unwrap_or(0) > 0);
+            // Round 0 merges the rest values with every train captured so far.
+            let boundary: HashMap<u32, Vec<f64>>;
+            let (source, seed): (&HashMap<u32, Vec<f64>>, Option<&CaptureRun>) = if round == 0 {
+                boundary = rest_trains
+                    .iter()
+                    .chain(&trains)
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect();
+                (&boundary, None)
+            } else {
+                (&trains, runs.get(&rep.0))
+            };
             let t_solve = std::time::Instant::now();
-            let wf = match solve_capture(
-                sub,
-                &frag,
+            let wf = match group.solve(
                 &cluster_blocks[&rep.0],
                 &members,
-                &conducts_cand,
-                &companions,
                 rep,
-                candidates,
                 &rest,
-                held,
-                Some((&trains, &grid)),
-                runs.get(&rep.0),
-                cluster_grown,
-                opts,
-                tstop,
+                Some((source, &grid)),
+                seed,
+                grown,
             ) {
                 Ok(wf) => wf,
                 Err(_) => {
@@ -729,45 +643,65 @@ pub fn execute_stiff_group_held_capped(
                         candidates,
                         rep,
                         &rest,
-                        opts.reltol,
+                        reltol,
                         bootstrapped,
                     ));
                     return Ok(None);
                 }
             };
+            if dbg && round == 0 {
+                eprintln!(
+                    "  ROUND 0 {} ({} joint): {:.2}s",
+                    sub.node_name(rep),
+                    cluster.len(),
+                    t_solve.elapsed().as_secs_f64()
+                );
+            }
             for c in cluster {
                 let new = sample_node(&wf.0, &wf.1, *c, &grid);
-                let old = &trains[&c.0];
-                // The residual metric is time-shift-tolerant by ONE grid step:
-                // each sample compares against the other iterate's neighbouring
-                // cells and keeps the smallest difference. This is the
-                // capture-grid claim's own metric (a replayed boundary is exact
-                // up to the grid), and it is what lets spiking trains converge:
-                // a spike whose timing shifts by one cell between iterates is
-                // the same physics, but a pointwise metric reads it as volts of
-                // divergence, which is exactly how the flagship's mega group
-                // refused at the full window while accepting at smoke scale.
-                let diff = shifted_residual(old, &new);
-                if dbg {
-                    eprintln!(
-                        "  ROUND {} {}: {:.2}s, residual {:.3e}",
-                        _round + 1,
-                        sub.node_name(*c),
-                        t_solve.elapsed().as_secs_f64(),
-                        diff
-                    );
-                }
-                sag.insert(c.0, diff);
-                let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
-                if diff > 10.0 * reltol * vnom {
-                    converged = false;
+                if round > 0 {
+                    // The residual metric is time-shift-tolerant by ONE grid
+                    // step: each sample compares against the other iterate's
+                    // neighbouring cells and keeps the smallest difference. This
+                    // is the capture-grid claim's own metric (a replayed boundary
+                    // is exact up to the grid), and it is what lets spiking
+                    // trains converge: a spike whose timing shifts by one cell
+                    // between iterates is the same physics, but a pointwise
+                    // metric reads it as volts of divergence, which is exactly
+                    // how the flagship's mega group refused at the full window
+                    // while accepting at smoke scale.
+                    let diff = shifted_residual(&trains[&c.0], &new);
+                    if dbg {
+                        eprintln!(
+                            "  ROUND {round} {}: {:.2}s, residual {:.3e}",
+                            sub.node_name(*c),
+                            t_solve.elapsed().as_secs_f64(),
+                            diff
+                        );
+                    }
+                    if diff > tol_of(c) {
+                        converged = false;
+                    }
+                    sag.insert(c.0, diff);
                 }
                 trains.insert(c.0, new);
             }
             runs.insert(rep.0, wf);
         }
-        if converged {
-            break;
+        // A SINGLE cluster covering every candidate has no replayed candidate
+        // boundaries at all: the only inputs to its solve are the held trains,
+        // which are fixed for the whole call. The relaxation map is therefore
+        // CONSTANT (no member's train feeds back into any solve), so round 0
+        // already sits at the fixed point EXACTLY, not approximately: a train
+        // round would re-solve the identical problem (the flagship measured the
+        // round-1 residual at exactly 0.0 for all 16 members, ~750s of pure
+        // repetition). Zero sag is the structural truth here, the same class of
+        // claim as balance's round-off: nothing was replayed, so nothing sags.
+        if round == 0 && clusters.len() == 1 {
+            converged = true;
+            for c in candidates {
+                sag.insert(c.0, 0.0);
+            }
         }
     }
 
@@ -775,8 +709,7 @@ pub fn execute_stiff_group_held_capped(
     let mut outcomes = Vec::new();
     for c in candidates {
         let s = sag.get(&c.0).copied().unwrap_or(f64::INFINITY);
-        let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
-        let tol = 10.0 * reltol * vnom;
+        let tol = tol_of(c);
         let g = grew.get(&c.0).copied().unwrap_or(0);
         let joint = cand_rep
             .get(&c.0)
@@ -832,41 +765,28 @@ pub fn execute_stiff_group_held_capped(
     }
 
     let n_out = sub.node_count();
-    let mut waveforms = Waveforms {
-        time: grid.clone(),
-        node_voltages: vec![vec![0.0; grid.len()]; n_out],
-        branch_currents: Vec::new(),
-    };
+    let mut waveforms = Waveforms::on_grid(n_out, &grid);
     for node in 1..n_out {
         let series: Vec<f64> = if held.contains_key(&(node as u32)) {
             held[&(node as u32)].clone()
         } else if bound[node] {
             trains[&(node as u32)].clone()
-        } else if let Some(&blk) = frag.node_block.get(&node) {
-            let Some(&owner) = block_owner.get(&blk) else {
-                continue; // rail-only block (held case); composed ignores it
+        } else {
+            // A block reads from its owning run. Companion-island nodes
+            // (absorbed copies, replay-pin islands) ride in every capture and
+            // read from the first cluster's final run; known-side nodes of the
+            // core island with no free block land there too and stay zero
+            // only if no capture mapped them.
+            let owner = match frag.node_block.get(&node) {
+                Some(blk) => match block_owner.get(blk) {
+                    Some(&owner) => owner,
+                    None => continue, // rail-only block (held case); composed ignores it
+                },
+                None => clusters[0][0].0,
             };
             let (wf, g2l) = &runs[&owner];
             match g2l.get(&(node as u32)) {
-                Some(&ln) => grid
-                    .iter()
-                    .map(|&t| lerp_at(&wf.time, &wf.node_voltages[ln as usize], t))
-                    .collect(),
-                None => continue,
-            }
-        } else {
-            // Companion-island nodes (absorbed copies, replay-pin islands)
-            // ride in every capture; read them from the first cluster's
-            // final run. Known-side nodes of the core island with no free
-            // block land here too and stay zero only if no capture mapped
-            // them.
-            let owner = clusters[0][0].0;
-            let (wf, g2l) = &runs[&owner];
-            match g2l.get(&(node as u32)) {
-                Some(&ln) => grid
-                    .iter()
-                    .map(|&t| lerp_at(&wf.time, &wf.node_voltages[ln as usize], t))
-                    .collect(),
+                Some(&ln) => resample(wf, ln as usize, &grid),
                 None => continue,
             }
         };
@@ -910,7 +830,7 @@ pub fn execute_stiff_group_held_capped(
 ///    when the whole-group DC collapses). Sample each rail's voltage train from
 ///    that solve: the balance closes each rail's KCL exactly per step.
 /// 2. **Signal relaxation.** Hold the rails at those trains and relax the
-///    signals with [`execute_stiff_group_held`]: each signal is captured on its
+///    signals with [`execute_stiff_group_held_capped`]: each signal is captured on its
 ///    small adjacent-block group (rails held keep it small even for a hub),
 ///    exactly the proven stiff mechanism. Sample the new signal trains.
 ///
@@ -1064,6 +984,18 @@ pub fn execute_composed_group(
     if debug {
         eprintln!("COMPOSED whole-group balance fragments: {whole_group_balances}");
     }
+    // Every refusal exit: signals unmeasured, rails uncertified.
+    let refuse = |refusal_report: &mut Vec<StiffOutcome>| -> SolveResult<Option<StiffExecution>> {
+        refusal_report.extend(signal_refusals(signal_cuts, &rest, reltol, bootstrapped));
+        refusal_report.extend(rail_refusals(
+            rails,
+            rail_kind,
+            &rail_vnom,
+            reltol,
+            bootstrapped,
+        ));
+        Ok(None)
+    };
 
     // ---- outer alternation (rail balance <-> signal relaxation) -----------
     // With the whole-group balance the rail<->signal coupling is block
@@ -1093,25 +1025,11 @@ pub fn execute_composed_group(
                     if debug {
                         eprintln!("COMPOSED rail balance died: {:?}", other.as_ref().err());
                     }
-                    refusal_report.extend(composed_refusal_outcomes(
-                        signal_cuts,
-                        rails,
-                        rail_kind,
-                        None,
-                        &rest,
-                        &rail_vnom,
-                        reltol,
-                        bootstrapped,
-                    ));
-                    return Ok(None);
+                    return refuse(refusal_report);
                 }
             };
             for rt in rails {
-                let s: Vec<f64> = grid
-                    .iter()
-                    .map(|&t| lerp_at(&rail_wf.time, &rail_wf.node_voltages[rt.rail.0 as usize], t))
-                    .collect();
-                rail_trains.insert(rt.rail.0, s);
+                rail_trains.insert(rt.rail.0, resample(&rail_wf, rt.rail.0 as usize, &grid));
             }
         }
         // (else: rails stay held at their feed-voltage seed in rail_trains.)
@@ -1122,10 +1040,11 @@ pub fn execute_composed_group(
             break;
         }
         let mut inner_refusals = Vec::new();
-        let exec = match execute_stiff_group_held(
+        let exec = match execute_stiff_group_held_capped(
             sub,
             signal_cuts,
             &rail_trains,
+            &CapturePolicy::default(),
             &sub_opts,
             tstop,
             &mut inner_refusals,
@@ -1136,35 +1055,20 @@ pub fn execute_composed_group(
                     eprintln!("COMPOSED signal relaxation refused: {inner_refusals:?}");
                 }
                 refusal_report.extend(inner_refusals);
-                for rt in rails {
-                    let vnom = rail_vnom.get(&rt.rail.0).copied().unwrap_or(1.0);
-                    refusal_report.push(StiffOutcome {
-                        node: rt.rail,
-                        kind: rail_kind,
-                        sag_v: f64::NAN,
-                        tol_v: 10.0 * reltol * vnom,
-                        accepted: false,
-                        bootstrapped,
-                        capture_growth: 0,
-                        note: "composed relaxation refused; rail balance not certified",
-                    });
-                }
+                refusal_report.extend(rail_refusals(
+                    rails,
+                    rail_kind,
+                    &rail_vnom,
+                    reltol,
+                    bootstrapped,
+                ));
                 return Ok(None);
             }
         };
 
         let mut outer_move = 0.0f64;
         for c in signal_cuts {
-            let new: Vec<f64> = grid
-                .iter()
-                .map(|&t| {
-                    lerp_at(
-                        &exec.waveforms.time,
-                        &exec.waveforms.node_voltages[c.0 as usize],
-                        t,
-                    )
-                })
-                .collect();
+            let new = resample(&exec.waveforms, c.0 as usize, &grid);
             let old = &signal_trains[&c.0];
             outer_move = outer_move.max(shifted_residual(old, &new));
             signal_trains.insert(c.0, new);
@@ -1195,26 +1099,12 @@ pub fn execute_composed_group(
     }
 
     if !outer_converged && !signal_cuts.is_empty() {
-        refusal_report.extend(composed_refusal_outcomes(
-            signal_cuts,
-            rails,
-            rail_kind,
-            None,
-            &rest,
-            &rail_vnom,
-            reltol,
-            bootstrapped,
-        ));
-        return Ok(None);
+        return refuse(refusal_report);
     }
 
     // ---- final assembly ---------------------------------------------------
     let n_out = sub.node_count();
-    let mut waveforms = Waveforms {
-        time: grid.clone(),
-        node_voltages: vec![vec![0.0; grid.len()]; n_out],
-        branch_currents: Vec::new(),
-    };
+    let mut waveforms = Waveforms::on_grid(n_out, &grid);
     if whole_group_balances {
         // One exact whole-group rail-balance solve at the converged trains.
         let full = match solve_composed(
@@ -1231,27 +1121,11 @@ pub fn execute_composed_group(
                 if debug {
                     eprintln!("COMPOSED final assembly died: {:?}", other.as_ref().err());
                 }
-                refusal_report.extend(composed_refusal_outcomes(
-                    signal_cuts,
-                    rails,
-                    rail_kind,
-                    None,
-                    &rest,
-                    &rail_vnom,
-                    reltol,
-                    bootstrapped,
-                ));
-                return Ok(None);
+                return refuse(refusal_report);
             }
         };
-        for node in 1..n_out {
-            if node >= full.node_voltages.len() {
-                continue;
-            }
-            for (k, &t) in grid.iter().enumerate() {
-                waveforms.node_voltages[node][k] =
-                    lerp_at(&full.time, &full.node_voltages[node], t);
-            }
+        for node in 1..n_out.min(full.node_voltages.len()) {
+            waveforms.node_voltages[node] = resample(&full, node, &grid);
         }
     } else {
         // Feed-hold: the held signal relaxation's OWN assembly is the group's
@@ -1259,10 +1133,7 @@ pub fn execute_composed_group(
         // held rails from their feed-voltage trains; rail-only blocks stay 0).
         if let Some(wf) = held_waveforms {
             for node in 1..n_out.min(wf.node_voltages.len()) {
-                for (k, &t) in grid.iter().enumerate() {
-                    waveforms.node_voltages[node][k] =
-                        lerp_at(&wf.time, &wf.node_voltages[node], t);
-                }
+                waveforms.node_voltages[node] = resample(&wf, node, &grid);
             }
         } else {
             // No signals to relax: just the held rails.
@@ -1437,58 +1308,56 @@ fn solve_composed(
     let Some(mut engine) = PartitionedTransient::try_build_from_partition(&subp, opts, part) else {
         return Ok(None);
     };
-    Ok(Some(super::collect_waveforms(&mut engine, &subp, tstop)?))
+    Waveforms::collect_nodes(subp.node_count(), |sink| {
+        engine.run_streaming(&subp, tstop, sink)
+    })
+    .map(Some)
 }
 
-/// Refusal outcomes for the composed executor: signals carry their sag (INF for
-/// the one whose solve died), rails carry no certified balance.
-fn composed_refusal_outcomes(
+/// Refusal outcomes for the composed executor's signals: unmeasured (NaN)
+/// sag, since the relaxation never contracted.
+fn signal_refusals(
     signal_cuts: &[NodeId],
+    rest: &HashMap<u32, f64>,
+    reltol: f64,
+    bootstrapped: bool,
+) -> Vec<StiffOutcome> {
+    signal_cuts
+        .iter()
+        .map(|c| StiffOutcome {
+            node: *c,
+            kind: BoundaryKind::Signal,
+            sag_v: f64::NAN,
+            tol_v: 10.0 * reltol * rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0),
+            accepted: false,
+            bootstrapped,
+            capture_growth: 0,
+            note: "composed relaxation did not contract within the round budget",
+        })
+        .collect()
+}
+
+/// Refusal outcomes for the composed executor's rails: no certified balance.
+fn rail_refusals(
     rails: &[RailTear],
     rail_kind: BoundaryKind,
-    dead: Option<NodeId>,
-    rest: &HashMap<u32, f64>,
     rail_vnom: &HashMap<u32, f64>,
     reltol: f64,
     bootstrapped: bool,
 ) -> Vec<StiffOutcome> {
-    let mut out = Vec::new();
-    for c in signal_cuts {
-        let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
-        let tol = 10.0 * reltol * vnom;
-        let sag = match dead {
-            Some(d) if d.0 == c.0 => f64::INFINITY,
-            _ => f64::NAN,
-        };
-        out.push(StiffOutcome {
-            node: *c,
-            kind: BoundaryKind::Signal,
-            sag_v: sag,
-            tol_v: tol,
-            accepted: false,
-            bootstrapped,
-            capture_growth: 0,
-            note: match dead {
-                Some(d) if d.0 == c.0 => "composed capture died at this signal",
-                Some(_) => "unmeasured: a sibling signal solve died first",
-                None => "composed relaxation did not contract within the round budget",
-            },
-        });
-    }
-    for rt in rails {
-        let vnom = rail_vnom.get(&rt.rail.0).copied().unwrap_or(1.0);
-        out.push(StiffOutcome {
+    rails
+        .iter()
+        .map(|rt| StiffOutcome {
             node: rt.rail,
             kind: rail_kind,
             sag_v: f64::NAN,
-            tol_v: 10.0 * reltol * vnom,
+            tol_v: 10.0 * reltol * rail_vnom.get(&rt.rail.0).copied().unwrap_or(1.0),
             accepted: false,
             bootstrapped,
             capture_growth: 0,
             note: "composed relaxation refused; rail balance not certified",
-        });
-    }
-    out
+        })
+        .collect()
 }
 
 /// Outcomes for an out-of-scope disqualification: no measurement exists,
@@ -1685,361 +1554,297 @@ fn grow_capture_blocks(
     out
 }
 
-/// Build a capture CLUSTER's circuit: the cluster's (merged, possibly
-/// generator-grown) capture blocks' devices plus every device that conducts a
-/// member candidate (they carry the load current), with pin sources for the
-/// candidates OUTSIDE the cluster those devices or blocks touch. Returns the
-/// circuit and the global-to-local node map. Pin sources are added as DC zero
-/// and set by the caller (DC rest or PWL trains). Member candidates get NO
-/// pin: they are interior, solved jointly and exactly.
-fn capture_circuit(
-    sub: &Circuit,
-    frag: &crate::decompose::rails::Fragmentation,
-    blocks: &[usize],
-    members: &HashSet<u32>,
-    conducts_cand: &HashMap<DeviceId, Vec<u32>>,
-    companions: &[DeviceId],
-    candidates: &[NodeId],
-    held: &HashMap<u32, Vec<f64>>,
-) -> (Circuit, HashMap<u32, u32>) {
-    let my_blocks: HashSet<usize> = blocks.iter().copied().collect();
-    let companion_set: HashSet<DeviceId> = companions.iter().copied().collect();
-    let mut devices: Vec<DeviceId> = Vec::new();
-    for (id, _) in sub.iter() {
-        let in_block = frag
-            .device_block
-            .get(&id)
-            .is_some_and(|b| my_blocks.contains(b));
-        // Devices conducting a member that belong to no block (all terminals
-        // held: between two candidates) still carry load current: include them.
-        let orphan_on_c = !frag.device_block.contains_key(&id)
-            && conducts_cand
-                .get(&id)
-                .is_some_and(|v| v.iter().any(|x| members.contains(x)));
-        // Companion devices (absorbed drivers, replay pins: everything
-        // outside the candidates' island) hold the sense boundaries.
-        if in_block || orphan_on_c || companion_set.contains(&id) {
-            devices.push(id);
-        }
-    }
-
-    let mut cap = Circuit::new();
-    cap.temp_c = sub.temp_c;
-    let mut g2l: HashMap<u32, u32> = HashMap::new();
-    for &id in &devices {
-        let mut d = sub.devices[id.0 as usize].clone();
-        d.map_nodes(&mut |gn| {
-            if gn.is_ground() {
-                return NodeId::GROUND;
-            }
-            if let Some(&ln) = g2l.get(&gn.0) {
-                return NodeId(ln);
-            }
-            let ln = cap.node(sub.node_name(gn));
-            g2l.insert(gn.0, ln.0);
-            ln
-        });
-        cap.add(d);
-    }
-    // Pin every candidate OUTSIDE the cluster this capture touches.
-    for o in candidates {
-        if members.contains(&o.0) {
-            continue;
-        }
-        if let Some(&ln) = g2l.get(&o.0) {
-            cap.add(Device::Vsource {
-                name: format!("VSTIFF_{}", sub.node_name(*o)),
-                p: NodeId(ln),
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(0.0),
-            });
-        }
-    }
-    // Pin every HELD node (the composed executor's rails) this capture touches.
-    // Value is set by the caller from the held train (VRAIL_, so ramp_all_sources
-    // treats it like a rampable stimulus, not a certified VREPLAY_ boundary).
-    // SORTED keys: device insertion order is solver-visible (pivots, Newton
-    // paths), and HashMap iteration order is not deterministic; with several
-    // held rails an unsorted walk varies the capture circuit run to run.
-    let mut held_keys: Vec<u32> = held.keys().copied().collect();
-    held_keys.sort_unstable();
-    for h in held_keys {
-        if let Some(&ln) = g2l.get(&h) {
-            cap.add(Device::Vsource {
-                name: format!("VRAIL_{}", sub.node_name(NodeId(h))),
-                p: NodeId(ln),
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(0.0),
-            });
-        }
-    }
-    (cap, g2l)
+/// A pinned boundary of a capture circuit: a candidate OUTSIDE the cluster
+/// (`VSTIFF_`) or a held rail (`VRAIL_`, so `ramp_all_sources` treats it like a
+/// rampable stimulus, not a certified `VREPLAY_` boundary), by global node.
+#[derive(Clone, Copy)]
+enum Pin {
+    Stiff(u32),
+    Rail(u32),
 }
 
-/// Solve one capture CLUSTER: cluster-external candidates pinned at rest DC
-/// (round 0) or at PWL trains (round 1+); member candidates interior. `c` is
-/// the cluster representative (naming, error messages). Returns the run plus
-/// its node map.
-#[allow(clippy::too_many_arguments)]
-fn solve_capture(
-    sub: &Circuit,
-    frag: &crate::decompose::rails::Fragmentation,
-    blocks: &[usize],
-    members: &HashSet<u32>,
-    conducts_cand: &HashMap<DeviceId, Vec<u32>>,
-    companions: &[DeviceId],
-    c: NodeId,
-    candidates: &[NodeId],
-    rest: &HashMap<u32, f64>,
-    held: &HashMap<u32, Vec<f64>>,
-    trains: Option<BoundaryTrains<'_>>,
-    seed: Option<&CaptureRun>,
-    grown: bool,
-    opts: &SolverOptions,
+/// Everything a capture solve reads that is fixed for one stiff execution.
+struct CaptureGroup<'a> {
+    sub: &'a Circuit,
+    frag: &'a crate::decompose::rails::Fragmentation,
+    conducts_cand: &'a HashMap<DeviceId, Vec<u32>>,
+    companions: &'a [DeviceId],
+    candidates: &'a [NodeId],
+    held: &'a HashMap<u32, Vec<f64>>,
+    opts: &'a SolverOptions,
     tstop: f64,
-) -> SolveResult<CaptureRun> {
-    let (mut cap, g2l) = capture_circuit(
-        sub,
-        frag,
-        blocks,
-        members,
-        conducts_cand,
-        companions,
-        candidates,
-        held,
-    );
-    // Set the pins: PWL trains when supplied, else the DC rest values.
-    for dev in cap.devices.iter_mut() {
-        if let Device::Vsource { name, kind, .. } = dev {
-            if let Some(net) = name.strip_prefix("VSTIFF_") {
-                let other = candidates
-                    .iter()
-                    .find(|o| sub.node_name(**o) == net)
-                    .ok_or_else(|| {
-                        SolveError::internal(format!("stiff pin lost its candidate: {net}"))
-                    })?;
-                *kind = match trains {
-                    Some((r0, grid)) => SourceKind::Pwl(
-                        grid.iter()
-                            .zip(&r0[&other.0])
-                            .map(|(&t, &v)| PwlPoint { t, v })
-                            .collect(),
-                    ),
-                    None => SourceKind::Dc(rest.get(&other.0).copied().unwrap_or(0.0)),
-                };
-            } else if let Some(net) = name.strip_prefix("VRAIL_") {
-                // A held rail: pin it at its supplied train (constant DC of the
-                // train's t=0 value when no grid is available, e.g. the rest
-                // bootstrap).
-                let train = held
-                    .iter()
-                    .find(|(k, _)| sub.node_name(NodeId(**k)) == net)
-                    .map(|(_, v)| v)
-                    .ok_or_else(|| {
-                        SolveError::internal(format!("held rail pin lost its node: {net}"))
-                    })?;
-                *kind = match trains {
-                    Some((_, grid)) => SourceKind::Pwl(
-                        grid.iter()
-                            .zip(train)
-                            .map(|(&t, &v)| PwlPoint { t, v })
-                            .collect(),
-                    ),
-                    None => SourceKind::Dc(train.first().copied().unwrap_or(0.0)),
-                };
+}
+
+impl CaptureGroup<'_> {
+    /// Build a capture CLUSTER's circuit: the cluster's (merged, possibly
+    /// generator-grown) capture `blocks`' devices plus every device that
+    /// conducts a member candidate (they carry the load current), with pin
+    /// sources for the candidates OUTSIDE the cluster and the held rails those
+    /// devices touch. Returns the circuit, the global-to-local node map, and
+    /// the pins, added as DC zero for the caller to set (DC rest or PWL
+    /// trains). Member candidates get NO pin: they are interior, solved
+    /// jointly and exactly.
+    fn circuit(
+        &self,
+        blocks: &[usize],
+        members: &HashSet<u32>,
+    ) -> (Circuit, HashMap<u32, u32>, Vec<(DeviceId, Pin)>) {
+        let my_blocks: HashSet<usize> = blocks.iter().copied().collect();
+        let companion_set: HashSet<DeviceId> = self.companions.iter().copied().collect();
+        let mut cap = SubCircuit::new(self.sub);
+        for (id, _) in self.sub.iter() {
+            let in_block = self
+                .frag
+                .device_block
+                .get(&id)
+                .is_some_and(|b| my_blocks.contains(b));
+            // Devices conducting a member that belong to no block (all terminals
+            // held: between two candidates) still carry load current: include them.
+            let orphan_on_c = !self.frag.device_block.contains_key(&id)
+                && self
+                    .conducts_cand
+                    .get(&id)
+                    .is_some_and(|v| v.iter().any(|x| members.contains(x)));
+            // Companion devices (absorbed drivers, replay pins: everything
+            // outside the candidates' island) hold the sense boundaries.
+            if in_block || orphan_on_c || companion_set.contains(&id) {
+                cap.copy(self.sub, id);
             }
         }
+        // SORTED held keys: device insertion order is solver-visible (pivots,
+        // Newton paths), and HashMap iteration order is not deterministic; with
+        // several held rails an unsorted walk varies the capture run to run.
+        let mut held_keys: Vec<u32> = self.held.keys().copied().collect();
+        held_keys.sort_unstable();
+        let outside = self.candidates.iter().filter(|o| !members.contains(&o.0));
+        let wanted = outside
+            .map(|o| Pin::Stiff(o.0))
+            .chain(held_keys.into_iter().map(Pin::Rail));
+        let mut pins = Vec::new();
+        for pin in wanted {
+            let (prefix, gn) = match pin {
+                Pin::Stiff(gn) => ("VSTIFF_", gn),
+                Pin::Rail(gn) => ("VRAIL_", gn),
+            };
+            if let Some(p) = cap.local(NodeId(gn)) {
+                let sid = cap.add(Device::Vsource {
+                    name: format!("{prefix}{}", self.sub.node_name(NodeId(gn))),
+                    p,
+                    n: NodeId::GROUND,
+                    kind: SourceKind::Dc(0.0),
+                });
+                pins.push((sid, pin));
+            }
+        }
+        let (cap, g2l) = cap.into_parts();
+        (cap, g2l, pins)
     }
-    let mut sub_opts = *opts;
-    sub_opts.partitioning = Partitioning::Off;
 
-    // Warm-start the DC from the previous round's EARLY-TRANSIENT state (the
-    // t=dt sample, which one honest Newton step already corrected), because
-    // the cold homotopy on an extracted sub-circuit can accept a nonphysical
-    // operating point that a warm start walks straight out of. The engine
-    // falls back cold when a seed does not fit.
-    let dc_seed: Option<Vec<f64>> = seed.and_then(|(pwf, pg2l)| {
-        if pwf.time.len() < 2 {
-            return None;
-        }
-        let ws = Workspace::new(&cap);
-        let mut x = vec![0.0f64; ws.layout.size];
-        for (gn, ln) in &g2l {
-            // The previous round's circuit was built by the same construction
-            // over the same device list, so its local ids coincide; read via
-            // ITS map defensively anyway.
-            let Some(pln) = pg2l.get(gn) else { continue };
-            if let Some(i) = ws.layout.node(NodeId(*ln)) {
-                x[i] = pwf.node_voltages[*pln as usize][1];
-            }
-        }
-        Some(x)
-    });
-
-    let n_nodes = cap.node_count();
-    let run_collect = |circuit: &Circuit, ropts: &SolverOptions| -> SolveResult<Waveforms> {
-        let mut wf = Waveforms {
-            time: Vec::new(),
-            node_voltages: vec![Vec::new(); n_nodes],
-            branch_currents: Vec::new(),
-        };
-        Transient::new(*ropts).run_streaming_seeded(circuit, tstop, dc_seed.as_deref(), |s| {
-            wf.time.push(s.time);
-            for node in 0..n_nodes {
-                let v = if node == 0 { 0.0 } else { s.x[node - 1] };
-                wf.node_voltages[node].push(v);
-            }
-        })?;
-        Ok(wf)
-    };
-    // The FIXED-step power-on ramp ladder: quasi-static window first, step-like
-    // last (a slow ramp can stall dwelling at bad biases; a fast one snaps
-    // through). Fixed marches fail fast at an unresolvable event, so trying all
-    // three is cheap. The stiff pins (rest values or previous iterates, internal
-    // estimates, not certified data) ramp with the rest; VREPLAY_ pins stay
-    // unramped inside ramp_all_sources.
-    let fixed_ramp_ladder = || -> Option<Waveforms> {
-        let StepControl::Fixed { dt } = sub_opts.step else {
-            return None;
-        };
-        for scale in [200.0, 20.0, 2.0] {
-            let ramp_window = (scale * dt).min(tstop / 10.0);
-            if ramp_window < 2.0 * dt {
-                continue;
-            }
-            let ramped = super::staged::ramp_all_sources(&cap, ramp_window);
-            let mut ramp_opts = sub_opts;
-            ramp_opts.dc_init = crate::options::DcInit::FromZero;
-            if let Ok(wf) = run_collect(&ramped, &ramp_opts) {
-                return Some(wf);
-            }
-        }
-        None
-    };
-
-    // A SINGLE adaptive march for a grown capture the fixed grid cannot carry: a
-    // generator-inclusive capture pulls in a self-resetting relaxation loop whose
-    // reset is a sub-dt event, and only an adaptive resolution (the bespoke
-    // stage-A recipe: one ramped power-on window, dt_min small) marches it. Just
-    // ONE attempt (not the three-window ladder): an adaptive march is expensive,
-    // and this fires once per grown capture per round on the flagship. The result
-    // is sampled onto the group grid by lerp, so the non-uniform steps cost
-    // nothing downstream. dt_max = dt, the CAPTURE GRID ITSELF: the certificate
-    // claims CaptureGrid{dt}, and a march allowed to step coarser than the grid
-    // it certifies undersamples its own claim. The bespoke precedent agrees:
-    // stage A ran dt_max == sample_dt (both 2 us), not a multiple.
-    let adaptive_once = || -> Option<Waveforms> {
-        let StepControl::Fixed { dt } = sub_opts.step else {
-            return None;
-        };
-        let ramp_window = (20.0 * dt).min(tstop / 10.0);
-        let ramped = super::staged::ramp_all_sources(&cap, ramp_window);
-        let mut aopts = sub_opts;
-        aopts.dc_init = crate::options::DcInit::FromZero;
-        aopts.step = StepControl::Adaptive {
-            dt_initial: dt,
-            dt_min: 1e-12,
-            dt_max: dt,
-        };
-        let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
-        let t0 = std::time::Instant::now();
-        let r = run_collect(&ramped, &aopts).ok();
-        if dbg {
-            // Step census from the accepted grid: where the march spent its
-            // steps (the power-on bring-up inside the ramp window vs the
-            // cruise) and how small it had to go. Pure readout, no behaviour.
-            let census = r.as_ref().map(|wf| {
-                let n = wf.time.len();
-                let bring_up = wf.time.iter().filter(|&&t| t <= ramp_window).count();
-                let mut min_dt = f64::INFINITY;
-                for w in wf.time.windows(2) {
-                    min_dt = min_dt.min(w[1] - w[0]);
+    /// Solve one capture CLUSTER: cluster-external candidates pinned at rest
+    /// DC (no `trains`) or at PWL trains, held rails at their trains, member
+    /// candidates interior. `c` is the cluster representative (naming, error
+    /// messages). Returns the run plus its node map.
+    #[allow(clippy::too_many_arguments)]
+    fn solve(
+        &self,
+        blocks: &[usize],
+        members: &HashSet<u32>,
+        c: NodeId,
+        rest: &HashMap<u32, f64>,
+        trains: Option<BoundaryTrains<'_>>,
+        seed: Option<&CaptureRun>,
+        grown: bool,
+    ) -> SolveResult<CaptureRun> {
+        let sub = self.sub;
+        let tstop = self.tstop;
+        let (mut cap, g2l, pins) = self.circuit(blocks, members);
+        for &(sid, pin) in &pins {
+            let (series, at_rest): (&[f64], f64) = match pin {
+                Pin::Stiff(gn) => (
+                    trains.map_or(&[][..], |(r0, _)| &r0[&gn]),
+                    rest.get(&gn).copied().unwrap_or(0.0),
+                ),
+                Pin::Rail(gn) => {
+                    let t = &self.held[&gn];
+                    (t, t.first().copied().unwrap_or(0.0))
                 }
-                (n, bring_up, min_dt)
-            });
-            eprintln!(
-                "  adaptive_once at {}: {} devices, {} nodes, {:.2}s, ok={}, steps={:?} (total, in ramp window {:.1e}s, min dt)",
-                sub.node_name(c),
-                cap.devices.len(),
-                cap.node_count(),
-                t0.elapsed().as_secs_f64(),
-                r.is_some(),
-                census,
-                ramp_window,
-            );
+            };
+            let pinned = match trains {
+                Some((_, grid)) => SourceKind::Pwl(
+                    grid.iter()
+                        .zip(series)
+                        .map(|(&t, &v)| PwlPoint { t, v })
+                        .collect(),
+                ),
+                None => SourceKind::Dc(at_rest),
+            };
+            if let Device::Vsource { kind, .. } = &mut cap.devices[sid.0 as usize] {
+                *kind = pinned;
+            }
         }
-        r
-    };
+        let mut sub_opts = *self.opts;
+        sub_opts.partitioning = Partitioning::Off;
 
-    let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
+        // Warm-start the DC from the previous round's EARLY-TRANSIENT state (the
+        // t=dt sample, which one honest Newton step already corrected), because
+        // the cold homotopy on an extracted sub-circuit can accept a nonphysical
+        // operating point that a warm start walks straight out of. The engine
+        // falls back cold when a seed does not fit.
+        let dc_seed: Option<Vec<f64>> = seed.and_then(|(pwf, pg2l)| {
+            if pwf.time.len() < 2 {
+                return None;
+            }
+            let ws = Workspace::new(&cap);
+            let mut x = vec![0.0f64; ws.layout.size];
+            for (gn, ln) in &g2l {
+                // The previous round's circuit was built by the same construction
+                // over the same device list, so its local ids coincide; read via
+                // ITS map defensively anyway.
+                let Some(pln) = pg2l.get(gn) else { continue };
+                if let Some(i) = ws.layout.node(NodeId(*ln)) {
+                    x[i] = pwf.node_voltages[*pln as usize][1];
+                }
+            }
+            Some(x)
+        });
 
-    // GROWN captures march ADAPTIVELY FIRST, not as a rescue. A grown capture
-    // contains a self-resetting generator loop, and a fixed grid does not just
-    // risk failing on its reset events: it can "succeed" while MANUFACTURING
-    // spikes. Measured on the flagship's torn O2 column under identical
-    // imposed trains: fixed dt=1e-6 counts 15 spikes, fixed dt=5e-7 counts 1,
-    // the adaptive march counts 2. The fixed-grid count is grid chatter, not
-    // physics, so a fixed "success" on a generator loop cannot be trusted
-    // even when Newton accepts every step. Plain (ungrown) captures keep the
-    // fixed-first path bit-unchanged: no generator inside, no chatter, and
-    // their refusal semantics must not be touched (review invariant).
-    if grown {
-        if let Some(wf) = adaptive_once() {
-            return Ok((wf, g2l));
-        }
-        // Adaptive died: fall through to the fixed chain as the rescue,
-        // inverting the original order. (Note: a grown capture that only the
-        // fixed chain can carry keeps its chatter risk; the alternative is a
-        // refusal, and the certificate's sag measurement still gates it.)
-    }
+        let run_collect = |circuit: &Circuit, ropts: &SolverOptions| -> SolveResult<Waveforms> {
+            Waveforms::collect_nodes(cap.node_count(), |sink| {
+                Transient::new(*ropts).run_streaming_seeded(
+                    circuit,
+                    tstop,
+                    dc_seed.as_deref(),
+                    sink,
+                )
+            })
+        };
+        let StepControl::Fixed { dt } = sub_opts.step else {
+            return Err(SolveError::refused(
+                "stiff execution requires fixed step control",
+            ));
+        };
+        // The FIXED-step power-on ramp ladder: quasi-static window first, step-like
+        // last (a slow ramp can stall dwelling at bad biases; a fast one snaps
+        // through). Fixed marches fail fast at an unresolvable event, so trying all
+        // three is cheap. The stiff pins (rest values or previous iterates, internal
+        // estimates, not certified data) ramp with the rest; VREPLAY_ pins stay
+        // unramped inside ramp_all_sources.
+        let fixed_ramp_ladder = || -> Option<Waveforms> {
+            for scale in [200.0, 20.0, 2.0] {
+                let ramp_window = (scale * dt).min(tstop / 10.0);
+                if ramp_window < 2.0 * dt {
+                    continue;
+                }
+                let ramped = super::staged::ramp_all_sources(&cap, ramp_window);
+                let mut ramp_opts = sub_opts;
+                ramp_opts.dc_init = crate::options::DcInit::FromZero;
+                if let Ok(wf) = run_collect(&ramped, &ramp_opts) {
+                    return Some(wf);
+                }
+            }
+            None
+        };
 
-    let t_fixed = std::time::Instant::now();
-    match run_collect(&cap, &sub_opts) {
-        Ok(wf) => Ok((wf, g2l)),
-        // A DC-class death gets the fixed-step power-on ramp the staged fused
-        // path has (ORIGINAL behaviour, every capture). A plain-adjacency
-        // capture that dies past the ladder is a legitimate refusal signal (a
-        // cut through an active loop, say) that must NOT be papered over: the
-        // adaptive march never runs for it.
-        Err(e) if e.is_dc_failure() => {
+        // A SINGLE adaptive march for a grown capture the fixed grid cannot carry: a
+        // generator-inclusive capture pulls in a self-resetting relaxation loop whose
+        // reset is a sub-dt event, and only an adaptive resolution (the bespoke
+        // stage-A recipe: one ramped power-on window, dt_min small) marches it. Just
+        // ONE attempt (not the three-window ladder): an adaptive march is expensive,
+        // and this fires once per grown capture per round on the flagship. The result
+        // is sampled onto the group grid by lerp, so the non-uniform steps cost
+        // nothing downstream. dt_max = dt, the CAPTURE GRID ITSELF: the certificate
+        // claims CaptureGrid{dt}, and a march allowed to step coarser than the grid
+        // it certifies undersamples its own claim. The bespoke precedent agrees:
+        // stage A ran dt_max == sample_dt (both 2 us), not a multiple.
+        let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
+        let adaptive_once = || -> Option<Waveforms> {
+            let ramp_window = (20.0 * dt).min(tstop / 10.0);
+            let ramped = super::staged::ramp_all_sources(&cap, ramp_window);
+            let mut aopts = sub_opts;
+            aopts.dc_init = crate::options::DcInit::FromZero;
+            aopts.step = StepControl::Adaptive {
+                dt_initial: dt,
+                dt_min: 1e-12,
+                dt_max: dt,
+            };
+            let t0 = std::time::Instant::now();
+            let r = run_collect(&ramped, &aopts).ok();
             if dbg {
+                // Step census from the accepted grid: where the march spent its
+                // steps (the power-on bring-up inside the ramp window vs the
+                // cruise) and how small it had to go. Pure readout, no behaviour.
+                let census = r.as_ref().map(|wf| {
+                    let n = wf.time.len();
+                    let bring_up = wf.time.iter().filter(|&&t| t <= ramp_window).count();
+                    let min_dt = wf
+                        .time
+                        .windows(2)
+                        .map(|w| w[1] - w[0])
+                        .fold(f64::INFINITY, f64::min);
+                    (n, bring_up, min_dt)
+                });
                 eprintln!(
-                    "  fixed at {} DC-died after {:.2}s: {e}",
+                    "  adaptive_once at {}: {} devices, {} nodes, {:.2}s, ok={}, steps={:?} (total, in ramp window {:.1e}s, min dt)",
                     sub.node_name(c),
-                    t_fixed.elapsed().as_secs_f64()
+                    cap.devices.len(),
+                    cap.node_count(),
+                    t0.elapsed().as_secs_f64(),
+                    r.is_some(),
+                    census,
+                    ramp_window,
                 );
             }
-            let t_ladder = std::time::Instant::now();
-            if let Some(wf) = fixed_ramp_ladder() {
-                if dbg {
-                    eprintln!(
-                        "  ladder at {} ok in {:.2}s",
-                        sub.node_name(c),
-                        t_ladder.elapsed().as_secs_f64()
-                    );
-                }
+            r
+        };
+
+        // GROWN captures march ADAPTIVELY FIRST, not as a rescue. A grown capture
+        // contains a self-resetting generator loop, and a fixed grid does not just
+        // risk failing on its reset events: it can "succeed" while MANUFACTURING
+        // spikes. Measured on the flagship's torn O2 column under identical
+        // imposed trains: fixed dt=1e-6 counts 15 spikes, fixed dt=5e-7 counts 1,
+        // the adaptive march counts 2. The fixed-grid count is grid chatter, not
+        // physics, so a fixed "success" on a generator loop cannot be trusted
+        // even when Newton accepts every step. Plain (ungrown) captures keep the
+        // fixed-first path bit-unchanged: no generator inside, no chatter, and
+        // their refusal semantics must not be touched (review invariant).
+        if grown {
+            if let Some(wf) = adaptive_once() {
                 return Ok((wf, g2l));
             }
-            if dbg {
-                eprintln!(
-                    "  ladder at {} died in {:.2}s",
-                    sub.node_name(c),
-                    t_ladder.elapsed().as_secs_f64()
-                );
-            }
-            let message = format!("stiff capture at {} failed: {e}", sub.node_name(c));
-            Err(e.with_message(message))
+            // Adaptive died: fall through to the fixed chain as the rescue,
+            // inverting the original order. (Note: a grown capture that only the
+            // fixed chain can carry keeps its chatter risk; the alternative is a
+            // refusal, and the certificate's sag measurement still gates it.)
         }
-        Err(e) => {
+
+        let t_fixed = std::time::Instant::now();
+        let died = |what: &str, e: &SolveError| {
             if dbg {
                 eprintln!(
-                    "  fixed at {} died after {:.2}s: {e}",
+                    "  {what} at {} died after {:.2}s: {e}",
                     sub.node_name(c),
                     t_fixed.elapsed().as_secs_f64()
                 );
             }
-            let message = format!("stiff capture at {} failed: {e}", sub.node_name(c));
-            Err(e.with_message(message))
+        };
+        match run_collect(&cap, &sub_opts) {
+            Ok(wf) => Ok((wf, g2l)),
+            // A DC-class death gets the fixed-step power-on ramp the staged fused
+            // path has (ORIGINAL behaviour, every capture). A plain-adjacency
+            // capture that dies past the ladder is a legitimate refusal signal (a
+            // cut through an active loop, say) that must NOT be papered over: the
+            // adaptive march never runs for it.
+            Err(e) => {
+                died("fixed", &e);
+                if e.is_dc_failure() {
+                    if let Some(wf) = fixed_ramp_ladder() {
+                        return Ok((wf, g2l));
+                    }
+                    died("ramp ladder", &e);
+                }
+                let message = format!("stiff capture at {} failed: {e}", sub.node_name(c));
+                Err(e.with_message(message))
+            }
         }
     }
 }
@@ -2047,10 +1852,7 @@ fn solve_capture(
 /// Sample one (global) node from a capture run onto the uniform grid.
 fn sample_node(wf: &Waveforms, g2l: &HashMap<u32, u32>, node: NodeId, grid: &[f64]) -> Vec<f64> {
     match g2l.get(&node.0) {
-        Some(&ln) => grid
-            .iter()
-            .map(|&t| lerp_at(&wf.time, &wf.node_voltages[ln as usize], t))
-            .collect(),
+        Some(&ln) => resample(wf, ln as usize, grid),
         None => vec![0.0; grid.len()],
     }
 }
@@ -2074,36 +1876,10 @@ fn shifted_residual(a: &[f64], b: &[f64]) -> f64 {
     worst
 }
 
-fn uniform_grid(dt: f64, tstop: f64) -> Vec<f64> {
-    let mut grid = vec![0.0];
-    let mut t = 0.0;
-    let eps = dt * 1e-9;
-    while t < tstop - eps {
-        let h = dt.min(tstop - t);
-        t += h;
-        grid.push(t);
-    }
-    grid
-}
-
-fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
-    if times.is_empty() {
-        return 0.0;
-    }
-    match times.binary_search_by(|x| x.partial_cmp(&t).expect("non-finite sample time")) {
-        Ok(i) => vals[i],
-        Err(0) => vals[0],
-        Err(i) if i >= times.len() => *vals.last().unwrap(),
-        Err(i) => {
-            let (t0, t1) = (times[i - 1], times[i]);
-            vals[i - 1] + (t - t0) / (t1 - t0) * (vals[i] - vals[i - 1])
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orchestrate::lerp_at;
     use crate::test_fixtures::{
         assert_matches_within_grid, bjt, cap, comparator, fixed_opts, idc, max_error, monolith,
         pnp, pnp_blocks, res, sw, swing, up_crossings, vdc, vpulse, GND,

@@ -24,29 +24,7 @@ fn rc_step_response() {
     let cap = 1e-6;
     let tau = r * cap;
 
-    let mut circuit = Circuit::new();
-    let vin = circuit.node("in");
-    let out = circuit.node("out");
-    circuit.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(v),
-    });
-    circuit.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: out,
-        ohms: r,
-        tc1: None,
-    });
-    circuit.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: cap,
-        ic: Some(0.0),
-    });
+    let circuit = crate::shared::rc_lowpass(v, r, cap);
 
     let opts = SolverOptions {
         integration: Integration::Trapezoidal,

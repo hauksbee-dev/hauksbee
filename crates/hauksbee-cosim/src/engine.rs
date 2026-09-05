@@ -24,11 +24,11 @@ use hauksbee_frontdoor_api::protocol::{
 use hauksbee_models::{Bus, ModelLibrary};
 use hauksbee_solve::{Integration, SolverOptions, StepControl};
 
-use crate::binder::{bind_board, BoundBoard};
 use crate::peripherals::{CsProvenance, I2cBus, RegisterMapSensor, ResolvedCs, SpiBus};
-use crate::power_supply::{Chemistry, PowerSupply, UsbSpec};
-use crate::reports::bind::BindReport;
 use crate::scheduler::Scheduler;
+use hauksbee_bind::bind_report::BindReport;
+use hauksbee_bind::binder::{bind_board, BoundBoard};
+use hauksbee_bind::power_supply::{Chemistry, PowerSupply, UsbSpec};
 
 /// Analog chunk for boards whose MCU runs on an external emulator (Renode or
 /// QEMU). See the note in [`HauksbeeEngine::from_bound`] for why the

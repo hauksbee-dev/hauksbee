@@ -28,6 +28,8 @@ use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::decompose::rails::TearMotive;
 use hauksbee_solve::decompose::verify::Decomposition;
 use hauksbee_solve::orchestrate::run_staged;
+
+use crate::shared::lerp_at;
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient, Waveforms};
 
 /// Deterministic xorshift64*; good enough to scatter topologies, and every
@@ -163,18 +165,6 @@ fn random_board(seed: u64) -> Circuit {
         }
     }
     c
-}
-
-fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
-    match times.binary_search_by(|x| x.partial_cmp(&t).unwrap()) {
-        Ok(i) => vals[i],
-        Err(0) => vals[0],
-        Err(i) if i >= times.len() => *vals.last().unwrap(),
-        Err(i) => {
-            let (t0, t1) = (times[i - 1], times[i]);
-            vals[i - 1] + (t - t0) / (t1 - t0) * (vals[i] - vals[i - 1])
-        }
-    }
 }
 
 /// Two-sided compare per the module doc: value agreement, or the same value

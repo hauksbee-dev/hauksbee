@@ -6,7 +6,7 @@ hauksbee run <board> --drc --apply-shorts --firmware fw.hex --headless   # bridg
 ```
 
 Detection lives in `crates/hauksbee-extract/src/drc.rs`; simulation of a
-detected short in `crates/hauksbee-engine/src/shorts.rs`. Output shape:
+detected short in `crates/hauksbee-bind/src/shorts.rs`. Output shape:
 [JSON_OUTPUT.md](../analysis/JSON_OUTPUT.md#finding).
 
 ## Detection

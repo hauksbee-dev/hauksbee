@@ -28,36 +28,19 @@ impl CompiledEntry {
     /// Returns an error if any regex pattern is invalid. The `id` from the
     /// entry is included in error messages.
     pub fn compile(entry: ModelEntry) -> Result<Self, regex::Error> {
-        let value_re = entry
-            .r#match
-            .value_re
-            .as_deref()
-            .map(|p| Regex::new(&format!("(?i){}", p)))
-            .transpose()?;
-        let footprint_re = entry
-            .r#match
-            .footprint_re
-            .as_deref()
-            // Case-INSENSITIVE like value_re/mpn_re: a rule `footprint_re = "sot-23"`
-            // must match a board footprint `Package_TO_SOT_SMD:SOT-23`. A
-            // case-sensitive compile silently skipped the entry, dropping the part
-            // to a generic fallback with no diagnostic.
-            .map(|p| Regex::new(&format!("(?i){}", p)))
-            .transpose()?;
-        let mpn_re = entry
-            .r#match
-            .mpn_re
-            .as_deref()
-            .map(|p| Regex::new(&format!("(?i){}", p)))
-            .transpose()?;
-        let property_res = entry
-            .r#match
+        // Every pattern is case-INSENSITIVE, footprints included: a rule
+        // `footprint_re = "sot-23"` must match `Package_TO_SOT_SMD:SOT-23`. A
+        // case-sensitive compile silently skipped the entry, dropping the part
+        // to a generic fallback with no diagnostic.
+        let ci = |p: &str| Regex::new(&format!("(?i){p}"));
+        let rules = &entry.r#match;
+        let value_re = rules.value_re.as_deref().map(ci).transpose()?;
+        let footprint_re = rules.footprint_re.as_deref().map(ci).transpose()?;
+        let mpn_re = rules.mpn_re.as_deref().map(ci).transpose()?;
+        let property_res = rules
             .properties
             .iter()
-            .map(|(key, pattern)| {
-                Regex::new(&format!("(?i){}", pattern))
-                    .map(|regex| (normalise_property_key(key), regex))
-            })
+            .map(|(key, pattern)| ci(pattern).map(|re| (normalise_property_key(key), re)))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(CompiledEntry {
             entry,
@@ -72,64 +55,34 @@ impl CompiledEntry {
     ///
     /// Rules are ANDed: every populated rule must match.
     pub fn matches(&self, q: &ComponentQuery) -> bool {
-        let rules = &self.entry.r#match;
-
-        // lib_id: exact or prefix match
-        if let Some(lid) = &rules.lib_id {
-            let query_lid = q.lib_id.as_deref().unwrap_or("");
-            let ok = if lid.ends_with(':') {
-                // prefix match
-                query_lid.starts_with(lid.as_str())
+        fn field(v: &Option<String>) -> &str {
+            v.as_deref().unwrap_or("")
+        }
+        // lib_id: a trailing ':' makes it a library prefix, else an exact id.
+        let lib_ok = self.entry.r#match.lib_id.as_deref().is_none_or(|lid| {
+            let query_lid = field(&q.lib_id);
+            if lid.ends_with(':') {
+                query_lid.starts_with(lid)
             } else {
-                // exact match
-                query_lid == lid.as_str()
-            };
-            if !ok {
-                return false;
+                query_lid == lid
             }
-        }
-
-        // value regex
-        if let Some(re) = &self.value_re {
-            // Normalise common comma-decimal before matching
-            let val = normalise_value_str(q.value.as_deref().unwrap_or(""));
-            if !re.is_match(&val) {
-                return false;
-            }
-        }
-
-        // footprint regex
-        if let Some(re) = &self.footprint_re {
-            let fp = q.footprint.as_deref().unwrap_or("");
-            if !re.is_match(fp) {
-                return false;
-            }
-        }
-
-        // MPN regex
-        if let Some(re) = &self.mpn_re {
-            let mpn = q.mpn.as_deref().unwrap_or("");
-            if !re.is_match(mpn) {
-                return false;
-            }
-        }
-
-        // Named source properties. All authored rules are required; a missing
-        // property is not evidence and therefore cannot match.
-        for (expected_key, regex) in &self.property_res {
-            let Some((_, value)) = q
-                .properties
+        });
+        // European comma-decimal is normalised before the value regex runs.
+        let value = normalise_value_str(field(&q.value));
+        let re_ok = |re: &Option<Regex>, text: &str| re.as_ref().is_none_or(|re| re.is_match(text));
+        // Named source properties: every authored rule is required, and a
+        // missing property is not evidence, so it cannot match.
+        let properties_ok = self.property_res.iter().all(|(expected_key, regex)| {
+            q.properties
                 .iter()
                 .find(|(key, _)| normalise_property_key(key) == *expected_key)
-            else {
-                return false;
-            };
-            if !regex.is_match(value) {
-                return false;
-            }
-        }
-
-        true
+                .is_some_and(|(_, value)| regex.is_match(value))
+        });
+        lib_ok
+            && re_ok(&self.value_re, &value)
+            && re_ok(&self.footprint_re, field(&q.footprint))
+            && re_ok(&self.mpn_re, field(&q.mpn))
+            && properties_ok
     }
 
     /// Specificity score (higher = more specific = wins ties).
@@ -141,38 +94,23 @@ impl CompiledEntry {
     /// - Footprint regex is a catch-all fallback.
     pub fn specificity_score(&self, q: &ComponentQuery) -> u32 {
         let rules = &self.entry.r#match;
-        let mut score = 0u32;
-
-        if let Some(lid) = &rules.lib_id {
-            if lid.ends_with(':') {
-                score += 10; // prefix
-            } else {
-                score += 20; // exact
-            }
-        }
-        if rules.value_re.is_some() {
-            score += 30;
-        }
-        if rules.mpn_re.is_some() {
-            score += 40;
-        }
-        if rules.footprint_re.is_some() {
-            // Only add footprint to score if it was actually checked
-            let fp = q.footprint.as_deref().unwrap_or("");
-            if self
-                .footprint_re
-                .as_ref()
-                .map(|re| re.is_match(fp))
-                .unwrap_or(false)
-            {
-                score += 5;
-            }
-        }
+        let lib = match &rules.lib_id {
+            Some(lid) if lid.ends_with(':') => 10,
+            Some(_) => 20,
+            None => 0,
+        };
+        // The footprint counts only when it actually matched the query.
+        let footprint = self
+            .footprint_re
+            .as_ref()
+            .is_some_and(|re| re.is_match(q.footprint.as_deref().unwrap_or("")));
         // A named property that carries an exact order code is at least as
         // discriminating as an MPN field. Count each required property so an
         // exact source-qualified entry wins over the same generic family rule.
-        score += 50 * rules.properties.len() as u32;
-        score
+        lib + 30 * u32::from(rules.value_re.is_some())
+            + 40 * u32::from(rules.mpn_re.is_some())
+            + 5 * u32::from(footprint)
+            + 50 * rules.properties.len() as u32
     }
 
     /// Fine-grained regex constrainedness, used as a same-layer tie-break.
@@ -185,20 +123,12 @@ impl CompiledEntry {
     /// wins deterministically instead of by load order.
     pub fn regex_specificity(&self) -> u32 {
         let rules = &self.entry.r#match;
-        [
-            rules.value_re.as_deref(),
-            rules.mpn_re.as_deref(),
-            rules.footprint_re.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .map(pattern_constrainedness)
-        .sum::<u32>()
-            + rules
-                .properties
-                .values()
-                .map(|pattern| pattern_constrainedness(pattern))
-                .sum::<u32>()
+        [&rules.value_re, &rules.mpn_re, &rules.footprint_re]
+            .into_iter()
+            .flatten()
+            .chain(rules.properties.values())
+            .map(|pattern| pattern_constrainedness(pattern))
+            .sum()
     }
 }
 
@@ -421,9 +351,7 @@ impl ComponentQuery {
             lib_id: lib_id.into(),
             value: value.into(),
             footprint: footprint.into(),
-            mpn: None,
-            properties: Vec::new(),
-            reference: None,
+            ..Default::default()
         }
     }
 }
@@ -433,10 +361,15 @@ impl ComponentQuery {
 impl MatchRules {
     /// Number of populated rule fields (for tie-breaking).
     pub fn populated(&self) -> usize {
-        self.lib_id.is_some() as usize
-            + self.value_re.is_some() as usize
-            + self.footprint_re.is_some() as usize
-            + self.mpn_re.is_some() as usize
+        [
+            &self.lib_id,
+            &self.value_re,
+            &self.footprint_re,
+            &self.mpn_re,
+        ]
+        .iter()
+        .filter(|r| r.is_some())
+        .count()
             + self.properties.len()
     }
 }

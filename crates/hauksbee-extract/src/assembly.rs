@@ -205,20 +205,13 @@ mod tests {
     use crate::DUPLICATE_REFERENCE_CONFLICT_KEY;
 
     fn component(dnp: bool, properties: &[(&str, &str)]) -> Component {
-        Component {
-            reference: "U1".into(),
-            value: "TEST".into(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: properties
-                .iter()
-                .map(|(key, value)| ((*key).into(), (*value).into()))
-                .collect(),
-            dnp,
-            pins: Vec::new(),
-        }
+        let mut c = crate::testutil::part("U1", "TEST", "", "", Vec::new());
+        c.properties = properties
+            .iter()
+            .map(|(key, value)| ((*key).into(), (*value).into()))
+            .collect();
+        c.dnp = dnp;
+        c
     }
 
     #[test]

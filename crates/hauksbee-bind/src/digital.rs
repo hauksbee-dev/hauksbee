@@ -574,7 +574,7 @@ impl DigitalComponent {
     }
 
     /// Compiled parallel-memory ports, if this declarative part owns any.
-    pub(crate) fn memory_ports(&self) -> Vec<crate::logic::ParallelMemoryPort> {
+    pub fn memory_ports(&self) -> Vec<crate::logic::ParallelMemoryPort> {
         self.logic
             .as_ref()
             .map(LogicComponent::memory_ports)
@@ -582,7 +582,7 @@ impl DigitalComponent {
     }
 
     /// True when the named memory is the component's only tick-owned behavior.
-    pub(crate) fn has_exclusive_memory_port(&self, name: &str) -> bool {
+    pub fn has_exclusive_memory_port(&self, name: &str) -> bool {
         self.logic
             .as_ref()
             .map(|logic| logic.has_exclusive_memory_port(name))
@@ -870,7 +870,7 @@ impl Hc595Chain {
     /// high-impedance input to driven output. This is not an observable edge
     /// from a known prior logic level, so clocks and latches must not advance.
     /// Level-sensitive active-low clear still applies immediately.
-    pub(crate) fn establish_control(&mut self, pin: (char, u8), high: bool) {
+    pub fn establish_control(&mut self, pin: (char, u8), high: bool) {
         if pin == self.ser {
             self.lvl_ser = high;
         }

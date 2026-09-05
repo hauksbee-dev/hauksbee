@@ -84,172 +84,113 @@ fn magic_head(bytes: &[u8]) -> String {
     String::from_utf8_lossy(window).chars().take(512).collect()
 }
 
-// ── The six builtin readers ───────────────────────────────────────────────────
+// ── The builtin readers ───────────────────────────────────────────────────────
 
-/// KiCad `.kicad_pcb` layout (`(kicad_pcb ...`).
-pub struct KicadPcbReader;
-impl BoardReader for KicadPcbReader {
-    fn name(&self) -> &str {
-        "kicad-pcb"
-    }
-    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        magic_head(bytes).contains("(kicad_pcb")
-    }
-    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        ExtractedBoard::from_kicad_pcb(&String::from_utf8_lossy(bytes))
-    }
-}
-
-/// KiCad `.kicad_sch` schematic (`(kicad_sch ...`). When a real file `path` is
-/// supplied the reader recurses the sub-sheet hierarchy; without one it reads
-/// the single sheet in `bytes` (the historical `from_auto` behaviour).
-pub struct KicadSchematicReader;
-impl BoardReader for KicadSchematicReader {
-    fn name(&self) -> &str {
-        "kicad-schematic"
-    }
-    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        magic_head(bytes).contains("(kicad_sch")
-    }
-    fn read(&self, bytes: &[u8], path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        match path {
-            Some(p) if p.is_file() => ExtractedBoard::from_kicad_schematic_path(p),
-            _ => ExtractedBoard::from_kicad_schematic(&String::from_utf8_lossy(bytes)),
+/// One builtin format: its id, its cheap detection, its parse, and whether its
+/// content is binary. The doc comment on each names the magic it keys on.
+macro_rules! builtin_reader {
+    ($(#[$doc:meta])* $name:ident, $id:literal, binary: $binary:expr,
+     detects: |$db:ident| $detect:expr, read: |$rb:ident, $rp:ident| $read:expr) => {
+        $(#[$doc])*
+        pub struct $name;
+        impl BoardReader for $name {
+            fn name(&self) -> &str {
+                $id
+            }
+            fn detects(&self, $db: &[u8], _path: Option<&Path>) -> bool {
+                $detect
+            }
+            fn read(&self, $rb: &[u8], $rp: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+                $read
+            }
+            fn is_binary(&self) -> bool {
+                $binary
+            }
         }
-    }
+    };
 }
 
-/// KiCad s-expression netlist export (`(export ...`).
-pub struct KicadNetlistReader;
-impl BoardReader for KicadNetlistReader {
-    fn name(&self) -> &str {
-        "kicad-netlist"
-    }
-    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        magic_head(bytes).trim_start().starts_with("(export")
-    }
-    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        ExtractedBoard::from_kicad_netlist(&String::from_utf8_lossy(bytes))
-    }
+fn text(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    String::from_utf8_lossy(bytes)
 }
 
-/// Eagle `.brd` board XML (`<eagle ...`).
-pub struct EagleReader;
-impl BoardReader for EagleReader {
-    fn name(&self) -> &str {
-        "eagle"
+builtin_reader!(
+    /// KiCad `.kicad_pcb` layout (`(kicad_pcb ...`).
+    KicadPcbReader, "kicad-pcb", binary: false,
+    detects: |b| magic_head(b).contains("(kicad_pcb"),
+    read: |b, _p| ExtractedBoard::from_kicad_pcb(&text(b))
+);
+builtin_reader!(
+    /// KiCad `.kicad_sch` schematic (`(kicad_sch ...`). When a real file `path`
+    /// is supplied the reader recurses the sub-sheet hierarchy; without one it
+    /// reads the single sheet in `bytes` (the historical `from_auto` behaviour).
+    KicadSchematicReader, "kicad-schematic", binary: false,
+    detects: |b| magic_head(b).contains("(kicad_sch"),
+    read: |b, p| match p {
+        Some(p) if p.is_file() => ExtractedBoard::from_kicad_schematic_path(p),
+        _ => ExtractedBoard::from_kicad_schematic(&text(b)),
     }
-    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        magic_head(bytes).contains("<eagle")
-    }
-    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        ExtractedBoard::from_eagle_brd(&String::from_utf8_lossy(bytes))
-    }
-}
-
-/// IPC-D-356/356A fab netlist. Detected by its fixed-column test records
-/// (`317`/`327`/`367` at column 0); the same records
-/// [`ExtractedBoard::from_ipc_d356`] requires, so detection and a successful
-/// read coincide exactly.
-pub struct Ipc356Reader;
-impl BoardReader for Ipc356Reader {
-    fn name(&self) -> &str {
-        "ipc-d356"
-    }
-    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        // Scan the WHOLE file at line starts (a cheap byte scan, no allocation).
-        // The parser reads the entire file, so detection must too: a large `C`
-        // comment / `P` parameter header can push the first `3xx` test record
-        // past any fixed window, and a windowed scan would regress that file to
-        // Unrecognized even though `from_ipc_d356` parses it fine.
-        bytes.split(|&b| b == b'\n').any(|line| {
-            line.starts_with(b"317") || line.starts_with(b"327") || line.starts_with(b"367")
-        })
-    }
-    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        ExtractedBoard::from_ipc_d356(&String::from_utf8_lossy(bytes))
-    }
-}
-
-/// ASCII Protel board export: pipe-delimited `|RECORD=` text declaring
-/// `KIND=Protel_Advanced_PCB` (the `.pcbdoc` form EasyEDA produces). Detection
-/// requires that KIND, so ASCII exports of other Protel documents fall through
-/// to [`unrecognized_message`]'s explanation instead of a garbled parse.
-pub struct ProtelAsciiReader;
-impl BoardReader for ProtelAsciiReader {
-    fn name(&self) -> &str {
-        "protel-ascii"
-    }
-    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        crate::protel_ascii::looks_like_protel_ascii(bytes)
-    }
-    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        ExtractedBoard::from_protel_ascii(&String::from_utf8_lossy(bytes))
-    }
-}
-
-/// Altium Designer `.PcbDoc` (binary OLE2). Detection is the container +
-/// Altium-stream check ([`crate::altium::looks_like_pcbdoc`]); the OLE2 magic
-/// `D0 CF 11 E0` cannot appear in any text format, so this never contends with
-/// the text readers.
-pub struct AltiumReader;
-impl BoardReader for AltiumReader {
-    fn name(&self) -> &str {
-        "altium"
-    }
-    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        crate::altium::looks_like_pcbdoc(bytes)
-    }
-    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        ExtractedBoard::from_altium_pcb(bytes)
-    }
-    fn is_binary(&self) -> bool {
-        true
-    }
-}
-
-/// IPC-2581 (DPMX) design-exchange XML, revision B or C. Detected by its root
-/// element / namespace ([`crate::ipc2581::looks_like_ipc2581`]), never by the
-/// `.xml` extension, so an Eagle `.brd` (also XML) and an arbitrary XML file
-/// both fall through.
-pub struct Ipc2581Reader;
-impl BoardReader for Ipc2581Reader {
-    fn name(&self) -> &str {
-        "ipc-2581"
-    }
-    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        crate::ipc2581::looks_like_ipc2581(bytes)
-    }
-    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        ExtractedBoard::from_ipc2581(&String::from_utf8_lossy(bytes))
-    }
-}
-
-/// ODB++ (Siemens/Valor) design archive in its `.tgz` / `.tar` / `.zip` form.
-/// Detected by the `matrix/matrix` member inside the archive
-/// ([`crate::odbpp::looks_like_odbpp_archive`]), which is what makes a tree an
-/// ODB++ job and which a zip of gerbers never has. Declared binary so a text
-/// input handed to [`ExtractedBoard::from_auto_bytes`] cannot reach it, and so
-/// this reader is consulted *before* an archive is treated as gerbers.
-///
-/// The DIRECTORY form has no bytes to sniff and so cannot go through the
-/// registry; `hauksbee-engine`'s board-input normalizer detects it by path with
-/// [`crate::odbpp::looks_like_odbpp_dir`].
-pub struct OdbppReader;
-impl BoardReader for OdbppReader {
-    fn name(&self) -> &str {
-        "odb++"
-    }
-    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        crate::odbpp::looks_like_odbpp_archive(bytes)
-    }
-    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        ExtractedBoard::from_odbpp_archive(bytes)
-    }
-    fn is_binary(&self) -> bool {
-        true
-    }
-}
+);
+builtin_reader!(
+    /// KiCad s-expression netlist export (`(export ...`).
+    KicadNetlistReader, "kicad-netlist", binary: false,
+    detects: |b| magic_head(b).trim_start().starts_with("(export"),
+    read: |b, _p| ExtractedBoard::from_kicad_netlist(&text(b))
+);
+builtin_reader!(
+    /// Eagle `.brd` board XML (`<eagle ...`).
+    EagleReader, "eagle", binary: false,
+    detects: |b| magic_head(b).contains("<eagle"),
+    read: |b, _p| ExtractedBoard::from_eagle_brd(&text(b))
+);
+builtin_reader!(
+    /// IPC-D-356/356A fab netlist, detected by its fixed-column test records
+    /// (`317`/`327`/`367` at column 0), the same records
+    /// [`ExtractedBoard::from_ipc_d356`] requires. The WHOLE file is scanned at
+    /// line starts because the parser reads all of it: a large `C` comment /
+    /// `P` parameter header can push the first test record past any window.
+    Ipc356Reader, "ipc-d356", binary: false,
+    detects: |b| b.split(|&c| c == b'\n').any(|line| {
+        line.starts_with(b"317") || line.starts_with(b"327") || line.starts_with(b"367")
+    }),
+    read: |b, _p| ExtractedBoard::from_ipc_d356(&text(b))
+);
+builtin_reader!(
+    /// ASCII Protel board export: pipe-delimited `|RECORD=` text declaring
+    /// `KIND=Protel_Advanced_PCB` (the `.pcbdoc` form EasyEDA produces). ASCII
+    /// exports of other Protel documents fall through to
+    /// [`unrecognized_message`]'s explanation instead of a garbled parse.
+    ProtelAsciiReader, "protel-ascii", binary: false,
+    detects: |b| crate::protel_ascii::looks_like_protel_ascii(b),
+    read: |b, _p| ExtractedBoard::from_protel_ascii(&text(b))
+);
+builtin_reader!(
+    /// Altium Designer `.PcbDoc` (binary OLE2). The OLE2 magic `D0 CF 11 E0`
+    /// cannot appear in any text format, so this never contends with the text
+    /// readers.
+    AltiumReader, "altium", binary: true,
+    detects: |b| crate::altium::looks_like_pcbdoc(b),
+    read: |b, _p| ExtractedBoard::from_altium_pcb(b)
+);
+builtin_reader!(
+    /// IPC-2581 (DPMX) design-exchange XML, revision B or C, detected by its
+    /// root element / namespace, never by the `.xml` extension, so an Eagle
+    /// `.brd` (also XML) and an arbitrary XML file both fall through.
+    Ipc2581Reader, "ipc-2581", binary: false,
+    detects: |b| crate::ipc2581::looks_like_ipc2581(b),
+    read: |b, _p| ExtractedBoard::from_ipc2581(&text(b))
+);
+builtin_reader!(
+    /// ODB++ (Siemens/Valor) design archive in its `.tgz` / `.tar` / `.zip`
+    /// form, detected by the `matrix/matrix` member inside the archive, which a
+    /// zip of gerbers never has. Binary, so this reader is consulted before an
+    /// archive is treated as gerbers. The DIRECTORY form has no bytes to sniff;
+    /// `hauksbee-engine`'s board-input normalizer detects it by path with
+    /// [`crate::odbpp::looks_like_odbpp_dir`].
+    OdbppReader, "odb++", binary: true,
+    detects: |b| crate::odbpp::looks_like_odbpp_archive(b),
+    read: |b, _p| ExtractedBoard::from_odbpp_archive(b)
+);
 
 // ── The registry ──────────────────────────────────────────────────────────────
 

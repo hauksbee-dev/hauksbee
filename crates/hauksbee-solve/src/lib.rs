@@ -65,6 +65,7 @@ pub mod rawfile;
 pub mod sim;
 mod sparse;
 mod stamp;
+mod subcircuit;
 mod system;
 mod transient;
 

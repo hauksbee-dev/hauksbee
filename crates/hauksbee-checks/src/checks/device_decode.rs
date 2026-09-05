@@ -671,7 +671,7 @@ fn tps25982_rated_connectors(
             let AssemblyState::Present(part) = AssemblyState::of(component) else {
                 continue;
             };
-            if let Some(model) = crate::binder::resolve(lib, part).model {
+            if let Some(model) = hauksbee_bind::binder::resolve(lib, part).model {
                 if model.kind == ComponentKind::Connector {
                     if let Some(rating_a) = model.ratings.max_current_a.filter(|a| *a > 0.0) {
                         witnesses

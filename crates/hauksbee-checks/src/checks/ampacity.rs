@@ -37,7 +37,7 @@ use hauksbee_extract::{
 };
 use hauksbee_models::ModelLibrary;
 
-use crate::{binder::resolve, component_evidence::role_net};
+use hauksbee_bind::{binder::resolve, component_evidence::role_net};
 use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 
 /// Direction of a regulated through-current at one of a component's rail pins.

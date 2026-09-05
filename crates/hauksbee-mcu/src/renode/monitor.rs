@@ -10,9 +10,10 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
+use crate::external::{connect_loopback, read_step};
 use anyhow::{bail, Context, Result};
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::io::Write;
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 /// A connected Renode Monitor session.
@@ -25,59 +26,27 @@ pub struct Monitor {
 }
 
 impl Monitor {
-    /// Connect to a Renode Monitor listening on `addr`, retrying until
-    /// `connect_timeout` elapses (Renode takes several seconds to bind).
-    ///
-    /// `dead` is polled between attempts and short-circuits the wait when the
-    /// peer process has already exited. Without it, a Renode that died at
-    /// startup (most often because another process took the port between our
-    /// probe and its bind) costs the caller the whole connect timeout and then
-    /// reports "connection refused", which names the symptom and hides the
-    /// cause.
-    pub fn connect_while<A: ToSocketAddrs + Clone>(
-        addr: A,
+    /// Connect to a Renode Monitor listening on `127.0.0.1:port`, retrying
+    /// until `connect_timeout` elapses (Renode takes several seconds to bind).
+    /// `dead` short-circuits the wait once the Renode process has exited (see
+    /// [`connect_loopback`]).
+    pub fn connect(
+        port: u16,
         connect_timeout: Duration,
-        mut dead: impl FnMut() -> Option<String>,
+        dead: impl FnMut() -> Option<String>,
     ) -> Result<Self> {
-        let deadline = Instant::now() + connect_timeout;
-        loop {
-            // Resolve fresh each attempt; the port may not be open yet.
-            let mut resolved = addr
-                .clone()
-                .to_socket_addrs()
-                .context("resolving Renode monitor address")?;
-            let sock = resolved
-                .next()
-                .context("no socket address for Renode monitor")?;
-            match TcpStream::connect_timeout(&sock, Duration::from_millis(500)) {
-                Ok(stream) => {
-                    stream
-                        .set_read_timeout(Some(Duration::from_millis(200)))
-                        .ok();
-                    let mut m = Monitor {
-                        stream,
-                        carry: String::new(),
-                        timeout: Duration::from_secs(30),
-                    };
-                    // Drain the startup banner / first prompt.
-                    let _ = m.read_until_prompt(Duration::from_secs(5));
-                    return Ok(m);
-                }
-                Err(e) => {
-                    if let Some(reason) = dead() {
-                        bail!("Renode exited before its monitor port came up ({reason}): {e}");
-                    }
-                    if Instant::now() >= deadline {
-                        bail!(
-                            "could not connect to Renode monitor within {:?}: {}",
-                            connect_timeout,
-                            e
-                        );
-                    }
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-            }
-        }
+        let stream = connect_loopback("Renode monitor", port, connect_timeout, dead)?;
+        stream
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .ok();
+        let mut m = Monitor {
+            stream,
+            carry: String::new(),
+            timeout: Duration::from_secs(30),
+        };
+        // Drain the startup banner / first prompt.
+        let _ = m.read_until_prompt(Duration::from_secs(5));
+        Ok(m)
     }
 
     /// Set the default per-command response timeout.
@@ -140,41 +109,29 @@ impl Monitor {
     /// command, so it is better to fail loudly and let the backend be torn down.
     fn read_until_prompt(&mut self, timeout: Duration) -> Result<String> {
         let deadline = Instant::now() + timeout;
-        let mut buf = std::mem::take(&mut self.carry);
-        let mut chunk = [0u8; 4096];
-        loop {
-            if prompt_index(&buf).is_some() {
-                break;
+        let mut buf = std::mem::take(&mut self.carry).into_bytes();
+        let end = loop {
+            // Lossy on each check: the prompt is ASCII, so a split multibyte
+            // sequence at the tail can never hide or fake one.
+            if let Some(end) = prompt_index(&String::from_utf8_lossy(&buf)) {
+                break end;
             }
-            if Instant::now() >= deadline {
+            if !read_step(&mut self.stream, &mut buf, deadline, "Renode monitor")? {
                 bail!(
                     "Renode monitor command timed out after {:?} with no prompt; \
                      partial buffer: {:?}",
                     timeout,
-                    buf.chars().take(200).collect::<String>()
+                    String::from_utf8_lossy(&buf)
+                        .chars()
+                        .take(200)
+                        .collect::<String>()
                 );
             }
-            match self.stream.read(&mut chunk) {
-                Ok(0) => bail!("Renode monitor closed the connection"),
-                Ok(n) => {
-                    buf.push_str(&String::from_utf8_lossy(&chunk[..n]));
-                }
-                Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(e) => return Err(e).context("reading from Renode monitor"),
-            }
-        }
-
+        };
         // Split at the prompt: everything up to the prompt is this response;
-        // anything after the prompt is carried to the next read.
-        let end = prompt_index(&buf).expect("loop only exits with a prompt");
-        let (resp, rest) = buf.split_at(end);
-        // The prompt occupies the tail of `rest`; nothing legitimate follows it,
-        // but keep any bytes past the prompt suffix for the next read.
+        // anything after the prompt suffix is carried to the next read.
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        let (resp, rest) = text.split_at(end);
         self.carry = rest
             .find(") ")
             .map(|i| rest[i + 2..].to_string())

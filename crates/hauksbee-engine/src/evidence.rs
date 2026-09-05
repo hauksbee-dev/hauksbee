@@ -21,14 +21,17 @@ use std::fmt::Write;
 use std::path::Path;
 
 use crate::reports::bind::{BindOutcome, BindReport};
+pub(crate) use hauksbee_bind::occurrence::{
+    component_occurrence_subjects_for_references, OCCURRENCE_PREFIX,
+};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::evidence::{
     ArtifactId, ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionId,
     AssumptionSource, CausalPathIndex, Contribution, CrossCheck, EntityKind, EntityRef,
     ErrorBudget, EvidenceError, EvidenceMap, EvidenceRegistry, EvidenceStatus, IgnoredInput,
-    IntegrationMethod, IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, ModelSource,
-    ModelSourceTier, ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate,
-    Scope, Subject, SubjectSet, TimeWindow, ValueOrigin, WindowMethod,
+    IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, ModelSource, ModelSourceTier,
+    ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate, Scope, Subject,
+    SubjectSet, ValueOrigin,
 };
 use hauksbee_models::Confidence;
 use sha2::{Digest, Sha256};
@@ -111,104 +114,6 @@ pub struct BoardEvidence {
     reader_contributions: Vec<Contribution>,
     reader_ignored: Vec<IgnoredInput>,
     reader_cross_checks: Vec<CrossCheck>,
-}
-
-fn integration_method(method: hauksbee_solve::Integration) -> IntegrationMethod {
-    match method {
-        hauksbee_solve::Integration::Trapezoidal => IntegrationMethod::Trapezoidal,
-        hauksbee_solve::Integration::Gear2 => IntegrationMethod::Gear2,
-        hauksbee_solve::Integration::BackwardEuler => IntegrationMethod::BackwardEuler,
-    }
-}
-
-fn checked_subwindow(
-    kind: &'static str,
-    start_s: f64,
-    end_s: f64,
-    result: TimeWindow,
-) -> Result<TimeWindow, EvidenceError> {
-    let window = TimeWindow::new(start_s, end_s)?;
-    if start_s < result.start_s() || end_s > result.end_s() {
-        return Err(EvidenceError::WindowOutsideResult {
-            kind,
-            start_s,
-            end_s,
-            result_start_s: result.start_s(),
-            result_end_s: result.end_s(),
-        });
-    }
-    Ok(window)
-}
-
-fn windows_overlap(first: TimeWindow, second: TimeWindow) -> bool {
-    first.start_s() < second.end_s() && second.start_s() < first.end_s()
-}
-
-/// Partition the solved span into primary-method windows after removing failed
-/// and fallback spans. This avoids an overlapping "primary over the whole run"
-/// entry that would falsely claim the primary method produced fallback data.
-fn uncovered_windows(
-    result: TimeWindow,
-    blocked: impl IntoIterator<Item = TimeWindow>,
-) -> Result<Vec<TimeWindow>, EvidenceError> {
-    let mut blocked: Vec<_> = blocked.into_iter().collect();
-    blocked.sort_by(|a, b| a.start_s().total_cmp(&b.start_s()));
-    let mut cursor = result.start_s();
-    let mut out = Vec::new();
-    for window in blocked {
-        if cursor < window.start_s() {
-            out.push(TimeWindow::new(cursor, window.start_s())?);
-        }
-        cursor = cursor.max(window.end_s());
-    }
-    if cursor < result.end_s() {
-        out.push(TimeWindow::new(cursor, result.end_s())?);
-    }
-    Ok(out)
-}
-
-const OCCURRENCE_PREFIX: &str = "@hkb-occurrence:";
-
-pub(crate) fn component_occurrence_subject(
-    reference: &str,
-    total_occurrences: usize,
-    ordinal: usize,
-) -> String {
-    let reference = reference.trim();
-    if !reference.is_empty() && total_occurrences <= 1 && !reference.starts_with(OCCURRENCE_PREFIX)
-    {
-        return reference.to_string();
-    }
-    let encoded = reference
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<String>();
-    format!("{OCCURRENCE_PREFIX}{encoded}:{ordinal}")
-}
-
-pub(crate) fn component_occurrence_subjects_for_references<'a>(
-    references: impl IntoIterator<Item = &'a str>,
-) -> Vec<String> {
-    let references: Vec<_> = references.into_iter().collect();
-    let mut totals = BTreeMap::<String, usize>::new();
-    for reference in &references {
-        *totals.entry(reference.trim().to_string()).or_default() += 1;
-    }
-    let mut seen = BTreeMap::<String, usize>::new();
-    references
-        .into_iter()
-        .map(|reference| {
-            let reference = reference.trim();
-            let ordinal = seen.entry(reference.to_string()).or_default();
-            *ordinal += 1;
-            component_occurrence_subject(
-                reference,
-                totals.get(reference).copied().unwrap_or_default(),
-                *ordinal,
-            )
-        })
-        .collect()
 }
 
 fn provenance_display_reference(reference: &str) -> String {
@@ -1375,6 +1280,8 @@ impl BoardEvidence {
 
     /// Error budget for transient/thermal/co-sim numeric claims, populated from
     /// the solver options actually used plus the run's measured windows.
+    /// Forwards to [`hauksbee_cosim::error_budget::transient_error_budget`],
+    /// which the scheduler shares.
     pub fn transient_error_budget(
         options: &hauksbee_solve::SolverOptions,
         start_s: f64,
@@ -1383,60 +1290,14 @@ impl BoardEvidence {
         failed_windows: &[(f64, f64)],
         fallback_windows: &[(f64, f64, &str)],
     ) -> Result<ErrorBudget, EvidenceError> {
-        let result_window = TimeWindow::new(start_s, end_s)?;
-        let tolerance = IntegrationTolerance::new(
-            options.reltol,
-            options.vntol,
-            options.abstol,
-            options.chgtol,
-        )?;
-        let mut blocked = Vec::with_capacity(failed_windows.len() + fallback_windows.len());
-        let mut failed_typed = Vec::with_capacity(failed_windows.len());
-        for &(start, end) in failed_windows {
-            let window = checked_subwindow("failed", start, end, result_window)?;
-            blocked.push((window, "failed"));
-            failed_typed.push(window);
-        }
-        let mut fallback_typed = Vec::with_capacity(fallback_windows.len());
-        for &(start, end, method) in fallback_windows {
-            let window = checked_subwindow("fallback", start, end, result_window)?;
-            let method = match method {
-                "reduced-step" => IntegrationMethod::ReducedStep,
-                "backward-euler" => IntegrationMethod::BackwardEuler,
-                "cold-start-backward-euler" => IntegrationMethod::ColdStartBackwardEuler,
-                "subdivided-backward-euler" => IntegrationMethod::SubdividedBackwardEuler,
-                unknown => {
-                    return Err(EvidenceError::UnknownIntegrationMethod {
-                        method: unknown.to_string(),
-                    })
-                }
-            };
-            blocked.push((window, "fallback"));
-            fallback_typed.push((window, method));
-        }
-        for (i, (first, first_kind)) in blocked.iter().enumerate() {
-            for (second, second_kind) in blocked.iter().skip(i + 1) {
-                if windows_overlap(*first, *second) {
-                    return Err(EvidenceError::OverlappingWindows {
-                        first_kind,
-                        second_kind,
-                    });
-                }
-            }
-        }
-
-        let mut budget = ErrorBudget::new(tolerance).with_event_time_error(event_time_error_s)?;
-        let primary = integration_method(options.integration);
-        for window in uncovered_windows(result_window, blocked.iter().map(|(window, _)| *window))? {
-            budget = budget.with_method(WindowMethod::new(window, primary)?);
-        }
-        for (window, method) in fallback_typed {
-            budget = budget.with_method(WindowMethod::new(window, method)?);
-        }
-        for window in failed_typed {
-            budget = budget.with_failed_window(window);
-        }
-        Ok(budget)
+        hauksbee_cosim::error_budget::transient_error_budget(
+            options,
+            start_s,
+            end_s,
+            event_time_error_s,
+            failed_windows,
+            fallback_windows,
+        )
     }
 
     /// Numerical settings behind a non-transient solver result such as an AC

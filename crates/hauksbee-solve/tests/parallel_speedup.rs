@@ -19,10 +19,7 @@ use hauksbee_solve::{
 };
 use std::time::Instant;
 
-#[path = "../benches/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
-use fixtures::{build_rc_ladder, build_shunt_array};
+use crate::fixtures::{build_rc_ladder, build_shunt_array};
 
 fn opts(dt: f64, part: Partitioning, parallel: ParallelPolicy) -> SolverOptions {
     SolverOptions {

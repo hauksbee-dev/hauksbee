@@ -5,7 +5,7 @@
 //! [`ExtractedBoard`] (and, where it needs
 //! physics, builds and solves its own [`Circuit`](hauksbee_ir::Circuit)), and
 //! returns a verdict plus the numbers behind it. They are kept separate from
-//! the bind-time [`stress`](crate::stress) monitor: stress watches a running
+//! the bind-time [`stress`](hauksbee_bind::stress) monitor: stress watches a running
 //! co-simulation against datasheet ratings, whereas a check answers a specific
 //! standards question about the design.
 //!
@@ -69,7 +69,7 @@ pub(crate) fn resolved_components<'a>(
 ) -> impl Iterator<Item = (&'a hauksbee_extract::Component, hauksbee_models::ModelEntry)> + 'a {
     board.components.iter().filter_map(move |comp| {
         let part = hauksbee_extract::assembly::AssemblyState::of(comp).fitted()?;
-        Some((comp, crate::binder::resolve(lib, part).model?))
+        Some((comp, hauksbee_bind::binder::resolve(lib, part).model?))
     })
 }
 

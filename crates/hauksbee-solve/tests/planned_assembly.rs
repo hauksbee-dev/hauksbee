@@ -12,12 +12,11 @@
 
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{
-    AssemblyMode, Integration, Partitioning, SolverOptions, StepControl, Transient, Waveforms,
+    AssemblyMode, Integration, Partitioning, SolverOptions, StepControl, Transient,
 };
 
-#[path = "../benches/fixtures.rs"]
-mod fixtures;
-use fixtures::{build_rc_ladder, build_shunt_array};
+use crate::fixtures::{build_rc_ladder, build_shunt_array};
+use crate::shared::max_deviation;
 
 /// The graded-board options from `benches/graded_boards.rs` /
 /// `tests/rail_tear.rs`, so this gate drives the engine exactly as the
@@ -34,30 +33,6 @@ fn opts(part: Partitioning, dt: f64, assembly: AssemblyMode) -> SolverOptions {
         assembly,
         ..SolverOptions::default()
     }
-}
-
-/// Compare two waveform sets sample-for-sample over every node. Returns
-/// `(max_abs_err, worst_tol_ratio)` where the ratio is `|a-b| / (reltol *
-/// max(|a|,|b|) + vntol)`; a ratio <= 1.0 means "within solver tolerance".
-fn max_deviation(a: &Waveforms, b: &Waveforms, reltol: f64, vntol: f64) -> (f64, f64) {
-    assert_eq!(
-        a.time.len(),
-        b.time.len(),
-        "runs produced different sample grids"
-    );
-    assert_eq!(a.node_voltages.len(), b.node_voltages.len());
-    let mut max_abs = 0.0f64;
-    let mut worst_ratio = 0.0f64;
-    for (wa, wb) in a.node_voltages.iter().zip(b.node_voltages.iter()) {
-        for (&va, &vb) in wa.iter().zip(wb.iter()) {
-            assert!(va.is_finite() && vb.is_finite(), "non-finite sample");
-            let err = (va - vb).abs();
-            let bound = reltol * va.abs().max(vb.abs()) + vntol;
-            max_abs = max_abs.max(err);
-            worst_ratio = worst_ratio.max(err / bound);
-        }
-    }
-    (max_abs, worst_ratio)
 }
 
 /// RC ladder (linear backbone board): monolithic `Off`, planned vs

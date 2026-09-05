@@ -137,7 +137,51 @@ impl PcbDoc {
     }
 }
 
-// ── Stream cursor for the two record encodings ────────────────────────────────
+// ── Byte readers and the stream cursor ───────────────────────────────────────
+
+/// Little-endian field readers over a raw stream; out-of-range reads yield 0
+/// so a truncated record decodes to zeros rather than panicking (callers guard
+/// the offsets that matter).
+pub(crate) fn u8_at(b: &[u8], o: usize) -> u8 {
+    b.get(o).copied().unwrap_or(0)
+}
+pub(crate) fn u16_at(b: &[u8], o: usize) -> u16 {
+    b.get(o..o + 2)
+        .map(|s| u16::from_le_bytes([s[0], s[1]]))
+        .unwrap_or(0)
+}
+pub(crate) fn u32_at(b: &[u8], o: usize) -> u32 {
+    b.get(o..o + 4)
+        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+        .unwrap_or(0)
+}
+pub(crate) fn f64_at(b: &[u8], o: usize) -> f64 {
+    b.get(o..o + 8)
+        .map(|s| f64::from_le_bytes(s.try_into().unwrap()))
+        .unwrap_or(0.0)
+}
+/// Coordinate at `o` converted to millimetres.
+pub(crate) fn coord_mm(b: &[u8], o: usize) -> f64 {
+    (u32_at(b, o) as i32) as f64 * MM_PER_UNIT
+}
+
+/// The payloads of a fixed-binary stream whose records are one `marker` byte
+/// then a single length-prefixed sub-record (TRACKS6, ARCS6, VIAS6). Stops at
+/// the first record whose marker is not `marker`: the stream is corrupt or a
+/// version this reader does not model, so stop rather than misread.
+pub(crate) fn fixed_records(buf: &[u8], marker: u8) -> impl Iterator<Item = &[u8]> {
+    let mut pos = 0;
+    std::iter::from_fn(move || {
+        if pos >= buf.len() || u8_at(buf, pos) != marker {
+            return None;
+        }
+        let len = u32_at(buf, pos + 1) as usize;
+        let start = pos + 5;
+        let end = (start + len).min(buf.len());
+        pos = end;
+        Some(&buf[start.min(end)..end])
+    })
+}
 
 /// A forward cursor over a `Data` stream.
 pub(crate) struct StreamReader<'a> {
@@ -155,37 +199,19 @@ impl<'a> StreamReader<'a> {
     }
 
     fn u8_at(&self, off: usize) -> u8 {
-        self.buf.get(off).copied().unwrap_or(0)
+        u8_at(self.buf, off)
     }
 
     fn u16_at(&self, off: usize) -> u16 {
-        if off + 2 <= self.buf.len() {
-            u16::from_le_bytes([self.buf[off], self.buf[off + 1]])
-        } else {
-            0
-        }
+        u16_at(self.buf, off)
     }
 
     fn u32_at(&self, off: usize) -> u32 {
-        if off + 4 <= self.buf.len() {
-            u32::from_le_bytes([
-                self.buf[off],
-                self.buf[off + 1],
-                self.buf[off + 2],
-                self.buf[off + 3],
-            ])
-        } else {
-            0
-        }
+        u32_at(self.buf, off)
     }
 
-    fn i32_at(&self, off: usize) -> i32 {
-        self.u32_at(off) as i32
-    }
-
-    /// Coordinate at `off` converted to millimetres.
     fn coord_mm(&self, off: usize) -> f64 {
-        self.i32_at(off) as f64 * MM_PER_UNIT
+        coord_mm(self.buf, off)
     }
 
     // ── Properties-string records ─────────────────────────────────────────────
@@ -317,6 +343,12 @@ pub(crate) struct PadRecord {
     pub component: u16,
     pub x_mm: f64,
     pub y_mm: f64,
+    /// Top-layer copper size and shape code (1 = circle/oval, 2 = rectangle,
+    /// 3 = octagon, per KiCad `ALTIUM_PAD_SHAPE`), for the geometric DRC.
+    pub size_x: f64,
+    pub size_y: f64,
+    pub shape: u8,
+    pub rotation_deg: f64,
 }
 
 /// Decode an Altium Properties/text byte string. Altium stores these in the
@@ -421,6 +453,8 @@ pub(crate) fn parse_pads(buf: &[u8]) -> Vec<PadRecord> {
         // Altium Y is up; the DRC is self-consistent in relative positions, so
         // we keep Altium's frame (no negation) the way the Eagle path does.
         let y_mm = r.coord_mm(s5 + 17);
+        let (size_x, size_y) = (r.coord_mm(s5 + 21), r.coord_mm(s5 + 25));
+        let (shape, rotation_deg) = (r.u8_at(s5 + 49), f64_at(buf, s5 + 52));
         r.pos = e5;
         // Sub-record 6: per-layer stack, skipped (we use the top/mid/bot sizes
         // for DRC, not the 32-layer table).
@@ -432,6 +466,10 @@ pub(crate) fn parse_pads(buf: &[u8]) -> Vec<PadRecord> {
             component,
             x_mm,
             y_mm,
+            size_x,
+            size_y,
+            shape,
+            rotation_deg,
         });
     }
     out

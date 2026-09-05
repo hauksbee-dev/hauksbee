@@ -1,15 +1,11 @@
-//! Geometry primitives and distance math for copper connectivity tracing.
-//!
-//! This mirrors the shape model and distance helpers proven in [`crate::drc`]
-//! (capsules, polygons, segment/segment and polygon edge distances), but stands
-//! alone because the gerber path builds primitives from a different source and
-//! needs a couple of extra operations (segment-vs-polygon touch, polygon
-//! centroid) the DRC didn't expose. The numerics are identical so a touch here
-//! means the same thing a short means there.
+//! Geometry primitives and distance math shared by the DRC, the gerber
+//! connectivity tracer and the SI checks: capsules, polygons, weighted
+//! multi-contour pours, and the signed copper-gap between any two of them. One
+//! set of numerics, so a touch here means the same thing a short means there.
 
 /// A "stadium": a segment of finite width. A round flash/via is the degenerate
 /// case `a == b`. All coordinates in board millimetres.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Capsule {
     pub ax: f64,
     pub ay: f64,
@@ -36,11 +32,8 @@ pub enum Shape {
     /// their overlap instead of flipping that lens back to copper. Disjoint
     /// islands of one region are split into separate shapes upstream, so a
     /// `MultiPolygon` built by the region reader is a single electrically-connected
-    /// piece. Exact clear-polarity difference emits each disconnected exterior as a
-    /// separate shape, while the qualified dense-plane path removes each freed
-    /// annular island into its own primitive. The union-find therefore may rely on
-    /// one shape describing one connected filled area. No inflation radius: pours
-    /// are drawn at their true outline.
+    /// piece and the union-find may rely on one shape describing one connected
+    /// filled area. No inflation radius: pours are drawn at their true outline.
     MultiPolygon {
         contours: Vec<Vec<(f64, f64)>>,
         weights: Vec<i16>,
@@ -61,6 +54,7 @@ impl Shape {
     /// This shape shifted by `(dx, dy)` board millimetres. Used to tile a
     /// step-and-repeat base cell across its grid.
     pub fn translated(&self, dx: f64, dy: f64) -> Shape {
+        let shift = |pts: &[(f64, f64)]| pts.iter().map(|(x, y)| (x + dx, y + dy)).collect();
         match self {
             Shape::Capsule(c) => Shape::Capsule(Capsule {
                 ax: c.ax + dx,
@@ -70,14 +64,11 @@ impl Shape {
                 r: c.r,
             }),
             Shape::Polygon { pts, r } => Shape::Polygon {
-                pts: pts.iter().map(|(x, y)| (x + dx, y + dy)).collect(),
+                pts: shift(pts),
                 r: *r,
             },
             Shape::MultiPolygon { contours, weights } => Shape::MultiPolygon {
-                contours: contours
-                    .iter()
-                    .map(|c| c.iter().map(|(x, y)| (x + dx, y + dy)).collect())
-                    .collect(),
+                contours: contours.iter().map(|c| shift(c)).collect(),
                 weights: weights.clone(),
             },
         }
@@ -93,82 +84,67 @@ impl Shape {
                 c.ay.max(c.by) + c.r,
             ],
             Shape::Polygon { pts, r } => {
-                let mut b = [
-                    f64::INFINITY,
-                    f64::INFINITY,
-                    f64::NEG_INFINITY,
-                    f64::NEG_INFINITY,
-                ];
-                for &(x, y) in pts {
-                    b[0] = b[0].min(x);
-                    b[1] = b[1].min(y);
-                    b[2] = b[2].max(x);
-                    b[3] = b[3].max(y);
-                }
+                let b = polygon_bounds(pts);
                 [b[0] - r, b[1] - r, b[2] + r, b[3] + r]
             }
-            Shape::MultiPolygon { contours, .. } => {
-                let mut b = [
-                    f64::INFINITY,
-                    f64::INFINITY,
-                    f64::NEG_INFINITY,
-                    f64::NEG_INFINITY,
-                ];
-                for c in contours {
-                    for &(x, y) in c {
-                        b[0] = b[0].min(x);
-                        b[1] = b[1].min(y);
-                        b[2] = b[2].max(x);
-                        b[3] = b[3].max(y);
-                    }
-                }
-                b
-            }
+            Shape::MultiPolygon { contours, .. } => polygon_bounds(contours.iter().flatten()),
         }
     }
 
-    /// A representative interior point (centroid-ish), for pad/flash matching.
+    /// A representative interior point (centroid-ish), for pad/flash matching
+    /// and zone containment. For a ring this may fall in a hole, but the centre
+    /// is only a *representative* point and pours never anchor pads.
     pub fn center(&self) -> (f64, f64) {
         match self {
             Shape::Capsule(c) => ((c.ax + c.bx) / 2.0, (c.ay + c.by) / 2.0),
-            Shape::Polygon { pts, .. } => {
-                let n = pts.len().max(1) as f64;
-                (
-                    pts.iter().map(|p| p.0).sum::<f64>() / n,
-                    pts.iter().map(|p| p.1).sum::<f64>() / n,
-                )
-            }
-            // The outer boundary's vertex average. For a ring this may fall in
-            // a hole, but the centre is only a *representative* point for
-            // pad/flash matching, and pours never anchor pads.
+            Shape::Polygon { pts, .. } => vertex_mean(pts),
             Shape::MultiPolygon { contours, .. } => {
-                let pts = contours.first().map(|c| c.as_slice()).unwrap_or(&[]);
-                let n = pts.len().max(1) as f64;
-                (
-                    pts.iter().map(|p| p.0).sum::<f64>() / n,
-                    pts.iter().map(|p| p.1).sum::<f64>() / n,
-                )
+                vertex_mean(contours.first().map(|c| c.as_slice()).unwrap_or(&[]))
             }
         }
     }
 }
 
-/// Squared distance from point P to segment AB.
-fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
-    let dx = bx - ax;
-    let dy = by - ay;
+/// AABB (minx, miny, maxx, maxy) of a point list; infinite for an empty one.
+pub fn polygon_bounds<'a>(pts: impl IntoIterator<Item = &'a (f64, f64)>) -> [f64; 4] {
+    pts.into_iter().fold(
+        [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ],
+        |b, &(x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)],
+    )
+}
+
+fn vertex_mean(pts: &[(f64, f64)]) -> (f64, f64) {
+    let n = pts.len().max(1) as f64;
+    (
+        pts.iter().map(|p| p.0).sum::<f64>() / n,
+        pts.iter().map(|p| p.1).sum::<f64>() / n,
+    )
+}
+
+// ── Distance helpers (all in mm) ─────────────────────────────────────────────
+
+/// Closest point on segment AB to point P, with the squared distance.
+pub fn point_seg_closest(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> ((f64, f64), f64) {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
-    if len2 <= f64::EPSILON {
-        let ex = px - ax;
-        let ey = py - ay;
-        return ex * ex + ey * ey;
-    }
-    let t = (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0);
-    let cx = ax + t * dx;
-    let cy = ay + t * dy;
-    let ex = px - cx;
-    let ey = py - cy;
-    ex * ex + ey * ey
+    let c = if len2 <= f64::EPSILON {
+        a
+    } else {
+        let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0);
+        (a.0 + t * dx, a.1 + t * dy)
+    };
+    let (ex, ey) = (p.0 - c.0, p.1 - c.1);
+    (c, ex * ex + ey * ey)
+}
+
+/// Squared distance from point P to segment AB.
+pub fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    point_seg_closest((px, py), (ax, ay), (bx, by)).1
 }
 
 fn orient(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
@@ -193,15 +169,43 @@ pub fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f
         || (d4 == 0.0 && on_seg(p1, p4, p2))
 }
 
-fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f64)) -> f64 {
+/// Minimum distance between two segments plus the closest point pair (on AB,
+/// on CD). 0 with the crossing point (both) when they cross; a colinear touch
+/// falls through to the endpoint candidates, which find a zero-distance pair.
+pub fn seg_seg_closest(
+    a1: (f64, f64),
+    a2: (f64, f64),
+    b1: (f64, f64),
+    b2: (f64, f64),
+) -> (f64, (f64, f64), (f64, f64)) {
     if segments_intersect(a1, a2, b1, b2) {
-        return 0.0;
+        let (d1x, d1y) = (a2.0 - a1.0, a2.1 - a1.1);
+        let (d2x, d2y) = (b2.0 - b1.0, b2.1 - b1.1);
+        let denom = d1x * d2y - d1y * d2x;
+        if denom.abs() > 1e-12 {
+            let t = (((b1.0 - a1.0) * d2y - (b1.1 - a1.1) * d2x) / denom).clamp(0.0, 1.0);
+            let p = (a1.0 + t * d1x, a1.1 + t * d1y);
+            return (0.0, p, p);
+        }
     }
-    point_seg_dist2(a1.0, a1.1, b1.0, b1.1, b2.0, b2.1)
-        .min(point_seg_dist2(a2.0, a2.1, b1.0, b1.1, b2.0, b2.1))
-        .min(point_seg_dist2(b1.0, b1.1, a1.0, a1.1, a2.0, a2.1))
-        .min(point_seg_dist2(b2.0, b2.1, a1.0, a1.1, a2.0, a2.1))
-        .sqrt()
+    let candidates = [
+        (b1, a1, a2, false),
+        (b2, a1, a2, false),
+        (a1, b1, b2, true),
+        (a2, b1, b2, true),
+    ];
+    let mut best = (f64::INFINITY, a1, b1);
+    for (p, s1, s2, p_on_a) in candidates {
+        let (q, d2) = point_seg_closest(p, s1, s2);
+        if d2 < best.0 {
+            best = if p_on_a { (d2, p, q) } else { (d2, q, p) };
+        }
+    }
+    (best.0.sqrt(), best.1, best.2)
+}
+
+pub fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f64)) -> f64 {
+    seg_seg_closest(a1, a2, b1, b2).0
 }
 
 /// Even-odd containment over a set of closed contours: inside iff enclosed by
@@ -252,84 +256,72 @@ pub fn point_in_polygon(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
     inside
 }
 
-fn poly_poly_edge_dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
-    let mut best = f64::INFINITY;
-    let na = a.len();
-    let nb = b.len();
-    if na < 2 || nb < 2 {
+/// Minimum boundary-to-boundary distance between two polygons (0 if their
+/// edges cross) plus the closest point pair (on `a`, on `b`). Containment is
+/// the caller's business (point-in-polygon).
+pub fn poly_poly_closest(a: &[(f64, f64)], b: &[(f64, f64)]) -> (f64, (f64, f64), (f64, f64)) {
+    let mut best = (f64::INFINITY, (0.0, 0.0), (0.0, 0.0));
+    if a.is_empty() || b.is_empty() {
+        return best;
+    }
+    if a.len() < 2 || b.len() < 2 {
+        // Degenerate: nearest a-vertex against b's boundary.
         for &pa in a {
-            for &pb in b {
-                best = best.min((pa.0 - pb.0).hypot(pa.1 - pb.1));
+            for (b1, b2) in contour_edges(b) {
+                let (q, d2) = point_seg_closest(pa, b1, b2);
+                if d2.sqrt() < best.0 {
+                    best = (d2.sqrt(), pa, q);
+                }
             }
         }
         return best;
     }
-    let mut ja = na - 1;
-    for ia in 0..na {
-        let (a1, a2) = (a[ja], a[ia]);
-        let mut jb = nb - 1;
-        for ib in 0..nb {
-            best = best.min(seg_seg_dist(a1, a2, b[jb], b[ib]));
-            jb = ib;
+    for (a1, a2) in contour_edges(a) {
+        for (b1, b2) in contour_edges(b) {
+            let cand = seg_seg_closest(a1, a2, b1, b2);
+            if cand.0 < best.0 {
+                best = cand;
+            }
         }
-        ja = ia;
     }
     best
 }
 
-fn closest_point_on_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len2 = dx * dx + dy * dy;
-    if len2 == 0.0 {
-        return a;
+/// Nearest distance from segment AB to a closed contour's edges (0 when they
+/// cross), with the closest points (on AB, on the contour). A one-point
+/// contour falls back to point distance.
+fn seg_contour_closest(
+    a: (f64, f64),
+    b: (f64, f64),
+    pts: &[(f64, f64)],
+) -> (f64, (f64, f64), (f64, f64)) {
+    let mut best = (f64::INFINITY, a, a);
+    if pts.len() == 1 {
+        let (p, d2) = point_seg_closest(pts[0], a, b);
+        return (d2.sqrt(), p, pts[0]);
     }
-    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0);
-    (a.0 + t * dx, a.1 + t * dy)
+    for (c, d) in contour_edges(pts) {
+        let cand = seg_seg_closest(a, b, c, d);
+        if cand.0 < best.0 {
+            best = cand;
+        }
+    }
+    best
 }
 
-/// Closest points on `a` and `b`, with the first witness always lying on `a`.
-fn closest_segment_points(
-    a1: (f64, f64),
-    a2: (f64, f64),
-    b1: (f64, f64),
-    b2: (f64, f64),
-) -> ((f64, f64), (f64, f64), f64) {
-    if segments_intersect(a1, a2, b1, b2) {
-        let r = (a2.0 - a1.0, a2.1 - a1.1);
-        let s = (b2.0 - b1.0, b2.1 - b1.1);
-        let denom = r.0 * s.1 - r.1 * s.0;
-        if denom.abs() > 1e-15 {
-            let q = (b1.0 - a1.0, b1.1 - a1.1);
-            let t = (q.0 * s.1 - q.1 * s.0) / denom;
-            let p = (a1.0 + t * r.0, a1.1 + t * r.1);
-            return (p, p, 0.0);
-        }
-        for p in [a1, a2] {
-            if on_seg(b1, p, b2) {
-                return (p, p, 0.0);
-            }
-        }
-        for p in [b1, b2] {
-            if on_seg(a1, p, a2) {
-                return (p, p, 0.0);
-            }
-        }
+/// The reported location for a closest centerline/boundary point pair
+/// `pa`/`pb` carrying copper radii `ra`/`rb`: the midpoint of the copper
+/// edge-to-edge span along the closest-approach line. For a positive gap that
+/// is the middle of the air gap; for an overlap it lands inside the shared
+/// copper, clamped between `pa` and `pb` so deep penetrations stay on copper.
+fn closest_approach_point(pa: (f64, f64), pb: (f64, f64), ra: f64, rb: f64) -> (f64, f64) {
+    let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
+    let d = (dx * dx + dy * dy).sqrt();
+    if d <= f64::EPSILON {
+        return pa;
     }
-
-    let mut candidates = [
-        (a1, closest_point_on_segment(a1, b1, b2)),
-        (a2, closest_point_on_segment(a2, b1, b2)),
-        (closest_point_on_segment(b1, a1, a2), b1),
-        (closest_point_on_segment(b2, a1, a2), b2),
-    ];
-    candidates.sort_by(|(pa, pb), (qa, qb)| {
-        (pa.0 - pb.0)
-            .hypot(pa.1 - pb.1)
-            .partial_cmp(&(qa.0 - qb.0).hypot(qa.1 - qb.1))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let (pa, pb) = candidates[0];
-    (pa, pb, (pa.0 - pb.0).hypot(pa.1 - pb.1))
+    let t = ((ra + d - rb) / (2.0 * d)).clamp(0.0, 1.0);
+    (pa.0 + dx * t, pa.1 + dy * t)
 }
 
 /// Is there painted copper arbitrarily close to this stored contour point?
@@ -373,34 +365,36 @@ fn point_reaches_polygon(p: (f64, f64), polygon: &[(f64, f64)], radius: f64) -> 
             .any(|(a, b)| point_seg_dist2(p.0, p.1, a.0, a.1, b.0, b.1) <= radius * radius)
 }
 
+/// The smallest candidate gap whose witness point sits on EXPOSED copper of
+/// the weighted region; `None` when no candidate does.
 fn nearest_exposed_gap(
     mut candidates: Vec<(f64, (f64, f64))>,
     contours: &[Vec<(f64, f64)>],
     weights: &[i16],
-) -> f64 {
+) -> Option<(f64, (f64, f64))> {
     candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     candidates
         .into_iter()
-        .find_map(|(gap, point)| weighted_copper_near(point, contours, weights).then_some(gap))
-        .unwrap_or(f64::INFINITY)
+        .find(|(_, point)| weighted_copper_near(*point, contours, weights))
 }
 
-fn capsule_weighted_gap(c: &Capsule, contours: &[Vec<(f64, f64)>], weights: &[i16]) -> f64 {
-    if [
-        (c.ax, c.ay),
-        (c.bx, c.by),
-        ((c.ax + c.bx) * 0.5, (c.ay + c.by) * 0.5),
-    ]
-    .into_iter()
-    .any(|p| point_in_weighted_contours(p.0, p.1, contours, weights))
+fn capsule_weighted_gap(
+    c: &Capsule,
+    contours: &[Vec<(f64, f64)>],
+    weights: &[i16],
+) -> Option<(f64, (f64, f64))> {
+    let (a, b) = ((c.ax, c.ay), (c.bx, c.by));
+    if let Some(p) = [a, b, ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5)]
+        .into_iter()
+        .find(|p| point_in_weighted_contours(p.0, p.1, contours, weights))
     {
-        return -c.r.max(0.0) - 1e-6;
+        return Some((-c.r.max(0.0) - 1e-6, p));
     }
     let candidates = contours
         .iter()
         .flat_map(|contour| contour_edges(contour))
-        .map(|(a, b)| {
-            let (q, _, distance) = closest_segment_points(a, b, (c.ax, c.ay), (c.bx, c.by));
+        .map(|(e1, e2)| {
+            let (distance, q, _) = seg_seg_closest(e1, e2, a, b);
             (distance - c.r, q)
         })
         .collect();
@@ -412,12 +406,12 @@ fn polygon_weighted_gap(
     radius: f64,
     contours: &[Vec<(f64, f64)>],
     weights: &[i16],
-) -> f64 {
-    let contained = polygon
+) -> Option<(f64, (f64, f64))> {
+    if let Some(&p) = polygon
         .iter()
-        .any(|&(x, y)| point_in_weighted_contours(x, y, contours, weights));
-    if contained {
-        return -radius.max(0.0) - 1e-6;
+        .find(|&&(x, y)| point_in_weighted_contours(x, y, contours, weights))
+    {
+        return Some((-radius.max(0.0) - 1e-6, p));
     }
     let mut candidates = Vec::new();
     for contour in contours {
@@ -430,7 +424,7 @@ fn polygon_weighted_gap(
         for (a, b) in contour_edges(contour) {
             let mut nearest = (f64::INFINITY, a);
             for (pa, pb) in contour_edges(polygon) {
-                let (q, _, distance) = closest_segment_points(a, b, pa, pb);
+                let (distance, q, _) = seg_seg_closest(a, b, pa, pb);
                 if distance < nearest.0 {
                     nearest = (distance, q);
                 }
@@ -446,72 +440,78 @@ fn weighted_regions_gap(
     wa: &[i16],
     cb: &[Vec<(f64, f64)>],
     wb: &[i16],
-) -> f64 {
+) -> Option<(f64, (f64, f64))> {
     for contour in ca {
         for &p in contour {
             if point_in_weighted_contours(p.0, p.1, cb, wb) && weighted_copper_near(p, ca, wa) {
-                return -1e-6;
+                return Some((-1e-6, p));
             }
         }
         for (a, b) in contour_edges(contour) {
             for other in cb {
                 for (c, d) in contour_edges(other) {
-                    let (q, r, distance) = closest_segment_points(a, b, c, d);
+                    let (distance, q, r) = seg_seg_closest(a, b, c, d);
                     if distance == 0.0
                         && weighted_copper_near(q, ca, wa)
                         && weighted_copper_near(r, cb, wb)
                     {
-                        return 0.0;
+                        return Some((0.0, q));
                     }
                 }
             }
         }
     }
-    if cb
-        .iter()
+    cb.iter()
         .flatten()
-        .any(|&p| point_in_weighted_contours(p.0, p.1, ca, wa) && weighted_copper_near(p, cb, wb))
-    {
-        -1e-6
-    } else {
-        f64::INFINITY
-    }
+        .find(|&&p| point_in_weighted_contours(p.0, p.1, ca, wa) && weighted_copper_near(p, cb, wb))
+        .map(|&p| (-1e-6, p))
 }
 
 /// Signed copper-edge gap between two shapes. `<= 0` means the copper overlaps
-/// (they are the same conductor); positive is the clear gap. Mirrors
-/// `drc::shape_gap` but returns only the scalar (callers here don't need the
-/// witness point).
+/// (they are the same conductor); positive is the clear gap.
 pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
+    shape_gap_at(a, b).0
+}
+
+/// [`shape_gap`] plus the point of closest approach (see
+/// [`closest_approach_point`]; for full containment, a point of the contained
+/// copper), which is where a DRC finding is reported.
+pub fn shape_gap_at(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
     match (a, b) {
         (Shape::Capsule(ca), Shape::Capsule(cb)) => {
-            seg_seg_dist(
+            let (d, pa, pb) = seg_seg_closest(
                 (ca.ax, ca.ay),
                 (ca.bx, ca.by),
                 (cb.ax, cb.ay),
                 (cb.bx, cb.by),
-            ) - ca.r
-                - cb.r
+            );
+            (d - ca.r - cb.r, closest_approach_point(pa, pb, ca.r, cb.r))
         }
         (Shape::Capsule(c), Shape::Polygon { pts, r })
         | (Shape::Polygon { pts, r }, Shape::Capsule(c)) => {
-            let best = seg_contour_dist((c.ax, c.ay), (c.bx, c.by), pts);
-            let contained = point_in_polygon(c.ax, c.ay, pts) || point_in_polygon(c.bx, c.by, pts);
-            if contained {
-                -(c.r + r).max(0.0) - 1e-6
-            } else {
-                best - c.r - r
+            // Either capsule endpoint inside the polygon is a hard overlap
+            // whatever the edge distance says, located at that endpoint.
+            let (ea, eb) = ((c.ax, c.ay), (c.bx, c.by));
+            for e in [ea, eb] {
+                if point_in_polygon(e.0, e.1, pts) {
+                    return (-(c.r + r).max(0.0) - 1e-6, e);
+                }
             }
+            let (d, pc, pp) = seg_contour_closest(ea, eb, pts);
+            (d - c.r - r, closest_approach_point(pc, pp, c.r, *r))
         }
         (Shape::Polygon { pts: pa, r: ra }, Shape::Polygon { pts: pb, r: rb }) => {
-            let edge = poly_poly_edge_dist(pa, pb) - ra - rb;
-            let contained = pa.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pb))
-                || pb.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pa));
-            if contained {
-                edge.min(0.0) - 1e-6
-            } else {
-                edge
+            let (d, qa, qb) = poly_poly_closest(pa, pb);
+            let edge = d - ra - rb;
+            // Containment either way is a hard overlap, located at a vertex of
+            // the contained outline.
+            if pa.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pb)) {
+                return (edge.min(0.0) - 1e-6, pa[0]);
             }
+            if pb.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pa)) {
+                return (edge.min(0.0) - 1e-6, pb[0]);
+            }
+            (edge, closest_approach_point(qa, qb, *ra, *rb))
         }
         // The multi-contour arms mirror the polygon arms above, but only an
         // EXPOSED contour is a copper edge. A clear contour buried under another
@@ -519,11 +519,11 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
         // capsule endpoint sitting in a hole is NOT contained; the hole is empty).
         (Shape::Capsule(c), Shape::MultiPolygon { contours, weights })
         | (Shape::MultiPolygon { contours, weights }, Shape::Capsule(c)) => {
-            capsule_weighted_gap(c, contours, weights)
+            capsule_weighted_gap(c, contours, weights).unwrap_or((f64::INFINITY, a.center()))
         }
         (Shape::Polygon { pts, r }, Shape::MultiPolygon { contours, weights })
         | (Shape::MultiPolygon { contours, weights }, Shape::Polygon { pts, r }) => {
-            polygon_weighted_gap(pts, *r, contours, weights)
+            polygon_weighted_gap(pts, *r, contours, weights).unwrap_or((f64::INFINITY, a.center()))
         }
         (
             Shape::MultiPolygon {
@@ -534,25 +534,8 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
                 contours: cb,
                 weights: wb,
             },
-        ) => weighted_regions_gap(ca, wa, cb, wb),
+        ) => weighted_regions_gap(ca, wa, cb, wb).unwrap_or((f64::INFINITY, a.center())),
     }
-}
-
-/// Nearest distance from segment AB to a closed contour's edges (0 when they
-/// cross). Degenerate contours fall back to point distance.
-fn seg_contour_dist(a: (f64, f64), b: (f64, f64), pts: &[(f64, f64)]) -> f64 {
-    let mut best = f64::INFINITY;
-    let n = pts.len();
-    if n >= 2 {
-        let mut j = n - 1;
-        for i in 0..n {
-            best = best.min(seg_seg_dist(a, b, pts[j], pts[i]));
-            j = i;
-        }
-    } else if n == 1 {
-        best = point_seg_dist2(pts[0].0, pts[0].1, a.0, a.1, b.0, b.1).sqrt();
-    }
-    best
 }
 
 /// A grid-accelerated point-in-polygon tester for a large fixed polygon (a

@@ -177,16 +177,10 @@ fn explicit_kicad_copper(n: &Name) -> Option<LayerRole> {
         })
     };
     if token_suffix("f_cu") || token_suffix("f.cu") {
-        return Some(LayerRole::Copper {
-            index: 0,
-            name: top_label(n.original),
-        });
+        return Some(top(&n));
     }
     if token_suffix("b_cu") || token_suffix("b.cu") {
-        return Some(LayerRole::Copper {
-            index: usize::MAX,
-            name: bottom_label(n.original),
-        });
+        return Some(bottom(&n));
     }
     for sep in ['_', '.'] {
         let tail = format!("{sep}cu");
@@ -200,10 +194,7 @@ fn explicit_kicad_copper(n: &Name) -> Option<LayerRole> {
                 continue;
             };
             if (1..=32).contains(&k) && rest[digits.len()..] == tail {
-                return Some(LayerRole::Copper {
-                    index: k,
-                    name: n.original.to_string(),
-                });
+                return Some(inner(k, &n));
             }
         }
     }
@@ -283,14 +274,8 @@ fn is_altium_drill_drawing_ext(ext: &str) -> bool {
 fn eagle_role(n: &Name) -> Option<LayerRole> {
     let ext = n.ext.as_deref()?;
     let role = match ext {
-        "cmp" => LayerRole::Copper {
-            index: 0,
-            name: top_label(n.original),
-        },
-        "sol" => LayerRole::Copper {
-            index: usize::MAX,
-            name: bottom_label(n.original),
-        },
+        "cmp" => top(&n),
+        "sol" => bottom(&n),
         "plc" | "pls" | "stc" | "sts" | "crc" | "crs" | "mil" => LayerRole::Ignored,
         "dim" => LayerRole::Outline,
         "drd" => LayerRole::Drill,
@@ -299,10 +284,7 @@ fn eagle_role(n: &Name) -> Option<LayerRole> {
             if !(2..=15).contains(&k) {
                 return None;
             }
-            LayerRole::Copper {
-                index: k - 1,
-                name: n.original.to_string(),
-            }
+            inner(k - 1, &n)
         }
     };
     Some(role)
@@ -486,23 +468,14 @@ pub fn classify(path: &Path) -> LayerRole {
 
     // ── Copper by Protel/Altium extension ───────────────────────────────────
     if n.ext_is("gtl") {
-        return LayerRole::Copper {
-            index: 0,
-            name: top_label(n.original),
-        };
+        return top(&n);
     }
     if n.ext_is("gbl") {
-        return LayerRole::Copper {
-            index: usize::MAX,
-            name: bottom_label(n.original),
-        };
+        return bottom(&n);
     }
     // Inner copper: .G1L/.G2L… or .GP1/.GP2… or .G1/.G2…
     if let Some(idx) = protel_inner_index(&n) {
-        return LayerRole::Copper {
-            index: idx,
-            name: n.original.to_string(),
-        };
+        return inner(idx, &n);
     }
 
     // ── Nothing below here can be copper unless the file is a plotted film ──
@@ -537,10 +510,7 @@ pub fn classify(path: &Path) -> LayerRole {
         || n.has("toplayer")
         || n.has("top layer")
     {
-        return LayerRole::Copper {
-            index: 0,
-            name: top_label(n.original),
-        };
+        return top(&n);
     }
     if n.has("b_cu")
         || n.has("b.cu")
@@ -548,16 +518,10 @@ pub fn classify(path: &Path) -> LayerRole {
         || n.has("bottomlayer")
         || n.has("bottom layer")
     {
-        return LayerRole::Copper {
-            index: usize::MAX,
-            name: bottom_label(n.original),
-        };
+        return bottom(&n);
     }
     if let Some(idx) = kicad_inner_index(&n) {
-        return LayerRole::Copper {
-            index: idx,
-            name: n.original.to_string(),
-        };
+        return inner(idx, &n);
     }
 
     // ── Bare role names on a plotted film ───────────────────────────────────
@@ -572,24 +536,15 @@ pub fn classify(path: &Path) -> LayerRole {
     // claimed by the tests above, so what is left with a bare `top` is copper.
     if is_gerber_film_ext(&n) {
         if n.has_word("top") || n.has_word("front") {
-            return LayerRole::Copper {
-                index: 0,
-                name: top_label(n.original),
-            };
+            return top(&n);
         }
         if n.has_word("bottom") || n.has_word("bot") || n.has_word("back") {
-            return LayerRole::Copper {
-                index: usize::MAX,
-                name: bottom_label(n.original),
-            };
+            return bottom(&n);
         }
         // Inner films named by stack position: `L2-GND.gbr`, `l3.gbr`. L1 is the
         // top layer, so `L<n>` maps to inner index n-1.
         if let Some(idx) = bare_stack_index(&n) {
-            return LayerRole::Copper {
-                index: idx,
-                name: n.original.to_string(),
-            };
+            return inner(idx, &n);
         }
     }
 
@@ -623,17 +578,11 @@ pub fn classify(path: &Path) -> LayerRole {
             let digits: String = stem.chars().filter(|c| c.is_ascii_digit()).collect();
             if let Ok(k) = digits.parse::<usize>() {
                 if k >= 1 {
-                    return LayerRole::Copper {
-                        index: k,
-                        name: n.original.to_string(),
-                    };
+                    return inner(k, &n);
                 }
             }
             // No number: still a copper plane, drop it after top, before bottom.
-            return LayerRole::Copper {
-                index: 1,
-                name: n.original.to_string(),
-            };
+            return inner(1, &n);
         }
     }
 
@@ -1225,6 +1174,26 @@ pub fn parse_gbrjob(text: &str) -> std::collections::HashMap<String, GbrJobRole>
     out
 }
 
+/// The three copper roles a name can resolve to. A nameless film keeps the
+/// KiCad label so reports can still say which side it was.
+fn top(n: &Name) -> LayerRole {
+    LayerRole::Copper {
+        index: 0,
+        name: top_label(n.original),
+    }
+}
+fn bottom(n: &Name) -> LayerRole {
+    LayerRole::Copper {
+        index: usize::MAX,
+        name: bottom_label(n.original),
+    }
+}
+fn inner(index: usize, n: &Name) -> LayerRole {
+    LayerRole::Copper {
+        index,
+        name: n.original.to_string(),
+    }
+}
 fn top_label(orig: &str) -> String {
     if orig.is_empty() {
         "F.Cu".to_string()

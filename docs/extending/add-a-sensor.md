@@ -2,7 +2,7 @@
 
 **Goal.** Model an I2C (or SPI) register-map sensor purely as data: one
 `[sensor]` TOML file that the generic engine interpreter
-(`RegisterMapSensor` in `crates/hauksbee-engine/src/peripherals/register_map.rs`)
+(`RegisterMapSensor` in `crates/hauksbee-cosim/src/peripherals/register_map.rs`)
 realizes as a bus slave. No Rust. The worked example is the Bosch BME280
 (humidity, pressure, temperature). The shipped spec this walkthrough
 retraces is `testdata/sensor-specs/bme280.toml`.
@@ -185,7 +185,7 @@ firmware would (burst reads through the interpreter), run the datasheet's own
 raw→physical math on the bytes, and assert the physical answer the datasheet
 prints. The shipped BME280 fixture
 (`declarative_bme280_decodes_datasheet_worked_example` in
-`crates/hauksbee-engine/src/peripherals/register_map.rs`) does exactly this.
+`crates/hauksbee-cosim/src/peripherals/register_map.rs`) does exactly this.
 It `include_str!`s the real spec file, so the test pins the shipped data,
 not a copy. It reads the calibration burst and the 0xF7 data burst, runs
 the Bosch int32 compensation, and asserts 25.08 °C / 100656 Pa.

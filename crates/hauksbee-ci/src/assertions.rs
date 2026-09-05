@@ -70,7 +70,7 @@ impl AssertResult {
     /// A neutral result for one assertion: an unwaived, unexplained, non-invalid
     /// failure with no failing member and no subjects. Every construction site
     /// sets only the fields that differ, via struct-update syntax.
-    fn shell(label: String, kind: impl Into<String>, seeds_total: usize) -> Self {
+    pub(crate) fn shell(label: String, kind: impl Into<String>, seeds_total: usize) -> Self {
         Self {
             label,
             kind: kind.into(),
@@ -309,13 +309,7 @@ fn evaluate_one(
     // Is this member's analog evaluation window held-stale, i.e. does it overlap
     // a chunk the solver failed on? Such a member's samples cannot be trusted, so
     // its pass/fail is meaningless.
-    let member_invalid = |out: &RunOutcome| -> bool {
-        analog_eval_window(a, out).is_some_and(|(ws, we)| {
-            out.failed_windows
-                .iter()
-                .any(|&(fs, fe)| ws < fe && fs < we)
-        })
-    };
+    let member_invalid = |out: &RunOutcome| stale_overlap(a, out).is_some();
 
     // Precedence is FAIL > INVALID > PASS. Evaluate every ensemble member so the
     // result carries the pass-rate and the full failing-seed list, but SKIP a
@@ -441,38 +435,33 @@ fn evaluate_one(
     // report a distinct INVALID rather than let a window with no valid samples
     // masquerade as a pass. This fires per-window (not per consecutive-abort), so
     // an intermittent divergence below the abort threshold still refuses.
-    for out in outcomes {
-        if let Some((ws, we)) = analog_eval_window(a, out) {
-            if let Some(&(fs, fe)) = out
-                .failed_windows
-                .iter()
-                .find(|&&(fs, fe)| ws < fe && fs < we)
-            {
-                let per_seed = if outcomes.len() > 1 {
-                    format!("{}: ", member_label(member, out))
-                } else {
-                    String::new()
-                };
-                return AssertResult {
-                    invalid: true,
-                    detail: format!(
-                        "{per_seed}INVALID: the analog solve failed within this \
-                         assertion's window ({:.2}-{:.2} ms overlaps its \
-                         {:.2}-{:.2} ms evaluation span); those voltages are \
-                         held-stale, so the result cannot be trusted.",
-                        fs * 1e3,
-                        fe * 1e3,
-                        ws * 1e3,
-                        we * 1e3,
-                    ),
-                    failing_seed: Some(out.seed),
-                    failing_seeds: vec![out.seed],
-                    subject_nets,
-                    subject_refs,
-                    ..AssertResult::shell(label, kind, outcomes.len())
-                };
-            }
-        }
+    if let Some((out, ((ws, we), (fs, fe)))) = outcomes
+        .iter()
+        .find_map(|out| stale_overlap(a, out).map(|w| (out, w)))
+    {
+        let per_seed = if outcomes.len() > 1 {
+            format!("{}: ", member_label(member, out))
+        } else {
+            String::new()
+        };
+        return AssertResult {
+            invalid: true,
+            detail: format!(
+                "{per_seed}INVALID: the analog solve failed within this \
+                 assertion's window ({:.2}-{:.2} ms overlaps its \
+                 {:.2}-{:.2} ms evaluation span); those voltages are \
+                 held-stale, so the result cannot be trusted.",
+                fs * 1e3,
+                fe * 1e3,
+                ws * 1e3,
+                we * 1e3,
+            ),
+            failing_seed: Some(out.seed),
+            failing_seeds: vec![out.seed],
+            subject_nets,
+            subject_refs,
+            ..AssertResult::shell(label, kind, outcomes.len())
+        };
     }
 
     // All members green. State exactly what that means: plain fuzz keeps its
@@ -549,6 +538,19 @@ fn all_green_detail(
             }
         }
     }
+}
+
+/// The member's analog evaluation span for `a` and the first failed-solve
+/// window overlapping it, or `None` when nothing overlaps (or the assertion is
+/// not analog-derived at all). A hit means the member's samples are held-stale
+/// and its pass/fail is meaningless.
+fn stale_overlap(a: &Assertion, out: &RunOutcome) -> Option<((f64, f64), (f64, f64))> {
+    let (ws, we) = analog_eval_window(a, out)?;
+    let failed = out
+        .failed_windows
+        .iter()
+        .find(|&&(fs, fe)| ws < fe && fs < we)?;
+    Some(((ws, we), *failed))
 }
 
 /// The sim-time window (seconds) an assertion evaluates the analog transient
@@ -716,6 +718,63 @@ fn check_model_coverage(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, 
     (passed, detail)
 }
 
+/// The pass/fail accumulator behind every multi-clause check. Each clause
+/// contributes one detail fragment; a failing clause is MARKED (`<- FAILED
+/// HERE`) so a two-clause failure reads at a glance, and may name the observed
+/// shortfall for the report's `why:` line, the number the fix has to close.
+struct Verdict {
+    ok: bool,
+    parts: Vec<String>,
+    whys: Vec<String>,
+}
+
+impl Verdict {
+    fn new() -> Self {
+        Verdict {
+            ok: true,
+            parts: Vec::new(),
+            whys: Vec::new(),
+        }
+    }
+
+    fn pass(&mut self, part: String) {
+        self.parts.push(part);
+    }
+
+    /// A failing clause: `part` is the detail fragment as it should print,
+    /// `why` the observed shortfall (`None` when the fragment already is the
+    /// diagnosis).
+    fn fail(&mut self, part: String, why: Option<String>) {
+        self.ok = false;
+        self.parts.push(part);
+        self.whys.extend(why);
+    }
+
+    /// One clause judged against a bound: `pass_part` when `held`, otherwise
+    /// `fail_part` marked and `why` recorded.
+    fn clause(&mut self, held: bool, pass_part: String, fail_part: String, why: String) {
+        if held {
+            self.pass(pass_part);
+        } else {
+            self.fail(format!("{fail_part} <- FAILED HERE"), Some(why));
+        }
+    }
+
+    fn parts(&self) -> String {
+        self.parts.join(", ")
+    }
+
+    fn finish(self, detail: String) -> (bool, String, Option<String>) {
+        let why = (!self.whys.is_empty()).then(|| self.whys.join("; "));
+        (self.ok, detail, why)
+    }
+}
+
+/// A `(false, reason, None)` verdict for a check that never got data.
+fn no_data(reason: String) -> (bool, String, Option<String>) {
+    (false, reason, None)
+}
+
 /// rail_window: judge a rail's behaviour over a scenario window: min/max bounds,
 /// dip duration below a threshold, and recovery time.
 fn check_rail_window(
@@ -725,126 +784,89 @@ fn check_rail_window(
     let net = a.net.clone().unwrap_or_default();
     let scope = a.scenario.clone().unwrap_or_default();
     let Some(win) = out.rail_windows.get(&(scope.clone(), net.clone())) else {
-        return (
-            false,
-            format!("net '{net}' was never sampled in scenario window '{scope}'"),
-            None,
-        );
+        return no_data(format!(
+            "net '{net}' was never sampled in scenario window '{scope}'"
+        ));
     };
     if win.samples.is_empty() {
-        return (
-            false,
-            format!("net '{net}' had no samples in the window"),
-            None,
-        );
+        return no_data(format!("net '{net}' had no samples in the window"));
     }
 
-    // Same marking discipline as check_voltage: the failing clause carries
-    // `<- FAILED HERE`, the passing clauses stay un-annotated, and the why
-    // names the observed excess (volts of sag, ms over the dip budget).
-    let mut ok = true;
-    let mut parts = Vec::new();
-    let mut whys = Vec::new();
+    let mut v = Verdict::new();
     if let Some(lo) = a.min {
-        if win.min_v >= lo - 1e-6 {
-            parts.push(format!("min={:.3}V (>= {lo}V)", win.min_v));
-        } else {
-            ok = false;
-            parts.push(format!(
-                "min={:.3}V < required {lo}V <- FAILED HERE",
-                win.min_v
-            ));
-            whys.push(format!(
+        v.clause(
+            win.min_v >= lo - 1e-6,
+            format!("min={:.3}V (>= {lo}V)", win.min_v),
+            format!("min={:.3}V < required {lo}V", win.min_v),
+            format!(
                 "{net} sagged to {:.3} V in the window, {:.3} V below your {lo} V floor",
                 win.min_v,
                 lo - win.min_v
-            ));
-        }
+            ),
+        );
     }
     if let Some(hi) = a.max {
-        if win.max_v <= hi + 1e-6 {
-            parts.push(format!("max={:.3}V (<= {hi}V)", win.max_v));
-        } else {
-            ok = false;
-            parts.push(format!(
-                "max={:.3}V > allowed {hi}V <- FAILED HERE",
-                win.max_v
-            ));
-            whys.push(format!(
+        v.clause(
+            win.max_v <= hi + 1e-6,
+            format!("max={:.3}V (<= {hi}V)", win.max_v),
+            format!("max={:.3}V > allowed {hi}V", win.max_v),
+            format!(
                 "{net} rose to {:.3} V in the window, {:.3} V above your {hi} V ceiling",
                 win.max_v,
                 win.max_v - hi
-            ));
-        }
+            ),
+        );
     }
+    // A duration needs at least two samples to measure (windows(2) yields
+    // nothing from one point, so dip_duration_s folds to 0 and silently
+    // auto-passes). A window that spans less than one frame is degenerate:
+    // fail loudly rather than claim a timing spec we could not evaluate.
+    let too_few = |what: String| {
+        format!(
+            "{what}: window has {} sample(s), too few to measure a duration",
+            win.samples.len()
+        )
+    };
     if let (Some(d), Some(for_ms)) = (a.dip_below, a.for_max_ms) {
-        // A duration needs at least two samples to measure (windows(2) yields
-        // nothing from one point, so dip_duration_s folds to 0 and silently
-        // auto-passes). A window that spans less than one frame is degenerate,
-        // fail loudly rather than claim a timing spec we could not evaluate.
         if win.samples.len() < 2 {
-            ok = false;
-            parts.push(format!(
-                "dip<{d}V: window has {} sample(s), too few to measure a duration",
-                win.samples.len()
-            ));
+            v.fail(too_few(format!("dip<{d}V")), None);
         } else {
             let dip_ms = win.dip_duration_s(d) * 1000.0;
-            if dip_ms <= for_ms + 1e-6 {
-                parts.push(format!("dip<{d}V for {dip_ms:.2}ms (<= {for_ms}ms)"));
-            } else {
-                ok = false;
-                parts.push(format!(
-                    "dip<{d}V for {dip_ms:.2}ms > allowed {for_ms}ms <- FAILED HERE"
-                ));
-                whys.push(format!(
+            v.clause(
+                dip_ms <= for_ms + 1e-6,
+                format!("dip<{d}V for {dip_ms:.2}ms (<= {for_ms}ms)"),
+                format!("dip<{d}V for {dip_ms:.2}ms > allowed {for_ms}ms"),
+                format!(
                     "{net} sat below {d} V for {dip_ms:.2} ms, {:.2} ms longer than your budget",
                     dip_ms - for_ms
-                ));
-            }
+                ),
+            );
         }
     }
     if let (Some(d), Some(r), Some(within_ms)) = (a.dip_below, a.recover_to, a.recover_within_ms) {
         if win.samples.len() < 2 {
-            ok = false;
-            parts.push(format!(
-                "recover-to-{r}V: window has {} sample(s), too few to measure a duration",
-                win.samples.len()
-            ));
+            v.fail(too_few(format!("recover-to-{r}V")), None);
         } else {
             let rec_ms = win.recovery_s(d, r) * 1000.0;
-            if rec_ms <= within_ms + 1e-6 {
-                parts.push(format!(
-                    "recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"
-                ));
-            } else {
-                ok = false;
-                parts.push(format!(
-                    "recover-to-{r}V in {rec_ms:.2}ms > allowed {within_ms}ms <- FAILED HERE"
-                ));
-                whys.push(format!(
+            v.clause(
+                rec_ms <= within_ms + 1e-6,
+                format!("recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"),
+                format!("recover-to-{r}V in {rec_ms:.2}ms > allowed {within_ms}ms"),
+                format!(
                     "{net} took {rec_ms:.2} ms to climb back to {r} V after dipping below \
                      {d} V, {:.2} ms past your recovery deadline",
                     rec_ms - within_ms
-                ));
-            }
+                ),
+            );
         }
     }
-
-    (
-        ok,
-        format!(
-            "{net} window: {} [min={:.3}V max={:.3}V]",
-            parts.join(", "),
-            win.min_v,
-            win.max_v
-        ),
-        if whys.is_empty() {
-            None
-        } else {
-            Some(whys.join("; "))
-        },
-    )
+    let detail = format!(
+        "{net} window: {} [min={:.3}V max={:.3}V]",
+        v.parts(),
+        win.min_v,
+        win.max_v
+    );
+    v.finish(detail)
 }
 
 /// protection_trip: whether a supply net's battery protection latched.
@@ -1216,34 +1238,25 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
     let net = a.net.clone().unwrap_or_default();
     let thr = a.after_ms.unwrap_or(0.0);
     let Some(win) = out.windows.get(&(net.clone(), thr.to_bits())) else {
-        return (
-            false,
-            format!("net '{net}' was never sampled (no window at {thr}ms)"),
-            None,
-        );
+        return no_data(format!(
+            "net '{net}' was never sampled (no window at {thr}ms)"
+        ));
     };
     if win.samples == 0 {
-        return (
-            false,
-            format!("net '{net}' had no samples after {thr}ms"),
-            None,
-        );
+        return no_data(format!("net '{net}' had no samples after {thr}ms"));
     }
     // For a >= bound the worst case is the minimum the rail dipped to in the
-    // window; for a <= bound, the maximum it rose to. A failing bound is MARKED
-    // in the detail and the passing one left un-annotated, so a two-bound
-    // failure reads at a glance; the `why` names the observed shortfall in
-    // volts, which is the number the fix has to close.
-    let mut ok = true;
-    let mut parts = Vec::new();
-    let mut whys = Vec::new();
+    // window; for a <= bound, the maximum it rose to. The `why` names the
+    // observed shortfall in volts, which is the number the fix has to close.
+    let mut v = Verdict::new();
     let bounds = [
-        // (limit, worst-case sample, label, comparison, excursion verb, side)
+        // (limit, worst-case sample, label, comparison, breach, excursion verb, side, noun)
         (
             a.min,
             win.min_v,
             "min",
             ">=",
+            "< required",
             "dipped to",
             "below your",
             "floor",
@@ -1253,83 +1266,61 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
             win.max_v,
             "max",
             "<=",
+            "> allowed",
             "rose to",
             "above your",
             "ceiling",
         ),
     ];
-    for (limit, worst, label, cmp, verb, side, bound_noun) in bounds {
+    for (limit, worst, label, cmp, breach, verb, side, noun) in bounds {
         let Some(limit) = limit else { continue };
         // One signed distance drives both directions: positive means the sample
         // is past the bound, whichever bound it is.
         let signed = |v: f64| if label == "min" { limit - v } else { v - limit };
-        if signed(worst) <= 1e-6 {
-            parts.push(format!("{label}={worst:.3}V ({cmp} {limit}V)"));
-            continue;
-        }
-        ok = false;
-        let breach = if label == "min" {
-            "< required"
-        } else {
-            "> allowed"
-        };
-        parts.push(format!(
-            "{label}={worst:.3}V {breach} {limit}V <- FAILED HERE"
-        ));
-        whys.push(if signed(win.last_v) <= 1e-6 {
+        let why = if signed(win.last_v) <= 1e-6 {
             format!(
-                "{net} {verb} {worst:.3} V, {:.3} V {side} {limit} V {bound_noun}, \
+                "{net} {verb} {worst:.3} V, {:.3} V {side} {limit} V {noun}, \
                  before settling back to {:.3} V",
                 signed(worst),
                 win.last_v
             )
         } else {
             format!(
-                "{net} settled {:.3} V {side} {bound_noun} ({:.3} V vs {label} {limit} V)",
+                "{net} settled {:.3} V {side} {noun} ({:.3} V vs {label} {limit} V)",
                 signed(win.last_v),
                 win.last_v
             )
-        });
+        };
+        v.clause(
+            signed(worst) <= 1e-6,
+            format!("{label}={worst:.3}V ({cmp} {limit}V)"),
+            format!("{label}={worst:.3}V {breach} {limit}V"),
+            why,
+        );
     }
     let when = if thr > 0.0 {
         format!(" after {thr}ms")
     } else {
         String::new()
     };
-    (
-        ok,
-        format!(
-            "{net}{when}: {} [settled {:.3}V]",
-            parts.join(", "),
-            win.last_v
-        ),
-        if whys.is_empty() {
-            None
-        } else {
-            Some(whys.join("; "))
-        },
-    )
+    let detail = format!("{net}{when}: {} [settled {:.3}V]", v.parts(), win.last_v);
+    v.finish(detail)
 }
 
 fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
-    // Concatenate the requested MCU's UART, or all MCUs if unspecified.
+    // Concatenate the requested MCU's UART, or all MCUs if unspecified, in a
+    // STABLE (sorted-by-key) order: iterating a HashMap's values put the
+    // streams in nondeterministic order, so an anchored/boundary-spanning
+    // match (`^BOOT`) flaked run to run.
     let text: String = match &a.mcu {
         Some(m) => out.uart.get(m).cloned().unwrap_or_default(),
         None => {
-            // Concatenate all MCUs in a STABLE (sorted-by-key) order, iterating
-            // a HashMap's values put the streams in nondeterministic order, so an
-            // anchored/boundary-spanning match (`^BOOT`) flaked run to run.
             let mut items: Vec<(&String, &String)> = out.uart.iter().collect();
-            items.sort_by(|x, y| x.0.cmp(y.0));
-            items
-                .into_iter()
-                .map(|(_, v)| v.as_str())
-                .collect::<Vec<_>>()
-                .join("")
+            items.sort();
+            items.into_iter().map(|(_, v)| v.as_str()).collect()
         }
     };
-    let preview = text.replace(['\r', '\n'], "·");
-    let preview = truncate(&preview, 60);
+    let preview = truncate(&text.replace(['\r', '\n'], "·"), 60);
 
     if let Some(needle) = &a.contains {
         let ok = text.contains(needle);
@@ -1341,22 +1332,21 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             ),
         );
     }
-    if let Some(re) = &a.matches {
-        match regex::Regex::new(re) {
-            Ok(rx) => {
-                let ok = rx.is_match(&text);
-                (
-                    ok,
-                    format!(
-                        "UART={preview:?} {} /{re}/",
-                        if ok { "matches" } else { "does NOT match" }
-                    ),
-                )
-            }
-            Err(e) => (false, format!("bad regex /{re}/: {e}")),
+    let Some(re) = &a.matches else {
+        return (false, "uart assertion had no contains/matches".into());
+    };
+    match regex::Regex::new(re) {
+        Ok(rx) => {
+            let ok = rx.is_match(&text);
+            (
+                ok,
+                format!(
+                    "UART={preview:?} {} /{re}/",
+                    if ok { "matches" } else { "does NOT match" }
+                ),
+            )
         }
-    } else {
-        (false, "uart assertion had no contains/matches".into())
+        Err(e) => (false, format!("bad regex /{re}/: {e}")),
     }
 }
 
@@ -1436,70 +1426,47 @@ fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String
 fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let Some(ac) = &out.ac else {
-        return (
-            false,
-            "no AC analysis ran (missing [ac] block)".into(),
-            None,
-        );
+        return no_data("no AC analysis ran (missing [ac] block)".into());
     };
     let Some(m) = ac.margins.get(&net) else {
-        return (
-            false,
-            format!("net '{net}' produced no loop-stability margins"),
-            None,
-        );
+        return no_data(format!("net '{net}' produced no loop-stability margins"));
     };
     let Some(pm) = m.phase_margin_deg else {
-        return (
-            false,
-            format!(
-                "loop '{net}' never crosses 0 dB in the swept band (no gain crossover; DC loop gain {:.1} dB)",
-                m.dc_gain_db
-            ),
-            None,
-        );
+        return no_data(format!(
+            "loop '{net}' never crosses 0 dB in the swept band (no gain crossover; DC loop gain {:.1} dB)",
+            m.dc_gain_db
+        ));
     };
     let fc = m.gain_crossover_hz.unwrap_or(f64::NAN);
-    let mut ok = true;
-    let mut parts = Vec::new();
-    let mut whys = Vec::new();
+    let mut v = Verdict::new();
     if let Some(lo) = a.min {
-        if pm >= lo - 1e-6 {
-            parts.push(format!(">= {lo}"));
-        } else {
-            ok = false;
-            parts.push(format!("{pm:.2} deg < required {lo} deg <- FAILED HERE"));
-            whys.push(format!(
+        v.clause(
+            pm >= lo - 1e-6,
+            format!(">= {lo}"),
+            format!("{pm:.2} deg < required {lo} deg"),
+            format!(
                 "the loop crossed 0 dB with {pm:.2} deg of phase in hand, {:.2} deg \
                  less than your {lo} deg floor",
                 lo - pm
-            ));
-        }
+            ),
+        );
     }
     if let Some(hi) = a.max {
-        if pm <= hi + 1e-6 {
-            parts.push(format!("<= {hi}"));
-        } else {
-            ok = false;
-            parts.push(format!("{pm:.2} deg > allowed {hi} deg <- FAILED HERE"));
-            whys.push(format!(
+        v.clause(
+            pm <= hi + 1e-6,
+            format!("<= {hi}"),
+            format!("{pm:.2} deg > allowed {hi} deg"),
+            format!(
                 "the loop's phase margin came out {:.2} deg above your {hi} deg ceiling",
                 pm - hi
-            ));
-        }
+            ),
+        );
     }
-    (
-        ok,
-        format!(
-            "loop {net}: phase margin {pm:.2} deg at fc={fc:.4} Hz ({})",
-            parts.join(", ")
-        ),
-        if whys.is_empty() {
-            None
-        } else {
-            Some(whys.join("; "))
-        },
-    )
+    let detail = format!(
+        "loop {net}: phase margin {pm:.2} deg at fc={fc:.4} Hz ({})",
+        v.parts()
+    );
+    v.finish(detail)
 }
 
 /// ac_gain: the magnitude (dB) at `net` must lie in the requested bound, at the
@@ -1507,115 +1474,69 @@ fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<
 fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let Some(ac) = &out.ac else {
-        return (
-            false,
-            "no AC analysis ran (missing [ac] block)".into(),
-            None,
-        );
+        return no_data("no AC analysis ran (missing [ac] block)".into());
     };
     let Some(bode) = ac.bode.get(&net) else {
-        return (
-            false,
-            format!("net '{net}' was not sampled by the AC sweep"),
-            None,
-        );
+        return no_data(format!("net '{net}' was not sampled by the AC sweep"));
     };
     if bode.is_empty() {
-        return (false, format!("net '{net}' has no AC data"), None);
+        return no_data(format!("net '{net}' has no AC data"));
     }
-
-    // A requested frequency outside the swept band cannot be measured, interp_db
-    // would silently clamp to the nearest endpoint gain and report it AS IF taken
-    // at the requested frequency. Fail loudly instead of comparing an endpoint
-    // gain against the bound. (R7 #13)
-    if let Some(f) = a.freq_hz {
-        // A non-finite freq_hz (a `nan`/`inf` TOML literal) slips past the band
-        // bounds because every comparison against NaN is false, so the guard
-        // below would be skipped and interp_db would clamp to the top-of-band
-        // gain and report it as if measured "at NaN Hz". Refuse up front.
-        if !f.is_finite() {
-            return (
-                false,
-                format!("ac_gain for '{net}' has a non-finite freq_hz ({f}); set a real frequency"),
-                None,
-            );
-        }
-        let (f_lo, f_hi) = (bode[0].0, bode[bode.len() - 1].0);
-        if f < f_lo * (1.0 - 1e-9) || f > f_hi * (1.0 + 1e-9) {
-            return (
-                false,
-                format!(
-                    "ac_gain for '{net}' requested {f} Hz is outside the swept band \
-                     {f_lo}-{f_hi} Hz; widen [ac] fstart/fstop or move the check in-band"
-                ),
-                None,
-            );
-        }
-    }
+    let band_min = bode.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let band_max = bode.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
 
     // Pick the gain to test: at a specific frequency (log-interpolated) or the
-    // worst case over the whole band.
-    let (db, where_str) = if let Some(f) = a.freq_hz {
-        (interp_db(bode, f), format!("at {f} Hz"))
-    } else {
-        // Worst case for the bound being checked.
-        let min_db = bode.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
-        let max_db = bode.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-        // Report whichever extreme the bound cares about (default min).
-        let v = if a.max.is_some() && a.min.is_none() {
-            max_db
-        } else {
-            min_db
-        };
-        (v, "over band".to_string())
+    // worst case over the whole band for the bound being checked. A requested
+    // frequency outside the swept band cannot be measured: interp_db would
+    // silently clamp to the nearest endpoint gain and report it AS IF taken at
+    // the requested frequency, so it is refused instead. A non-finite freq_hz
+    // (a `nan`/`inf` TOML literal) slips past the band bounds because every
+    // comparison against NaN is false, so it gets its own refusal first.
+    let (worst_lo, worst_hi, where_str) = match a.freq_hz {
+        Some(f) if !f.is_finite() => {
+            return no_data(format!(
+                "ac_gain for '{net}' has a non-finite freq_hz ({f}); set a real frequency"
+            ))
+        }
+        Some(f) => {
+            let (f_lo, f_hi) = (bode[0].0, bode[bode.len() - 1].0);
+            if f < f_lo * (1.0 - 1e-9) || f > f_hi * (1.0 + 1e-9) {
+                return no_data(format!(
+                    "ac_gain for '{net}' requested {f} Hz is outside the swept band \
+                     {f_lo}-{f_hi} Hz; widen [ac] fstart/fstop or move the check in-band"
+                ));
+            }
+            let db = interp_db(bode, f);
+            (db, db, format!("at {f} Hz"))
+        }
+        None => (band_min, band_max, "over band".to_string()),
     };
 
-    let mut ok = true;
-    let mut parts = Vec::new();
-    let mut whys = Vec::new();
+    let mut v = Verdict::new();
     if let Some(lo) = a.min {
-        let worst = if a.freq_hz.is_some() {
-            db
-        } else {
-            bode.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)
-        };
-        if worst >= lo - 1e-6 {
-            parts.push(format!("min={worst:.3}dB (>= {lo})"));
-        } else {
-            ok = false;
-            parts.push(format!("min={worst:.3}dB < required {lo}dB <- FAILED HERE"));
-            whys.push(format!(
-                "{net} measured {worst:.3} dB {where_str}, {:.3} dB below your {lo} dB floor",
-                lo - worst
-            ));
-        }
+        v.clause(
+            worst_lo >= lo - 1e-6,
+            format!("min={worst_lo:.3}dB (>= {lo})"),
+            format!("min={worst_lo:.3}dB < required {lo}dB"),
+            format!(
+                "{net} measured {worst_lo:.3} dB {where_str}, {:.3} dB below your {lo} dB floor",
+                lo - worst_lo
+            ),
+        );
     }
     if let Some(hi) = a.max {
-        let worst = if a.freq_hz.is_some() {
-            db
-        } else {
-            bode.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)
-        };
-        if worst <= hi + 1e-6 {
-            parts.push(format!("max={worst:.3}dB (<= {hi})"));
-        } else {
-            ok = false;
-            parts.push(format!("max={worst:.3}dB > allowed {hi}dB <- FAILED HERE"));
-            whys.push(format!(
-                "{net} measured {worst:.3} dB {where_str}, {:.3} dB above your {hi} dB ceiling",
-                worst - hi
-            ));
-        }
+        v.clause(
+            worst_hi <= hi + 1e-6,
+            format!("max={worst_hi:.3}dB (<= {hi})"),
+            format!("max={worst_hi:.3}dB > allowed {hi}dB"),
+            format!(
+                "{net} measured {worst_hi:.3} dB {where_str}, {:.3} dB above your {hi} dB ceiling",
+                worst_hi - hi
+            ),
+        );
     }
-    (
-        ok,
-        format!("{net} gain {where_str}: {}", parts.join(", ")),
-        if whys.is_empty() {
-            None
-        } else {
-            Some(whys.join("; "))
-        },
-    )
+    let detail = format!("{net} gain {where_str}: {}", v.parts());
+    v.finish(detail)
 }
 
 /// Linear interpolation (in log-frequency) of magnitude dB at frequency `f`.
@@ -1660,41 +1581,33 @@ fn check_no_faults(out: &RunOutcome) -> (bool, String) {
 fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let reference = a.reference.clone().unwrap_or_default();
     let limit = a.amps.unwrap_or(0.0);
-    match peak_for_ref(&out.peak_current, &reference) {
-        Some((key, peak)) => {
-            let ok = peak <= limit + 1e-9;
-            let unit = unit_note("peak unit", &key, &reference);
-            let peak_s = format_amps(peak);
-            if ok {
-                (
-                    true,
-                    format!("I({reference}) peak {peak_s} (<= {limit}A){unit}"),
-                    None,
-                )
-            } else {
-                (
-                    false,
-                    format!("I({reference}) peak {peak_s} > limit {limit}A <- FAILED HERE{unit}"),
-                    Some(format!(
-                        "{reference} drew {peak_s} at peak, {} over your {limit} A limit",
-                        format_amps(peak - limit)
-                    )),
-                )
-            }
-        }
-        None => (
-            // No current data. The runner rejects a max_current on an untracked
-            // component kind at bind time (`check_trackable_assert_refs`), so
-            // reaching this branch means the tracked device never produced a
-            // sample, fail loud rather than report a guard that was never
-            // evaluated as green.
-            false,
-            format!(
-                "I({reference}): no current data was recorded for this component; \
-                 the guard was never evaluated, so it cannot be reported green"
-            ),
+    // No current data: the runner rejects a max_current on an untracked
+    // component kind at bind time (`check_trackable_assert_refs`), so reaching
+    // this branch means the tracked device never produced a sample; fail loud
+    // rather than report a guard that was never evaluated as green.
+    let Some((key, peak)) = peak_for_ref(&out.peak_current, &reference) else {
+        return no_data(format!(
+            "I({reference}): no current data was recorded for this component; \
+             the guard was never evaluated, so it cannot be reported green"
+        ));
+    };
+    let unit = unit_note("peak unit", &key, &reference);
+    let peak_s = format_amps(peak);
+    if peak <= limit + 1e-9 {
+        (
+            true,
+            format!("I({reference}) peak {peak_s} (<= {limit}A){unit}"),
             None,
-        ),
+        )
+    } else {
+        (
+            false,
+            format!("I({reference}) peak {peak_s} > limit {limit}A <- FAILED HERE{unit}"),
+            Some(format!(
+                "{reference} drew {peak_s} at peak, {} over your {limit} A limit",
+                format_amps(peak - limit)
+            )),
+        )
     }
 }
 
@@ -1729,11 +1642,11 @@ fn unit_note(noun: &str, key: &str, reference: &str) -> String {
 /// True for the bare ref itself and for any of its per-unit keys: a multi-unit
 /// package stamps one device per unit with a `_q<N>` / `_s<N>` suffix
 /// ("IC3906_q2", "SW1_s0"), so per-unit producers (`peak_temp_c`, faults) never
-/// record the bare package ref. Mirrors the binder's suffix rule and the
-/// runner's `thermally_tracked` gate; the gate accepts a bare ref whose units
-/// are monitored, so the consumers here MUST match those unit keys too, or a
-/// safety assert on a multi-unit package could never fail.
-fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
+/// record the bare package ref. Mirrors the binder's suffix rule; the runner's
+/// trackability gate uses this same test to accept a bare ref whose units are
+/// monitored, so the consumers here match exactly the keys the gate admitted,
+/// or a safety assert on a multi-unit package could never fail.
+pub(crate) fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
     key == reference
         || key.strip_prefix(reference).is_some_and(|s| {
             // `_q`/`_s`/`_e` are the binder's multi-unit suffixes (transistor,

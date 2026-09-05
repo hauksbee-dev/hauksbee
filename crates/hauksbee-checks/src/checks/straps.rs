@@ -39,7 +39,7 @@ use hauksbee_extract::{
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ModelLibrary, StrapInternalPull, StrapLevel};
 
-use crate::binder::resolve;
+use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
 
 /// Run the strap-pin lint over an extracted board, resolving each component

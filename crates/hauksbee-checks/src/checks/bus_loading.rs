@@ -41,7 +41,7 @@ use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
 
-use crate::binder::power_rail_voltage;
+use hauksbee_bind::binder::power_rail_voltage;
 
 /// Maximum sink current (A) a standard I2C open-drain driver guarantees at
 /// VOL: 3 mA per UM10204.

@@ -25,8 +25,9 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
+use crate::external::{connect_loopback, read_step};
 use anyhow::{bail, Context, Result};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
@@ -40,30 +41,16 @@ impl GdbStub {
     /// Connect to a QEMU gdbstub on `127.0.0.1:port`, retrying until
     /// `connect_timeout` elapses.
     pub fn connect(port: u16, connect_timeout: Duration) -> Result<Self> {
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-        let deadline = Instant::now() + connect_timeout;
-        let stream = loop {
-            match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
-                Ok(s) => break s,
-                Err(e) => {
-                    if Instant::now() >= deadline {
-                        return Err(e).context("connecting to QEMU gdbstub");
-                    }
-                    std::thread::sleep(Duration::from_millis(150));
-                }
-            }
-        };
+        let stream = connect_loopback("QEMU gdbstub", port, connect_timeout, || None)?;
         stream
             .set_read_timeout(Some(Duration::from_millis(200)))
             .ok();
-        stream.set_nodelay(true).ok();
         let mut g = GdbStub {
             stream,
             timeout: Duration::from_secs(10),
         };
-        // Tell the stub we don't want ack-mode noise beyond the basic `+`. We
-        // keep ack-mode on (simpler), so nothing to negotiate; just confirm the
-        // link with a no-op query.
+        // Ack-mode stays on (simpler), so nothing to negotiate; just confirm
+        // the link with a no-op query.
         let _ = g.packet("qSupported:")?;
         Ok(g)
     }
@@ -157,23 +144,11 @@ impl GdbStub {
                 }
                 Scan::NeedMore => {}
             }
-            if Instant::now() >= deadline {
+            if !read_step(&mut self.stream, &mut buf, deadline, "QEMU gdbstub")? {
                 bail!(
                     "gdb packet read timed out; partial: {:?}",
                     String::from_utf8_lossy(&buf)
                 );
-            }
-            let mut chunk = [0u8; 1024];
-            match self.stream.read(&mut chunk) {
-                Ok(0) => bail!("gdbstub connection closed"),
-                Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    std::thread::sleep(Duration::from_millis(3));
-                }
-                Err(e) => return Err(e).context("reading gdbstub socket"),
             }
         }
     }

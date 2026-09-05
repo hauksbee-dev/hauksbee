@@ -608,7 +608,7 @@ impl ParallelMemoryStorage {
 /// port. The scheduler combines these role names with the bound board's nets
 /// when it installs an edge-synchronous firmware responder.
 #[derive(Debug, Clone)]
-pub(crate) struct ParallelMemoryPort {
+pub struct ParallelMemoryPort {
     pub name: String,
     pub address: Vec<String>,
     pub writes: Vec<ParallelMemoryWritePort>,
@@ -622,7 +622,7 @@ pub(crate) struct ParallelMemoryPort {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ParallelMemoryWritePort {
+pub struct ParallelMemoryWritePort {
     pub pin: String,
     pub edge: Edge,
     pub gates: Vec<(String, Level)>,
@@ -1346,7 +1346,7 @@ impl LogicComponent {
 
     /// Addressable memories declared by this component, sharing their backing
     /// cells with the tick evaluator. Empty for ordinary logic parts.
-    pub(crate) fn memory_ports(&self) -> Vec<ParallelMemoryPort> {
+    pub fn memory_ports(&self) -> Vec<ParallelMemoryPort> {
         self.memories
             .iter()
             .map(|m| ParallelMemoryPort {
@@ -1394,7 +1394,7 @@ impl LogicComponent {
     /// component's ordinary tick entirely. It is therefore safe only when no
     /// register, combinational expression, tri-state group, second memory, or
     /// unrelated output also depends on that tick.
-    pub(crate) fn has_exclusive_memory_port(&self, name: &str) -> bool {
+    pub fn has_exclusive_memory_port(&self, name: &str) -> bool {
         if self.memories.len() != 1
             || self.memories[0].name != name
             || !self.registers.is_empty()

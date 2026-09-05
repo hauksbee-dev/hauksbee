@@ -162,15 +162,12 @@ impl Trace {
     /// structural problem, a bad trace must never silently skip.
     pub fn load(path: &Path) -> Result<Self, SpecError> {
         let text = std::fs::read_to_string(path)
-            .map_err(|e| SpecError::Io(format!("reading trace {}: {e}", path.display())))?;
+            .map_err(SpecError::io(format!("reading trace {}", path.display())))?;
         let mut trace: Trace = toml::from_str(&text).map_err(|e| SpecError::Toml {
             file: path.display().to_string(),
             message: e.message().to_string(),
         })?;
-        trace.base_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        trace.base_dir = crate::spec::base_dir_of(path);
         trace.validate(path)?;
         Ok(trace)
     }
@@ -235,11 +232,7 @@ impl Trace {
 
     /// Load one channel's captured waveform as a `(t_seconds, value)` series.
     pub fn load_channel(&self, ch: &Channel) -> Result<Vec<(f64, f64)>, SpecError> {
-        let path = if Path::new(&ch.file).is_absolute() {
-            PathBuf::from(&ch.file)
-        } else {
-            self.base_dir.join(&ch.file)
-        };
+        let path = crate::spec::resolve_in(&self.base_dir, &ch.file);
         if ch.file.to_ascii_lowercase().ends_with(".vcd") {
             load_vcd(&path, ch.signal.as_deref())
         } else {
@@ -253,14 +246,9 @@ impl Trace {
 /// The runner records these nets' simulated waveforms during the run.
 pub fn assert_nets(spec: &Spec) -> Result<HashSet<String>, SpecError> {
     let mut nets = HashSet::new();
-    for a in &spec.asserts {
-        if a.kind != "hwtrace" {
-            continue;
-        }
+    for a in spec.asserts.iter().filter(|a| a.kind == "hwtrace") {
         let trace = Trace::load(&trace_path(spec, a)?)?;
-        for ch in &trace.channels {
-            nets.insert(ch.net.clone());
-        }
+        nets.extend(trace.channels.iter().map(|ch| ch.net.clone()));
     }
     Ok(nets)
 }
@@ -271,11 +259,7 @@ pub fn trace_path(spec: &Spec, a: &crate::spec::Assertion) -> Result<PathBuf, Sp
         .trace
         .as_deref()
         .ok_or_else(|| SpecError::Invalid("hwtrace assertion needs a `trace` path".to_string()))?;
-    Ok(if Path::new(rel).is_absolute() {
-        PathBuf::from(rel)
-    } else {
-        spec.base_dir.join(rel)
-    })
+    Ok(crate::spec::resolve_in(&spec.base_dir, rel))
 }
 
 // ── capture-file loaders ──────────────────────────────────────────────────────
@@ -288,7 +272,7 @@ pub fn trace_path(spec: &Spec, a: &crate::spec::Assertion) -> Result<PathBuf, Sp
 /// is all preamble is a wrong file, not an empty waveform.
 fn load_csv(path: &Path) -> Result<Vec<(f64, f64)>, SpecError> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| SpecError::Io(format!("reading capture {}: {e}", path.display())))?;
+        .map_err(SpecError::io(format!("reading capture {}", path.display())))?;
     let mut out = Vec::new();
     for line in text.lines() {
         let mut fields = line.split([',', ';', '\t', ' ']).filter(|s| !s.is_empty());
@@ -334,7 +318,7 @@ fn load_csv(path: &Path) -> Result<Vec<(f64, f64)>, SpecError> {
 /// signal in the file it may be omitted.
 fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecError> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| SpecError::Io(format!("reading capture {}: {e}", path.display())))?;
+        .map_err(SpecError::io(format!("reading capture {}", path.display())))?;
     let ctx = path.display();
 
     // Header: timescale and var declarations.
@@ -663,13 +647,11 @@ pub fn compare(
         Err(e) => return fail(format!("{net} {}: simulated waveform: {e}", f.kind)),
     };
 
-    let mut band = 0.0_f64;
-    if let Some(a) = f.abstol {
-        band = band.max(a);
-    }
-    if let Some(r) = f.reltol {
-        band = band.max(r * cap.abs());
-    }
+    let band = f
+        .abstol
+        .into_iter()
+        .chain(f.reltol.map(|r| r * cap.abs()))
+        .fold(0.0_f64, f64::max);
     let delta = sim - cap;
     let pass = delta.abs() <= band + 1e-12;
     let verdict = if pass { "within" } else { "EXCEEDS" };

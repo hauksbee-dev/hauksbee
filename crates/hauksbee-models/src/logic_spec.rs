@@ -383,6 +383,11 @@ impl Logic {
     }
 }
 
+/// The value mask of a `bits`-wide register (`bits` is 1..=64).
+fn width_mask(bits: u32) -> u64 {
+    u64::MAX >> (64 - bits)
+}
+
 /// Accept `reset = { ... }` (one table) or `reset = [{ ... }, ...]` (array).
 fn one_or_many_resets<'de, D>(de: D) -> Result<Vec<ResetSpec>, D::Error>
 where
@@ -470,43 +475,47 @@ impl<'a> Parser<'a> {
         self.bytes.get(self.pos).copied()
     }
 
-    /// `expr := xor ( '|' xor )*`  (accepts `||` as an alias)
-    fn parse_or(&mut self) -> Result<LogicExpr, LogicExprError> {
-        let mut lhs = self.parse_xor()?;
-        while self.peek() == Some(b'|') {
+    /// Consume the run of bytes satisfying `pred` and return it.
+    fn take_while(&mut self, pred: impl Fn(u8) -> bool) -> &'a str {
+        let start = self.pos;
+        while self.bytes.get(self.pos).is_some_and(|&b| pred(b)) {
             self.pos += 1;
-            if self.bytes.get(self.pos) == Some(&b'|') {
+        }
+        &self.src[start..self.pos]
+    }
+
+    /// One left-associative binary level: `next ( op next )*`. A doubled
+    /// operator (`||`, `&&`) is accepted as an alias of the single one.
+    fn parse_binary(
+        &mut self,
+        op: u8,
+        next: fn(&mut Self) -> Result<LogicExpr, LogicExprError>,
+        build: fn(Box<LogicExpr>, Box<LogicExpr>) -> LogicExpr,
+    ) -> Result<LogicExpr, LogicExprError> {
+        let mut lhs = next(self)?;
+        while self.peek() == Some(op) {
+            self.pos += 1;
+            if self.bytes.get(self.pos) == Some(&op) {
                 self.pos += 1;
             }
-            let rhs = self.parse_xor()?;
-            lhs = LogicExpr::Or(Box::new(lhs), Box::new(rhs));
+            lhs = build(Box::new(lhs), Box::new(next(self)?));
         }
         Ok(lhs)
+    }
+
+    /// `expr := xor ( '|' xor )*`
+    fn parse_or(&mut self) -> Result<LogicExpr, LogicExprError> {
+        self.parse_binary(b'|', Self::parse_xor, LogicExpr::Or)
     }
 
     /// `xor := and ( '^' and )*`
     fn parse_xor(&mut self) -> Result<LogicExpr, LogicExprError> {
-        let mut lhs = self.parse_and()?;
-        while self.peek() == Some(b'^') {
-            self.pos += 1;
-            let rhs = self.parse_and()?;
-            lhs = LogicExpr::Xor(Box::new(lhs), Box::new(rhs));
-        }
-        Ok(lhs)
+        self.parse_binary(b'^', Self::parse_and, LogicExpr::Xor)
     }
 
-    /// `and := unary ( '&' unary )*`  (accepts `&&` as an alias)
+    /// `and := unary ( '&' unary )*`
     fn parse_and(&mut self) -> Result<LogicExpr, LogicExprError> {
-        let mut lhs = self.parse_unary()?;
-        while self.peek() == Some(b'&') {
-            self.pos += 1;
-            if self.bytes.get(self.pos) == Some(&b'&') {
-                self.pos += 1;
-            }
-            let rhs = self.parse_unary()?;
-            lhs = LogicExpr::And(Box::new(lhs), Box::new(rhs));
-        }
-        Ok(lhs)
+        self.parse_binary(b'&', Self::parse_unary, LogicExpr::And)
     }
 
     /// `unary := '!' unary | atom`
@@ -531,53 +540,33 @@ impl<'a> Parser<'a> {
                 Ok(inner)
             }
             Some(c) if c.is_ascii_alphanumeric() || c == b'_' => {
-                let start = self.pos;
-                while self
-                    .bytes
-                    .get(self.pos)
-                    .map(|b| b.is_ascii_alphanumeric() || *b == b'_')
-                    .unwrap_or(false)
-                {
-                    self.pos += 1;
-                }
-                let ident = &self.src[start..self.pos];
+                let ident = self.take_while(|b| b.is_ascii_alphanumeric() || b == b'_');
                 // A bare 0/1 is a constant; any other token (including
                 // digit-led pin names like `1a`) is an identifier.
-                if ident == "0" {
-                    return Ok(LogicExpr::Const(false));
+                match ident {
+                    "0" => return Ok(LogicExpr::Const(false)),
+                    "1" => return Ok(LogicExpr::Const(true)),
+                    _ => {}
                 }
-                if ident == "1" {
-                    return Ok(LogicExpr::Const(true));
+                if self.bytes.get(self.pos) != Some(&b'[') {
+                    return Ok(LogicExpr::Name(ident.to_string()));
                 }
-                if self.bytes.get(self.pos) == Some(&b'[') {
-                    self.pos += 1;
-                    let istart = self.pos;
-                    while self
-                        .bytes
-                        .get(self.pos)
-                        .map(|b| b.is_ascii_digit())
-                        .unwrap_or(false)
-                    {
-                        self.pos += 1;
-                    }
-                    if istart == self.pos {
-                        return self.err("expected a bit index after '['");
-                    }
-                    let idx: u32 =
-                        self.src[istart..self.pos]
-                            .parse()
-                            .map_err(|_| LogicExprError {
-                                msg: "bit index does not fit in u32".into(),
-                                at: istart,
-                                src: self.src.to_string(),
-                            })?;
-                    if self.bytes.get(self.pos) != Some(&b']') {
-                        return self.err("expected ']'");
-                    }
-                    self.pos += 1;
-                    return Ok(LogicExpr::Bit(ident.to_string(), idx));
+                self.pos += 1;
+                let istart = self.pos;
+                let digits = self.take_while(|b| b.is_ascii_digit());
+                if digits.is_empty() {
+                    return self.err("expected a bit index after '['");
                 }
-                Ok(LogicExpr::Name(ident.to_string()))
+                let idx: u32 = digits.parse().map_err(|_| LogicExprError {
+                    msg: "bit index does not fit in u32".into(),
+                    at: istart,
+                    src: self.src.to_string(),
+                })?;
+                if self.bytes.get(self.pos) != Some(&b']') {
+                    return self.err("expected ']'");
+                }
+                self.pos += 1;
+                Ok(LogicExpr::Bit(ident.to_string(), idx))
             }
             Some(_) => self.err("expected an identifier, literal, '!', or '('"),
             None => self.err("unexpected end of expression"),
@@ -996,11 +985,7 @@ impl Logic {
                     bits: r.bits,
                 });
             }
-            let mask = if r.bits == 64 {
-                u64::MAX
-            } else {
-                (1u64 << r.bits) - 1
-            };
+            let mask = width_mask(r.bits);
             if r.init & !mask != 0 {
                 return Err(LogicSpecError::InitValueTooWide {
                     register: r.name.clone(),
@@ -1252,11 +1237,7 @@ impl Logic {
                     });
                 }
             }
-            let mask = if m.bits == 64 {
-                u64::MAX
-            } else {
-                (1u64 << m.bits) - 1
-            };
+            let mask = width_mask(m.bits);
             if m.init & !mask != 0 {
                 return Err(LogicSpecError::InitValueTooWide {
                     register: m.name.clone(),

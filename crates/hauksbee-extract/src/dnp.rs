@@ -507,17 +507,7 @@ mod jumper_class_tests {
     use crate::Component;
 
     fn comp(reference: &str, value: &str, lib_id: &str, footprint: &str) -> Component {
-        Component {
-            reference: reference.into(),
-            value: value.into(),
-            lib_id: lib_id.into(),
-            footprint: footprint.into(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: Vec::new(),
-        }
+        crate::testutil::part(reference, value, lib_id, footprint, Vec::new())
     }
 
     #[test]

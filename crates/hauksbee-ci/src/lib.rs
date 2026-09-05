@@ -175,6 +175,23 @@ fn refuse_timing_claims(results: &mut [assertions::AssertResult], refusals: &[St
     }
 }
 
+/// The order-stable, deduped union of one per-member message list across the
+/// ensemble. One discipline for every honesty channel: a substitution, a
+/// coverage hole, a dead rail or a timing refusal in ONE member is one in the
+/// ensemble (an MCU substituted once is substituted for every member; nothing
+/// per-seed powers a rail).
+fn union_across(
+    outcomes: &[runner::RunOutcome],
+    f: impl Fn(&runner::RunOutcome) -> &[String],
+) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    outcomes
+        .iter()
+        .flat_map(|o| f(o).iter().cloned())
+        .filter(|m| seen.insert(m.clone()))
+        .collect()
+}
+
 /// Load the spec, run the co-sim across its seeds, and evaluate its assertions.
 pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
@@ -187,14 +204,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // Timing coverage is a validity contract, not an advisory note. One
     // unrepresentable request or one pulse the tick path demonstrably missed
     // makes every assertion INVALID, preventing a plausible false green.
-    let mut timing_refusals: Vec<String> = {
-        let mut seen = std::collections::BTreeSet::new();
-        outcomes
-            .iter()
-            .flat_map(|o| o.timing_refusals.iter().cloned())
-            .filter(|m| seen.insert(m.clone()))
-            .collect()
-    };
+    let mut timing_refusals = union_across(&outcomes, |o| &o.timing_refusals);
     let timing_coverage = outcomes
         .first()
         .map(|o| o.timing_coverage.clone())
@@ -233,27 +243,6 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // A strict analog abort on ANY seed forces the invalid-for-analysis exit even
     // if no assertion's window happened to overlap the failed span.
     let analog_abort = outcomes.iter().any(|o| o.analog_abort);
-    // Union of substitution messages across members (an MCU substituted once is
-    // substituted for the whole ensemble), deduped and order-stable.
-    let substitutions: Vec<String> = {
-        let mut seen = std::collections::BTreeSet::new();
-        outcomes
-            .iter()
-            .flat_map(|o| o.substitutions.iter().cloned())
-            .filter(|m| seen.insert(m.clone()))
-            .collect()
-    };
-    // Union of co-sim coverage warnings (dropped ADC channels, unexercised bus
-    // peripherals) across members, deduped and order-stable, same discipline
-    // as substitutions: a hole in ONE member is a hole in the ensemble.
-    let coverage_warnings: Vec<String> = {
-        let mut seen = std::collections::BTreeSet::new();
-        outcomes
-            .iter()
-            .flat_map(|o| o.coverage_warnings.iter().cloned())
-            .filter(|m| seen.insert(m.clone()))
-            .collect()
-    };
     // Coverage banner data for a tolerance ensemble: how many members ran and
     // how many components were sampled (from any outcome; the set is fixed).
     let coverage = if spec.has_tolerances() {
@@ -326,54 +315,54 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     {
         evidence = evidence
             .with_assumptions([assumption])
-            .map_err(|error| SpecError::Invalid(format!("merging run evidence: {error}")))?;
+            .map_err(SpecError::invalid("merging run evidence"))?;
     }
-    let spec_bytes = std::fs::read(&cfg.spec).map_err(|error| {
-        SpecError::Io(format!(
-            "reading spec evidence '{}': {error}",
-            cfg.spec.display()
-        ))
-    })?;
-    evidence = evidence
-        .with_toml_artifact(
-            &cfg.spec,
-            &spec_bytes,
-            hauksbee_ir::evidence::ArtifactRole::Spec,
-            hauksbee_ir::evidence::Contribution {
-                what: "assertions".into(),
-                detail: "run configuration, stimuli, supplies, and assertion thresholds".into(),
-            },
-        )
-        .map_err(|error| SpecError::Invalid(format!("building spec evidence: {error}")))?;
-
+    // The spec, and the waiver file beside the board when there is one, are
+    // inputs this run consumed: inventory their exact bytes.
     let waiver_path = spec
         .board_path()
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join(hauksbee_engine::waiver::DEFAULT_WAIVER_FILE);
-    if waiver_path.is_file() {
-        let bytes = std::fs::read(&waiver_path).map_err(|error| {
-            SpecError::Io(format!(
-                "reading waiver evidence '{}': {error}",
-                waiver_path.display()
-            ))
-        })?;
+    let toml_inputs = [
+        (
+            &cfg.spec,
+            "spec",
+            hauksbee_ir::evidence::ArtifactRole::Spec,
+            "assertions",
+            "run configuration, stimuli, supplies, and assertion thresholds",
+        ),
+        (
+            &waiver_path,
+            "waiver",
+            hauksbee_ir::evidence::ArtifactRole::Waivers,
+            "authorizations",
+            "time-bounded human authorizations applied to matching CI findings",
+        ),
+    ];
+    for (path, what, role, contributed, detail) in toml_inputs {
+        if what == "waiver" && !waiver_path.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(path).map_err(SpecError::io(format!(
+            "reading {what} evidence '{}'",
+            path.display()
+        )))?;
         evidence = evidence
             .with_toml_artifact(
-                &waiver_path,
+                path,
                 &bytes,
-                hauksbee_ir::evidence::ArtifactRole::Waivers,
+                role,
                 hauksbee_ir::evidence::Contribution {
-                    what: "authorizations".into(),
-                    detail: "time-bounded human authorizations applied to matching CI findings"
-                        .into(),
+                    what: contributed.into(),
+                    detail: detail.into(),
                 },
             )
-            .map_err(|error| SpecError::Invalid(format!("building waiver evidence: {error}")))?;
+            .map_err(SpecError::invalid(format!("building {what} evidence")))?;
     }
     let today = hauksbee_ir::evidence::RunDate::from_system_clock();
-    let waiver_assumptions = applied_waivers.iter().map(|waiver| {
-        hauksbee_ir::evidence::Assumption::waived_assertion(
+    for waiver in &applied_waivers {
+        let assumption = hauksbee_ir::evidence::Assumption::waived_assertion(
             &waiver.check,
             &waiver.kind,
             &waiver.subject,
@@ -382,15 +371,10 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             &waiver.until,
             today,
         )
-    });
-    for assumption in waiver_assumptions {
+        .map_err(SpecError::invalid("building live-waiver evidence"))?;
         evidence = evidence
-            .with_assumptions([assumption.map_err(|error| {
-                SpecError::Invalid(format!("building live-waiver evidence: {error}"))
-            })?])
-            .map_err(|error| {
-                SpecError::Invalid(format!("building live-waiver evidence: {error}"))
-            })?;
+            .with_assumptions([assumption])
+            .map_err(SpecError::invalid("building live-waiver evidence"))?;
     }
 
     let failed_windows: Vec<(f64, f64)> = outcomes
@@ -417,7 +401,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         &failed_windows,
         &fallback_windows,
     )
-    .map_err(|error| SpecError::Invalid(format!("building CI error budget: {error}")))?;
+    .map_err(SpecError::invalid("building CI error budget"))?;
     if let Some(residual) = outcomes
         .iter()
         .filter_map(|outcome| outcome.error_budget.as_ref()?.residual())
@@ -433,9 +417,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                 hauksbee_engine::BoardEvidence::solver_error_budget(
                     &hauksbee_solve::SolverOptions::default(),
                 )
-                .map_err(|error| {
-                    SpecError::Invalid(format!("building AC assertion budget: {error}"))
-                })?,
+                .map_err(SpecError::invalid("building AC assertion budget"))?,
             )
         } else if assertion_has_numeric_result(&spec, result) {
             Some(transient_budget.clone())
@@ -451,12 +433,10 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                     budget,
                     coverage_description.as_deref(),
                 )
-                .map_err(|error| {
-                    SpecError::Invalid(format!(
-                        "building evidence for assertion '{}': {error}",
-                        result.label
-                    ))
-                })?,
+                .map_err(SpecError::invalid(format!(
+                    "building evidence for assertion '{}'",
+                    result.label
+                )))?,
         );
     }
     // Circuit-aware refinement for voltage assertions (see
@@ -536,12 +516,10 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                 .unwrap_or_default();
             *map = evidence
                 .map_assuming_open_parts_high_impedance(map.clone())
-                .map_err(|error| {
-                    SpecError::Invalid(format!(
-                        "recomputing evidence for assertion '{}': {error}",
-                        result.label
-                    ))
-                })?;
+                .map_err(SpecError::invalid(format!(
+                    "recomputing evidence for assertion '{}'",
+                    result.label
+                )))?;
             result.detail = format!(
                 "{} (level defined through {via} by modeled board elements; holds unless \
                  an unmodelled part on the net drives or loads it)",
@@ -581,19 +559,9 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         elapsed: started.elapsed(),
         analog_abort,
         coverage,
-        substitutions,
-        // A rail dead in one member is dead in every member (nothing per-seed
-        // powers a rail), but union rather than assume, on the same discipline
-        // as substitutions: a hole in ONE member is a hole in the ensemble.
-        dead_rails: {
-            let mut seen = std::collections::BTreeSet::new();
-            outcomes
-                .iter()
-                .flat_map(|o| o.dead_rails.iter().cloned())
-                .filter(|n| seen.insert(n.clone()))
-                .collect()
-        },
-        coverage_warnings,
+        substitutions: union_across(&outcomes, |o| &o.substitutions),
+        dead_rails: union_across(&outcomes, |o| &o.dead_rails),
+        coverage_warnings: union_across(&outcomes, |o| &o.coverage_warnings),
         timing_coverage,
         timing_refusals,
         waiver_notes: notes,
@@ -644,18 +612,11 @@ mod timing_validity_tests {
     #[test]
     fn unmet_timing_contract_cannot_green_or_be_waived() {
         let mut results = vec![assertions::AssertResult {
-            label: "short strobe captured".into(),
-            kind: "toggle".into(),
             passed: true,
-            invalid: false,
             detail: "observed 2 toggles".into(),
-            failing_seed: None,
-            failing_seeds: Vec::new(),
-            seeds_total: 1,
-            why: None,
             waived: Some("legacy waiver".into()),
             subject_nets: vec!["STROBE".into()],
-            subject_refs: Vec::new(),
+            ..assertions::AssertResult::shell("short strobe captured".into(), "toggle", 1)
         }];
         refuse_timing_claims(
             &mut results,

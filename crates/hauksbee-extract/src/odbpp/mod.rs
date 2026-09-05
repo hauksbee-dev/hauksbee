@@ -369,14 +369,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     let producer = info_field(&info, "ODB_SOURCE")
         .or_else(|| info_field(&info, "SAVE_APP"))
         .unwrap_or_default();
-    let kicad = producer.to_ascii_uppercase().contains("KICAD");
-    let unescape = |s: &str| -> String {
-        if kicad {
-            crate::unescape_kicad_name(s)
-        } else {
-            s.to_string()
-        }
-    };
+    let unescape = crate::name_unescaper(&producer);
 
     // `misc/info`'s `UNITS` is the job-wide default for any file that declares
     // none of its own; see [`records::declared_units`].

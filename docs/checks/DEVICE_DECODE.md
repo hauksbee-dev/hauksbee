@@ -8,7 +8,7 @@ can see it. This check class decodes the divider.
 
 Invoke: `hauksbee run <board> --lint` (findings carry check tag
 `device_decode`), or `--check`. Source:
-`crates/hauksbee-engine/src/checks/device_decode.rs`.
+`crates/hauksbee-checks/src/checks/device_decode.rs`.
 
 ## Scope
 

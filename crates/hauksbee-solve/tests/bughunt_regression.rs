@@ -5,30 +5,7 @@ use hauksbee_ir::{Circuit, Device, NodeId, SourceKind, SpiceLoader};
 use hauksbee_solve::{Partitioning, SolverOptions, StepControl, Transient};
 
 fn rc(farads: f64) -> Circuit {
-    let mut c = Circuit::new();
-    let vin = c.node("in");
-    let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: out,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads,
-        ic: Some(0.0),
-    });
-    c
+    crate::shared::rc_lowpass(1.0, 1e3, farads)
 }
 
 /// Bug-hunt #2: the final Fixed step must not overshoot `tstop`. With dt = 1 ns

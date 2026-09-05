@@ -65,6 +65,25 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
+    /// A diagnostic with no location and no fix; the callers that can derive
+    /// either set it with struct-update syntax.
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Diagnostic {
+            line: None,
+            col: None,
+            code,
+            message: message.into(),
+            fix: None,
+        }
+    }
+
+    /// The same diagnostic, pointed at `ident`'s first occurrence in the spec
+    /// text when it appears there.
+    fn at(self, text: &str, ident: &str) -> Self {
+        let (line, col) = locate(text, ident).map_or((None, None), |(l, c)| (Some(l), Some(c)));
+        Diagnostic { line, col, ..self }
+    }
+
     /// Render for the terminal: `file:line:col: [code] message (fix)`.
     pub fn render_human(&self, file: &Path) -> String {
         let mut loc = file.display().to_string();
@@ -115,13 +134,10 @@ pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) => {
-            return vec![Diagnostic {
-                line: None,
-                col: None,
-                code: "io",
-                message: format!("cannot read spec '{}': {e}", path.display()),
-                fix: None,
-            }];
+            return vec![Diagnostic::new(
+                "io",
+                format!("cannot read spec '{}': {e}", path.display()),
+            )];
         }
     };
 
@@ -145,18 +161,10 @@ pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
         // a failed board load ends the phase (net/ref checks need the board).
         let board_path = spec.board_path();
         match crate::runner::load_board(&board_path) {
-            Err(e) => {
-                let (line, col) = locate(&text, &spec.board.display().to_string())
-                    .map(|(l, c)| (Some(l), Some(c)))
-                    .unwrap_or((None, None));
-                diags.push(Diagnostic {
-                    line,
-                    col,
-                    code: "board-load",
-                    message: e.to_string(),
-                    fix: None,
-                });
-            }
+            Err(e) => diags.push(
+                Diagnostic::new("board-load", e.to_string())
+                    .at(&text, &spec.board.display().to_string()),
+            ),
             Ok(board) => {
                 let extra: Vec<&Path> = opts.models_dir.as_deref().into_iter().collect();
                 let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&extra);
@@ -232,32 +240,27 @@ fn firmware_diagnostic(spec: &Spec, text: &str) -> Option<Diagnostic> {
 /// A `firmware-missing` diagnostic pointed at the spec's `firmware` value, with
 /// the same "(from the spec's `firmware = ...`)" trailer `run` prints.
 fn firmware_diag(text: &str, declared: &str, message: &str) -> Diagnostic {
-    let (line, col) = locate(text, declared)
-        .map(|(l, c)| (Some(l), Some(c)))
-        .unwrap_or((None, None));
     Diagnostic {
-        line,
-        col,
-        code: "firmware-missing",
-        message: format!("{message} (from the spec's `firmware = \"{declared}\"`)"),
         fix: Some(
             "build the firmware first, fix the path, or pass --no-board to validate \
              structure only"
                 .to_string(),
         ),
+        ..Diagnostic::new(
+            "firmware-missing",
+            format!("{message} (from the spec's `firmware = \"{declared}\"`)"),
+        )
+        .at(text, declared)
     }
 }
 
 /// Turn a toml deserialization error into a diagnostic with exact line/col
 /// (the toml crate reports a byte span into the source text).
 fn toml_diagnostic(text: &str, e: &toml::de::Error) -> Diagnostic {
-    let (line, col) = match e.span() {
-        Some(span) => {
-            let (l, c) = line_col(text, span.start);
-            (Some(l), Some(c))
-        }
-        None => (None, None),
-    };
+    let (line, col) = e.span().map_or((None, None), |span| {
+        let (l, c) = line_col(text, span.start);
+        (Some(l), Some(c))
+    });
     let message = e.message().to_string();
     // serde's deny_unknown_fields errors arrive through the TOML parser;
     // give them their own code (and a did-you-mean against the expected
@@ -272,9 +275,8 @@ fn toml_diagnostic(text: &str, e: &toml::de::Error) -> Diagnostic {
     Diagnostic {
         line,
         col,
-        code,
-        message,
         fix,
+        ..Diagnostic::new(code, message)
     }
 }
 
@@ -289,37 +291,21 @@ fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
         }
         SpecError::UnknownNets(items) => {
             for (net, ctx, suggestions) in items {
-                let (line, col) = locate(text, net)
-                    .map(|(l, c)| (Some(l), Some(c)))
-                    .unwrap_or((None, None));
-                let fix = if suggestions.is_empty() {
-                    None
-                } else {
-                    Some(format!("did you mean: {}?", suggestions.join(", ")))
-                };
                 diags.push(Diagnostic {
-                    line,
-                    col,
-                    code: "unknown-net",
-                    message: format!("'{net}' (referenced in {ctx}) is not a net on the board"),
-                    fix,
+                    fix: (!suggestions.is_empty())
+                        .then(|| format!("did you mean: {}?", suggestions.join(", "))),
+                    ..Diagnostic::new(
+                        "unknown-net",
+                        format!("'{net}' (referenced in {ctx}) is not a net on the board"),
+                    )
+                    .at(text, net)
                 });
             }
         }
-        SpecError::Io(m) => diags.push(Diagnostic {
-            line: None,
-            col: None,
-            code: "io",
-            message: m.clone(),
-            fix: None,
-        }),
-        SpecError::Toml { message, .. } => diags.push(Diagnostic {
-            line: None,
-            col: None,
-            code: "toml-parse",
-            message: message.clone(),
-            fix: None,
-        }),
+        SpecError::Io(m) => diags.push(Diagnostic::new("io", m.clone())),
+        SpecError::Toml { message, .. } => {
+            diags.push(Diagnostic::new("toml-parse", message.clone()))
+        }
         SpecError::Invalid(m) => {
             // The did-you-mean lives in ONE place on a diagnostic: `fix`. It
             // arrives spliced into the validation message (that is the shape
@@ -335,22 +321,18 @@ fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
             diags.push(Diagnostic {
                 line,
                 col,
-                code: classify_invalid(m),
-                message,
                 fix,
+                ..Diagnostic::new(classify_invalid(m), message)
             });
         }
-        SpecError::Solver { context, source } => diags.push(Diagnostic {
-            line: None,
-            col: None,
-            code: if matches!(source, hauksbee_solve::SolveError::Refused { .. }) {
+        SpecError::Solver { context, source } => diags.push(Diagnostic::new(
+            if matches!(source, hauksbee_solve::SolveError::Refused { .. }) {
                 "solver-refused"
             } else {
                 "solver-failed"
             },
-            message: format!("{context}: {source}"),
-            fix: None,
-        }),
+            format!("{context}: {source}"),
+        )),
     }
 }
 
@@ -456,19 +438,12 @@ fn unknown_field_fix(msg: &str) -> Option<String> {
 /// first one that appears in the spec text to a line/col. Best effort: a name
 /// that appears several times resolves to its first occurrence.
 fn locate_from_message(text: &str, msg: &str) -> (Option<u32>, Option<u32>) {
-    let mut parts = msg.split('\'');
     // Quoted identifiers are the odd-numbered fragments.
-    let _ = parts.next();
-    while let Some(ident) = parts.next() {
-        let _ = parts.next(); // skip the fragment between quotes
-        if ident.is_empty() {
-            continue;
-        }
-        if let Some((l, c)) = locate(text, ident) {
-            return (Some(l), Some(c));
-        }
-    }
-    (None, None)
+    msg.split('\'')
+        .skip(1)
+        .step_by(2)
+        .find_map(|ident| locate(text, ident))
+        .map_or((None, None), |(l, c)| (Some(l), Some(c)))
 }
 
 /// 1-based (line, col) of `ident`'s first occurrence in `text`, preferring a

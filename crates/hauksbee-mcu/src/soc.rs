@@ -64,6 +64,7 @@
 //! and a new backend is a trait implementation, not a descriptor. A descriptor
 //! only configures the three backends that already exist.
 
+use hauksbee_ir::levenshtein;
 use std::path::PathBuf;
 
 /// A SoC-descriptor load or validation failure.
@@ -321,6 +322,34 @@ impl Backend {
             Backend::Qemu => "qemu",
         }
     }
+
+    /// The [`SocError::BackendMismatch`] for a descriptor declaring `found`
+    /// where `self` was expected.
+    fn mismatch(self, found: Backend) -> SocError {
+        SocError::BackendMismatch {
+            expected: self.name().to_string(),
+            found: found.name().to_string(),
+        }
+    }
+}
+
+/// Parse a descriptor for one backend: check the DECLARED backend before the
+/// full (`deny_unknown_fields`) parse, so a descriptor for the other backend
+/// gets the clear [`SocError::BackendMismatch`] rather than a confusing
+/// "unknown field" from the strict schema.
+#[cfg(any(feature = "renode", feature = "qemu"))]
+fn parse_for<T: serde::de::DeserializeOwned>(src: &str, expected: Backend) -> Result<T, SocError> {
+    let declared = peek_backend(src)?;
+    if declared != expected {
+        return Err(expected.mismatch(declared));
+    }
+    Ok(toml::from_str(src)?)
+}
+
+/// `soc.expected_e_machine` as an ELF `e_machine` value.
+#[cfg(any(feature = "renode", feature = "qemu"))]
+fn parse_e_machine(name: &str) -> Result<u16, SocError> {
+    crate::elf::e_machine_from_name(name).ok_or_else(|| SocError::UnknownEMachine(name.to_string()))
 }
 
 // ── The `[soc]` header, backend-agnostic ─────────────────────────────────────
@@ -363,7 +392,10 @@ mod renode_schema {
     #[derive(Debug, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(super) struct RenodeSoc {
-        pub backend: String,
+        /// Accepted by the schema; already checked by `parse_for` before the
+        /// full parse, so a mismatch never reaches `into_config`.
+        #[serde(rename = "backend")]
+        pub _backend: String,
         pub machine: String,
         pub platform_repl: String,
         /// Optional named support bundle (peripheral models Renode does not
@@ -467,16 +499,10 @@ mod renode_schema {
             let inject = match (self.monitor_command, self.memory_word) {
                 (Some(cmd), None) => AdcInject::MonitorCommand(cmd),
                 (None, Some(word)) => AdcInject::MemoryWord(word),
-                (Some(_), Some(_)) => {
+                (cmd, word) => {
                     return Err(SocError::AdcInjectAmbiguous {
                         channel: self.channel,
-                        set: 2,
-                    })
-                }
-                (None, None) => {
-                    return Err(SocError::AdcInjectAmbiguous {
-                        channel: self.channel,
-                        set: 0,
+                        set: u8::from(cmd.is_some()) + u8::from(word.is_some()),
                     })
                 }
             };
@@ -524,15 +550,6 @@ mod renode_schema {
 
     impl RenodeSoc {
         pub(super) fn into_config(self) -> Result<RenodeConfig, SocError> {
-            // Backend must be renode (this is the renode loader). A "qemu" file
-            // here is a mismatch; an unknown token is UnknownBackend.
-            let backend = super::Backend::parse(&self.backend)?;
-            if backend != super::Backend::Renode {
-                return Err(SocError::BackendMismatch {
-                    expected: "renode".to_string(),
-                    found: self.backend,
-                });
-            }
             if self.platform_repl.trim().is_empty() {
                 return Err(SocError::EmptyPlatform);
             }
@@ -545,19 +562,15 @@ mod renode_schema {
             }
             super::validate_frequency(self.frequency_hz)?;
             if self.support_bundle.is_none() {
-                let mut token_fields: Vec<(&'static str, bool)> = vec![
-                    ("platform_repl", self.platform_repl.contains("{support}")),
-                    (
-                        "extra_setup",
-                        self.extra_setup.iter().any(|c| c.contains("{support}")),
-                    ),
-                    (
-                        "post_load_setup",
-                        self.post_load_setup.iter().any(|c| c.contains("{support}")),
-                    ),
-                ];
-                token_fields.retain(|(_, uses)| *uses);
-                if let Some((field, _)) = token_fields.first() {
+                let uses = |c: &String| c.contains("{support}");
+                let offending = [
+                    ("platform_repl", uses(&self.platform_repl)),
+                    ("extra_setup", self.extra_setup.iter().any(uses)),
+                    ("post_load_setup", self.post_load_setup.iter().any(uses)),
+                ]
+                .into_iter()
+                .find(|(_, uses)| *uses);
+                if let Some((field, _)) = offending {
                     return Err(SocError::SupportTokenWithoutBundle { field });
                 }
             }
@@ -579,8 +592,7 @@ mod renode_schema {
                 self.support_bundle.as_deref(),
                 self.frequency_hz,
             )?;
-            let expected_e_machine = crate::elf::e_machine_from_name(&self.expected_e_machine)
-                .ok_or_else(|| SocError::UnknownEMachine(self.expected_e_machine.clone()))?;
+            let expected_e_machine = super::parse_e_machine(&self.expected_e_machine)?;
 
             super::validate_ports(self.ports.iter().map(|p| (p.letter, p.width)))?;
             validate_port_dir_widths(&self.ports)?;
@@ -592,28 +604,18 @@ mod renode_schema {
                     ("clock_control.presence_command", &clock.presence_command),
                     ("clock_control.tick_command", &clock.tick_command),
                 ])?;
-                if !clock.presence_command.contains("{present}") {
-                    return Err(SocError::ClockControlTemplate {
-                        field: "presence_command",
-                        placeholder: "{present}",
-                    });
-                }
-                if !clock.tick_command.contains("{micros}") {
-                    return Err(SocError::ClockControlTemplate {
-                        field: "tick_command",
-                        placeholder: "{micros}",
-                    });
+                for (field, command, placeholder) in [
+                    ("presence_command", &clock.presence_command, "{present}"),
+                    ("tick_command", &clock.tick_command, "{micros}"),
+                ] {
+                    if !command.contains(placeholder) {
+                        return Err(SocError::ClockControlTemplate { field, placeholder });
+                    }
                 }
             }
 
-            let mut seen_channels: Vec<u8> = Vec::new();
-            for entry in &self.adc {
-                if seen_channels.contains(&entry.channel) {
-                    return Err(SocError::DuplicateAdcChannel {
-                        channel: entry.channel,
-                    });
-                }
-                seen_channels.push(entry.channel);
+            if let Some(channel) = super::first_duplicate(self.adc.iter().map(|e| e.channel)) {
+                return Err(SocError::DuplicateAdcChannel { channel });
             }
             let adc_channels = self
                 .adc
@@ -654,20 +656,9 @@ impl crate::renode::RenodeConfig {
     /// controllers, unknown `expected_e_machine`), and constructs the config.
     /// A `backend = "qemu"` descriptor is refused with [`SocError::BackendMismatch`].
     pub fn from_soc_toml(src: &str) -> Result<crate::renode::RenodeConfig, SocError> {
-        // Check the declared backend BEFORE the full (deny_unknown_fields) parse,
-        // so a QEMU descriptor gets the clear BackendMismatch error rather than a
-        // confusing "unknown field `arch`" from the strict renode schema.
-        match peek_backend(src)? {
-            Backend::Renode => {}
-            Backend::Qemu => {
-                return Err(SocError::BackendMismatch {
-                    expected: "renode".to_string(),
-                    found: "qemu".to_string(),
-                })
-            }
-        }
-        let file: renode_schema::RenodeSocFile = toml::from_str(src)?;
-        file.soc.into_config()
+        parse_for::<renode_schema::RenodeSocFile>(src, Backend::Renode)?
+            .soc
+            .into_config()
     }
 }
 
@@ -690,7 +681,9 @@ mod qemu_schema {
     #[derive(Debug, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(super) struct QemuSoc {
-        pub backend: String,
+        /// Accepted by the schema; already checked by `parse_for`.
+        #[serde(rename = "backend")]
+        pub _backend: String,
         pub arch: String,
         pub machine: String,
         pub icount_shift: u8,
@@ -722,21 +715,13 @@ mod qemu_schema {
 
     impl QemuSoc {
         pub(super) fn into_config(self) -> Result<QemuConfig, SocError> {
-            let backend = super::Backend::parse(&self.backend)?;
-            if backend != super::Backend::Qemu {
-                return Err(SocError::BackendMismatch {
-                    expected: "qemu".to_string(),
-                    found: self.backend,
-                });
-            }
             let arch = arch_from_name(&self.arch)?;
             super::validate_non_empty(&[
                 ("machine", &self.machine),
                 ("gpio_qom_path", &self.gpio_qom_path),
             ])?;
             super::validate_frequency(self.frequency_hz)?;
-            let expected_e_machine = crate::elf::e_machine_from_name(&self.expected_e_machine)
-                .ok_or_else(|| SocError::UnknownEMachine(self.expected_e_machine.clone()))?;
+            let expected_e_machine = super::parse_e_machine(&self.expected_e_machine)?;
 
             super::validate_ports(self.banks.iter().map(|b| (b.letter, b.width)))?;
             super::validate_controllers("i2c", &self.i2c.buses)?;
@@ -761,17 +746,9 @@ impl crate::qemu::QemuConfig {
     /// Load a QEMU config from a `*.soc.toml` descriptor. Same validated
     /// path as the Renode loader; a `backend = "renode"` descriptor is refused.
     pub fn from_soc_toml(src: &str) -> Result<crate::qemu::QemuConfig, SocError> {
-        match peek_backend(src)? {
-            Backend::Qemu => {}
-            Backend::Renode => {
-                return Err(SocError::BackendMismatch {
-                    expected: "qemu".to_string(),
-                    found: "renode".to_string(),
-                })
-            }
-        }
-        let file: qemu_schema::QemuSocFile = toml::from_str(src)?;
-        file.soc.into_config()
+        parse_for::<qemu_schema::QemuSocFile>(src, Backend::Qemu)?
+            .soc
+            .into_config()
     }
 }
 
@@ -880,34 +857,32 @@ fn check_clock_declarations(
 
     let mut found_any = false;
     for source in &sources {
-        for declared in repl_property_values(source, "systickFrequency") {
-            found_any = true;
-            if declared != frequency_hz {
+        // PerformanceInMips is the core clock in MHz, so a part whose clock is
+        // not a whole number of MHz cannot be expressed and the mismatch
+        // reports it rather than silently rounding.
+        for (property, label, scale) in [
+            ("systickFrequency", "nvic systickFrequency", 1u64),
+            ("PerformanceInMips", "cpu PerformanceInMips", 1_000_000),
+        ] {
+            for declared in repl_property_values(source, property) {
+                found_any = true;
+                if declared.saturating_mul(scale) == frequency_hz {
+                    continue;
+                }
+                let mut expected_prose =
+                    format!("not the declared part clock of {frequency_hz} Hz");
+                if scale != 1 {
+                    expected_prose.push_str(&format!(
+                        " expressed in MHz ({} MIPS)",
+                        frequency_hz / scale
+                    ));
+                }
                 return Err(SocError::ClockMismatch {
-                    property: "nvic systickFrequency",
+                    property: label,
                     declared,
                     frequency_hz,
-                    expected_prose: format!("not the declared part clock of {frequency_hz} Hz"),
-                    ratio: declared as f64 / frequency_hz as f64,
-                });
-            }
-        }
-        for declared in repl_property_values(source, "PerformanceInMips") {
-            found_any = true;
-            // MIPS is the core clock in MHz, so a part whose clock is not a
-            // whole number of MHz cannot be expressed and the mismatch below
-            // reports it rather than silently rounding.
-            if declared.saturating_mul(1_000_000) != frequency_hz {
-                return Err(SocError::ClockMismatch {
-                    property: "cpu PerformanceInMips",
-                    declared,
-                    frequency_hz,
-                    expected_prose: format!(
-                        "not the declared part clock of {frequency_hz} Hz expressed in MHz \
-                         ({} MIPS)",
-                        frequency_hz / 1_000_000
-                    ),
-                    ratio: (declared as f64 * 1e6) / frequency_hz as f64,
+                    expected_prose,
+                    ratio: (declared as f64 * scale as f64) / frequency_hz as f64,
                 });
             }
         }
@@ -940,38 +915,46 @@ fn validate_non_empty(fields: &[(&'static str, &str)]) -> Result<(), SocError> {
     Ok(())
 }
 
-/// Validate GPIO port/bank `(letter, width)` pairs: no zero-width port, no two
-/// ports sharing a letter (which the engine keys on).
+/// The first item that repeats an earlier one, if any.
+fn first_duplicate<T: PartialEq>(items: impl IntoIterator<Item = T>) -> Option<T> {
+    let mut seen = Vec::new();
+    for item in items {
+        if seen.contains(&item) {
+            return Some(item);
+        }
+        seen.push(item);
+    }
+    None
+}
+
+/// Validate GPIO port/bank `(letter, width)` pairs: no zero-width port, none
+/// wider than the 32-bit word a bank is observed as, no two ports sharing a
+/// letter (which the engine keys on).
 fn validate_ports(ports: impl Iterator<Item = (char, u8)>) -> Result<(), SocError> {
-    let mut seen: Vec<char> = Vec::new();
-    for (letter, width) in ports {
+    let ports: Vec<(char, u8)> = ports.collect();
+    for &(letter, width) in &ports {
         if width == 0 {
             return Err(SocError::ZeroWidthPort { letter });
         }
         if width > 32 {
             return Err(SocError::PortTooWide { letter, width });
         }
-        if seen.contains(&letter) {
-            return Err(SocError::DuplicatePortLetter(letter));
-        }
-        seen.push(letter);
     }
-    Ok(())
+    match first_duplicate(ports.iter().map(|p| p.0)) {
+        Some(letter) => Err(SocError::DuplicatePortLetter(letter)),
+        None => Ok(()),
+    }
 }
 
 /// Validate a bus controller list has no duplicate names.
 fn validate_controllers(bus: &'static str, controllers: &[String]) -> Result<(), SocError> {
-    let mut seen: Vec<&str> = Vec::new();
-    for c in controllers {
-        if seen.contains(&c.as_str()) {
-            return Err(SocError::DuplicateController {
-                bus,
-                name: c.clone(),
-            });
-        }
-        seen.push(c);
+    match first_duplicate(controllers) {
+        Some(name) => Err(SocError::DuplicateController {
+            bus,
+            name: name.clone(),
+        }),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 // ── Resolution: a `backend:part` spec → a descriptor ───────────────
@@ -979,32 +962,24 @@ fn validate_controllers(bus: &'static str, controllers: &[String]) -> Result<(),
 /// Built-in descriptors, embedded so the binary is self-contained while the
 /// file stays the single source of truth (the `mcp4728.toml` precedent). Keyed
 /// by the `backend:part` spec [`SocConfig::resolve`] accepts.
-const EMBEDDED: &[(&str, &str)] = &[
-    (
-        "renode:stm32f072",
-        include_str!("../db/mcu/stm32f072.soc.toml"),
-    ),
-    (
-        "renode:stm32f103",
-        include_str!("../db/mcu/stm32f103.soc.toml"),
-    ),
-    (
-        "renode:stm32f4_discovery",
-        include_str!("../db/mcu/stm32f4_discovery.soc.toml"),
-    ),
-    (
-        "renode:nrf52840",
-        include_str!("../db/mcu/nrf52840.soc.toml"),
-    ),
-    (
-        "renode:sifive_fe310",
-        include_str!("../db/mcu/sifive_fe310.soc.toml"),
-    ),
-    ("renode:rp2040", include_str!("../db/mcu/rp2040.soc.toml")),
-    ("qemu:esp32", include_str!("../db/mcu/esp32.soc.toml")),
-    ("qemu:esp32s3", include_str!("../db/mcu/esp32s3.soc.toml")),
-    ("qemu:esp32c3", include_str!("../db/mcu/esp32c3.soc.toml")),
-];
+const EMBEDDED: &[(&str, &str)] = &{
+    macro_rules! embedded {
+        ($($spec:literal => $file:literal),* $(,)?) => {
+            [$(($spec, include_str!(concat!("../db/mcu/", $file, ".soc.toml")))),*]
+        };
+    }
+    embedded! {
+        "renode:stm32f072" => "stm32f072",
+        "renode:stm32f103" => "stm32f103",
+        "renode:stm32f4_discovery" => "stm32f4_discovery",
+        "renode:nrf52840" => "nrf52840",
+        "renode:sifive_fe310" => "sifive_fe310",
+        "renode:rp2040" => "rp2040",
+        "qemu:esp32" => "esp32",
+        "qemu:esp32s3" => "esp32s3",
+        "qemu:esp32c3" => "esp32c3",
+    }
+};
 
 /// A resolved descriptor, ready to hand to the backend it names.
 #[derive(Debug, Clone)]
@@ -1102,10 +1077,7 @@ impl SocConfig {
                     return peek_backend(&src)
                         .and_then(|declared| {
                             if declared != expected {
-                                return Err(SocError::BackendMismatch {
-                                    expected: expected.name().to_string(),
-                                    found: declared.name().to_string(),
-                                });
+                                return Err(expected.mismatch(declared));
                             }
                             Self::from_soc_toml(&src)
                         })
@@ -1198,16 +1170,13 @@ impl SocConfig {
 /// directory. Both are optional; a build with neither uses only the embedded
 /// built-ins.
 fn override_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(d) = std::env::var_os("HAUKSBEE_MCU_DIR") {
-        if !d.is_empty() {
-            dirs.push(PathBuf::from(d));
-        }
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(home).join(".config/hauksbee/mcu"));
-    }
-    dirs
+    let explicit = std::env::var_os("HAUKSBEE_MCU_DIR").filter(|d| !d.is_empty());
+    let home = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/hauksbee/mcu"));
+    explicit
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(home)
+        .collect()
 }
 
 /// The warning for a SET-but-missing `$HAUKSBEE_MCU_DIR`, or `None` when the
@@ -1216,10 +1185,7 @@ fn override_dirs() -> Vec<PathBuf> {
 /// absent on most machines and must stay silent. Split from the eprintln so
 /// the wording is unit-testable ([`env_dir_missing_warning`] is the pure core).
 fn missing_env_dir_warning() -> Option<String> {
-    let d = std::env::var_os("HAUKSBEE_MCU_DIR")?;
-    if d.is_empty() {
-        return None;
-    }
+    let d = std::env::var_os("HAUKSBEE_MCU_DIR").filter(|d| !d.is_empty())?;
     env_dir_missing_warning(&PathBuf::from(d))
 }
 
@@ -1320,32 +1286,6 @@ fn nearest_builtin(spec: &str, builtins: &[&'static str]) -> Option<&'static str
         }
     }
     best.map(|(_, _, _, c)| c)
-}
-
-/// Classic Levenshtein edit distance (the same helper the engine's net
-/// did-you-mean uses; duplicated locally because hauksbee-mcu sits below the
-/// engine in the crate graph).
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let (n, m) = (a.len(), b.len());
-    if n == 0 {
-        return m;
-    }
-    if m == 0 {
-        return n;
-    }
-    let mut prev: Vec<usize> = (0..=m).collect();
-    let mut cur = vec![0usize; m + 1];
-    for i in 1..=n {
-        cur[0] = i;
-        for j in 1..=m {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[m]
 }
 
 #[cfg(test)]

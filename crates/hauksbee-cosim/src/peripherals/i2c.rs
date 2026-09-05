@@ -53,7 +53,7 @@ pub trait I2cSlave: Send {
     /// The [`TickCtx`] is the same context the peripheral `pre_solve` /
     /// `post_solve` hooks receive, so a slave can convert its accumulated
     /// register writes into net voltages (e.g. a DAC driving its VOUT nets
-    /// through their [`crate::drivers::PinDriver`]s).
+    /// through their [`hauksbee_bind::drivers::PinDriver`]s).
     ///
     /// **Delivery is deferred to the chunk boundary.** The byte-level events
     /// arrive through the MCU's `on_i2c` callback during `run_micros`, where no

@@ -424,30 +424,14 @@ fn from_strings(c: &Component) -> PartClass {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Component, Pin};
+    use crate::testutil::pin;
+    use crate::Component;
 
     fn part(reference: &str, value: &str, lib_id: &str, footprint: &str) -> Component {
-        Component {
-            reference: reference.into(),
-            value: value.into(),
-            lib_id: lib_id.into(),
-            footprint: footprint.into(),
-            position: None,
-            layer: "F.Cu".into(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: vec![pad("1", 1), pad("2", 2)],
-        }
-    }
-
-    fn pad(number: &str, net: i64) -> Pin {
-        Pin {
-            number: number.into(),
-            net: Some(net),
-            function: String::new(),
-            kind: String::new(),
-            position: None,
-        }
+        let pins = vec![pin("1", Some(1)), pin("2", Some(2))];
+        let mut c = crate::testutil::part(reference, value, lib_id, footprint, pins);
+        c.layer = "F.Cu".into();
+        c
     }
 
     #[test]
@@ -604,11 +588,11 @@ mod tests {
     #[test]
     fn a_part_without_two_connected_pads_is_not_a_two_terminal_passive() {
         let mut three = part("R1", "10k", "Device:R", "");
-        three.pins.push(pad("3", 3));
+        three.pins.push(pin("3", Some(3)));
         assert_eq!(classify_two_terminal(&three), PartClass::NotTwoTerminal);
         // Repeated pad numbers still count as two terminals.
         let mut doubled = part("R1", "10k", "Device:R", "");
-        doubled.pins.push(pad("1", 1));
+        doubled.pins.push(pin("1", Some(1)));
         assert!(classify_two_terminal(&doubled).is_resistor());
     }
 

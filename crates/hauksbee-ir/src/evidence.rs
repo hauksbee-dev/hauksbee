@@ -268,6 +268,52 @@ impl std::fmt::Display for AssumptionId {
     }
 }
 
+/// One wire-vocabulary table per enum, spelled once: `as_str` (the exact
+/// string serde writes, so a hand-written surface cannot spell it
+/// differently), `Display`, and a `FromStr` whose error lists every accepted
+/// spelling.
+macro_rules! wire_enum {
+    ($ty:ident, $what:literal, { $($variant:ident => $s:literal),+ $(,)? }) => {
+        impl $ty {
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $s,)+
+                }
+            }
+        }
+
+        impl std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        impl std::str::FromStr for $ty {
+            type Err = String;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                match value {
+                    $($s => Ok(Self::$variant),)+
+                    other => Err(format!(
+                        "unknown {} {other:?}; expected {}",
+                        $what,
+                        expected_list(&[$($s),+])
+                    )),
+                }
+            }
+        }
+    };
+}
+
+/// `a, b, c, or d`: the accepted spellings, for a `FromStr` refusal.
+fn expected_list(names: &[&str]) -> String {
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{}, or {last}", rest.join(", ")),
+        Some((last, _)) => last.to_string(),
+        None => String::new(),
+    }
+}
+
 /// What kind of gap an [`Assumption`] records. The kind, not the wording, is
 /// what [`EvidenceMap::derive_status`] reads, so adding a variant is a policy
 /// decision about what undermines a conclusion.
@@ -842,12 +888,7 @@ impl Assumption {
         // finds out. Left as a debug assert rather than a `Result` because
         // ninety call sites returning `Result` for a bug in their own arguments
         // buys nothing a test does not.
-        debug_assert!(
-            built.validate().is_ok(),
-            "{}",
-            built.validate().unwrap_err()
-        );
-        built
+        built.checked()
     }
 
     /// Separates the two halves of a named abstention inside the binder's single
@@ -1148,12 +1189,7 @@ impl Assumption {
             built.id = built.id.with_ordinal(n);
             built.collision_base_id = built.id.clone();
         }
-        debug_assert!(
-            built.validate().is_ok(),
-            "{}",
-            built.validate().unwrap_err()
-        );
-        built
+        built.checked()
     }
 
     /// A model stood in for the real part: an engine fallback entry
@@ -1614,8 +1650,7 @@ impl Assumption {
         assumption.id =
             AssumptionId::disambiguated(AssumptionKind::Waived, &id_subject, &assumption.statement);
         assumption.collision_base_id = assumption.id.clone();
-        debug_assert!(assumption.validate().is_ok());
-        Ok(assumption)
+        Ok(assumption.checked())
     }
 
     /// Structural well-formedness, which a registry asserts as it collects and
@@ -1629,6 +1664,16 @@ impl Assumption {
     ///   warning), and a `Waived` one must;
     /// - a `TimeWindow` scope's bounds are real numbers, because they reach the
     ///   published JSON and NaN or infinity is not JSON.
+    /// Every constructor's output must satisfy the rules [`Self::validate`]
+    /// states, and a debug build is where a producer that hands over an empty
+    /// datum finds out. A debug assert rather than a `Result` because ninety
+    /// call sites returning `Result` for a bug in their own arguments buys
+    /// nothing a test does not.
+    fn checked(self) -> Self {
+        debug_assert!(self.validate().is_ok(), "{}", self.validate().unwrap_err());
+        self
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         for (name, text) in [
             ("statement", &self.statement),
@@ -1804,47 +1849,18 @@ impl ModelSourceTier {
             Self::UserModel => 70,
         }
     }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::EstimatedFallback => "estimated-fallback",
-            Self::IntervalModel => "interval-model",
-            Self::DatasheetDerived => "datasheet-derived",
-            Self::CuratedLibrary => "curated-library",
-            Self::CuratedPack => "curated-pack",
-            Self::VendorSpice => "vendor-spice",
-            Self::UserModel => "user-model",
-        }
-    }
 }
 
-impl std::fmt::Display for ModelSourceTier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for ModelSourceTier {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "open" => Ok(Self::Open),
-            "estimated-fallback" => Ok(Self::EstimatedFallback),
-            "interval-model" => Ok(Self::IntervalModel),
-            "datasheet-derived" => Ok(Self::DatasheetDerived),
-            "curated-library" => Ok(Self::CuratedLibrary),
-            "curated-pack" => Ok(Self::CuratedPack),
-            "vendor-spice" => Ok(Self::VendorSpice),
-            "user-model" => Ok(Self::UserModel),
-            other => Err(format!(
-                "unknown model tier {other:?}; expected open, estimated-fallback, interval-model, \
-                 datasheet-derived, curated-library, curated-pack, vendor-spice, or user-model"
-            )),
-        }
-    }
-}
+wire_enum!(ModelSourceTier, "model tier", {
+    Open => "open",
+    EstimatedFallback => "estimated-fallback",
+    IntervalModel => "interval-model",
+    DatasheetDerived => "datasheet-derived",
+    CuratedLibrary => "curated-library",
+    CuratedPack => "curated-pack",
+    VendorSpice => "vendor-spice",
+    UserModel => "user-model",
+});
 
 /// What validation the selected model has actually passed. These names say
 /// nothing about unmeasured accuracy: range checking is not curve validation.
@@ -1866,39 +1882,14 @@ impl ModelValidation {
             Self::VendorQualified => 30,
         }
     }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Unvalidated => "unvalidated",
-            Self::PhysicalBoundsOnly => "physical-bounds-only",
-            Self::DatasheetCurves => "datasheet-curves",
-            Self::VendorQualified => "vendor-qualified",
-        }
-    }
 }
 
-impl std::str::FromStr for ModelValidation {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "unvalidated" => Ok(Self::Unvalidated),
-            "physical-bounds-only" => Ok(Self::PhysicalBoundsOnly),
-            "datasheet-curves" => Ok(Self::DatasheetCurves),
-            "vendor-qualified" => Ok(Self::VendorQualified),
-            other => Err(format!(
-                "unknown model validation {other:?}; expected unvalidated, \
-                 physical-bounds-only, datasheet-curves, or vendor-qualified"
-            )),
-        }
-    }
-}
-
-impl std::fmt::Display for ModelValidation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+wire_enum!(ModelValidation, "model validation", {
+    Unvalidated => "unvalidated",
+    PhysicalBoundsOnly => "physical-bounds-only",
+    DatasheetCurves => "datasheet-curves",
+    VendorQualified => "vendor-qualified",
+});
 
 /// Confidence in a model or parameter match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -2416,22 +2407,12 @@ pub enum ModelIntervalKind {
     EstimatedRange,
 }
 
-impl ModelIntervalKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::SpecificationLimits => "specification-limits",
-            Self::EmpiricalError => "empirical-error",
-            Self::TypicalRange => "typical-range",
-            Self::EstimatedRange => "estimated-range",
-        }
-    }
-}
-
-impl std::fmt::Display for ModelIntervalKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+wire_enum!(ModelIntervalKind, "model interval kind", {
+    SpecificationLimits => "specification-limits",
+    EmpiricalError => "empirical-error",
+    TypicalRange => "typical-range",
+    EstimatedRange => "estimated-range",
+});
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -3300,24 +3281,13 @@ pub enum EvidenceStatus {
     Undermined,
 }
 
-impl EvidenceStatus {
-    /// The wire form, identical to what serde writes. The one place this
-    /// vocabulary is spelled, so a hand-written surface cannot spell it
-    /// differently.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Clean => "clean",
-            Self::Qualified => "qualified",
-            Self::Undermined => "undermined",
-        }
-    }
-}
-
-impl std::fmt::Display for EvidenceStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+// The wire form, identical to what serde writes: the one place this
+// vocabulary is spelled, so a hand-written surface cannot spell it differently.
+wire_enum!(EvidenceStatus, "evidence status", {
+    Clean => "clean",
+    Qualified => "qualified",
+    Undermined => "undermined",
+});
 
 /// What one assertion rests on: the artifacts, models, parameters and
 /// assumptions on its causal path, its error budget, and the derived status.
