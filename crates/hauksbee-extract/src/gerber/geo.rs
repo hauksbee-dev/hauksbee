@@ -356,6 +356,17 @@ fn contour_edges(contour: &[(f64, f64)]) -> impl Iterator<Item = ((f64, f64), (f
     (0..n).filter_map(move |i| (n >= 2).then_some((contour[(i + n - 1) % n], contour[i])))
 }
 
+/// Whether `(px, py)` lies on the copper of `shape`, corner radius included.
+pub fn shape_contains_point(shape: &Shape, px: f64, py: f64) -> bool {
+    match shape {
+        Shape::Capsule(c) => point_seg_dist2(px, py, c.ax, c.ay, c.bx, c.by) <= c.r * c.r,
+        Shape::Polygon { pts, r } => point_reaches_polygon((px, py), pts, *r),
+        Shape::MultiPolygon { contours, weights } => {
+            point_in_weighted_contours(px, py, contours, weights)
+        }
+    }
+}
+
 fn point_reaches_polygon(p: (f64, f64), polygon: &[(f64, f64)], radius: f64) -> bool {
     point_in_polygon(p.0, p.1, polygon)
         || contour_edges(polygon)

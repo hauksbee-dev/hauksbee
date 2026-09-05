@@ -92,20 +92,6 @@ fn same_layer_role(left: &LayerRole, right: &LayerRole) -> bool {
     }
 }
 
-fn layer_role_phrase(role: &LayerRole) -> String {
-    match role {
-        LayerRole::Copper { index: 0, .. } => "top copper".to_string(),
-        LayerRole::Copper {
-            index: usize::MAX, ..
-        } => "bottom copper".to_string(),
-        LayerRole::Copper { index, .. } => format!("inner copper position {index}"),
-        LayerRole::Drill => "drilling".to_string(),
-        LayerRole::Outline => "the board outline".to_string(),
-        LayerRole::Ignored => "electrically irrelevant artwork".to_string(),
-        LayerRole::Unknown => "unknown".to_string(),
-    }
-}
-
 /// Resolve one Altium `.LDP` layer walk into the physical pair used by the
 /// drill stitcher. `g1` is physical L2, and a terminal `gbl` sits one layer
 /// below the deepest named inner layer (or at L2 on a two-layer job).
@@ -207,6 +193,180 @@ fn drill_is_gerber_format(head: &str, ext: Option<&str>) -> bool {
     head.contains("%FS")
         || head.contains("%AD")
         || ext.map(|s| s.eq_ignore_ascii_case("art")).unwrap_or(false)
+}
+
+/// Up to 64 KiB of the file's leading text, lossily decoded, for
+/// classification. Every X2 attribute and Excellon header sits at the top of
+/// its file; a binary member yields something no rule matches.
+fn read_head(path: &Path) -> String {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let mut buf = Vec::new();
+    let _ = file.take(64 * 1024).read_to_end(&mut buf);
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// The refusal for a job with no copper film, naming every file seen and how
+/// it was read, so the fix is a rename and not a search.
+fn no_copper_error(inventory: &[(String, LayerRole)]) -> ExtractError {
+    const SHOWN: usize = 40;
+    let mut seen: Vec<String> = inventory
+        .iter()
+        .take(SHOWN)
+        .map(|(name, role)| format!("{name} ({})", layers::role_phrase(role)))
+        .collect();
+    if inventory.len() > SHOWN {
+        seen.push(format!("and {} more", inventory.len() - SHOWN));
+    }
+    let listing = if seen.is_empty() {
+        "no files at all".to_string()
+    } else {
+        format!("{} file(s): {}", inventory.len(), seen.join(", "))
+    };
+    ExtractError::Gerber(format!(
+        "no copper gerber layers found here; point hauksbee at the fab output folder (or a \
+         zip of it) that contains the copper layer files alongside the drill file. Seen: \
+         {listing}. A copper film is recognised by its exporter's own statement (a .gbrjob \
+         entry, or an X2 TF.FileFunction,Copper attribute in the film) or by name: \
+         .GTL/.GBL/.G1, *-F_Cu.gbr/*-B_Cu.gbr/*-In1_Cu.gbr, .cmp/.sol, Top.gbr/Bottom.gbr. \
+         Rename the copper films to one of those, or add a layer_map.txt beside them with \
+         one line per film, such as `Top.ger = copper:0` and `Bottom.ger = copper:bottom`"
+    ))
+}
+
+/// Whether a drill file's name says its holes are NOT plated.
+fn name_says_non_plated(fname: &str) -> bool {
+    let n = fname.to_ascii_lowercase();
+    n.contains("npth") || n.contains("non-plated") || n.contains("nonplated")
+}
+
+/// One drill file read into hits, with what its own body said about them.
+struct DrillRead {
+    hits: Vec<excellon::Hole>,
+    /// Plated, non-plated, or unstated, from the body alone.
+    plated: Option<bool>,
+    declared: excellon::DeclaredSpan,
+    /// A gerber-format film whose drill apertures mix plated and mechanical
+    /// functions; plating is assigned per file here, so the film settles nothing.
+    mixed_functions: bool,
+}
+
+/// Read an Excellon program, carrying its reader notes into the job's.
+fn read_excellon(text: &str, fname: &str, notes: &mut Vec<String>) -> DrillRead {
+    let drill = excellon::parse(text);
+    notes.extend(drill.notes.iter().map(|n| format!("{fname}: {n}")));
+    DrillRead {
+        hits: drill.holes,
+        plated: drill.plated,
+        declared: drill.span,
+        mixed_functions: false,
+    }
+}
+
+/// Read a gerber-format drill film: each flash is a hole (an oblong flash a
+/// slot), and on a film that declares itself a rout layer each drawn path is
+/// a plated wall.
+///
+/// Plating is taken from the strongest source the film offers: its own
+/// `TF.FileFunction`, then its `%TA.AperFunction` drill functions. Whether the
+/// drawn paths are routs is settled by the film's OWN attribute only: any
+/// board whose project name contains "slot" would otherwise have its legend
+/// promoted to conductor.
+fn read_drill_film(text: &str, fname: &str, notes: &mut Vec<String>) -> DrillRead {
+    let functions = film_drill_functions(text);
+    let function = film_file_function(text).unwrap_or_default();
+    let plated =
+        if film_is_non_plated(text) || matches!(functions, FilmDrillFunctions::AllMechanical) {
+            Some(false)
+        } else if function.contains("PLATED")
+            || function.contains("PTH")
+            || matches!(functions, FilmDrillFunctions::AllPlated)
+        {
+            Some(true)
+        } else {
+            None
+        };
+    let declares_rout =
+        function.contains("ROUT") || function.contains("SLOT") || function.contains("MILL");
+    let lower = fname.to_ascii_lowercase();
+    if !declares_rout
+        && (lower.contains("rout") || lower.contains("slot") || lower.contains("mill"))
+    {
+        notes.push(format!(
+            "{fname}: this gerber-format drill film is named as a rout or slot layer but does \
+             not declare itself one, so the paths drawn on it are left as artwork rather \
+             than read as plated walls. A drawn path is only a conductor if the film says \
+             it is; promoting it on the strength of a file name would turn any legend on \
+             a board whose project name contains \"slot\" into copper. Add a \
+             TF.FileFunction naming the layer's role to recover them."
+        ));
+    }
+    let mut hits = Vec::new();
+    for pr in rs274x::parse_layer(text).unwrap_or_default() {
+        match pr.kind {
+            rs274x::PrimKind::Flash => {
+                // A drill film draws the finished CUTOUT, so an oblong flash is
+                // a slot: its narrow side is the tool and its long axis the path
+                // that tool swept. A round flash comes back with its two
+                // centres coincident, which is a round hole.
+                let (dia, from, to) = drill_flash_extent(&pr.shape);
+                let is_slot = (to.0 - from.0).hypot(to.1 - from.1) > 1e-9;
+                hits.push(excellon::Hole {
+                    x: from.0,
+                    y: from.1,
+                    diameter: dia,
+                    to: is_slot.then_some(to),
+                });
+            }
+            rs274x::PrimKind::Track if declares_rout => {
+                if let geo::Shape::Capsule(c) = &pr.shape {
+                    hits.push(excellon::Hole {
+                        x: c.ax,
+                        y: c.ay,
+                        diameter: c.r * 2.0,
+                        to: Some((c.bx, c.by)),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    DrillRead {
+        hits,
+        plated,
+        declared: film_declared_span(text),
+        mixed_functions: matches!(functions, FilmDrillFunctions::Mixed),
+    }
+}
+
+/// The hits a pad flash covers on two or more copper layers: the ring CAD
+/// draws around a via or a plated pad, and never around a mounting hole.
+/// Pours and tracks do not count; a mechanical hole through two planes is
+/// exactly the phantom short this rule must not create.
+fn hits_under_pad_rings(
+    hits: Vec<excellon::Hole>,
+    layers: &[Vec<rs274x::CopperPrim>],
+) -> Vec<excellon::Hole> {
+    let ringed = |x: f64, y: f64| {
+        layers
+            .iter()
+            .filter(|prims| {
+                prims.iter().any(|p| {
+                    let b = p.shape.bounds();
+                    p.kind == rs274x::PrimKind::Flash
+                        && x >= b[0]
+                        && x <= b[2]
+                        && y >= b[1]
+                        && y <= b[3]
+                        && geo::shape_contains_point(&p.shape, x, y)
+                })
+            })
+            .count()
+            >= 2
+    };
+    hits.into_iter().filter(|h| ringed(h.x, h.y)).collect()
 }
 
 /// Reverse-extract from a directory of gerber/drill/P&P files.
@@ -450,6 +610,8 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     let mut outlines: Vec<std::path::PathBuf> = Vec::new();
     let mut csvs: Vec<std::path::PathBuf> = Vec::new();
     let mut loc_files: Vec<std::path::PathBuf> = Vec::new();
+    // Every file and how it was read, for a refusal that can say what it saw.
+    let mut inventory: Vec<(String, LayerRole)> = Vec::new();
 
     for path in all_files {
         let fname = path
@@ -457,26 +619,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        let inferred = {
-            let inferred = layers::classify(&path);
-            if inferred == LayerRole::Unknown {
-                // A KiCad user may rename an inner copper layer, and the
-                // exported film follows that label: `GND_Cu.gbr` says neither
-                // "inner" nor a stack number. Its X2 declaration is the last
-                // authority before a file remains Unknown.
-                std::fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|text| {
-                        let ext = path.extension().and_then(|s| s.to_str());
-                        drill_is_gerber_format(&text, ext)
-                            .then(|| copper_x2_layer_role(&text, &path))
-                            .flatten()
-                    })
-                    .unwrap_or(inferred)
-            } else {
-                inferred
-            }
-        };
+        let inferred = layers::classify_file(&path, &read_head(&path));
         let extrep_declared = path
             .extension()
             .and_then(|s| s.to_str())
@@ -484,8 +627,9 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             .and_then(|extension| extrep_roles.get(&extension))
             .map(|role| extrep_layer_role(role, &path));
         // Explicit user mapping first, then `.gbrjob`, `.LDP` drill identity,
-        // then a usable unique `.EXTREP` extension. Filename/X2 inference is
-        // only the fallback.
+        // then a usable unique `.EXTREP` extension. The file's own attribute,
+        // its name and its body (in that order, see `classify_file`) are the
+        // fallback.
         let role = if let Some(mapped) = mapping.get(&fname) {
             mapped.clone()
         } else if let Some(job_role) = gbrjob.get(&fname) {
@@ -526,8 +670,8 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
                 if !same_layer_role(&declared, extrep) {
                     notes.push(format!(
                         ".gbrjob declares {fname} as {}, while .EXTREP says {}; the exact-file .gbrjob entry was used instead of the extension-wide report.",
-                        layer_role_phrase(&declared),
-                        layer_role_phrase(extrep)
+                        layers::role_phrase(&declared),
+                        layers::role_phrase(extrep)
                     ));
                 }
             }
@@ -538,14 +682,15 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             if !same_layer_role(&declared, &inferred) {
                 notes.push(format!(
                     ".EXTREP declares {fname} as {}, while filename inference says {}; exporter metadata was used.",
-                    layer_role_phrase(&declared),
-                    layer_role_phrase(&inferred)
+                    layers::role_phrase(&declared),
+                    layers::role_phrase(&inferred)
                 ));
             }
             declared
         } else {
             inferred
         };
+        inventory.push((fname.clone(), role.clone()));
         match role {
             r @ LayerRole::Copper { .. } => copper.push((r, path)),
             LayerRole::Drill => drills.push(path),
@@ -573,12 +718,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     }
 
     if copper.is_empty() {
-        return Err(ExtractError::Gerber(
-            "no copper gerber layers found here; point hauksbee at the fab output \
-             folder (or a zip of it) that contains the copper layer files \
-             (.gtl/.gbl, or *-F_Cu.gbr style) alongside the drill file"
-                .to_string(),
-        ));
+        return Err(no_copper_error(&inventory));
     }
 
     // Resolve copper layer order (top -> bottom).
@@ -650,230 +790,153 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
         }
     }
 
-    // Parse drills -> plated holes only (NPTH are mechanical). A drill is
-    // usually Excellon, but some tools (Allegro `.art`) emit it as a *gerber*
-    // film with the holes drawn as flashes. We sniff: a gerber drill carries
-    // RS-274X markers (`%FS`/`%MO`/`G04`), in which case the flash centres are
-    // the hole locations; otherwise it is Excellon.
+    // Read every drill file into hits and work out what it says about plating
+    // and about the copper layers its hits reach. Nothing is stitched yet,
+    // because whether SILENCE means "through-hole" depends on the rest of the
+    // job.
     let n_copper = ordered.len();
-    // Reader notes already contain metadata authority/fallback decisions;
-    // append every drill refusal below in encounter order so the final report
-    // remains deterministic and complete.
-
-    // Pass one: read every plated drill file and work out what it says about
-    // the copper layers its hits reach. Nothing is stitched yet, because
-    // whether SILENCE means "through-hole" depends on the rest of the job.
-    enum DrillBody {
-        /// An Excellon program, already parsed into hits.
-        Excellon(excellon::DrillFile),
-        /// A gerber film whose flashes are the hole locations. Kept as text
-        /// because the RS-274X plotter is the thing that reads it.
-        Film(String),
-    }
     struct ParsedDrill {
-        path: std::path::PathBuf,
         name: String,
-        body: DrillBody,
+        hits: Vec<excellon::Hole>,
         declared: excellon::DeclaredSpan,
         claim: SpanClaim,
     }
     // Does the job separate its plated and non-plated drilling into different
     // files? If it does, a sibling that is NOT the non-plated one is the plated
     // set by construction, which is a real signal and not an assumption.
-    let job_has_a_named_npth_drill = drills.iter().any(|d| {
-        let n = d
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        n.contains("npth") || n.contains("non-plated") || n.contains("nonplated")
-    });
-    // Drill files dropped because nothing said whether their holes are plated.
+    let job_has_a_named_npth_drill = drills.iter().any(|d| name_says_non_plated(&film(d)));
+    // Drill files dropped whole because nothing said whether their holes are
+    // plated, and hits kept on pad-ring evidence alone.
     let mut refused_plating_files = 0usize;
+    let mut inferred_plating_holes = 0usize;
     let mut parsed: Vec<ParsedDrill> = Vec::new();
     for d in &drills {
         let text = std::fs::read_to_string(d)
             .map_err(|e| ExtractError::Xml(format!("read {}: {e}", film(d))))?;
-        let n = d
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
+        let fname = film(d).to_string();
+        let n = fname.to_ascii_lowercase();
         let ldp_role = ldp_drills.get(&n);
         // Package manifests outrank the filename for plating. When `.gbrjob`
         // and `.LDP` both speak they must agree; silently choosing one can turn
         // a mechanical hole into a conductor or erase a real barrel.
-        let gbrjob_plated = match gbrjob.get(d.file_name().and_then(|s| s.to_str()).unwrap_or("")) {
+        let gbrjob_plated = match gbrjob.get(&fname) {
             Some(layers::GbrJobRole::Drill { plated }) => Some(*plated),
             _ => None,
         };
         let ldp_plated = ldp_role.and_then(|role| role.plated);
         if matches!((gbrjob_plated, ldp_plated), (Some(a), Some(b)) if a != b) {
             return Err(ExtractError::Gerber(format!(
-                ".gbrjob and .LDP disagree about whether {} is plated; resolve the package metadata before reconstructing connectivity",
-                film(d)
+                ".gbrjob and .LDP disagree about whether {fname} is plated; resolve the package metadata before reconstructing connectivity"
             )));
         }
         let manifest_plated = gbrjob_plated.or(ldp_plated);
-        let plated = !(n.contains("npth") || n.contains("non-plated") || n.contains("nonplated"));
         // Whether the NAME says these hits are plated. Weakest of the sources,
         // consulted only when the file itself says nothing. A manifest
         // `Plated` declaration counts as an explicit statement.
         let name_says_plated =
             n.contains("pth") || n.contains("plated") || manifest_plated == Some(true);
         let head: String = text.chars().take(256).collect();
-        let is_gerber = drill_is_gerber_format(&head, d.extension().and_then(|s| s.to_str()));
+        let read = if drill_is_gerber_format(&head, d.extension().and_then(|s| s.to_str())) {
+            read_drill_film(&text, &fname, &mut notes)
+        } else {
+            read_excellon(&text, &fname, &mut notes)
+        };
         // An X2 attribute in the file body beats the file name; the name is
         // consulted only when the file itself is silent.
-        let (body, file_declared) = if is_gerber {
-            // A gerber-format drill film carries the same `TF.FileFunction`
-            // attribute an Excellon file does, and is read the same way: for
-            // whether the holes are plated at all, and for the layer pair they
-            // span. Discarding either lets a film that states it drills a
-            // mechanical or blind hole be read as a plated through-hole and
-            // stitch the whole stack. Plating is taken from the strongest source
-            // the film offers, in order: its own `TF.FileFunction`, its
-            // `%TA.AperFunction` drill functions, the file name, the job
-            // splitting plated from non-plated into separate files. With none of
-            // those, plating is refused rather than assumed.
-            let functions = film_drill_functions(&text);
-            let says_plated = film_file_function(&text)
-                .map(|f| f.contains("PLATED") || f.contains("PTH"))
-                .unwrap_or(false);
-            let file_plated = if film_is_non_plated(&text)
-                || matches!(functions, FilmDrillFunctions::AllMechanical)
-            {
-                Some(false)
-            } else if says_plated || matches!(functions, FilmDrillFunctions::AllPlated) {
-                Some(true)
-            } else {
-                None
-            };
-            if matches!((file_plated, manifest_plated), (Some(a), Some(b)) if a != b) {
-                notes.push(format!(
-                    "{}: the drill file and package metadata disagree about whether its holes are plated. Its hits are refused instead of choosing the reading that would either invent or erase a conductor.",
-                    film(d)
-                ));
-                refused_plating_files += 1;
-                continue;
-            }
-            if file_plated == Some(false) || manifest_plated == Some(false) {
-                // Both authorities agree this is mechanical, or only one
-                // speaks and says so. It contributes no copper connectivity.
-                continue;
-            }
-            if file_plated.is_none() && manifest_plated.is_none() && !plated {
-                continue;
-            }
-            let derivable = says_plated
-                || matches!(functions, FilmDrillFunctions::AllPlated)
-                || name_says_plated
-                || job_has_a_named_npth_drill;
-            if !derivable {
-                notes.push(format!(
-                    "{}: nothing in this job says whether the holes on this drill film are \
-                     plated. Its hits are recorded but stitch no layers, because a plated hole \
-                     is a conductor and a mechanical one is not, and guessing either way is \
-                     wrong half the time. Add a TF.FileFunction, a %TA.AperFunction on the drill \
-                     apertures, or the usual PTH/NPTH split across two files.",
-                    d.file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("drill film")
-                ));
-                refused_plating_files += 1;
-                continue;
-            }
-            if matches!(functions, FilmDrillFunctions::Mixed) {
-                notes.push(format!(
-                    "{}: this drill film mixes plated and mechanical aperture functions, and \
-                     this reader assigns plating per FILE rather than per aperture. Its hits are \
-                     recorded but stitch no layers rather than have the mechanical ones read as \
-                     conductors. Split the plated and non-plated drilling into separate files to \
-                     recover them.",
-                    d.file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("drill film")
-                ));
-                refused_plating_files += 1;
-                continue;
-            }
-            let declared = film_declared_span(&text);
-            (DrillBody::Film(text), declared)
+        if matches!((read.plated, manifest_plated), (Some(a), Some(b)) if a != b) {
+            notes.push(format!(
+                "{fname}: the drill file and package metadata disagree about whether its holes are plated. Its hits are refused instead of choosing the reading that would either invent or erase a conductor."
+            ));
+            refused_plating_files += 1;
+            continue;
+        }
+        // A body that declares itself non-plated contributes no hits, so it
+        // must not reach the span analysis at all. Leaving it in let a
+        // mechanical file's layer-pair name mark the job multi-span and
+        // force its plated siblings into a refusal, losing real stitching
+        // on the strength of a file that drills no copper.
+        if read.plated == Some(false) || manifest_plated == Some(false) {
+            continue;
+        }
+        if read.plated.is_none() && manifest_plated.is_none() && name_says_non_plated(&fname) {
+            continue;
+        }
+        // A file that drills nothing is evidence about nothing. Left in, an
+        // empty pass declaring a blind pair would mark the job multi-span and
+        // push every silent sibling into a refusal.
+        if read.hits.is_empty() {
+            continue;
+        }
+        if read.mixed_functions {
+            notes.push(format!(
+                "{fname}: this drill film mixes plated and mechanical aperture functions, and \
+                 this reader assigns plating per FILE rather than per aperture. Its hits are \
+                 recorded but stitch no layers rather than have the mechanical ones read as \
+                 conductors. Split the plated and non-plated drilling into separate files to \
+                 recover them."
+            ));
+            refused_plating_files += 1;
+            continue;
+        }
+        // Plating decides whether these hits conduct. It comes from the file's
+        // own declaration, its name, or the job's plated/non-plated split. With
+        // none of those, the copper is the last witness: a hit that a pad flash
+        // covers on two or more layers is a via or a plated pad, because that
+        // is the only thing CAD draws a ring around; a hit no ring covers may
+        // be a mounting hole and stitches nothing.
+        let stated = read.plated == Some(true) || name_says_plated || job_has_a_named_npth_drill;
+        let hits = if stated {
+            read.hits
         } else {
-            let drill = excellon::parse(&text);
-            if matches!((drill.plated, manifest_plated), (Some(a), Some(b)) if a != b) {
+            let total = read.hits.len();
+            let ringed = hits_under_pad_rings(read.hits, &layer_prims);
+            if ringed.is_empty() {
                 notes.push(format!(
-                    "{}: the drill file and package metadata disagree about whether its holes are plated. Its hits are refused instead of choosing the reading that would either invent or erase a conductor.",
-                    film(d)
+                    "{fname}: nothing in this job says whether the holes in this drill file are \
+                     plated, and none of its {total} hit(s) sits under a pad flash on two copper \
+                     layers, so nothing here can be read as plated. Its hits stitch no layers, \
+                     because a plated hole is a conductor and a mechanical one is not, and \
+                     guessing either way is wrong half the time. Add a TF.FileFunction line, name \
+                     the file PTH or NPTH, or split the plated and non-plated drilling into two \
+                     files."
                 ));
                 refused_plating_files += 1;
                 continue;
             }
-            // A body that declares itself non-plated contributes no hits, so it
-            // must not reach the span analysis at all. Leaving it in let a
-            // mechanical file's layer-pair name mark the job multi-span and
-            // force its plated siblings into a refusal, losing real stitching
-            // on the strength of a file that drills no copper.
-            if drill.plated == Some(false) || manifest_plated == Some(false) {
-                continue;
-            }
-            if drill.plated.is_none() && manifest_plated.is_none() && !plated {
-                continue;
-            }
-            // A file that drills nothing is evidence about nothing. Left in, an
-            // empty pass declaring a blind pair would mark the job multi-span
-            // and push every silent sibling into a refusal, losing real
-            // stitching on the strength of a file with no hits in it.
-            if drill.holes.is_empty() {
-                continue;
-            }
-            // Same refusal as the film path: plating decides whether these
-            // hits conduct, so it comes from the file's own declaration, its
-            // name, or the job's plated/non-plated split, and from nowhere
-            // else. Almost every drill file states it one of those ways; one
-            // that states it in none is a list of coordinates with no way to
-            // tell a via from a mounting hole.
-            if drill.plated.is_none() && !name_says_plated && !job_has_a_named_npth_drill {
-                notes.push(format!(
-                    "{}: nothing in this job says whether the holes in this drill file are \
-                     plated. Its hits are recorded but stitch no layers, because a plated hole \
-                     is a conductor and a mechanical one is not, and guessing either way is \
-                     wrong half the time. Add a TF.FileFunction line, name the file PTH or NPTH, \
-                     or split the plated and non-plated drilling into two files.",
-                    d.file_name().and_then(|s| s.to_str()).unwrap_or("drill")
-                ));
-                refused_plating_files += 1;
-                continue;
-            }
-            let declared = drill.span;
-            (DrillBody::Excellon(drill), declared)
+            notes.push(format!(
+                "{fname}: nothing in this job says whether the holes in this drill file are \
+                 plated. {} of its {total} hit(s) sit under a pad flash on two or more copper \
+                 layers, which is how CAD draws a via or a plated pad and never a mounting hole, \
+                 so those were read as plated; the other {} touch no such ring and stitch \
+                 nothing. State it outright (a TF.FileFunction line, PTH/NPTH file names, or \
+                 ;TYPE=PLATED sections) to replace the inference.",
+                ringed.len(),
+                total - ringed.len()
+            ));
+            inferred_plating_holes += ringed.len();
+            ringed
         };
         let ldp_span = ldp_role.map(|role| ldp_declared_span(role, n_copper));
-        let (declared, span_conflict) = merge_declared_span(file_declared, ldp_span);
+        let (declared, span_conflict) = merge_declared_span(read.declared, ldp_span);
         if let Some(span) = ldp_span {
             notes.push(format!(
-                ".LDP declares {} as {} with {}; package metadata was consulted before filename span inference.",
-                film(d),
-                if ldp_plated == Some(false) {
-                    "non-plated"
-                } else if ldp_plated == Some(true) {
-                    "plated"
-                } else {
-                    "plating unstated"
+                ".LDP declares {fname} as {} with {}; package metadata was consulted before filename span inference.",
+                match ldp_plated {
+                    Some(false) => "non-plated",
+                    Some(true) => "plated",
+                    None => "plating unstated",
                 },
                 declared_span_phrase(span)
             ));
         }
         if span_conflict {
             notes.push(format!(
-                "{}: the drill file and .LDP declare different or unreadable copper spans, so its hits stitch no layers instead of choosing one authority.",
-                film(d)
+                "{fname}: the drill file and .LDP declare different or unreadable copper spans, so its hits stitch no layers instead of choosing one authority."
             ));
         }
         parsed.push(ParsedDrill {
-            path: d.clone(),
             name: n,
-            body,
+            hits,
             declared,
             // Filled in below, once the whole set has been read.
             claim: SpanClaim::Silent,
@@ -975,10 +1038,9 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
         SpanClaim::Silent => false,
     });
 
-    // Pass two: turn the hits into plated barrels with their resolved span.
+    // Turn the hits into plated barrels with their resolved span.
     let mut holes: Vec<PlatedHole> = Vec::new();
     for p in parsed {
-        let d = &p.path;
         let span = match p.claim {
             SpanClaim::Resolved(f, t) => LayerSpan::Range { from: f, to: t },
             // A declaration we could not resolve refuses unconditionally: the
@@ -991,7 +1053,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
                      nets the stackup keeps apart, and the declaration itself says they are not \
                      through-holes. Check that every copper layer of this job is present and \
                      classified, then re-run.",
-                    d.file_name().and_then(|s| s.to_str()).unwrap_or("drill")
+                    p.name
                 ));
                 LayerSpan::Unknown
             }
@@ -1003,94 +1065,19 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
                      Reading them as through-holes would merge nets the stackup keeps apart. \
                      Supply the X2 TF.FileFunction layer pair, or name the file after its pair \
                      (for example -L1-L2.drl or -F_Cu-In1_Cu.drl), to recover them.",
-                    d.file_name().and_then(|s| s.to_str()).unwrap_or("drill")
+                    p.name
                 ));
                 LayerSpan::Unknown
             }
             SpanClaim::PartialButUnreadable | SpanClaim::Silent => LayerSpan::Through,
         };
-
-        if let DrillBody::Film(text) = &p.body {
-            // Gerber-format drill: each flash is a hole; its disc radius is the
-            // drill radius. A drawn path on such a film may be a rout, but on
-            // an ordinary drill film the draws are legend art, and reading
-            // those as plated walls paints copper across the board.
-            //
-            // Only the film's OWN attribute settles it: any board whose project
-            // name contains "slot" would otherwise have its legend promoted to
-            // conductor. Where the name suggests a rout and the film declares
-            // none, the draws are left alone and the reader says why.
-            let declares_rout = film_file_function(text)
-                .map(|f| f.contains("ROUT") || f.contains("SLOT") || f.contains("MILL"))
-                .unwrap_or(false);
-            let name_suggests_rout = d
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| {
-                    let l = s.to_ascii_lowercase();
-                    l.contains("rout") || l.contains("slot") || l.contains("mill")
-                })
-                .unwrap_or(false);
-            let rout_film = declares_rout;
-            if name_suggests_rout && !declares_rout {
-                notes.push(format!(
-                    "{}: this gerber-format drill film is named as a rout or slot layer but does \
-                     not declare itself one, so the paths drawn on it are left as artwork rather \
-                     than read as plated walls. A drawn path is only a conductor if the film says \
-                     it is; promoting it on the strength of a file name would turn any legend on \
-                     a board whose project name contains \"slot\" into copper. Add a \
-                     TF.FileFunction naming the layer's role to recover them.",
-                    d.file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("drill film")
-                ));
-            }
-            if let Ok(prims) = rs274x::parse_layer(text) {
-                for pr in prims {
-                    match pr.kind {
-                        rs274x::PrimKind::Flash => {
-                            // A drill film draws the finished CUTOUT, so an
-                            // oblong flash is a slot: its narrow side is the
-                            // tool and its long axis is the path that tool
-                            // swept. Recovering both gives the whole plated
-                            // wall. A round flash comes back with its two
-                            // centres coincident, which is a round hole.
-                            let (dia, from, to) = drill_flash_extent(&pr.shape);
-                            let is_slot = (to.0 - from.0).hypot(to.1 - from.1) > 1e-9;
-                            holes.push(PlatedHole {
-                                x: from.0,
-                                y: from.1,
-                                diameter: dia,
-                                to: is_slot.then_some(to),
-                                span,
-                            });
-                        }
-                        rs274x::PrimKind::Track if rout_film => {
-                            if let geo::Shape::Capsule(c) = &pr.shape {
-                                holes.push(PlatedHole {
-                                    x: c.ax,
-                                    y: c.ay,
-                                    diameter: c.r * 2.0,
-                                    to: Some((c.bx, c.by)),
-                                    span,
-                                });
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        } else if let DrillBody::Excellon(drill) = p.body {
-            if drill.plated.unwrap_or(true) {
-                holes.extend(drill.holes.into_iter().map(|h| PlatedHole {
-                    x: h.x,
-                    y: h.y,
-                    diameter: h.diameter,
-                    to: h.to,
-                    span,
-                }));
-            }
-        }
+        holes.extend(p.hits.into_iter().map(|h| PlatedHole {
+            x: h.x,
+            y: h.y,
+            diameter: h.diameter,
+            to: h.to,
+            span,
+        }));
     }
 
     // The board outline, for the castellation count. Not connectivity: an
@@ -1139,6 +1126,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     let (mut board, mut stats) = connect::reconstruct(&name, layer_prims, holes, placements);
     stats.n_castellations = n_castellations;
     stats.refused_plating_files = refused_plating_files;
+    stats.inferred_plating_holes = inferred_plating_holes;
     if stats.refused_span_holes > 0 {
         notes.push(format!(
             "{} plated hit(s) on this job stitch no layers because their copper layer span is \
@@ -1339,32 +1327,8 @@ fn film_drill_functions(text: &str) -> FilmDrillFunctions {
 }
 
 /// The `TF.FileFunction` attribute of a gerber film, uppercased, if it has one.
-///
-/// File-attribute lines open with `%TF.FileFunction,` and end with `*%`; a
-/// `%TA` aperture attribute or an unterminated lookalike has no authority.
-/// There are only a handful of attributes among a film's many thousands of
-/// drawing commands, so only candidate lines are uppercased.
-/// The whole file is scanned rather than a fixed prefix: an exporter that
-/// writes a page of `G04` banner text first would otherwise push the attribute
-/// out of the window, and the reader would fall back to "says nothing" for a
-/// film that plainly states it is mechanical.
 fn film_file_function(text: &str) -> Option<String> {
-    const PREFIX: &str = "%TF.FILEFUNCTION,";
-    for line in text.lines() {
-        let line = line.trim_start();
-        if !line
-            .get(..PREFIX.len())
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(PREFIX))
-        {
-            continue;
-        }
-        let upper = line.trim_end().to_ascii_uppercase();
-        if !upper.ends_with("*%") {
-            continue;
-        }
-        return Some(upper);
-    }
-    None
+    layers::file_function(text)
 }
 
 /// The copper layer pair a gerber-format drill film declares, read from the
@@ -1419,44 +1383,6 @@ fn copper_physical_layer(text: &str) -> Option<u32> {
     let digits = layer;
     let n: u32 = digits.parse().ok()?;
     (n >= 1).then_some(n)
-}
-
-/// Classify an otherwise opaque copper film from its own X2 declaration while
-/// preserving the side tag. In particular `Copper,L2,Bot` is bottom copper,
-/// not a provisional inner layer at raw index 1; retaining that distinction
-/// prevents an agreeing `.EXTREP Bottom Layer` row from being reported as a
-/// conflict.
-fn copper_x2_layer_role(text: &str, path: &Path) -> Option<LayerRole> {
-    let head = film_file_function(text)?;
-    let at = head.find("FILEFUNCTION")? + "FILEFUNCTION".len();
-    let rest = head[at..].trim_start_matches([',', ' ']);
-    let mut fields = rest.split(',').map(|f| f.trim());
-    if fields.next()? != "COPPER" {
-        return None;
-    }
-    let layer = fields.next()?.strip_prefix('L')?;
-    if layer.is_empty() || !layer.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let physical = layer.parse::<usize>().ok()?;
-    if physical < 1 {
-        return None;
-    }
-    let side = fields.next()?.trim_end_matches(['*', '%']).trim();
-    let index = match side {
-        "TOP" => 0,
-        "BOT" | "BOTTOM" => usize::MAX,
-        "INR" => physical - 1,
-        _ => return None,
-    };
-    Some(LayerRole::Copper {
-        index,
-        name: path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string(),
-    })
 }
 
 /// Register one physical copper-layer claim without allowing either X2 or a
@@ -1884,6 +1810,19 @@ impl Drop for TempTree {
     }
 }
 
+/// Archive members that are the packer's, not the job's: macOS resource forks
+/// (`__MACOSX/`, `._name`), Finder and Explorer metadata. A `._board-F_Cu.gbr`
+/// fork read as a film classifies as top copper by name and parses as an
+/// empty layer, adding a phantom copper layer to the stack.
+fn is_archive_noise(name: &Path) -> bool {
+    name.components()
+        .any(|c| c.as_os_str().eq_ignore_ascii_case("__MACOSX"))
+        || name
+            .file_name()
+            .and_then(|f| f.to_str())
+            .is_some_and(layers::is_filesystem_noise)
+}
+
 /// If `dir` contains exactly one entry and it's a directory, return it.
 fn single_subdir(dir: &Path) -> Option<std::path::PathBuf> {
     let mut it = std::fs::read_dir(dir).ok()?.flatten();
@@ -1912,8 +1851,17 @@ fn unzip_into(bytes: &[u8], out: &Path) -> Result<(), ExtractError> {
         let name = file
             .enclosed_name()
             .ok_or_else(|| ExtractError::Xml("zip: unsafe path".into()))?;
-        // Flatten into the output dir by file name (job zips are flat anyway).
-        let dest = out.join(name.file_name().unwrap_or(name.as_os_str()));
+        if is_archive_noise(&name) {
+            continue;
+        }
+        // The archive's own layout is kept: two films with one basename in
+        // different folders must not overwrite each other, and the directory
+        // reader recurses anyway.
+        let dest = out.join(&name);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ExtractError::Xml(format!("zip mkdir {}: {e}", film(parent))))?;
+        }
         let mut buf = Vec::with_capacity(file.size() as usize);
         file.read_to_end(&mut buf)
             .map_err(|e| ExtractError::Xml(format!("zip read: {e}")))?;

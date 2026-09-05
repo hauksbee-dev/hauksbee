@@ -1502,9 +1502,9 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         self.assertIn("group: release-${{ github.ref }}", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
-        self.assertIn("release-quality:", workflow)
+        self.assertIn("release-quality-rust:", workflow)
         self.assertIn(
-            "needs: [build, build-windows, required-integrations, release-quality]",
+            "needs: [build, build-windows, required-integrations, release-quality-rust, release-quality-shapes, release-quality-release-binaries, release-quality-offline]",
             workflow,
         )
         for gate in (

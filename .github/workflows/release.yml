@@ -796,8 +796,12 @@ jobs:
           path: hauksbee/required-integrations-${{ matrix.label }}.json
           if-no-files-found: error
 
-  release-quality:
-    name: exact-SHA release quality gate
+  # The exact-SHA release quality gate. The same steps the one serial job used
+  # to run, split into four jobs that run at once so the gate's wall-clock is
+  # its slowest leg rather than the sum of every leg. Each Rust job compiles
+  # one feature shape.
+  release-quality-rust:
+    name: exact-SHA quality gate (fmt, clippy, tests, docs)
     needs: resolve-source
     runs-on: ubuntu-latest
     steps:
@@ -809,37 +813,127 @@ jobs:
       - name: Bind quality gate to the immutable release event
         id: quality-source
         env:
-          EVENT_SHA: ${{ github.sha }}
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_TAG: ${{ github.event.inputs.tag }}
           EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
         run: |
           head="$(git rev-parse HEAD)"
           [ "$head" = "$EXPECTED_SHA" ]
           echo "source_sha=$head" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: Install release-quality prerequisites
         run: |
           sudo apt-get update
           sudo apt-get install -y clang libclang-dev libelf-dev ngspice pkg-config zlib1g-dev shellcheck
           bash scripts/setup-ci-simavr.sh
-      - name: Rust format, licence, lint, tests, docs, and both feature shapes
+      - name: Rust format, licence, lint, tests and docs
         run: |
           export HAUKSBEE_SOURCE_COMMIT="$(git rev-parse HEAD)"
           cargo fmt --all --check
           python3 scripts/test-runtime-dependency-licenses.py
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace
-          cargo test --locked --workspace --features avr
+          RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
+
+  release-quality-shapes:
+    name: exact-SHA quality gate (bare engine and GPL-free shapes)
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          persist-credentials: false
+      - name: Bind quality gate to the immutable release event
+        id: quality-source
+        env:
+          EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          head="$(git rev-parse HEAD)"
+          [ "$head" = "$EXPECTED_SHA" ]
+          echo "source_sha=$head" >> "$GITHUB_OUTPUT"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install release-quality prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev libelf-dev ngspice pkg-config zlib1g-dev shellcheck
+          bash scripts/setup-ci-simavr.sh
+      - name: Both feature shapes
+        run: |
+          export HAUKSBEE_SOURCE_COMMIT="$(git rev-parse HEAD)"
           cargo check --locked -p hauksbee-engine --no-default-features
           cargo clippy --locked -p hauksbee-engine --no-default-features --all-targets -- -D warnings
           cargo test --locked -p hauksbee-engine --no-default-features --all-targets
           SIMAVR_INCLUDE_DIR=/nonexistent/simavr-must-not-be-linked \
             SIMAVR_LIB_DIR=/nonexistent/simavr-must-not-be-linked \
             cargo check --locked --workspace --no-default-features --features renode,qemu
-          RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
+
+  release-quality-release-binaries:
+    name: exact-SHA quality gate (release binaries, scenario QC, speed gate)
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          persist-credentials: false
+      - name: Bind quality gate to the immutable release event
+        id: quality-source
+        env:
+          EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          head="$(git rev-parse HEAD)"
+          [ "$head" = "$EXPECTED_SHA" ]
+          echo "source_sha=$head" >> "$GITHUB_OUTPUT"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install release-quality prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev libelf-dev ngspice pkg-config zlib1g-dev shellcheck
+          bash scripts/setup-ci-simavr.sh
+      - name: Speed gate against ngspice
+        run: |
+          export HAUKSBEE_SOURCE_COMMIT="$(git rev-parse HEAD)"
           HAUKSBEE_REQUIRE_NGSPICE=1 cargo test --locked --release -p hauksbee-solve --test speed_gate -- --nocapture
+      - name: Scenario QC on release binaries
+        env:
+          HAUKSBEE_SOURCE_COMMIT: ${{ steps.quality-source.outputs.source_sha }}
+        run: |
+          cargo build --locked --release --bin hauksbee --bin hauksbee-ci
+          expected="${{ steps.quality-source.outputs.source_sha }}"
+          for binary in hauksbee hauksbee-ci; do
+            "target/release/$binary" --version | grep -F "(git $expected)" >/dev/null
+          done
+          qc/run.sh --results-dir qc/release-results
+      - name: Retain exact-SHA scenario QC evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-quality-qc-${{ steps.quality-source.outputs.source_sha }}
+          path: qc/release-results/**/report.md
+          if-no-files-found: error
+          retention-days: 90
+
+  release-quality-offline:
+    name: exact-SHA quality gate (policy, integrations, docs, product app)
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          persist-credentials: false
+      - name: Bind quality gate to the immutable release event
+        id: quality-source
+        env:
+          EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          head="$(git rev-parse HEAD)"
+          [ "$head" = "$EXPECTED_SHA" ]
+          echo "source_sha=$head" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Offline policy, evidence, integration, and documentation contracts
         run: |
           python3 scripts/test-private-release-policy.py
@@ -864,28 +958,10 @@ jobs:
           HAUKSBEE_RELEASE_COMMIT="$(git rev-parse HEAD)" bun run build
           HB_EXPECT_WORKFLOW_EXPORT=1 bun run test:e2e
           HB_LINT_SITE=0 bun run visual-lint
-      - name: Scenario QC on release binaries
-        env:
-          HAUKSBEE_SOURCE_COMMIT: ${{ steps.quality-source.outputs.source_sha }}
-        run: |
-          cargo build --locked --release --bin hauksbee --bin hauksbee-ci
-          expected="${{ steps.quality-source.outputs.source_sha }}"
-          for binary in hauksbee hauksbee-ci; do
-            "target/release/$binary" --version | grep -F "(git $expected)" >/dev/null
-          done
-          qc/run.sh --results-dir qc/release-results
-      - name: Retain exact-SHA scenario QC evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: release-quality-qc-${{ steps.quality-source.outputs.source_sha }}
-          path: qc/release-results/**/report.md
-          if-no-files-found: error
-          retention-days: 90
 
   release:
     name: publish release
-    needs: [build, build-windows, required-integrations, release-quality]
+    needs: [build, build-windows, required-integrations, release-quality-rust, release-quality-shapes, release-quality-release-binaries, release-quality-offline]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -248,7 +248,78 @@ fn is_definitely_not_a_film(ext: &str) -> bool {
             | "toml"
             | "yaml"
             | "yml"
+            // Package reports and manifests: Altium's aperture/drill/layer
+            // reports and layer-pair export, Eagle's drill/photoplotter info
+            // files and mount lists.
+            | "rep"
+            | "apr"
+            | "apr_lib"
+            | "drr"
+            | "ldp"
+            | "extrep"
+            | "dri"
+            | "gpi"
+            | "mnt"
+            | "mnb"
     )
+}
+
+/// Altium film extensions that are drawings ABOUT the drilling rather than
+/// drilling: `.GD1` drill drawing, `.GG1` drill guide, and the `.GPT`/`.GPB` pad
+/// masters. A drill guide is flashed at every hole, so read as a drill film it
+/// would plant a hit per symbol with no plating statement to go with it.
+fn is_altium_drill_drawing_ext(ext: &str) -> bool {
+    let numbered = |prefix: &str| {
+        ext.strip_prefix(prefix)
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+    };
+    numbered("gd") || numbered("gg") || ext == "gpt" || ext == "gpb"
+}
+
+/// Eagle CAM-job extensions: `.cmp`/`.sol` copper, `.ly<n>` inner copper,
+/// `.plc`/`.pls` silk, `.stc`/`.sts` mask, `.crc`/`.crs` paste, `.dim` outline,
+/// `.mil` milling, `.drd` drill. The 2.7-era defaults every SparkFun and
+/// Adafruit Eagle package still ships.
+fn eagle_role(n: &Name) -> Option<LayerRole> {
+    let ext = n.ext.as_deref()?;
+    let role = match ext {
+        "cmp" => LayerRole::Copper {
+            index: 0,
+            name: top_label(n.original),
+        },
+        "sol" => LayerRole::Copper {
+            index: usize::MAX,
+            name: bottom_label(n.original),
+        },
+        "plc" | "pls" | "stc" | "sts" | "crc" | "crs" | "mil" => LayerRole::Ignored,
+        "dim" => LayerRole::Outline,
+        "drd" => LayerRole::Drill,
+        _ => {
+            let k: usize = ext.strip_prefix("ly")?.parse().ok()?;
+            if !(2..=15).contains(&k) {
+                return None;
+            }
+            LayerRole::Copper {
+                index: k - 1,
+                name: n.original.to_string(),
+            }
+        }
+    };
+    Some(role)
+}
+
+/// Films that are drawings about the drilling, not drilling: drill maps,
+/// drill drawings and drill guides. Every one of these carries the word
+/// `drill` and would otherwise be read as a drill film.
+fn is_drill_drawing(n: &Name) -> bool {
+    n.ext.as_deref().is_some_and(is_altium_drill_drawing_ext)
+        || n.has("drl_map")
+        || n.has("drill_map")
+        || n.has("drill-map")
+        || n.has("drillmap")
+        || n.has("drill map")
+        || n.has("drawing")
+        || n.has_word("guide")
 }
 
 /// Extensions that hold a plotted gerber film. A file with one of these that
@@ -260,10 +331,27 @@ fn is_gerber_film_ext(n: &Name) -> bool {
     )
 }
 
+/// Operating-system litter that travels with a copied fab folder: macOS
+/// resource forks (`._name`) and Finder/Explorer metadata. A `._board-F_Cu.gbr`
+/// fork would otherwise classify as top copper by its name alone.
+pub fn is_filesystem_noise(file_name: &str) -> bool {
+    file_name.starts_with("._")
+        || file_name == ".DS_Store"
+        || file_name.eq_ignore_ascii_case("thumbs.db")
+        || file_name.eq_ignore_ascii_case("desktop.ini")
+}
+
 /// Classify a single fab file by its path. Inner-copper indices are
 /// provisional (see [`assign_inner_indices`]).
 pub fn classify(path: &Path) -> LayerRole {
     let n = Name::of(path);
+    if path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .is_some_and(is_filesystem_noise)
+    {
+        return LayerRole::Ignored;
+    }
 
     // ── Nothing with a non-film extension is a fab film, of any role ────────
     // Hoisted above the drill checks because a drill MAP is a drawing:
@@ -277,22 +365,34 @@ pub fn classify(path: &Path) -> LayerRole {
         return LayerRole::Unknown;
     }
 
-    // ── Drill first: extension is the strongest signal ──────────────────────
-    if n.ext_is("drl") || n.ext_is("txt") || n.ext_is("xln") || n.ext_is("nc") || n.ext_is("tap") {
-        // `.txt` is sometimes a readme; require a drill-ish hint when ambiguous.
-        // Altium exports the drill as `<board>-RoundHoles.TXT` /
-        // `-RectHoles.TXT` / `-SlotHoles.TXT` (the Inkplate 6 set), so `holes`
-        // is a drill hint too. A plain `README.TXT` has none of these tokens
-        // and is still ignored.
-        if n.ext_is("txt")
-            && !(n.has("drill") || n.has("drl") || n.has("nc") || n.has("pth") || n.has("holes"))
-        {
-            return LayerRole::Ignored;
-        }
+    // ── Drawings about the drilling, before anything keyed on `drill` ───────
+    if is_drill_drawing(&n) {
+        return LayerRole::Ignored;
+    }
+
+    // ── Drill: extension is the strongest signal ────────────────────────────
+    if matches!(
+        n.ext.as_deref(),
+        Some("drl" | "xln" | "nc" | "tap" | "exc" | "ncd" | "xnc" | "drill")
+    ) {
         return LayerRole::Drill;
+    }
+    // `.txt` is the Protel/Altium drill extension and also a readme's. Altium
+    // exports `<board>-RoundHoles.TXT` / `-SlotHoles.TXT`, so `holes` is a drill
+    // hint; a `<board>.TXT` with no hint is left Unknown for the content sniff
+    // in [`classify_file`] to settle.
+    if n.ext_is("txt") {
+        return if n.has("drill") || n.has("drl") || n.has("pth") || n.has("holes") {
+            LayerRole::Drill
+        } else {
+            LayerRole::Unknown
+        };
     }
     if n.has("drill") || n.has("-pth") || n.has("-npth") || n.has(".pth") || n.has(".npth") {
         return LayerRole::Drill;
+    }
+    if let Some(role) = eagle_role(&n) {
+        return role;
     }
     // Allegro gerber-format drill film, e.g. `drill-1-6.art`: drilling drawn as
     // flashes on a gerber layer rather than as a separate Excellon file. The
@@ -344,6 +444,8 @@ pub fn classify(path: &Path) -> LayerRole {
         ("dimension", &[][..]),
         ("drawing", &[][..]),
         ("keepout", &[][..]),
+        ("keep-out", &[][..]),
+        ("keep_out", &[][..]),
         // Altium and Eagle both plot these beside the copper, and without this
         // `MyCircuit_Mechanical_Layer_1.gbr` and `Documentation Layer 1.gbr` read as
         // inner COPPER, putting outline and dimension lines on a layer every drill
@@ -536,6 +638,184 @@ pub fn classify(path: &Path) -> LayerRole {
     }
 
     LayerRole::Unknown
+}
+
+/// Classify a fab file from its name AND its leading text, in this order:
+///
+/// 1. the file's own X2 `TF.FileFunction` (a film or drill program stating
+///    what it is outranks whatever it happens to be called);
+/// 2. the filename conventions of [`classify`];
+/// 3. a content sniff for the extensions that carry no convention: a `.txt`
+///    or unrecognised file whose body is an Excellon program is the drill.
+///
+/// `head` is the start of the file (a few tens of KiB is plenty: attributes
+/// and the Excellon header both precede the body). Binary files pass an empty
+/// or lossy head and are classified by name alone.
+pub fn classify_file(path: &Path, head: &str) -> LayerRole {
+    if let Some(role) = file_function_role(head, path) {
+        return role;
+    }
+    let by_name = classify(path);
+    let n = Name::of(path);
+    // `.txt` has no convention: Protel's drill and a fab's README share it, so
+    // only the body can say which this is.
+    if by_name != LayerRole::Unknown && !n.ext_is("txt") {
+        return by_name;
+    }
+    if looks_like_excellon(head) {
+        return LayerRole::Drill;
+    }
+    if n.ext_is("txt") {
+        return LayerRole::Unknown;
+    }
+    by_name
+}
+
+/// The `TF.FileFunction` attribute of a film or drill program, uppercased and
+/// without its terminator, in any of the three spellings exporters use:
+/// the X2 extended command `%TF.FileFunction,...*%`, the KiCad 5 comment form
+/// `G04 #@! TF.FileFunction,...*`, and the Excellon comment `; #@! TF.FileFunction,...`.
+pub fn file_function(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        let body = line
+            .strip_prefix('%')
+            .or_else(|| line.strip_prefix("G04").map(str::trim_start))
+            .or_else(|| line.strip_prefix(';').map(str::trim_start))
+            .map(|rest| rest.trim_start_matches("#@!").trim_start());
+        let Some(body) = body else {
+            continue;
+        };
+        if !body
+            .get(..16)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("TF.FileFunction,"))
+        {
+            continue;
+        }
+        return Some(body.trim_end_matches(['*', '%', ' ']).to_ascii_uppercase());
+    }
+    None
+}
+
+/// The role a file's own `TF.FileFunction` declares, or `None` when it has no
+/// attribute or names a function this reader does not know.
+fn file_function_role(head: &str, path: &Path) -> Option<LayerRole> {
+    let attribute = file_function(head)?;
+    let rest = attribute.strip_prefix("TF.FILEFUNCTION,")?;
+    let mut fields = rest.split(',').map(str::trim);
+    let kind = fields.next()?;
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let role = match kind {
+        "COPPER" => {
+            let physical: usize = fields.next()?.strip_prefix('L')?.parse().ok()?;
+            let index = match fields.next()? {
+                "TOP" => 0,
+                "BOT" | "BOTTOM" => usize::MAX,
+                "INR" => physical.checked_sub(1)?,
+                _ => return None,
+            };
+            LayerRole::Copper { index, name: stem }
+        }
+        "PLATED" | "NONPLATED" => LayerRole::Drill,
+        "PROFILE" => LayerRole::Outline,
+        "SOLDERMASK" | "LEGEND" | "PASTE" | "GLUE" | "DRILLMAP" | "OTHER" | "KEEPOUT"
+        | "COMPONENT" | "VCUT" | "VCUTMAP" | "CARBONMASK" | "PEELABLEMASK" | "GOLDMASK"
+        | "SILVERMASK" | "TINMASK" | "HEATSINKMASK" | "DEPTHROUT" | "ASSEMBLYDRAWING"
+        | "ARRAYDRAWING" | "FABRICATIONDRAWING" | "PADS" | "VIAFILL" => LayerRole::Ignored,
+        _ => return None,
+    };
+    Some(role)
+}
+
+/// Whether `head` reads as an Excellon drill program: the `M48` header, a
+/// tool definition, a format statement, or (a header-less file) a body that is
+/// mostly `T<n>` selects and `X`/`Y` coordinate lines.
+pub fn looks_like_excellon(head: &str) -> bool {
+    let mut coordinate_lines = 0usize;
+    let mut other_lines = 0usize;
+    for raw in head.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(';') {
+            continue;
+        }
+        let up = line.to_ascii_uppercase();
+        if up == "M48"
+            || up.starts_with("FMAT,")
+            || up.starts_with("METRIC")
+            || up.starts_with("INCH")
+        {
+            return true;
+        }
+        if is_excellon_tool_def(&up) {
+            return true;
+        }
+        if up.starts_with('%') {
+            // An RS-274X extended command; a lone `%` is the Excellon header
+            // end and is counted as neither.
+            if up.len() > 1 {
+                return false;
+            }
+            continue;
+        }
+        let is_coordinate = up.strip_prefix(['X', 'Y']).is_some_and(|rest| {
+            rest.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+')
+        });
+        let is_select = up
+            .strip_prefix('T')
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()));
+        if is_coordinate || is_select || up == "M30" || up == "G90" || up == "G05" {
+            coordinate_lines += 1;
+        } else {
+            other_lines += 1;
+        }
+    }
+    coordinate_lines >= 2 && other_lines == 0
+}
+
+/// `T<n>C<diameter>` with optional feed/speed fields between: `T1C0.3`,
+/// `T01C0.0118`, `T1F00S00C0.00787`.
+fn is_excellon_tool_def(up: &str) -> bool {
+    let Some(rest) = up.strip_prefix('T') else {
+        return false;
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return false;
+    }
+    let after = &rest[digits..];
+    let Some(c) = after.find('C') else {
+        return false;
+    };
+    let diameter_follows = after[c + 1..].starts_with(|ch: char| ch.is_ascii_digit() || ch == '.');
+    let only_feed_speed_between = after[..c]
+        .bytes()
+        .all(|b| matches!(b, b'F' | b'S' | b'B' | b'H' | b'Z' | b'0'..=b'9' | b'.'));
+    diameter_follows && only_feed_speed_between
+}
+
+/// Whether `head` carries RS-274X structure: a format specification plus a
+/// unit or aperture definition, which no Excellon program contains.
+pub fn looks_like_rs274x(head: &str) -> bool {
+    head.contains("%FS") && (head.contains("%MO") || head.contains("%AD"))
+}
+
+/// A role as a report phrase.
+pub fn role_phrase(role: &LayerRole) -> String {
+    match role {
+        LayerRole::Copper { index: 0, .. } => "top copper".to_string(),
+        LayerRole::Copper {
+            index: usize::MAX, ..
+        } => "bottom copper".to_string(),
+        LayerRole::Copper { index, .. } => format!("inner copper position {index}"),
+        LayerRole::Drill => "drilling".to_string(),
+        LayerRole::Outline => "the board outline".to_string(),
+        LayerRole::Ignored => "electrically irrelevant artwork".to_string(),
+        LayerRole::Unknown => "unknown".to_string(),
+    }
 }
 
 /// An explicit layer-role mapping file: the escape hatch for exotic jobs whose
@@ -1363,7 +1643,8 @@ mod tests {
         assert_eq!(role("design.GTS"), LayerRole::Ignored);
         assert_eq!(role("design.GTO"), LayerRole::Ignored);
         assert_eq!(role("design.GKO"), LayerRole::Outline);
-        assert_eq!(role("design.TXT"), LayerRole::Ignored); // bare .txt = readme
+        // A bare `.TXT` is a readme or Protel's drill; only its body can say.
+        assert_eq!(role("design.TXT"), LayerRole::Unknown);
         assert_eq!(role("design-drill.txt"), LayerRole::Drill);
         assert_eq!(role("design.drl"), LayerRole::Drill);
     }

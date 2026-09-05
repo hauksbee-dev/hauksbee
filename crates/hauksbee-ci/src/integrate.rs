@@ -1047,6 +1047,7 @@ mod tests {
         let release_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
         for (mode, tag) in [("source", None), ("release", Some(release_tag.as_str()))] {
             let yaml = github_workflow_yaml_for(source, tag).unwrap();
+            assert!(yaml.contains("persist-credentials: false"), "{yaml}");
             let parsed = yaml_rust2::YamlLoader::load_from_str(&yaml).unwrap_or_else(|error| {
                 panic!("{mode} workflow is not valid YAML: {error}\n{yaml}")
             });

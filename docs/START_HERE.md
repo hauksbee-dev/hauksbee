@@ -6,7 +6,17 @@ models, runs static and numerical checks, and can boot the firmware against the
 solved board. A part with no adequate model is named and bound open; the
 stronger conclusion is refused rather than guessed.
 
-## Build and first run
+## Install, or build
+
+One line installs the released binaries (`hauksbee`, `hauksbee-ci`,
+`hauksbee-mcp`) and verifies their checksums:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+```
+
+Windows uses `irm https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex`.
+From a checkout:
 
 ```bash
 scripts/install-sims.sh --avr        # libsimavr (AVR co-sim); Renode/QEMU are optional
@@ -39,3 +49,5 @@ hauksbee-ci run ci/board.toml --junit out.xml     # assertions as a CI gate
   [thermal](checks/THERMAL.md), [transients](checks/TRANSIENTS.md),
   [resource conflicts](checks/RESOURCE_CONFLICTS.md), [device decode](checks/DEVICE_DECODE.md).
 - [Limitations](about/LIMITATIONS.md).
+
+Releases and the issue tracker live at <https://github.com/hauksbee-dev/hauksbee>.

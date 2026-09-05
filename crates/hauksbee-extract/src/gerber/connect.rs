@@ -1030,6 +1030,7 @@ pub fn reconstruct(
         n_slots,
         refused_span_holes,
         refused_plating_files: 0,
+        inferred_plating_holes: 0,
         n_castellations: 0,
         x2_named_nets,
         x2_bound_pads,
@@ -1070,6 +1071,11 @@ pub struct ReconStats {
     /// holes are plated. Their hits are absent from `n_holes` and stitch
     /// nothing; each is named in `notes`.
     pub refused_plating_files: usize,
+    /// Hits from drill files that never said whether they are plated, read as
+    /// plated because a pad flash sits over them on two or more copper layers,
+    /// which is how CAD draws a via or a plated pad and never how it draws a
+    /// mounting hole. Each such file is named in `notes`.
+    pub inferred_plating_holes: usize,
     /// Plated hits whose copper layer span the files did not let us resolve.
     /// These stitch nothing and are named in `notes`. A non-zero value means
     /// the reconstruction is deliberately UNDER-connected on this job.
@@ -1377,6 +1383,7 @@ mod tests {
             net_copper: Vec::new(),
             n_slots: 0,
             refused_plating_files: 0,
+            inferred_plating_holes: 0,
             refused_span_holes: 0,
             n_castellations: 0,
             notes: Vec::new(),
