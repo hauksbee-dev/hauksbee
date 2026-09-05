@@ -195,3 +195,11 @@ mod watchdog_coverage_surfaces;
 mod zero_ohm_jumper;
 #[path = "zero_ohm_link.rs"]
 mod zero_ohm_link;
+#[path = "tarski_full.rs"]
+mod tarski_full;
+#[path = "tarski_bind.rs"]
+mod tarski_bind;
+#[path = "tarski_595_chain.rs"]
+mod tarski_595_chain;
+#[path = "tarski_stretcher_transient.rs"]
+mod tarski_stretcher_transient;

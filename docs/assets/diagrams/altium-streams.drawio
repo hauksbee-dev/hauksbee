@@ -1,0 +1,55 @@
+<mxfile host="hauksbee">
+  <diagram name="altium-streams" id="altium-streams">
+    <mxGraphModel dx="1200" dy="1000" grid="0" page="0" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="streambox" style="rounded=1;arcSize=3;fillColor=none;strokeColor=#334155;strokeWidth=1;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="150" width="600" height="646" as="geometry"/>
+        </mxCell>
+        <mxCell id="doc" value=".PcbDoc (OLE2/CFB)" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="200" y="50" width="280" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="nets" value="Nets6/Data&#10;net names (index = primitive net field)" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="60" y="180" width="560" height="52" as="geometry"/>
+        </mxCell>
+        <mxCell id="comps" value="Components6/Data&#10;refdes (SOURCEDESIGNATOR), footprint (PATTERN),&#10;library, placement (X/Y/ROTATION/LAYER), channel" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="60" y="250" width="560" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="pads" value="Pads6/Data&#10;pad designator, layer, net, owning component,&#10;position, size, shape &#8594; pins + copper" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="60" y="342" width="560" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="tracks" value="Tracks6/Data&#10;copper segments (layer, net, endpoints, width)" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="60" y="434" width="560" height="52" as="geometry"/>
+        </mxCell>
+        <mxCell id="arcs" value="Arcs6/Data&#10;copper arcs (centre, radius, angles, width)" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="60" y="504" width="560" height="52" as="geometry"/>
+        </mxCell>
+        <mxCell id="vias" value="Vias6/Data&#10;through-hole vias (net, position, diameter)" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="60" y="574" width="560" height="52" as="geometry"/>
+        </mxCell>
+        <mxCell id="texts" value="Texts6/Data&#10;component value/comment (best-effort)" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="60" y="644" width="560" height="52" as="geometry"/>
+        </mxCell>
+        <mxCell id="polys" value="Polygons6/Data&#10;copper-pour outlines (layer, net, vertices)" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="60" y="714" width="560" height="52" as="geometry"/>
+        </mxCell>
+        <mxCell id="board" value="ExtractedBoard (nets, components, pads)" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="850" width="290" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="drc" value="altium_drc &#8594; DrcReport" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="350" y="850" width="290" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="c1" value="cfb crate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="doc" target="streambox">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="50" y="0" as="offset"/></mxGeometry>
+        </mxCell>
+        <mxCell id="o1" value="connectivity" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=0.25;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="streambox" target="board">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="-55" y="0" as="offset"/></mxGeometry>
+        </mxCell>
+        <mxCell id="o2" value="geometry" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=0.75;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="streambox" target="drc">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="50" y="0" as="offset"/></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

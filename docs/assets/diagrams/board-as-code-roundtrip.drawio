@@ -1,0 +1,48 @@
+<mxfile host="hauksbee">
+  <diagram name="board-as-code-roundtrip" id="bac">
+    <mxGraphModel dx="900" dy="600" grid="0" page="0" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="pcb" value=".kicad_pcb" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="200" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="code" value="board.board&#10;(editable text)" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="330" y="26" width="280" height="52" as="geometry"/>
+        </mxCell>
+        <mxCell id="fromcode" value="from-code" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="370" y="190" width="200" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="pcb2" value=".kicad_pcb'&#10;(recompiled, connectivity-equal)" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="620" y="186" width="290" height="52" as="geometry"/>
+        </mxCell>
+        <mxCell id="checkcode" value="check-code" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="300" width="200" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="pipe" value="extract &#9656; bind &#9656; co-sim &#9656; stress monitor &#9656; report" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="420" y="300" width="350" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="to-code" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="pcb" target="code">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="0" y="-14" as="offset"/></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="edit: value, wiring,&#10;add/remove parts, layout hints" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="code" target="fromcode">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="105" y="0" as="offset"/></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="fromcode" target="pcb2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" value="check-code" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=0.1;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="code" target="checkcode">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="0" y="-14" as="offset"/></mxGeometry>
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="checkcode" target="pipe"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" value="connectivity-equal" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;strokeColor=#3b82f6;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;exitX=0.5;exitY=0;entryX=0.5;entryY=0;" edge="1" parent="1" source="pcb2" target="pcb">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="765" y="-34"/>
+              <mxPoint x="140" y="-34"/>
+            </Array>
+            <mxPoint x="0" y="-14" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
