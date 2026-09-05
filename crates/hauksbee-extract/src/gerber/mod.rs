@@ -796,6 +796,9 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     // job.
     let n_copper = ordered.len();
     struct ParsedDrill {
+        /// The file name as shipped, for notes.
+        file: String,
+        /// The same lower-cased, for the layer-name tokens.
         name: String,
         hits: Vec<excellon::Hole>,
         declared: excellon::DeclaredSpan,
@@ -935,6 +938,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             ));
         }
         parsed.push(ParsedDrill {
+            file: fname,
             name: n,
             hits,
             declared,
@@ -1053,7 +1057,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
                      nets the stackup keeps apart, and the declaration itself says they are not \
                      through-holes. Check that every copper layer of this job is present and \
                      classified, then re-run.",
-                    p.name
+                    p.file
                 ));
                 LayerSpan::Unknown
             }
@@ -1065,7 +1069,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
                      Reading them as through-holes would merge nets the stackup keeps apart. \
                      Supply the X2 TF.FileFunction layer pair, or name the file after its pair \
                      (for example -L1-L2.drl or -F_Cu-In1_Cu.drl), to recover them.",
-                    p.name
+                    p.file
                 ));
                 LayerSpan::Unknown
             }
@@ -1328,7 +1332,7 @@ fn film_drill_functions(text: &str) -> FilmDrillFunctions {
 
 /// The `TF.FileFunction` attribute of a gerber film, uppercased, if it has one.
 fn film_file_function(text: &str) -> Option<String> {
-    layers::file_function(text)
+    layers::file_function(text).map(|(attribute, _)| attribute)
 }
 
 /// The copper layer pair a gerber-format drill film declares, read from the

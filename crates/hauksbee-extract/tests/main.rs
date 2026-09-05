@@ -31,6 +31,8 @@ mod gerber_advanced_geometry;
 mod gerber_altium_metadata;
 #[path = "gerber_closedloop.rs"]
 mod gerber_closedloop;
+#[path = "gerber_fab_packages.rs"]
+mod gerber_fab_packages;
 #[path = "gerber_gbrjob.rs"]
 mod gerber_gbrjob;
 #[path = "gerber_inkplate.rs"]

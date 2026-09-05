@@ -652,11 +652,14 @@ pub fn classify(path: &Path) -> LayerRole {
 /// and the Excellon header both precede the body). Binary files pass an empty
 /// or lossy head and are classified by name alone.
 pub fn classify_file(path: &Path, head: &str) -> LayerRole {
+    let n = Name::of(path);
+    if n.ext.as_deref().is_some_and(is_definitely_not_a_film) {
+        return LayerRole::Unknown;
+    }
     if let Some(role) = file_function_role(head, path) {
         return role;
     }
     let by_name = classify(path);
-    let n = Name::of(path);
     // `.txt` has no convention: Protel's drill and a fab's README share it, so
     // only the body can say which this is.
     if by_name != LayerRole::Unknown && !n.ext_is("txt") {
@@ -671,36 +674,62 @@ pub fn classify_file(path: &Path, head: &str) -> LayerRole {
     by_name
 }
 
+/// Which kind of file a `TF.FileFunction` attribute was found in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributeCarrier {
+    /// An RS-274X film: `%TF.FileFunction,...*%`, or KiCad 5's comment form
+    /// `G04 #@! TF.FileFunction,...*`.
+    Film,
+    /// An Excellon program: `; #@! TF.FileFunction,...`.
+    Excellon,
+}
+
 /// The `TF.FileFunction` attribute of a film or drill program, uppercased and
-/// without its terminator, in any of the three spellings exporters use:
-/// the X2 extended command `%TF.FileFunction,...*%`, the KiCad 5 comment form
-/// `G04 #@! TF.FileFunction,...*`, and the Excellon comment `; #@! TF.FileFunction,...`.
-pub fn file_function(text: &str) -> Option<String> {
+/// without its terminator, with the kind of file it was found in.
+///
+/// Only a properly terminated attribute has authority: `%TF...*%` must end its
+/// line, and the comment form must end in `*`. An unterminated lookalike or a
+/// `%TA` aperture attribute states nothing about the file.
+pub fn file_function(text: &str) -> Option<(String, AttributeCarrier)> {
+    const NAME: &str = "TF.FileFunction,";
+    let names_function = |body: &str| {
+        body.get(..NAME.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(NAME))
+    };
+    let attribute = |body: &str| body.trim_end_matches(['*', '%']).to_ascii_uppercase();
     for line in text.lines() {
         let line = line.trim();
-        let body = line
-            .strip_prefix('%')
-            .or_else(|| line.strip_prefix("G04").map(str::trim_start))
-            .or_else(|| line.strip_prefix(';').map(str::trim_start))
-            .map(|rest| rest.trim_start_matches("#@!").trim_start());
-        let Some(body) = body else {
-            continue;
-        };
-        if !body
-            .get(..16)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("TF.FileFunction,"))
-        {
-            continue;
+        if let Some(body) = line.strip_prefix('%') {
+            if names_function(body) && body.ends_with("*%") {
+                return Some((attribute(body), AttributeCarrier::Film));
+            }
+        } else if let Some(rest) = line.strip_prefix("G04") {
+            let body = rest.trim_start().trim_start_matches("#@!").trim_start();
+            if names_function(body) && body.ends_with('*') {
+                return Some((attribute(body), AttributeCarrier::Film));
+            }
+        } else if let Some(rest) = line.strip_prefix(';') {
+            let body = rest.trim_start().trim_start_matches("#@!").trim_start();
+            if names_function(body) {
+                return Some((attribute(body), AttributeCarrier::Excellon));
+            }
         }
-        return Some(body.trim_end_matches(['*', '%', ' ']).to_ascii_uppercase());
     }
     None
 }
 
 /// The role a file's own `TF.FileFunction` declares, or `None` when it has no
-/// attribute or names a function this reader does not know.
+/// attribute, its body lacks the structure of the file kind the attribute
+/// claims, or it names a function this reader does not know.
 fn file_function_role(head: &str, path: &Path) -> Option<LayerRole> {
-    let attribute = file_function(head)?;
+    let (attribute, carrier) = file_function(head)?;
+    let structural = match carrier {
+        AttributeCarrier::Film => looks_like_rs274x(head),
+        AttributeCarrier::Excellon => looks_like_excellon(head),
+    };
+    if !structural {
+        return None;
+    }
     let rest = attribute.strip_prefix("TF.FILEFUNCTION,")?;
     let mut fields = rest.split(',').map(str::trim);
     let kind = fields.next()?;
