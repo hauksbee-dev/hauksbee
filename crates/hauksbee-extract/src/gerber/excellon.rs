@@ -72,22 +72,146 @@ pub struct DrillFile {
     pub plated: Option<bool>,
     /// What the file's X2 attribute said about the copper layers its hits span.
     pub span: DeclaredSpan,
+    /// What the reader had to leave out or read at a stated fallback, one
+    /// sentence each, for the job's notes.
+    pub notes: Vec<String>,
+}
+
+/// The diameter a hit is read at when its tool has no entry in the tool
+/// table. Small on purpose: a barrel this narrow stitches only the copper
+/// directly over the hit, so an unknown tool can under-connect but never reach
+/// copper the real drill would not.
+pub const UNDEFINED_TOOL_DIAMETER_MM: f64 = 0.1;
+
+/// How an Excellon coordinate token is read: units, the integer/decimal split
+/// of a token with no decimal point, and which side the zeros are dropped from.
+#[derive(Debug, Clone, Copy)]
+struct CoordFormat {
+    metric: bool,
+    int_digits: usize,
+    dec_digits: usize,
+    /// Leading zeros omitted (`TZ`, the Excellon default), as opposed to
+    /// trailing zeros omitted (`LZ`).
+    leading_zero_omitted: bool,
+    /// An explicit `;FILE_FORMAT=`, `FORMAT=` or `METRIC,LZ,000.000` split was
+    /// seen, so a later units line must not clobber it with its default.
+    split_set: bool,
+    /// Any units or format statement was seen at all. Without one, an integer
+    /// coordinate has no readable meaning.
+    declared: bool,
+}
+
+impl CoordFormat {
+    fn scale(&self) -> f64 {
+        if self.metric {
+            1.0
+        } else {
+            25.4
+        }
+    }
+
+    /// Apply a `METRIC` / `INCH` line, with its optional `,LZ` / `,TZ` and
+    /// `,000.000` digit pattern (`METRIC,LZ,0000.00` is how several CAM
+    /// exporters state the split).
+    fn apply_units_line(&mut self, up: &str) {
+        self.metric = up.starts_with("METRIC") || up == "M71";
+        self.declared = true;
+        if !self.split_set {
+            (self.int_digits, self.dec_digits) = if self.metric { (3, 3) } else { (2, 4) };
+        }
+        if up.contains("LZ") {
+            self.leading_zero_omitted = false;
+        } else if up.contains("TZ") {
+            self.leading_zero_omitted = true;
+        }
+        if let Some(pattern) = up
+            .split(',')
+            .find(|f| f.contains('.') && f.bytes().all(|b| b == b'0' || b == b'.'))
+        {
+            let (i, d) = pattern.split_once('.').unwrap_or((pattern, ""));
+            self.set_split(i.len(), d.len());
+        }
+    }
+
+    /// Take an `i:j` split, ignoring absurd widths: these feed
+    /// `format!("{:0>width$}")` and the slicing below, so a corrupt
+    /// `99999:1` would panic or allocate wildly. Real splits are tiny.
+    fn set_split(&mut self, i: usize, d: usize) {
+        if i <= 12 && d <= 12 {
+            self.int_digits = i;
+            self.dec_digits = d;
+            self.split_set = true;
+            self.declared = true;
+        }
+    }
+}
+
+impl Default for CoordFormat {
+    fn default() -> Self {
+        // KiCad's default is metric with decimal points; the 2.4 split is
+        // the Excellon default for a file that states only INCH.
+        CoordFormat {
+            metric: true,
+            int_digits: 2,
+            dec_digits: 4,
+            leading_zero_omitted: true,
+            split_set: false,
+            declared: false,
+        }
+    }
+}
+
+/// The tool table plus the selected tool, and what the reader had to fall
+/// back on to keep reading.
+#[derive(Default)]
+struct Tools {
+    diameters: std::collections::HashMap<u32, f64>,
+    /// Tools declared under a `;TYPE=NON_PLATED` (Altium) header are
+    /// mechanical; their holes do not stitch copper.
+    npth: std::collections::HashSet<u32>,
+    current: Option<f64>,
+    current_is_npth: bool,
+    /// Tools selected without a diameter in the table, with the number of hits
+    /// read at the fallback diameter for each.
+    undefined: std::collections::BTreeMap<u32, usize>,
+    current_undefined: Option<u32>,
+}
+
+impl Tools {
+    fn select(&mut self, idx: u32) {
+        self.current_is_npth = self.npth.contains(&idx);
+        self.current_undefined = None;
+        self.current = self.diameters.get(&idx).copied();
+        // `T0` is the conventional "no tool" at the end of a program, never a
+        // hit's tool.
+        if self.current.is_none() && idx != 0 {
+            self.current = Some(UNDEFINED_TOOL_DIAMETER_MM);
+            self.current_undefined = Some(idx);
+        }
+    }
+
+    /// The diameter to drill a hit with, counting a fallback use.
+    fn hit_diameter(&mut self) -> Option<f64> {
+        if self.current_is_npth {
+            return None;
+        }
+        if let Some(idx) = self.current_undefined {
+            *self.undefined.entry(idx).or_default() += 1;
+        }
+        self.current
+    }
 }
 
 pub fn parse(text: &str) -> DrillFile {
-    let mut metric = true; // KiCad default is metric; most modern files are
-    let mut explicit_units = false;
-    let mut tools: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
-    // Tools declared under a `;TYPE=NON_PLATED` (Altium) header are mechanical;
-    // their holes do not stitch copper, so we record which tools are NPTH and
-    // skip their coordinates for connectivity.
-    let mut npth_tools: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut fmt = CoordFormat::default();
+    let mut tools = Tools::default();
     let mut in_npth_section = false;
-    let mut current: Option<f64> = None;
-    let mut current_is_npth = false;
     let mut holes = Vec::new();
     let mut plated: Option<bool> = None;
     let mut span = DeclaredSpan::Absent;
+    // Hits whose coordinates carry no decimal point on a file that never said
+    // how to read one.
+    let mut unreadable_hits = 0usize;
     // Routed-slot state. `M15` plunges the cutter, `G01` moves cut copper, `M16`
     // (or `M17`) retracts it. We only enter this mode on a file that actually
     // carries an `M15`: on every other file a `G00`/`G01` line keeps its old
@@ -107,15 +231,6 @@ pub fn parse(text: &str) -> DrillFile {
     // value seen so a single-axis line resolves to a full (x, y).
     let mut last_x: Option<f64> = None;
     let mut last_y: Option<f64> = None;
-    // Zero-suppression / format: KiCad emits decimal points, so we default to
-    // "coordinates already have an explicit decimal". Integer-only formats are
-    // handled by detecting the absence of a '.' and applying the tool format.
-    let mut int_digits = 2usize; // INCH default 2.4; METRIC default 3.3
-    let mut dec_digits = 4usize;
-    // True once an explicit `;FILE_FORMAT=` set the coordinate split, so a
-    // later INCH/METRIC line does not clobber it with its unit default.
-    let mut format_set = false;
-    let mut leading_zero_omitted = true; // LZ means leading kept; default omit
 
     for raw in text.lines() {
         let line = raw.trim();
@@ -138,26 +253,8 @@ pub fn parse(text: &str) -> DrillFile {
                 }
             }
             if let Some(eq) = up.find("FILE_FORMAT=").map(|i| i + "FILE_FORMAT=".len()) {
-                // `;FILE_FORMAT=2:5` -> 2 integer, 5 decimal digits.
-                let spec: String = up[eq..]
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit() || *c == ':')
-                    .collect();
-                if let Some((i, d)) = spec.split_once(':') {
-                    if let (Ok(i), Ok(d)) = (i.trim().parse::<usize>(), d.trim().parse::<usize>()) {
-                        // Guard a corrupt/hostile FILE_FORMAT (e.g. `99999:1`):
-                        // these widths feed `format!("{:0>width$}")` and the
-                        // slicing below, so an absurd value panics
-                        // ("Formatting argument out of range") or allocates
-                        // wildly. Real Excellon coordinate formats are tiny
-                        // (≤ ~6 digits per side); ignore anything larger and
-                        // keep the sane defaults.
-                        if i <= 12 && d <= 12 {
-                            int_digits = i;
-                            dec_digits = d;
-                            format_set = true;
-                        }
-                    }
+                if let Some((i, d)) = split_spec(&up[eq..]) {
+                    fmt.set_split(i, d);
                 }
             }
             // Altium sections: tools listed after `;TYPE=NON_PLATED` are
@@ -173,71 +270,36 @@ pub fn parse(text: &str) -> DrillFile {
             }
             continue;
         }
-        if line == "METRIC" || line.starts_with("METRIC") || line == "M71" {
-            metric = true;
-            explicit_units = true;
-            // METRIC default is 3.3, but a prior `;FILE_FORMAT=` may have set
-            // the real split (e.g. 4:4); only impose the default if none was
-            // given, symmetric with the INCH handler below.
-            if !format_set {
-                int_digits = 3;
-                dec_digits = 3;
-            }
-            apply_zero_mode(line, &mut leading_zero_omitted);
+        let up = line.to_ascii_uppercase();
+        if up.starts_with("METRIC") || up.starts_with("INCH") || up == "M71" || up == "M72" {
+            fmt.apply_units_line(&up);
             continue;
         }
-        if line == "INCH" || line.starts_with("INCH") || line == "M72" {
-            metric = false;
-            explicit_units = true;
-            // Default INCH is 2.4, but a prior `;FILE_FORMAT=` may have set the
-            // real split (e.g. 2:5); only impose the default if none was given.
-            if !format_set {
-                int_digits = 2;
-                dec_digits = 4;
-            }
-            apply_zero_mode(line, &mut leading_zero_omitted);
+        if up.starts_with("FMAT") || up == "M48" || up == "M95" || up == "%" {
             continue;
         }
-        if line.starts_with("FMAT") || line == "M48" || line == "M95" || line == "%" {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("FORMAT=") {
-            // e.g. FORMAT={3:3/ absolute / metric / decimal}
-            let up = rest.to_ascii_uppercase();
-            if up.contains("METRIC") {
-                metric = true;
-                explicit_units = true;
-            } else if up.contains("INCH") {
-                metric = false;
-                explicit_units = true;
+        if let Some(rest) = up.strip_prefix("FORMAT=") {
+            // e.g. FORMAT={3:3/ absolute / metric / decimal}. The `i:j` is the
+            // coordinate split; KiCad writes `{-:-/...}` when it has nothing to
+            // say, which parses as no digits and leaves the defaults alone.
+            if rest.contains("METRIC") {
+                fmt.metric = true;
+                fmt.declared = true;
+            } else if rest.contains("INCH") {
+                fmt.metric = false;
+                fmt.declared = true;
             }
-            // The `i:j` is the coordinate split, and reading only the units off
-            // this line left an integer-coordinate file on the wrong default: a
-            // `3:3` hit written `X001000` came out at 0.1 mm instead of 1.0 mm,
-            // which puts the barrel on whatever copper happens to be there.
-            // KiCad writes `{-:-/...}` when it has nothing to say, which parses
-            // as no digits and leaves the defaults alone.
-            let spec: String = up
-                .chars()
-                .skip_while(|c| !c.is_ascii_digit())
-                .take_while(|c| c.is_ascii_digit() || *c == ':')
-                .collect();
-            if let Some((i, d)) = spec.split_once(':') {
-                if let (Ok(i), Ok(d)) = (i.parse::<usize>(), d.parse::<usize>()) {
-                    if i <= 12 && d <= 12 {
-                        int_digits = i;
-                        dec_digits = d;
-                        format_set = true;
-                    }
-                }
+            if let Some((i, d)) = split_spec(rest.trim_start_matches(|c: char| !c.is_ascii_digit()))
+            {
+                fmt.set_split(i, d);
             }
             continue;
         }
         // Tool definition: T<idx>C<dia>  (may have F/S feed-speed suffixes).
-        if let Some(t) = parse_tool_def(line) {
-            tools.insert(t.0, if metric { t.1 } else { t.1 * 25.4 });
+        if let Some((idx, dia)) = parse_tool_def(line) {
+            tools.diameters.insert(idx, dia * fmt.scale());
             if in_npth_section {
-                npth_tools.insert(t.0);
+                tools.npth.insert(idx);
             }
             continue;
         }
@@ -246,12 +308,17 @@ pub fn parse(text: &str) -> DrillFile {
         // select with nothing after it ends the line here; otherwise the
         // coordinates carry on to the readers below and the hit survives.
         if let Some(idx) = parse_tool_select(line) {
-            current = tools.get(&idx).copied();
-            current_is_npth = npth_tools.contains(&idx);
-            let up = line.to_ascii_uppercase();
+            tools.select(idx);
             if !(up.contains('X') || up.contains('Y')) {
                 continue;
             }
+        }
+        // An integer coordinate on a file that never declared units or a
+        // format has no readable position. Counted and dropped rather than
+        // read at a default that puts the barrel on whatever copper is there.
+        if !fmt.declared && has_integer_coordinate(&up) {
+            unreadable_hits += 1;
+            continue;
         }
         // ── G85 canned slot: `X<a>Y<b>G85X<c>Y<d>` cuts from (a,b) to (c,d) ──
         // Read before the rout block, because a G85 record is self-describing:
@@ -268,44 +335,26 @@ pub fn parse(text: &str) -> DrillFile {
         if let Some((head, tail)) = split_g85(line) {
             // A head with no coordinates means the cut starts from where the
             // head already is, so the modal position IS the start point.
-            let start = parse_xy_modal(
-                head,
-                metric,
-                int_digits,
-                dec_digits,
-                leading_zero_omitted,
-                &mut last_x,
-                &mut last_y,
-            )
-            .or(match (last_x, last_y) {
-                (Some(x), Some(y)) => Some((x, y)),
-                _ => None,
-            });
-            let end = parse_xy_modal(
-                tail,
-                metric,
-                int_digits,
-                dec_digits,
-                leading_zero_omitted,
-                &mut last_x,
-                &mut last_y,
-            );
-            if let (Some((sx, sy)), Some((ex, ey)), Some(dia)) = (start, end, current) {
-                if !current_is_npth {
-                    holes.push(Hole {
-                        x: sx,
-                        y: sy,
-                        diameter: dia,
-                        to: Some((ex, ey)),
-                    });
-                }
+            let start =
+                parse_xy_modal(head, &fmt, &mut last_x, &mut last_y).or(match (last_x, last_y) {
+                    (Some(x), Some(y)) => Some((x, y)),
+                    _ => None,
+                });
+            let end = parse_xy_modal(tail, &fmt, &mut last_x, &mut last_y);
+            if let (Some((sx, sy)), Some((ex, ey)), Some(dia)) = (start, end, tools.hit_diameter())
+            {
+                holes.push(Hole {
+                    x: sx,
+                    y: sy,
+                    diameter: dia,
+                    to: Some((ex, ey)),
+                });
             }
             continue;
         }
 
         // ── Routing (slots cut by a moving cutter) ──────────────────────────
         if rout_capable {
-            let up = line.to_ascii_uppercase();
             // A mode code may carry the position it applies at (`M15X10Y10`
             // plunges the cutter THERE). Swallowing the line whole leaves the
             // modal position wherever it last was, and the next cut is then
@@ -313,15 +362,7 @@ pub fn parse(text: &str) -> DrillFile {
             // never routed. Read the coordinates first, then act on the code.
             let absorb_position = |lx: &mut Option<f64>, ly: &mut Option<f64>| {
                 if up.contains('X') || up.contains('Y') {
-                    let _ = parse_xy_modal(
-                        &up,
-                        metric,
-                        int_digits,
-                        dec_digits,
-                        leading_zero_omitted,
-                        lx,
-                        ly,
-                    );
+                    let _ = parse_xy_modal(&up, &fmt, lx, ly);
                 }
             };
             let m = leading_m_code(&up);
@@ -373,27 +414,16 @@ pub fn parse(text: &str) -> DrillFile {
             let is_cut = (g == Some(1) || bare_motion) && tool_down;
             if is_linear {
                 let (px, py) = (last_x, last_y);
-                // The uppercased line throughout the rout block, so a file that
-                // writes its axis and centre letters in lower case is read the
-                // same as one that does not.
-                let moved = parse_xy_modal(
-                    &up,
-                    metric,
-                    int_digits,
-                    dec_digits,
-                    leading_zero_omitted,
-                    &mut last_x,
-                    &mut last_y,
-                );
-                if let (Some((nx, ny)), Some(dia), true, Some(sx), Some(sy)) =
-                    (moved, current, is_cut && !current_is_npth, px, py)
-                {
-                    holes.push(Hole {
-                        x: sx,
-                        y: sy,
-                        diameter: dia,
-                        to: Some((nx, ny)),
-                    });
+                let moved = parse_xy_modal(&up, &fmt, &mut last_x, &mut last_y);
+                if let (Some((nx, ny)), true, Some(sx), Some(sy)) = (moved, is_cut, px, py) {
+                    if let Some(dia) = tools.hit_diameter() {
+                        holes.push(Hole {
+                            x: sx,
+                            y: sy,
+                            diameter: dia,
+                            to: Some((nx, ny)),
+                        });
+                    }
                 }
                 continue;
             }
@@ -409,31 +439,21 @@ pub fn parse(text: &str) -> DrillFile {
             if is_arc {
                 let clockwise = g == Some(2);
                 let (px, py) = (last_x, last_y);
-                let moved = parse_xy_modal(
-                    &up,
-                    metric,
-                    int_digits,
-                    dec_digits,
-                    leading_zero_omitted,
-                    &mut last_x,
-                    &mut last_y,
-                );
-                let scale = if metric { 1.0 } else { 25.4 };
-                // Read the centre off the uppercased line: the G-code already
-                // is, and a file that writes `i`/`j` in lower case would
-                // otherwise lose its arc wall while its `G03` still parsed.
-                let ij = arc_center_offset(&up, int_digits, dec_digits, leading_zero_omitted)
-                    .map(|(i, j)| (i * scale, j * scale));
-                if let (Some((nx, ny)), Some(dia), true, Some(sx), Some(sy), Some((i, j))) =
-                    (moved, current, tool_down && !current_is_npth, px, py, ij)
+                let moved = parse_xy_modal(&up, &fmt, &mut last_x, &mut last_y);
+                let ij =
+                    arc_center_offset(&up, &fmt).map(|(i, j)| (i * fmt.scale(), j * fmt.scale()));
+                if let (Some((nx, ny)), true, Some(sx), Some(sy), Some((i, j))) =
+                    (moved, tool_down, px, py, ij)
                 {
-                    for (ax, ay, bx, by) in tessellate_arc(sx, sy, nx, ny, i, j, clockwise) {
-                        holes.push(Hole {
-                            x: ax,
-                            y: ay,
-                            diameter: dia,
-                            to: Some((bx, by)),
-                        });
+                    if let Some(dia) = tools.hit_diameter() {
+                        for (ax, ay, bx, by) in tessellate_arc(sx, sy, nx, ny, i, j, clockwise) {
+                            holes.push(Hole {
+                                x: ax,
+                                y: ay,
+                                diameter: dia,
+                                to: Some((bx, by)),
+                            });
+                        }
                     }
                 }
                 continue;
@@ -451,55 +471,76 @@ pub fn parse(text: &str) -> DrillFile {
         // they have always meant a positioned hit here, and every board that
         // relies on that reading would lose its holes. Inside a rout section
         // the block above has already claimed them.
-        let bare_g = leading_g_code(&line.to_ascii_uppercase());
+        let bare_g = leading_g_code(&up);
         if matches!(bare_g, Some(n) if n != 0 && n != 1) {
-            let up = line.to_ascii_uppercase();
             if up.contains('X') || up.contains('Y') {
-                let _ = parse_xy_modal(
-                    &up,
-                    metric,
-                    int_digits,
-                    dec_digits,
-                    leading_zero_omitted,
-                    &mut last_x,
-                    &mut last_y,
-                );
+                let _ = parse_xy_modal(&up, &fmt, &mut last_x, &mut last_y);
                 continue;
             }
         }
 
         // Coordinate line: X..Y.. , or modal X-only / Y-only (keep last axis).
-        if let Some((x, y)) = parse_xy_modal(
-            line,
-            metric,
-            int_digits,
-            dec_digits,
-            leading_zero_omitted,
-            &mut last_x,
-            &mut last_y,
-        ) {
+        if let Some((x, y)) = parse_xy_modal(line, &fmt, &mut last_x, &mut last_y) {
             // Skip mechanical (NPTH) holes: they carry no copper to stitch.
-            if let Some(dia) = current {
-                if !current_is_npth {
-                    holes.push(Hole {
-                        x,
-                        y,
-                        diameter: dia,
-                        to: None,
-                    });
-                }
+            if let Some(dia) = tools.hit_diameter() {
+                holes.push(Hole {
+                    x,
+                    y,
+                    diameter: dia,
+                    to: None,
+                });
             }
-            continue;
         }
         // G90/G91/G05/M30/etc: ignore.
-        let _ = explicit_units;
     }
 
+    let mut notes = Vec::new();
+    for (idx, hits) in &tools.undefined {
+        notes.push(format!(
+            "tool T{idx} is selected but has no diameter in the tool table, so its {hits} hit(s) \
+             were read at a nominal {UNDEFINED_TOOL_DIAMETER_MM} mm; a barrel that narrow stitches \
+             only the copper directly over the hit. Add a T{idx}C<diameter> line to recover the \
+             real size."
+        ));
+    }
+    if unreadable_hits > 0 {
+        notes.push(format!(
+            "{unreadable_hits} coordinate line(s) carry no decimal point on a file that declares \
+             neither units nor a number format (no METRIC/INCH, FORMAT= or ;FILE_FORMAT= line), \
+             so their positions cannot be read and they were dropped. Add the header line the \
+             exporter left out."
+        ));
+    }
     DrillFile {
         holes,
         plated,
         span,
+        notes,
     }
+}
+
+/// `i:j` at the start of `s`, e.g. the `2:5` of `;FILE_FORMAT=2:5` or the
+/// `3:3` of `FORMAT={3:3/ absolute / metric / decimal}`.
+fn split_spec(s: &str) -> Option<(usize, usize)> {
+    let spec: String = s
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ':')
+        .collect();
+    let (i, d) = spec.split_once(':')?;
+    Some((i.trim().parse().ok()?, d.trim().parse().ok()?))
+}
+
+/// Whether an (uppercased) body line carries an `X` or `Y` value written
+/// without a decimal point.
+fn has_integer_coordinate(up: &str) -> bool {
+    up.match_indices(['X', 'Y']).any(|(pos, _)| {
+        let rest = &up[pos + 1..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+            .unwrap_or(rest.len());
+        let token = &rest[..end];
+        token.bytes().any(|b| b.is_ascii_digit()) && !token.contains('.')
+    })
 }
 
 /// The numeric G-code a line opens with, if any: `G0`, `G00` and `G000` all
@@ -527,24 +568,14 @@ fn leading_code(up: &str, letter: char) -> Option<u32> {
 
 /// Read the `I`/`J` centre offsets of a rout arc, in document units. Both must
 /// be present: an arc missing either has no centre and so no recoverable curve.
-fn arc_center_offset(
-    line: &str,
-    int_digits: usize,
-    dec_digits: usize,
-    leading_zero_omitted: bool,
-) -> Option<(f64, f64)> {
+fn arc_center_offset(line: &str, fmt: &CoordFormat) -> Option<(f64, f64)> {
     let axis = |upper: char, lower: char| -> Option<f64> {
         let pos = line.find([upper, lower])?;
         let rest = &line[pos + 1..];
         let end = rest
             .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
             .unwrap_or(rest.len());
-        parse_coord(
-            rest[..end].trim(),
-            int_digits,
-            dec_digits,
-            leading_zero_omitted,
-        )
+        parse_coord(rest[..end].trim(), fmt)
     };
     Some((axis('I', 'i')?, axis('J', 'j')?))
 }
@@ -725,16 +756,6 @@ pub fn parse_file_function_span(up: &str) -> DeclaredSpan {
     }
 }
 
-fn apply_zero_mode(line: &str, leading_zero_omitted: &mut bool) {
-    let up = line.to_ascii_uppercase();
-    if up.contains("LZ") {
-        // Leading Zeros kept (trailing suppressed).
-        *leading_zero_omitted = false;
-    } else if up.contains("TZ") {
-        *leading_zero_omitted = true;
-    }
-}
-
 fn parse_tool_def(line: &str) -> Option<(u32, f64)> {
     if !line.starts_with('T') {
         return None;
@@ -778,10 +799,7 @@ fn parse_tool_select(line: &str) -> Option<u32> {
 /// resolved absolute (x, y) and updates the modal state.
 fn parse_xy_modal(
     line: &str,
-    metric: bool,
-    int_digits: usize,
-    dec_digits: usize,
-    leading_zero_omitted: bool,
+    fmt: &CoordFormat,
     last_x: &mut Option<f64>,
     last_y: &mut Option<f64>,
 ) -> Option<(f64, f64)> {
@@ -795,20 +813,13 @@ fn parse_xy_modal(
     if xi.is_none() && yi.is_none() {
         return None;
     }
-    let scale = if metric { 1.0 } else { 25.4 };
     // Slice the token after X up to the next non-number / 'Y'.
     let axis_tok = |pos: usize| -> Option<f64> {
         let rest = &line[pos + 1..];
         let end = rest
             .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
             .unwrap_or(rest.len());
-        parse_coord(
-            rest[..end].trim(),
-            int_digits,
-            dec_digits,
-            leading_zero_omitted,
-        )
-        .map(|v| v * scale)
+        parse_coord(rest[..end].trim(), fmt).map(|v| v * fmt.scale())
     };
     if let Some(p) = xi {
         if let Some(v) = axis_tok(p) {
@@ -831,12 +842,7 @@ fn parse_xy_modal(
 }
 
 /// Parse one Excellon coordinate token into the document unit (mm or inch).
-fn parse_coord(
-    tok: &str,
-    int_digits: usize,
-    dec_digits: usize,
-    leading_zero_omitted: bool,
-) -> Option<f64> {
+fn parse_coord(tok: &str, fmt: &CoordFormat) -> Option<f64> {
     if tok.is_empty() {
         return None;
     }
@@ -849,15 +855,15 @@ fn parse_coord(
     if digits.is_empty() {
         return None;
     }
-    let total = int_digits + dec_digits;
-    let padded = if leading_zero_omitted {
+    let total = fmt.int_digits + fmt.dec_digits;
+    let padded = if fmt.leading_zero_omitted {
         // Value right-justified: pad leading zeros to `total`.
         format!("{:0>width$}", digits, width = total)
     } else {
         // Trailing zeros suppressed: pad on the right.
         format!("{:0<width$}", digits, width = total)
     };
-    let cut = padded.len().saturating_sub(dec_digits);
+    let cut = padded.len().saturating_sub(fmt.dec_digits);
     let int_part = &padded[..cut];
     let dec_part = &padded[cut..];
     let val: f64 = format!("{}.{}", int_part, dec_part).parse().ok()?;
@@ -922,7 +928,15 @@ M30
     #[test]
     fn implicit_decimal_metric() {
         // 3.3 metric, leading zeros omitted: X123456 -> 123.456
-        let v = parse_coord("123456", 3, 3, true).unwrap();
+        let fmt = CoordFormat {
+            metric: true,
+            int_digits: 3,
+            dec_digits: 3,
+            leading_zero_omitted: true,
+            split_set: true,
+            declared: true,
+        };
+        let v = parse_coord("123456", &fmt).unwrap();
         assert!((v - 123.456).abs() < 1e-6);
     }
 

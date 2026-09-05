@@ -13,7 +13,24 @@ no adequate model, or two manufacturing records contradict each other,
 Hauksbee reports the valid partial result and declines the stronger claim. It
 does not turn missing evidence into a green board.
 
-## Try it
+## Get Hauksbee
+
+On macOS, download `Hauksbee.app` from the
+[latest release](https://github.com/hauksbee-dev/hauksbee/releases/latest),
+unzip it, and double-click: it starts the engine locally and opens the web
+interface. For the CLI, one line installs the released binaries:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
+```
+
+From a checkout:
 
 ```bash
 scripts/install-sims.sh --avr          # libsimavr, for the in-process AVR backend
@@ -97,3 +114,5 @@ Start with [START_HERE](docs/START_HERE.md). Contributing notes are in
 Apache-2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). A binary built with
 the `avr` feature links GPL-3.0 libsimavr and is distributed under GPL-3.0;
 builds without it use Renode and QEMU as separate processes.
+
+Source, releases and issues: <https://github.com/hauksbee-dev/hauksbee>.

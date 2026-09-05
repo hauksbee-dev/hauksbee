@@ -31,3 +31,5 @@ them are not part of the default suite.
   Do not add tests that assert message wording or documentation text.
 - A missing model or an unsupported input is reported as a refusal, never
   turned into a green result.
+
+Issues and pull requests go to <https://github.com/hauksbee-dev/hauksbee>.
