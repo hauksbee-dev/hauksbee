@@ -2745,9 +2745,11 @@ fn main {
                 )
             };
         }
+        // One copper layer only: with a second layer the reader would infer
+        // plating from pad rings on both sides, and the refusal under test
+        // would not arise.
         let bytes = zip_of(&[
             bare!("BoardOutline.gbr"),
-            bare!("Bottom.gbr"),
             bare!("Through.drl"),
             bare!("Top.gbr"),
             bare!("TopAssy.gbr"),
