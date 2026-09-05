@@ -1120,70 +1120,8 @@ const = [0x00]
 style = "i2c_pointer"
 "#;
 
-    #[test]
-    fn parses_and_validates_lm75() {
-        let spec = SensorSpec::from_toml(LM75).unwrap();
-        assert_eq!(spec.sensor.name, "LM75");
-        assert_eq!(spec.sensor.bus, Bus::I2c);
-        assert_eq!(spec.sensor.i2c_address, Some(0x48));
-        assert_eq!(spec.sensor.registers.len(), 2);
-        let temp = &spec.sensor.registers[0];
-        assert_eq!(temp.addr, 0x00);
-        assert_eq!(temp.encoding, Some(Encoding::Q71Be));
-        assert_eq!(temp.read_len(), 2);
-    }
-
-    #[test]
-    fn round_trips_through_toml() {
-        let spec = SensorSpec::from_toml(LM75).unwrap();
-        let back = spec.to_toml().unwrap();
-        let reparsed = SensorSpec::from_toml(&back).unwrap();
-        assert_eq!(reparsed.sensor.name, spec.sensor.name);
-        assert_eq!(reparsed.sensor.registers.len(), spec.sensor.registers.len());
-        assert_eq!(
-            reparsed.sensor.registers[0].encoding,
-            spec.sensor.registers[0].encoding
-        );
-    }
-
-    #[test]
-    fn rejects_i2c_without_address() {
-        let bad = r#"
-[sensor]
-name = "X"
-bus = "i2c"
-[[sensor.register]]
-addr = 0
-const = [1]
-[sensor.protocol]
-style = "i2c_pointer"
-"#;
-        assert!(SensorSpec::from_toml(bad).is_err());
-    }
-
-    #[test]
-    fn rejects_unknown_input_in_expr() {
-        let bad = r#"
-[sensor]
-name = "X"
-bus = "i2c"
-i2c_address = 0x10
-[[sensor.register]]
-addr = 0
-bytes = 2
-encoding = "i16_be"
-expr = "undeclared_thing * 2"
-[sensor.protocol]
-style = "i2c_pointer"
-"#;
-        assert!(SensorSpec::from_toml(bad).is_err());
-    }
-
-    // ── Write side (05 §3.2) ─────────────────────────────────────────────────
-
     /// ADS1115-shaped pointer-framed write register with bit fields, and a read
-    /// register whose expr references the extracted fields (write→read
-    /// coupling). This is the exact shape the ADS1115/INA219 specs use.
+    /// register whose expr references the extracted fields.
     const WRITE_REG_SPEC: &str = r#"
 [sensor]
 name = "MINIADC"
@@ -1212,17 +1150,6 @@ expr = "a0 * 32768 / if(pga == 1.0, 4.096, 2.048)"
 [sensor.protocol]
 style = "i2c_pointer"
 "#;
-
-    #[test]
-    fn write_register_spec_parses_and_couples_reads() {
-        let spec = SensorSpec::from_toml(WRITE_REG_SPEC).unwrap();
-        let s = &spec.sensor;
-        assert_eq!(s.write_registers.len(), 1);
-        assert_eq!(s.write_registers[0].store, "config");
-        assert_eq!(s.write_registers[0].fields[0].bits, [11, 9]);
-        // The field extraction is Rust-side: 0x8383 has pga = 0b001.
-        assert_eq!(s.write_registers[0].fields[0].extract(0x8383), 1);
-    }
 
     /// MCP4728-shaped command framing: match/prefix/groups/channel/update.
     const WRITE_CMD_SPEC: &str = r#"
@@ -1267,198 +1194,88 @@ expr = "if(pd == 0.0, code / 4096 * 4.096, 0.0)"
 style = "i2c_pointer"
 "#;
 
+    fn spi_spec(protocol_extra: &str) -> String {
+        format!(
+            "[sensor]\nname = \"MINIMAG\"\nbus = \"spi\"\n[[sensor.input]]\nname = \"x\"\ndefault = 0.0\n\
+             [[sensor.register]]\naddr = 0x0f\nconst = [0x42]\n[[sensor.register]]\naddr = 0x10\nbytes = 2\n\
+             encoding = \"i16_le\"\nexpr = \"x\"\n[sensor.protocol]\nstyle = \"spi_reg\"\n{protocol_extra}\n"
+        )
+    }
+
     #[test]
-    fn write_command_spec_parses() {
+    fn lm75_parses_and_round_trips() {
+        let spec = SensorSpec::from_toml(LM75).unwrap();
+        assert_eq!(spec.sensor.name, "LM75");
+        assert_eq!(spec.sensor.bus, Bus::I2c);
+        assert_eq!(spec.sensor.i2c_address, Some(0x48));
+        assert_eq!(spec.sensor.registers.len(), 2);
+        let temp = &spec.sensor.registers[0];
+        assert_eq!(
+            (temp.addr, temp.encoding, temp.read_len()),
+            (0x00, Some(Encoding::Q71Be), 2)
+        );
+
+        let reparsed = SensorSpec::from_toml(&spec.to_toml().unwrap()).unwrap();
+        assert_eq!(reparsed.sensor.registers.len(), 2);
+        assert_eq!(reparsed.sensor.registers[0].encoding, Some(Encoding::Q71Be));
+    }
+
+    #[test]
+    fn write_register_and_command_specs_parse_with_field_extraction() {
+        let spec = SensorSpec::from_toml(WRITE_REG_SPEC).unwrap();
+        let w = &spec.sensor.write_registers[0];
+        assert_eq!(w.store, "config");
+        assert_eq!(w.fields[0].bits, [11, 9]);
+        assert_eq!(w.fields[0].extract(0x8383), 1);
+
         let spec = SensorSpec::from_toml(WRITE_CMD_SPEC).unwrap();
         let s = &spec.sensor;
         assert_eq!(s.channels, 4);
-        assert_eq!(s.write_commands.len(), 1);
         let c = &s.write_commands[0];
         assert_eq!(c.channel.source, ChannelSource::Auto);
         assert_eq!(c.update.len(), 2);
-        // Bit extraction: fast-write pair 0x38 0x00 -> group 0x3800, pd = 3,
-        // code = 0x800.
         assert_eq!(c.fields[0].extract(0x3800), 3);
         assert_eq!(c.fields[1].extract(0x3800), 0x800);
     }
 
     #[test]
-    fn rejects_pointer_and_command_writes_together() {
-        let bad = WRITE_CMD_SPEC.replace(
-            "[[sensor.output]]",
-            "[[sensor.write_register]]\naddr = 0x02\nencoding = \"u8\"\nstore = \"x\"\n\n[[sensor.output]]",
-        );
-        let e = SensorSpec::from_toml(&bad).unwrap_err();
-        assert!(e.to_string().contains("mutually exclusive"), "got: {e}");
-    }
-
-    #[test]
-    fn rejects_out_of_range_field_bits() {
-        let bad = WRITE_CMD_SPEC.replace("bits = [13, 12]", "bits = [16, 12]");
-        let e = SensorSpec::from_toml(&bad).unwrap_err();
-        assert!(e.to_string().contains("out of range"), "got: {e}");
-    }
-
-    #[test]
-    fn rejects_update_of_undeclared_state() {
-        let bad = WRITE_CMD_SPEC.replace("pd = \"pd_bits\"", "gain = \"pd_bits\"");
-        let e = SensorSpec::from_toml(&bad).unwrap_err();
-        assert!(e.to_string().contains("unknown state"), "got: {e}");
-    }
-
-    #[test]
-    fn rejects_namespace_collision_between_input_and_store() {
-        let bad = WRITE_REG_SPEC.replace("store = \"config\"", "store = \"a0\"");
-        let e = SensorSpec::from_toml(&bad).unwrap_err();
-        assert!(
-            e.to_string().contains("duplicate variable name"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_read_packing_as_write_encoding() {
-        let bad = WRITE_REG_SPEC.replace(
-            "encoding = \"u16_be\"\nstore = \"config\"",
-            "encoding = \"q7.1_be\"\nstore = \"config\"",
-        );
-        let e = SensorSpec::from_toml(&bad).unwrap_err();
-        assert!(
-            e.to_string().contains("no defined write decode"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_write_side_on_spi() {
-        let bad = r#"
-[sensor]
-name = "X"
-bus = "spi"
-
-[[sensor.write_register]]
-addr = 0x01
-encoding = "u8"
-store = "cfg"
-
-[sensor.protocol]
-style = "spi_reg"
-"#;
-        let e = SensorSpec::from_toml(bad).unwrap_err();
-        assert!(e.to_string().contains("i2c\" only"), "got: {e}");
-    }
-
-    #[test]
-    fn rejects_read_frame_alongside_registers() {
-        let bad = r#"
-[sensor]
-name = "X"
-bus = "i2c"
-i2c_address = 0x60
-
-[[sensor.register]]
-addr = 0x00
-const = [1]
-
-[sensor.read_frame]
-bytes = ["1.0"]
-
-[sensor.protocol]
-style = "i2c_pointer"
-"#;
-        let e = SensorSpec::from_toml(bad).unwrap_err();
-        assert!(e.to_string().contains("mutually exclusive"), "got: {e}");
-    }
-
-    #[test]
-    fn spi_spec_parses() {
-        let spi = r#"
-[sensor]
-name = "MINIMAG"
-bus = "spi"
-
-[[sensor.input]]
-name = "x"
-default = 0.0
-
-[[sensor.register]]
-addr = 0x0f
-const = [0x42]
-
-[[sensor.register]]
-addr = 0x10
-bytes = 2
-encoding = "i16_le"
-expr = "x"
-
-[sensor.protocol]
-style = "spi_reg"
-rw_read_is_high = true
-addr_mask = 0x7f
-"#;
-        let spec = SensorSpec::from_toml(spi).unwrap();
+    fn spi_spec_parses_with_mode() {
+        let spec =
+            SensorSpec::from_toml(&spi_spec("rw_read_is_high = true\naddr_mask = 0x7f")).unwrap();
         assert_eq!(spec.sensor.bus, Bus::Spi);
         assert_eq!(spec.sensor.protocol.style, ProtocolStyle::SpiReg);
         assert!(spec.sensor.protocol.rw_read_is_high);
         assert_eq!(spec.sensor.protocol.addr_mask, 0x7f);
-        // Omitting spi_mode defaults to mode 0 (back-compat).
         assert_eq!(spec.sensor.protocol.spi_mode, 0);
-    }
-
-    /// A minimal `spi_reg` sensor with a chosen `spi_mode`, for the mode tests.
-    fn spi_spec_with_mode(mode: &str) -> String {
-        format!(
-            r#"
-[sensor]
-name = "MINIMAG"
-bus = "spi"
-
-[[sensor.register]]
-addr = 0x0f
-const = [0x42]
-
-[sensor.protocol]
-style = "spi_reg"
-{mode}
-"#
-        )
-    }
-
-    #[test]
-    fn spi_mode_3_accepted_on_spi() {
-        let spec = SensorSpec::from_toml(&spi_spec_with_mode("spi_mode = 3")).unwrap();
+        let spec = SensorSpec::from_toml(&spi_spec("spi_mode = 3")).unwrap();
         assert_eq!(spec.sensor.protocol.spi_mode, 3);
     }
 
     #[test]
-    fn spi_mode_4_rejected() {
-        let e = SensorSpec::from_toml(&spi_spec_with_mode("spi_mode = 4")).unwrap_err();
-        assert!(
-            format!("{e}").contains("spi_mode 4 is out of range"),
-            "unexpected error: {e}"
-        );
-    }
-
-    #[test]
-    fn spi_mode_on_i2c_bus_rejected() {
-        let bad = r#"
-[sensor]
-name = "MINI6050"
-bus = "i2c"
-i2c_address = 0x68
-
-[[sensor.register]]
-addr = 0x75
-const = [0x68]
-
-[sensor.protocol]
-style = "i2c_pointer"
-spi_mode = 2
-"#;
-        let e = SensorSpec::from_toml(bad).unwrap_err();
-        assert!(
-            format!("{e}").contains("spi_mode = 2 is SPI-only"),
-            "unexpected error: {e}"
-        );
+    fn malformed_specs_are_rejected() {
+        let cases = [
+            LM75.replace("i2c_address = 0x48\n", ""),
+            LM75.replace("expr = \"temperature_c\"", "expr = \"undeclared_thing * 2\""),
+            WRITE_CMD_SPEC.replace(
+                "[[sensor.output]]",
+                "[[sensor.write_register]]\naddr = 0x02\nencoding = \"u8\"\nstore = \"x\"\n\n[[sensor.output]]",
+            ),
+            WRITE_CMD_SPEC.replace("bits = [13, 12]", "bits = [16, 12]"),
+            WRITE_CMD_SPEC.replace("pd = \"pd_bits\"", "gain = \"pd_bits\""),
+            WRITE_REG_SPEC.replace("store = \"config\"", "store = \"a0\""),
+            WRITE_REG_SPEC.replace("encoding = \"u16_be\"\nstore", "encoding = \"q7.1_be\"\nstore"),
+            spi_spec("spi_mode = 4"),
+            LM75.replace("style = \"i2c_pointer\"", "style = \"i2c_pointer\"\nspi_mode = 2"),
+            LM75.replace("[sensor.protocol]", "[sensor.read_frame]\nbytes = [\"1.0\"]\n[sensor.protocol]"),
+            "[sensor]\nname = \"X\"\nbus = \"spi\"\n[[sensor.write_register]]\naddr = 0x01\nencoding = \"u8\"\n\
+             store = \"cfg\"\n[sensor.protocol]\nstyle = \"spi_reg\"\n"
+                .to_string(),
+        ];
+        for (i, bad) in cases.iter().enumerate() {
+            assert!(
+                SensorSpec::from_toml(bad).is_err(),
+                "case {i} must be rejected"
+            );
+        }
     }
 }

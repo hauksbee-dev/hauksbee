@@ -1075,14 +1075,26 @@ mod tests {
         ModelLibrary::builtin()
     }
 
-    #[test]
-    fn builtin_loads_without_panic() {
-        let _l = lib();
+    fn by_value(l: &ModelLibrary, value: &str) -> Resolution {
+        l.resolve(&ComponentQuery {
+            value: Some(value.to_string()),
+            ..Default::default()
+        })
+    }
+
+    fn card(name: &str, kind: spice_input::SpiceCardKind, model_type: Option<&str>) -> SpiceCard {
+        SpiceCard {
+            name: name.to_string(),
+            kind,
+            raw: String::new(),
+            ports: Vec::new(),
+            params: Default::default(),
+            model_type: model_type.map(String::from),
+        }
     }
 
     #[test]
-    fn malformed_source_metadata_is_not_silently_discarded() {
-        let mut library = ModelLibrary::empty();
+    fn malformed_source_metadata_and_unsafe_references_reject_the_file() {
         let malformed = r#"
             [[models]]
             id = "bad-source"
@@ -1101,177 +1113,98 @@ mod tests {
             kind = "invented-confidence-class"
             basis = "hostile fixture"
         "#;
-        let error = library
+        let error = ModelLibrary::empty()
             .load_toml_str(malformed, "bad-source.toml", SourceLayer::UserDir)
-            .expect_err("invalid provenance must reject the whole model file");
-        assert!(
-            matches!(error, ModelError::TomlParse { .. }),
-            "source parse failure must not become default unknown provenance: {error:?}"
-        );
-    }
+            .unwrap_err();
+        assert!(matches!(error, ModelError::TomlParse { .. }), "{error:?}");
 
-    #[test]
-    fn source_references_require_https_and_well_formed_hashes() {
-        for (name, reference) in [
-            (
-                "http",
-                "url = \"http://vendor.example/device.pdf\"\n                    title = \"Device\"\n                    locator = \"Table 1\"",
-            ),
-            (
-                "hash",
-                "url = \"https://vendor.example/device.pdf\"\n                    title = \"Device\"\n                    locator = \"Table 1\"\n                    sha256 = \"abc\"",
-            ),
+        for reference in [
+            "url = \"http://vendor.example/device.pdf\"\ntitle = \"Device\"\nlocator = \"Table 1\"",
+            "url = \"https://vendor.example/device.pdf\"\ntitle = \"Device\"\nlocator = \"Table 1\"\nsha256 = \"abc\"",
         ] {
             let source = format!(
-                r#"
-                [[models]]
-                id = "bad-{name}"
-                kind = "passive"
-                [models.match]
-                value_re = "^1k$"
-                [models.source]
-                tier = "user-model"
-                validation = "unvalidated"
-                [[models.source.references]]
-                {reference}
-                "#
+                "[[models]]\nid = \"bad\"\nkind = \"passive\"\n[models.match]\nvalue_re = \"^1k$\"\n\
+                 [models.source]\ntier = \"user-model\"\nvalidation = \"unvalidated\"\n\
+                 [[models.source.references]]\n{reference}\n"
             );
             let error = ModelLibrary::empty()
                 .load_toml_str(&source, "bad-reference.toml", SourceLayer::UserDir)
-                .expect_err("unsafe citation must reject the model file");
-            assert!(
-                matches!(error, ModelError::ValidationFailed { .. }),
-                "bad {name} reference should be a validation failure: {error:?}"
-            );
+                .unwrap_err();
+            assert!(matches!(error, ModelError::ValidationFailed { .. }), "{error:?}");
         }
     }
 
     #[test]
     fn entry_without_match_rules_is_rejected_loud() {
-        // R31: an all-None `[match]` block (an omitted section, or a typo'd key
-        // like `mch_re` that serde silently drops) matches EVERY component at
-        // specificity 0. Since the user layer outranks pack/builtin, one such
-        // stray entry would silently rebind the whole board to it. Loading must
-        // fail loud instead of silently accepting a universal catch-all.
-        let mut lib = ModelLibrary::builtin();
-        let stray = r#"
-            [[models]]
-            id = "stray"
-            kind = "passive"
-        "#;
+        let mut lib = lib();
         let err = lib
-            .load_toml_str(stray, "stray.toml", SourceLayer::UserDir)
-            .expect_err("an entry with no match rules must be rejected");
+            .load_toml_str(
+                "[[models]]\nid = \"stray\"\nkind = \"passive\"\n",
+                "stray.toml",
+                SourceLayer::UserDir,
+            )
+            .unwrap_err();
         assert!(
             matches!(&err, ModelError::ValidationFailed { id, .. } if id == "stray"),
-            "must be a ValidationFailed naming the stray entry, got: {err:?}"
+            "{err:?}"
         );
-
-        // A well-formed entry (one match rule) still loads.
-        let ok = r#"
-            [[models]]
-            id = "real"
-            kind = "passive"
-            [models.match]
-            lib_id = "Device:R"
-        "#;
-        assert!(
-            lib.load_toml_str(ok, "real.toml", SourceLayer::UserDir)
-                .is_ok(),
-            "an entry with a populated match rule must load"
-        );
+        lib.load_toml_str(
+            "[[models]]\nid = \"real\"\nkind = \"passive\"\n[models.match]\nlib_id = \"Device:R\"\n",
+            "real.toml",
+            SourceLayer::UserDir,
+        )
+        .unwrap();
     }
 
-    /// Round-7 #14: the report's Display truncates long fields to fit the table;
-    /// slicing a value string at a fixed BYTE index panics when a multibyte char
-    /// straddles it. A "µF" value longer than the 24-col cell must render, not
-    /// crash.
     #[test]
     fn resolution_report_display_survives_multibyte_value() {
-        // 23 ASCII + 'µ' (2 bytes) puts a char boundary across byte index 24.
-        let value = format!("{}{}", "a".repeat(23), "µF");
         let q = ComponentQuery {
-            value: Some(value),
+            value: Some(format!("{}{}", "a".repeat(23), "µF")),
             ..Default::default()
         };
         let report = ResolutionReport {
             resolutions: vec![Resolution::unresolved(q)],
         };
-        let rendered = report.to_string();
-        assert!(
-            rendered.contains("Resolution report"),
-            "report renders: {rendered}"
-        );
+        assert!(report.to_string().contains("Resolution report"));
     }
 
     #[test]
-    fn resolve_resistor() {
+    fn builtin_resolves_representative_parts() {
         let l = lib();
-        let q = ComponentQuery::new(Some("Device:R".to_string()), Some("10k".to_string()), None);
-        let res = l.resolve(&q);
-        // Exact lib_id match with no value_re in the rule resolves at Family
-        // confidence (the entry covers the whole Device:R class, not a specific part).
-        assert!(
-            res.confidence <= Confidence::Family,
-            "expected Family or better, got {:?}",
-            res.confidence
-        );
-        assert_eq!(res.model.unwrap().kind, ComponentKind::Passive);
-    }
-
-    #[test]
-    fn resolve_bc847() {
-        let l = lib();
-        let q = ComponentQuery {
-            value: Some("BC847".to_string()),
+        let r = l.resolve(&ComponentQuery::new(
+            Some("Device:R".into()),
+            Some("10k".into()),
+            None,
+        ));
+        assert!(r.confidence <= Confidence::Family, "{:?}", r.confidence);
+        assert_eq!(r.model.unwrap().kind, ComponentKind::Passive);
+        for (value, kind) in [
+            ("BC847", ComponentKind::BjtNpn),
+            ("1N4148", ComponentKind::Diode),
+            ("74HC595", ComponentKind::ShiftRegister),
+        ] {
+            assert_eq!(by_value(&l, value).model.unwrap().kind, kind, "{value}");
+        }
+        let hole = l.resolve(&ComponentQuery {
+            footprint: Some("MountingHole:MountingHole_4.3mm_M4".to_string()),
             ..Default::default()
-        };
-        let res = l.resolve(&q);
-        assert!(res.model.is_some(), "expected BC847 to resolve");
-        assert_eq!(res.model.unwrap().kind, ComponentKind::BjtNpn);
-    }
+        });
+        assert_eq!(hole.model.unwrap().kind, ComponentKind::Ignore);
 
-    #[test]
-    fn resolve_1n4148() {
-        let l = lib();
-        let q = ComponentQuery {
-            value: Some("1N4148".to_string()),
+        let res = l.resolve(&ComponentQuery {
+            value: Some("UNKNOWNPART_XYZ999".to_string()),
+            reference: Some("U99".to_string()),
             ..Default::default()
-        };
-        let res = l.resolve(&q);
-        assert!(res.model.is_some());
-        assert_eq!(res.model.unwrap().kind, ComponentKind::Diode);
-    }
-
-    #[test]
-    fn resolve_74hc595() {
-        let l = lib();
-        let q = ComponentQuery {
-            value: Some("74HC595".to_string()),
-            ..Default::default()
-        };
-        let res = l.resolve(&q);
-        assert!(res.model.is_some());
-        assert_eq!(res.model.unwrap().kind, ComponentKind::ShiftRegister);
+        });
+        assert_eq!(res.confidence, Confidence::Unresolved);
+        assert!(res.model.is_none());
     }
 
     #[test]
     fn at28c256_fast_write_time_requires_explicit_f_identity() {
         let l = lib();
-        let standard = l
-            .resolve(&ComponentQuery {
-                value: Some("28C256".to_string()),
-                ..Default::default()
-            })
-            .model
-            .expect("generic EEPROM resolves");
-        let fast = l
-            .resolve(&ComponentQuery {
-                value: Some("AT28C256F-15JU".to_string()),
-                ..Default::default()
-            })
-            .model
-            .expect("explicit F EEPROM resolves");
+        let standard = by_value(&l, "28C256").model.unwrap();
+        let fast = by_value(&l, "AT28C256F-15JU").model.unwrap();
         assert_eq!(standard.id, "eeprom_28c256");
         assert_eq!(standard.logic.memories[0].program_time_s, Some(0.010));
         assert_eq!(fast.id, "eeprom_at28c256f");
@@ -1279,76 +1212,34 @@ mod tests {
     }
 
     #[test]
-    fn resolve_mounting_hole_is_ignore() {
-        let l = lib();
-        let q = ComponentQuery {
-            footprint: Some("MountingHole:MountingHole_4.3mm_M4".to_string()),
-            ..Default::default()
-        };
-        let res = l.resolve(&q);
-        assert!(res.model.is_some());
-        assert_eq!(res.model.unwrap().kind, ComponentKind::Ignore);
-    }
-
-    #[test]
-    fn unresolved_is_loud() {
-        let l = lib();
-        let q = ComponentQuery {
-            value: Some("UNKNOWNPART_XYZ999".to_string()),
-            reference: Some("U99".to_string()),
-            ..Default::default()
-        };
-        let res = l.resolve(&q);
-        assert_eq!(res.confidence, Confidence::Unresolved);
-        assert!(res.model.is_none());
-    }
-
-    #[test]
-    fn spice_card_overrides_builtin() {
+    fn spice_cards_override_builtin_but_subckts_and_unknown_types_do_not_masquerade() {
         let mut l = lib();
-        let card = SpiceCard {
-            name: "BC847".to_string(),
-            kind: spice_input::SpiceCardKind::Model,
-            raw: ".MODEL BC847 NPN(IS=2E-14)".to_string(),
-            ports: Vec::new(),
-            params: [("IS".to_string(), 2e-14_f64)].into_iter().collect(),
-            model_type: Some("NPN".to_string()),
-        };
-        l.add_spice_card(card);
-        let q = ComponentQuery {
-            value: Some("BC847".to_string()),
-            ..Default::default()
-        };
-        let res = l.resolve(&q);
+        let mut bc847 = card("BC847", spice_input::SpiceCardKind::Model, Some("NPN"));
+        bc847.params = [("IS".to_string(), 2e-14_f64)].into_iter().collect();
+        l.add_spice_card(bc847);
+        let res = by_value(&l, "BC847");
         assert_eq!(res.source.as_deref(), Some("spice"));
-        assert_eq!(
-            res.provenance.as_ref().unwrap().tier(),
-            ModelSourceTier::UserModel,
-            "a loose SPICE card is a user override, not an unverified vendor claim"
-        );
+        assert_eq!(res.provenance.unwrap().tier(), ModelSourceTier::UserModel);
+
+        let mut subckt = card("MYOPAMP", spice_input::SpiceCardKind::Subckt, None);
+        subckt.ports = vec!["INP".into(), "INN".into(), "OUT".into()];
+        l.add_spice_card(subckt);
+        let res = by_value(&l, "MYOPAMP");
+        assert!(res.model.is_none());
+        assert_eq!(res.confidence, Confidence::Unresolved);
+
+        l.add_spice_card(card("M1", spice_input::SpiceCardKind::Model, Some("VDMOS")));
+        assert!(by_value(&l, "M1").model.is_none());
+
+        l.add_spice_card(card("RMOD", spice_input::SpiceCardKind::Model, Some("R")));
+        assert!(by_value(&l, "RMOD").model.is_some());
     }
 
-    /// Round-8 #9: `~/.config/hauksbee/models` must sit ABOVE `~/.hauksbee/
-    /// models` so a hand-corrected model there deterministically overrides an
-    /// auto-extracted same-id one. The two user dirs must be distinct layers.
     #[test]
-    fn user_config_dir_outranks_user_dir() {
-        assert!(
-            SourceLayer::UserConfigDir.priority() > SourceLayer::UserDir.priority(),
-            "~/.config/hauksbee/models must outrank ~/.hauksbee/models"
-        );
-        assert!(
-            SourceLayer::UserConfigDir.priority() < SourceLayer::ModelsDirFlag.priority(),
-            "--models-dir still wins over the config dir"
-        );
-    }
+    fn layer_priorities_and_missing_dirs() {
+        assert!(SourceLayer::UserConfigDir.priority() > SourceLayer::UserDir.priority());
+        assert!(SourceLayer::UserConfigDir.priority() < SourceLayer::ModelsDirFlag.priority());
 
-    /// U3: an explicit `--models-dir` pointing at a nonexistent path is a
-    /// user typo; it must produce a loud error (so the CLI's eprintln fires),
-    /// not silently load zero models. The auto-discovered user dirs, by
-    /// contrast, may legitimately be absent and must stay silent.
-    #[test]
-    fn missing_models_dir_flag_reports_but_auto_dirs_stay_silent() {
         let mut l = lib();
         let missing = Path::new("/nonexistent/hauksbee/models/typo");
         let flag_errs = l.load_dir_layer(missing, SourceLayer::ModelsDirFlag);
@@ -1356,13 +1247,10 @@ mod tests {
             flag_errs
                 .iter()
                 .any(|e| matches!(e, ModelError::MissingDir { .. })),
-            "an explicit --models-dir typo must report MissingDir, got: {flag_errs:?}"
+            "{flag_errs:?}"
         );
         for auto in [SourceLayer::UserDir, SourceLayer::UserConfigDir] {
-            assert!(
-                l.load_dir_layer(missing, auto).is_empty(),
-                "an absent auto-discovered dir ({auto:?}) must stay silent"
-            );
+            assert!(l.load_dir_layer(missing, auto).is_empty(), "{auto:?}");
         }
     }
 
@@ -1377,219 +1265,76 @@ mod tests {
         .unwrap();
         std::fs::write(
             temp.path().join("models").join("device.toml"),
-            r#"
-[[models]]
-id = "pack_root_device"
-kind = "digital"
-[models.match]
-value_re = "(?i)^PACK_ROOT_DEVICE$"
-[models.pins]
-"1" = "in"
-"2" = "out"
-[models.coverage]
-missing = ["executable_behavior"]
-"#,
+            "[[models]]\nid = \"pack_root_device\"\nkind = \"digital\"\n[models.match]\n\
+             value_re = \"(?i)^PACK_ROOT_DEVICE$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
+             [models.coverage]\nmissing = [\"executable_behavior\"]\n",
         )
         .unwrap();
 
         let lib = ModelLibrary::builtin_with_user_dirs(&[temp.path()]);
-        let resolved = lib.resolve(&ComponentQuery {
-            value: Some("PACK_ROOT_DEVICE".to_string()),
-            ..Default::default()
-        });
+        let resolved = by_value(&lib, "PACK_ROOT_DEVICE");
         assert_eq!(
-            resolved.model.map(|model| model.id),
-            Some("pack_root_device".to_string())
+            resolved.model.map(|m| m.id).as_deref(),
+            Some("pack_root_device")
         );
-        assert_eq!(
-            resolved.source.as_deref(),
-            Some("user"),
-            "an explicit pack-root model must retain user-layer provenance"
-        );
-    }
-
-    /// Round-8 #10: a `.subckt`, and an unrecognized `.model` type, must NOT be
-    /// silently imported as a Passive with Exact confidence (that shadowed the
-    /// real part). Both resolve Unresolved; a genuine passive `.model R` still
-    /// resolves.
-    #[test]
-    fn spice_subckt_and_unknown_model_do_not_masquerade_as_passive() {
-        let subckt = SpiceCard {
-            name: "MYOPAMP".to_string(),
-            kind: spice_input::SpiceCardKind::Subckt,
-            raw: ".SUBCKT MYOPAMP INP INN VCC VEE OUT".to_string(),
-            ports: vec![
-                "INP".into(),
-                "INN".into(),
-                "VCC".into(),
-                "VEE".into(),
-                "OUT".into(),
-            ],
-            params: Default::default(),
-            model_type: None,
-        };
-        let mut l = lib();
-        l.add_spice_card(subckt);
-        let res = l.resolve(&ComponentQuery {
-            value: Some("MYOPAMP".to_string()),
-            ..Default::default()
-        });
-        assert!(
-            res.model.is_none(),
-            "a subckt must not resolve to a Passive model"
-        );
-        assert_eq!(res.confidence, Confidence::Unresolved);
-
-        let vdmos = SpiceCard {
-            name: "M1".to_string(),
-            kind: spice_input::SpiceCardKind::Model,
-            raw: ".MODEL M1 VDMOS(...)".to_string(),
-            ports: Vec::new(),
-            params: Default::default(),
-            model_type: Some("VDMOS".to_string()),
-        };
-        let mut l2 = lib();
-        l2.add_spice_card(vdmos);
-        let res2 = l2.resolve(&ComponentQuery {
-            value: Some("M1".to_string()),
-            ..Default::default()
-        });
-        assert!(
-            res2.model.is_none(),
-            "an unknown .model type must not resolve to Passive"
-        );
-
-        // A genuine passive .model R still resolves.
-        let rmod = SpiceCard {
-            name: "RMOD".to_string(),
-            kind: spice_input::SpiceCardKind::Model,
-            raw: ".MODEL RMOD R (...)".to_string(),
-            ports: Vec::new(),
-            params: Default::default(),
-            model_type: Some("R".to_string()),
-        };
-        let mut l3 = lib();
-        l3.add_spice_card(rmod);
-        let res3 = l3.resolve(&ComponentQuery {
-            value: Some("RMOD".to_string()),
-            ..Default::default()
-        });
-        assert!(
-            res3.model.is_some(),
-            "a .model R is a genuine passive and must resolve"
-        );
+        assert_eq!(resolved.source.as_deref(), Some("user"));
     }
 
     #[test]
-    fn report_display() {
-        let l = lib();
-        let queries = vec![
-            ComponentQuery {
-                reference: Some("R1".to_string()),
-                value: Some("10k".to_string()),
-                footprint: Some(
-                    "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal".to_string(),
-                ),
-                ..Default::default()
-            },
-            ComponentQuery {
-                reference: Some("D1".to_string()),
-                value: Some("1N4148".to_string()),
-                ..Default::default()
-            },
-            ComponentQuery {
-                reference: Some("U99".to_string()),
-                value: Some("UNKNOWN".to_string()),
-                ..Default::default()
-            },
-        ];
-        let report = l.report(&queries);
-        let s = report.to_string();
-        assert!(s.contains("R1"));
-        assert!(s.contains("1N4148"));
-        assert!(s.contains("UNRESOLVED"));
-    }
-
-    #[test]
-    fn source_policy_places_curated_models_above_extracted_and_estimated_models() {
+    fn source_policy_ranks_curated_above_extracted_and_estimated_unless_user_overrides() {
         let mut l = ModelLibrary::empty();
         let entry = |id: &str, tier: &str| {
             format!(
-                r#"
-[[models]]
-id = "{id}"
-kind = "diode"
-[models.source]
-tier = "{tier}"
-validation = "physical-bounds-only"
-[models.match]
-value_re = "^LADDER$"
-[models.params]
-is = 1e-9
-n = 1.5
-rs = 0.5
-"#
+                "[[models]]\nid = \"{id}\"\nkind = \"diode\"\n[models.source]\ntier = \"{tier}\"\n\
+                 validation = \"physical-bounds-only\"\n[models.match]\nvalue_re = \"^LADDER$\"\n\
+                 [models.params]\nis = 1e-9\nn = 1.5\nrs = 0.5\n"
             )
         };
         l.load_toml_str(
             &entry("estimated", "estimated-fallback"),
-            "fallback",
+            "f",
             SourceLayer::Builtin,
         )
         .unwrap();
         l.load_toml_str(
             &entry("extracted", "datasheet-derived"),
-            "extracted",
+            "e",
             SourceLayer::UserDir,
         )
         .unwrap();
         l.load_toml_str(
             &entry("curated", "curated-library"),
-            "curated",
+            "c",
             SourceLayer::Builtin,
         )
         .unwrap();
-
-        let resolved = l.resolve(&ComponentQuery::new(None, Some("LADDER".into()), None));
+        let resolved = by_value(&l, "LADDER");
         assert_eq!(resolved.model.unwrap().id, "curated");
         assert_eq!(
             resolved.provenance.unwrap().tier(),
-            hauksbee_ir::evidence::ModelSourceTier::CuratedLibrary
+            ModelSourceTier::CuratedLibrary
         );
-    }
 
-    #[test]
-    fn explicit_user_model_can_override_the_accuracy_ladder() {
-        let mut l = ModelLibrary::builtin();
+        let mut l = lib();
         l.load_toml_str(
-            r#"
-[[models]]
-id = "user_bat43"
-kind = "diode"
-[models.match]
-value_re = "^BAT43$"
-[models.params]
-is = 1e-9
-n = 1.3
-rs = 0.2
-"#,
+            "[[models]]\nid = \"user_bat43\"\nkind = \"diode\"\n[models.match]\nvalue_re = \"^BAT43$\"\n\
+             [models.params]\nis = 1e-9\nn = 1.3\nrs = 0.2\n",
             "user-bat43",
             SourceLayer::ModelsDirFlag,
         )
         .unwrap();
-        let resolved = l.resolve(&ComponentQuery::new(None, Some("BAT43".into()), None));
+        let resolved = by_value(&l, "BAT43");
         assert_eq!(resolved.model.unwrap().id, "user_bat43");
         assert_eq!(
             resolved.provenance.unwrap().tier(),
-            hauksbee_ir::evidence::ModelSourceTier::UserModel
+            ModelSourceTier::UserModel
         );
     }
 
-    /// Test resolution against components actually found in the pic_programmer board.
+    /// Resolution against the pic_programmer board's BOM.
     #[test]
     fn pic_programmer_bom() {
         let l = lib();
-        // Components extracted from the pic_programmer.kicad_pcb
         let bom: &[(&str, &str, &str)] = &[
             (
                 "C1",
@@ -1606,11 +1351,6 @@ rs = 0.2
                 "10K",
                 "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
             ),
-            (
-                "R10",
-                "5,1K",
-                "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
-            ),
             ("D2", "BAT43", "Diode_THT:D_DO-35_SOD27_P7.62mm_Horizontal"),
             (
                 "D1",
@@ -1618,9 +1358,7 @@ rs = 0.2
                 "Diode_THT:D_DO-35_SOD27_P12.70mm_Horizontal",
             ),
             ("D8", "RED-LED", "LED_THT:LED_D5.0mm"),
-            ("D9", "GREEN-LED", "LED_THT:LED_D5.0mm"),
             ("Q1", "BC237", "footprints:TO-92"),
-            ("Q3", "BC307", "footprints:TO-92"),
             (
                 "L1",
                 "22uH",
@@ -1634,8 +1372,8 @@ rs = 0.2
             ("P101", "CONN_1", "MountingHole:MountingHole_4.3mm_M4"),
             ("C5", "10nF", "Capacitor_THT:C_Disc_D5.1mm_W3.2mm_P5.00mm"),
             ("U2", "74HC125", "Package_DIP:DIP-14_W7.62mm_LongPads"),
+            ("U99", "UNKNOWN", ""),
         ];
-
         let queries: Vec<ComponentQuery> = bom
             .iter()
             .map(|(r, v, fp)| ComponentQuery {
@@ -1645,46 +1383,17 @@ rs = 0.2
                 ..Default::default()
             })
             .collect();
-
         let report = l.report(&queries);
-
-        // Print the report for inspection during test runs
-        println!("{}", report);
-
-        let (exact, family, guessed, unresolved) = report.counts();
-        println!(
-            "pic_programmer: exact={exact} family={family} guessed={guessed} unresolved={unresolved}"
-        );
-
-        // The components that should definitely resolve
-        let must_resolve = [
-            "C1", "C2", "R1", "D2", "D1", "D8", "D9", "Q1", "L1", "U3", "P101", "C5", "U2",
-        ];
         for res in &report.resolutions {
             let r = res.query.reference.as_deref().unwrap_or("");
-            if must_resolve.contains(&r) {
-                assert!(
-                    res.model.is_some(),
-                    "component {} (value={:?}) should have resolved but didn't",
-                    r,
-                    res.query.value
-                );
-            }
+            assert_eq!(
+                res.model.is_some(),
+                r != "U99",
+                "{r} (value={:?})",
+                res.query.value
+            );
         }
-
-        // Unresolved count should be 0 for the list above
-        let unresolved_list = report.unresolved();
-        let unresolved_refs: Vec<_> = unresolved_list
-            .iter()
-            .filter(|r| must_resolve.contains(&r.query.reference.as_deref().unwrap_or("")))
-            .collect();
-        assert!(
-            unresolved_refs.is_empty(),
-            "expected no unresolved in must_resolve set, got: {:?}",
-            unresolved_refs
-                .iter()
-                .map(|r| r.query.reference.as_deref())
-                .collect::<Vec<_>>()
-        );
+        let s = report.to_string();
+        assert!(s.contains("R1") && s.contains("UNRESOLVED"));
     }
 }

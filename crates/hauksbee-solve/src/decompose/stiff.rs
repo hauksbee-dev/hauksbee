@@ -291,265 +291,145 @@ pub fn detect_stiff_candidates(
 mod tests {
     use super::*;
     use crate::decompose::conduction::ConductionGraph;
-    use hauksbee_ir::{BjtModel, Device, Polarity, SourceKind};
+    use crate::test_fixtures::{bjt, pnp, res, vdc, GND};
 
-    /// A 4-cycle of BJTs with grounded base resistors, returning the four cycle
-    /// nodes. A cycle has no internal articulation point, so holding any single
-    /// one of its nodes leaves the rest connected: this makes the *only* way to
-    /// cut such a block off from its neighbours the shared node that joins them,
-    /// which is exactly the stiff-node shape under test (fanout without an
-    /// internal cut is not a tear).
-    fn add_cycle(c: &mut Circuit, prefix: &str, model: &BjtModel) -> Vec<NodeId> {
+    /// A 4-cycle of BJTs with grounded base resistors: no internal
+    /// articulation point, so the only cut off from its neighbours is the
+    /// shared node that joins them.
+    fn add_cycle(c: &mut Circuit, prefix: &str) -> Vec<NodeId> {
+        let model = pnp();
         let a: Vec<NodeId> = (0..4).map(|i| c.node(&format!("{prefix}_a{i}"))).collect();
         for i in 0..4 {
             let base = c.node(&format!("{prefix}_base{i}"));
-            c.add(Device::Bjt {
-                name: format!("{prefix}_Q{i}"),
-                c: a[i],
-                b: base,
-                e: a[(i + 1) % 4],
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("{prefix}_Rb{i}"),
-                a: base,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
+            bjt(
+                c,
+                &format!("{prefix}_Q{i}"),
+                a[i],
+                base,
+                a[(i + 1) % 4],
+                &model,
+            );
+            res(c, &format!("{prefix}_Rb{i}"), base, GND, 100e3);
         }
         a
     }
 
     fn mesh(c: &mut Circuit, name: &str, a: NodeId, b: NodeId) {
-        c.add(Device::Resistor {
-            name: name.into(),
-            a,
-            b,
-            ohms: 1e3,
-            tc1: None,
-        });
+        res(c, name, a, b, 1e3);
     }
 
-    fn source(c: &mut Circuit, name: &str, node: NodeId) {
-        c.add(Device::Vsource {
-            name: name.into(),
-            p: node,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
+    fn candidates(c: &Circuit, min_block_devices: usize) -> Vec<StiffCandidate> {
+        let g = ConductionGraph::analyze(c);
+        let policy = StiffPolicy {
+            min_block_devices,
+            max_probes_per_block: 16,
+        };
+        detect_stiff_candidates(c, &g, &[], &RailPolicy::default(), &policy)
     }
 
-    fn pnp() -> BjtModel {
-        BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        }
-    }
-
-    /// Two ~10-device nonlinear blocks fused through ONE driven node `vout`
-    /// (a resistor mesh joins each block to `vout`, itself fed from a source
-    /// through a small resistor). With the rail NOT held, holding `vout` is the
-    /// only cut that separates the two blocks, so it must be nominated with two
-    /// blocks and a speedup above one.
+    /// Two ~10-device blocks fused through ONE driven node `vout`.
     fn fused_pair() -> (Circuit, NodeId) {
         let mut c = Circuit::new();
         let pwr = c.node("pwr");
-        source(&mut c, "V5", pwr);
+        vdc(&mut c, "V5", pwr, 5.0);
         let vout = c.node("vout");
-        // The small series feed: vout is driven but not source-pinned.
-        c.add(Device::Resistor {
-            name: "Rfeed".into(),
-            a: pwr,
-            b: vout,
-            ohms: 10.0,
-            tc1: None,
-        });
-        let model = pnp();
-        let a = add_cycle(&mut c, "A", &model);
-        let b = add_cycle(&mut c, "B", &model);
-        // Two contacts per block so no internal block node is itself a cut:
-        // only vout separates block A from block B.
-        mesh(&mut c, "RvA0", vout, a[0]);
-        mesh(&mut c, "RvA2", vout, a[2]);
-        mesh(&mut c, "RvB0", vout, b[0]);
-        mesh(&mut c, "RvB2", vout, b[2]);
+        res(&mut c, "Rfeed", pwr, vout, 10.0);
+        let a = add_cycle(&mut c, "A");
+        let b = add_cycle(&mut c, "B");
+        for (name, n) in [
+            ("RvA0", a[0]),
+            ("RvA2", a[2]),
+            ("RvB0", b[0]),
+            ("RvB2", b[2]),
+        ] {
+            mesh(&mut c, name, vout, n);
+        }
         (c, vout)
     }
 
+    /// `vout` is the only cut and is nominated with 2+ blocks and a modeled
+    /// win; with the floor above the block size nothing is nominated.
     #[test]
-    fn fused_blocks_nominate_the_driven_node() {
+    fn fused_blocks_nominate_the_driven_node_above_the_floor() {
         let (c, vout) = fused_pair();
+        let cands = candidates(&c, 8);
+        assert_eq!(cands.len(), 1, "{cands:?}");
+        assert_eq!(cands[0].node, vout);
+        assert!(
+            cands[0].block_sizes.len() >= 2 && cands[0].est_speedup > 1.0,
+            "{:?}",
+            cands[0]
+        );
         let g = ConductionGraph::analyze(&c);
-        let policy = StiffPolicy {
-            min_block_devices: 8,
-            max_probes_per_block: 16,
-        };
-        let cands = detect_stiff_candidates(&c, &g, &[], &RailPolicy::default(), &policy);
-        assert_eq!(cands.len(), 1, "only vout cuts the fused pair: {cands:?}");
-        let t = &cands[0];
-        assert_eq!(t.node, vout);
-        assert!(
-            t.block_sizes.len() >= 2,
-            "vout must fragment into 2+ blocks: {:?}",
-            t.block_sizes
-        );
-        assert!(
-            t.est_speedup > 1.0,
-            "must be a modeled win: {}",
-            t.est_speedup
-        );
+        assert!(detect_stiff_candidates(
+            &c,
+            &g,
+            &[],
+            &RailPolicy::default(),
+            &StiffPolicy::default()
+        )
+        .is_empty());
     }
 
-    /// The same board, but with the floor above the block size: the fused
-    /// island is smaller than `min_block_devices`, so it is never searched and
-    /// nothing is nominated. The floor is respected, not overridden by fanout.
-    #[test]
-    fn blocks_below_the_floor_yield_nothing() {
-        let (c, _vout) = fused_pair();
-        let g = ConductionGraph::analyze(&c);
-        // Default floor is 64; the fused island is ~21 devices.
-        let cands =
-            detect_stiff_candidates(&c, &g, &[], &RailPolicy::default(), &StiffPolicy::default());
-        assert!(
-            cands.is_empty(),
-            "a sub-floor block cannot repay a boundary: {cands:?}"
-        );
-    }
-
-    /// A high-conduction-fanout node whose holding does NOT fragment: every
-    /// device also connects to a second shared node, so removing the first
-    /// leaves the block fused through the second. Fanout alone must not
-    /// nominate; only a node whose removal actually splits a block qualifies.
+    /// High conduction fanout whose holding does NOT fragment (every device
+    /// also connects to a second shared node) is not a tear.
     #[test]
     fn high_fanout_without_a_cut_is_not_nominated() {
         let mut c = Circuit::new();
         let pwr = c.node("pwr");
-        source(&mut c, "V5", pwr);
-        let n1 = c.node("n1");
-        let n2 = c.node("n2");
-        // n1 looks like a stiff rail (fed through a shunt, high fanout) but is
-        // not a cut: n2 re-fuses everything the moment n1 is held.
-        c.add(Device::Resistor {
-            name: "Rshunt".into(),
-            a: pwr,
-            b: n1,
-            ohms: 1e3,
-            tc1: None,
-        });
+        vdc(&mut c, "V5", pwr, 5.0);
+        let (n1, n2) = (c.node("n1"), c.node("n2"));
+        res(&mut c, "Rshunt", pwr, n1, 1e3);
         let model = pnp();
         for k in 0..6 {
             let base = c.node(&format!("base{k}"));
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: n1,
-                b: base,
-                e: n2,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("Rb{k}"),
-                a: base,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
+            bjt(&mut c, &format!("Q{k}"), n1, base, n2, &model);
+            res(&mut c, &format!("Rb{k}"), base, GND, 100e3);
         }
-        let g = ConductionGraph::analyze(&c);
-        let policy = StiffPolicy {
-            min_block_devices: 4,
-            max_probes_per_block: 16,
-        };
-        let cands = detect_stiff_candidates(&c, &g, &[], &RailPolicy::default(), &policy);
-        assert!(
-            cands.is_empty(),
-            "fanout without fragmentation is not a tear: {cands:?}"
-        );
+        assert!(candidates(&c, 4).is_empty());
     }
 
-    /// Composition: three blocks chained through two cut nodes `x` (A|B) and
-    /// `y` (B|C). Both must be nominated, and because detection grows the held
-    /// set greedily, the candidate held SECOND is scored and sized with the
-    /// first already held: holding both yields the fully composed three-block
-    /// fragmentation, not two independent two-block claims.
+    /// Three blocks chained through cuts `x` (A|B) and `y` (B|C): both are
+    /// nominated, and the second is scored with the first already held, so
+    /// one candidate carries the composed three-block fragmentation.
     #[test]
     fn chained_blocks_compose() {
         let mut c = Circuit::new();
         let pwr = c.node("pwr");
-        source(&mut c, "V5", pwr);
-        let x = c.node("x");
-        let y = c.node("y");
-        c.add(Device::Resistor {
-            name: "Rfx".into(),
-            a: pwr,
-            b: x,
-            ohms: 10.0,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "Rfy".into(),
-            a: pwr,
-            b: y,
-            ohms: 10.0,
-            tc1: None,
-        });
-        let model = pnp();
-        let a = add_cycle(&mut c, "A", &model);
-        let b = add_cycle(&mut c, "B", &model);
-        let d = add_cycle(&mut c, "C", &model);
-        // A joins x by two contacts; C joins y by two; B bridges both, two
-        // contacts each. Two contacts keep every internal node off the cut set,
-        // so only x and y fragment.
-        mesh(&mut c, "RAx0", a[0], x);
-        mesh(&mut c, "RAx2", a[2], x);
-        mesh(&mut c, "RBx0", b[0], x);
-        mesh(&mut c, "RBx2", b[2], x);
-        mesh(&mut c, "RBy1", b[1], y);
-        mesh(&mut c, "RBy3", b[3], y);
-        mesh(&mut c, "RCy0", d[0], y);
-        mesh(&mut c, "RCy2", d[2], y);
-
-        let g = ConductionGraph::analyze(&c);
-        let policy = StiffPolicy {
-            min_block_devices: 8,
-            max_probes_per_block: 16,
-        };
-        let cands = detect_stiff_candidates(&c, &g, &[], &RailPolicy::default(), &policy);
-        assert_eq!(
-            cands.len(),
-            2,
-            "both cut nodes must be nominated: {cands:?}"
-        );
+        vdc(&mut c, "V5", pwr, 5.0);
+        let (x, y) = (c.node("x"), c.node("y"));
+        res(&mut c, "Rfx", pwr, x, 10.0);
+        res(&mut c, "Rfy", pwr, y, 10.0);
+        let a = add_cycle(&mut c, "A");
+        let b = add_cycle(&mut c, "B");
+        let d = add_cycle(&mut c, "C");
+        for (name, n, cut) in [
+            ("RAx0", a[0], x),
+            ("RAx2", a[2], x),
+            ("RBx0", b[0], x),
+            ("RBx2", b[2], x),
+            ("RBy1", b[1], y),
+            ("RBy3", b[3], y),
+            ("RCy0", d[0], y),
+            ("RCy2", d[2], y),
+        ] {
+            mesh(&mut c, name, n, cut);
+        }
+        let cands = candidates(&c, 8);
+        assert_eq!(cands.len(), 2, "{cands:?}");
         assert!(
-            cands.iter().any(|k| k.node == x),
-            "x must be nominated: {cands:?}"
+            cands.iter().any(|k| k.node == x) && cands.iter().any(|k| k.node == y),
+            "{cands:?}"
         );
-        assert!(
-            cands.iter().any(|k| k.node == y),
-            "y must be nominated: {cands:?}"
-        );
-
-        // The first cut splits the single island in two; the second, scored
-        // with the first held, splits it in three. So exactly one candidate
-        // carries three blocks and one carries two, whichever order they were
-        // held in.
         let composed = cands
             .iter()
             .find(|k| k.block_sizes.len() == 3)
-            .expect("holding both cuts yields three blocks");
+            .expect("three blocks");
         let first = cands
             .iter()
             .find(|k| k.block_sizes.len() == 2)
-            .expect("the first cut yields two blocks");
-        assert_eq!(
-            composed.block_sizes,
-            vec![12, 10, 10],
-            "composed fragmentation is A|B|C"
-        );
-        assert_eq!(
-            first.block_sizes,
-            vec![23, 10],
-            "the first cut leaves one end block and the fused remainder"
-        );
+            .expect("two blocks");
+        assert_eq!(composed.block_sizes, vec![12, 10, 10]);
+        assert_eq!(first.block_sizes, vec![23, 10]);
     }
 }

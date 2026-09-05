@@ -3102,736 +3102,251 @@ fn ptc_settle_from_seed(circuit: &Circuit, opts: &SolverOptions, seed: &[f64]) -
 }
 
 #[cfg(test)]
-mod nan_guard_tests {
-    use super::{converged, node_block_converged};
-    use crate::options::SolverOptions;
-    use crate::system::Layout;
-    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+mod tests {
+    use super::*;
+    use crate::options::{RobustnessLadder, SolverOptions, Strategy, SwitchModel};
+    use crate::stamp::IntegCoeffs;
+    use crate::system::{Layout, ReactiveState};
+    use crate::test_fixtures::{cap, cap_ic, diode, divider, res, sw, vdc, vswitch, GND};
+    use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, NodeId};
+    use std::collections::HashMap;
 
-    // A tiny circuit so we can build a real Layout (the convergence tests index
-    // it for the node/branch split). Two nodes + a source branch.
-    fn small_layout() -> Layout {
-        let mut c = Circuit::new();
-        let a = c.node("a");
-        let b = c.node("b");
-        c.add(Device::Vsource {
-            name: "V".into(),
-            p: a,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R".into(),
-            a,
-            b,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "Rg".into(),
-            a: b,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        Layout::new(&c)
+    fn node_v(ws: &Workspace, n: NodeId) -> f64 {
+        ws.layout.node(n).map(|i| ws.x[i]).unwrap()
     }
 
-    // The bug this guards: `(NaN).abs() > tol` is FALSE, so a naive
-    // tolerance-only test reports a NaN-poisoned Newton image as "converged",
-    // and the solver accepts an Inf/NaN operating point as a root. Both
-    // convergence tests must REJECT any non-finite unknown.
+    /// `(NaN).abs() > tol` is false, so a tolerance-only test would accept a
+    /// NaN-poisoned iterate; both convergence tests must reject non-finite
+    /// unknowns and still accept a finite fixed point.
     #[test]
-    fn nan_iterate_is_not_converged() {
-        let layout = small_layout();
+    fn non_finite_iterates_never_converge() {
+        let (c, _, _) = divider();
+        let layout = Layout::new(&c);
         let opts = SolverOptions::default();
-        let n = layout.size;
-        // A point that, BUT FOR the non-finite entry, is bit-identical to its
-        // anchor (delta zero => would pass the tol test trivially).
-        let xp = vec![1.0; n];
+        let xp = vec![1.0; layout.size];
         let mut x = xp.clone();
-        x[0] = f64::NAN;
-        assert!(
-            !node_block_converged(&x, &xp, &layout, &opts),
-            "a NaN node voltage must not pass node_block_converged"
-        );
-        assert!(
-            !converged(&x, &xp, &layout, &opts),
-            "a NaN unknown must not pass converged"
-        );
-        // Same for +Inf (a near-singular solve can produce an Inf image).
-        x[0] = f64::INFINITY;
-        assert!(!node_block_converged(&x, &xp, &layout, &opts));
-        assert!(!converged(&x, &xp, &layout, &opts));
+        for bad in [f64::NAN, f64::INFINITY] {
+            x[0] = bad;
+            assert!(!node_block_converged(&x, &xp, &layout, &opts));
+            assert!(!converged(&x, &xp, &layout, &opts));
+        }
+        assert!(node_block_converged(&xp, &xp, &layout, &opts));
+        assert!(converged(&xp, &xp, &layout, &opts));
     }
 
-    // Sanity: a clean finite fixed point still converges (no false negative).
-    #[test]
-    fn finite_fixed_point_still_converges() {
-        let layout = small_layout();
-        let opts = SolverOptions::default();
-        let x = vec![0.5; layout.size];
-        assert!(node_block_converged(&x, &x, &layout, &opts));
-        assert!(converged(&x, &x, &layout, &opts));
-    }
-}
-
-#[cfg(test)]
-mod residual_tests {
-    use super::{dc_operating_point, dc_operating_point_no_ic, Workspace};
-    use crate::options::SolverOptions;
-    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
-
-    // A 1V source feeding two equal series resistors to ground: the midpoint
-    // solves to 0.5 V. At the true solution the KCL residual is ~0; at a wrong
-    // operating point it is the actual mismatch current. The residual API must
-    // report near-zero at the solved point and a real current off it.
+    /// At the root the KCL residual closes; a 1 V error at the midpoint leaves
+    /// 1 V / 500 Ω = 2 mA.
     #[test]
     fn dc_residual_is_zero_at_the_root() {
-        let mut c = Circuit::new();
-        let top = c.node("top");
-        let mid = c.node("mid");
-        c.add(Device::Vsource {
-            name: "V".into(),
-            p: top,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: top,
-            b: mid,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: mid,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
+        let (c, _, mid) = divider();
         let opts = SolverOptions::default();
         let mut ws = Workspace::new(&c);
         dc_operating_point(&mut ws, &c, &opts).unwrap();
-        // At the converged root, every node's KCL closes.
-        let r_root = ws.dc_residual_inf_norm(&c, &opts);
-        assert!(
-            r_root < 1e-9,
-            "residual at the root should be ~0, got {r_root:e}"
-        );
-
-        // Perturb the midpoint by 1 V: KCL now mismatches by ~1 V / 500 ohm = 2 mA
-        // (the two 1k resistors in parallel see the extra volt).
-        if let Some(i) = ws.layout.node(mid) {
-            ws.x[i] += 1.0;
-        }
+        assert!(ws.dc_residual_inf_norm(&c, &opts) < 1e-9);
+        ws.x[ws.layout.node(mid).unwrap()] += 1.0;
         let r_off = ws.dc_residual_inf_norm(&c, &opts);
-        assert!(
-            (r_off - 2e-3).abs() < 1e-4,
-            "a 1 V error at the midpoint should leave ~2 mA KCL residual, got {r_off:e}"
-        );
+        assert!((r_off - 2e-3).abs() < 1e-4, "got {r_off:e}");
     }
 
+    /// A cap with ic=0 across the divider's lower leg: the ic-honoring DC
+    /// point pins the midpoint to 0 V, the AC operating point ignores the ic
+    /// and sees the 0.5 V bias, and the residual of the ic-pinned iterate is a
+    /// root only when measured under the same `use_ic`.
     #[test]
-    fn ac_operating_point_ignores_initial_conditions() {
-        // R32: AC analysis linearizes around the ordinary DC operating point and
-        // must IGNORE initial conditions. A 1 V divider (two equal 1k) with a cap
-        // across the lower leg carrying ic=0: the TRUE DC bias floats the cap open,
-        // so the midpoint sits at 0.5 V. `dc_operating_point` honors the ic (pins
-        // the cap, shorting the midpoint to 0 V), correct for the transient
-        // initial state but WRONG for AC, where it would evaluate every nonlinear
-        // tangent at a collapsed bias. `dc_operating_point_no_ic` (used by AC) must
-        // return the real 0.5 V bias regardless of the ic.
-        let mut c = Circuit::new();
-        let top = c.node("top");
-        let mid = c.node("mid");
-        c.add(Device::Vsource {
-            name: "V".into(),
-            p: top,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: top,
-            b: mid,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: mid,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: "C1".into(),
-            a: mid,
-            b: NodeId::GROUND,
-            farads: 1e-6,
-            ic: Some(0.0),
-        });
+    fn initial_conditions_are_honored_or_ignored_per_path() {
+        let (mut c, _, mid) = divider();
+        cap_ic(&mut c, "C1", mid, GND, 1e-6, 0.0);
         let opts = SolverOptions::default();
-        let idx = |ws: &Workspace| ws.layout.node(mid).map(|i| ws.x[i]).unwrap_or(f64::NAN);
 
-        // AC path: the ic is ignored, so the midpoint is the true divider bias.
         let mut ws_ac = Workspace::new(&c);
         dc_operating_point_no_ic(&mut ws_ac, &c, &opts).unwrap();
         assert!(
-            (idx(&ws_ac) - 0.5).abs() < 1e-6,
-            "AC operating point must ignore ic and see 0.5 V, got {}",
-            idx(&ws_ac)
+            (node_v(&ws_ac, mid) - 0.5).abs() < 1e-6,
+            "AC bias {}",
+            node_v(&ws_ac, mid)
         );
-
-        // The ic-honoring path (transient initial state) pins the cap to ic=0,
-        // shorting the midpoint, proving the two paths genuinely differ, so
-        // reusing it for AC would corrupt the bias.
-        let mut ws_ic = Workspace::new(&c);
-        dc_operating_point(&mut ws_ic, &c, &opts).unwrap();
-        assert!(
-            idx(&ws_ic).abs() < 1e-6,
-            "the ic-honoring DC path pins the midpoint to ic=0, got {}",
-            idx(&ws_ic)
-        );
-    }
-
-    #[test]
-    fn residual_of_an_ic_pinned_iterate_is_measured_under_use_ic() {
-        // R38: the ResidualAccept backstop measures the KCL residual on the
-        // current iterate to decide whether it is a root. For a transient IC solve
-        // the iterate satisfies the IC-PINNED system (cap shorted to its ic via a
-        // penalty conductance); measuring the residual with caps OPEN
-        // (use_ic=false) reports the KCL of a DIFFERENT system, so a genuine
-        // IC operating point looks badly imbalanced and is wrongly rejected.
-        // The residual must be taken under the same use_ic.
-        let mut c = Circuit::new();
-        let top = c.node("top");
-        let mid = c.node("mid");
-        c.add(Device::Vsource {
-            name: "V".into(),
-            p: top,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: top,
-            b: mid,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: mid,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        // Cap across the lower leg pinned to ic=0, so the ic solve holds mid at 0 V,
-        // far from the true 0.5 V divider bias, giving the caps-open KCL a large
-        // imbalance at this iterate.
-        c.add(Device::Capacitor {
-            name: "C1".into(),
-            a: mid,
-            b: NodeId::GROUND,
-            farads: 1e-6,
-            ic: Some(0.0),
-        });
-        let opts = SolverOptions::default();
 
         let mut ws = Workspace::new(&c);
-        dc_operating_point(&mut ws, &c, &opts).unwrap(); // use_ic = true, pins mid to 0
-
-        // Under the SAME use_ic the iterate was solved with, it is a root.
-        let r_ic = ws.dc_residual_inf_norm_with(&c, &opts, true);
+        dc_operating_point(&mut ws, &c, &opts).unwrap();
         assert!(
-            r_ic < 1e-6,
-            "the IC-pinned iterate is a root under use_ic=true, residual {r_ic:e}"
+            node_v(&ws, mid).abs() < 1e-6,
+            "ic-pinned {}",
+            node_v(&ws, mid)
         );
-
-        // With caps OPEN (use_ic=false), the pinned node shows ~1 mA of KCL
-        // imbalance; the false rejection ResidualAccept would make.
+        assert!(ws.dc_residual_inf_norm_with(&c, &opts, true) < 1e-6);
         let r_open = ws.dc_residual_inf_norm_with(&c, &opts, false);
         assert!(
             r_open > 1e-4,
-            "the caps-open residual at the IC point is large, {r_open:e}, measuring \
-             it there is the bug"
+            "caps-open residual at the IC point is large: {r_open:e}"
         );
-        // The no-arg form is the caps-open one, confirming the default is unchanged.
         assert!((ws.dc_residual_inf_norm(&c, &opts) - r_open).abs() < 1e-12);
     }
-}
 
-#[cfg(test)]
-mod vswitch_jacobian_tests {
-    use super::{dc_operating_point, newton_solve, Workspace};
-    use crate::options::SolverOptions;
-    use crate::stamp::IntegCoeffs;
-    use crate::system::ReactiveState;
-    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
-
-    // A NEGATIVE-feedback analog switch (unique root, control in the tanh knee).
-    // A 5 V source drives `out` through the switch; the switch's control is
-    // vctrl = vbias - v(out), so as `out` rises the conductance FALLS. That
-    // negative feedback gives a single self-consistent operating point sitting
-    // right on the tanh transition, where the conductance's dependence on the
-    // control voltage is strongest. A no-tangent (Picard) stamp iterates this
-    // fixed point slowly / oscillates across the knee; the control-node Jacobian
-    // makes it Newton-linearized and convergent in a few iterations to the same
-    // unique root.
-    fn feedback_switch_circuit() -> (Circuit, NodeId) {
+    /// A NEGATIVE-feedback switch: vctrl = vbias - v(out), so as `out` rises
+    /// the conductance falls, and the unique root sits in the tanh knee.
+    fn feedback_switch(
+        vbias: f64,
+        (von, voff): (f64, f64),
+        (ron, roff): (f64, f64),
+        rl: f64,
+    ) -> (Circuit, NodeId) {
         let mut c = Circuit::new();
-        let src = c.node("src");
-        let out = c.node("out");
-        let bias = c.node("bias");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: src,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        c.add(Device::Vsource {
-            name: "VB".into(),
-            p: bias,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.5),
-        });
-        c.add(Device::VSwitch {
-            name: "S1".into(),
-            a: src,
-            b: out,
-            ctrl_p: bias, // vctrl = vbias - v(out): negative feedback through out
-            ctrl_n: out,
-            von: 2.0,
-            voff: 1.0,
-            ron: 1.0,
-            roff: 1e3,
-        });
-        c.add(Device::Resistor {
-            name: "RL".into(),
-            a: out,
-            b: NodeId::GROUND,
-            ohms: 1.0,
-            tc1: None,
-        });
+        let (src, out, bias) = (c.node("src"), c.node("out"), c.node("bias"));
+        vdc(&mut c, "V1", src, 5.0);
+        vdc(&mut c, "VB", bias, vbias);
+        vswitch(
+            &mut c,
+            "S1",
+            src,
+            out,
+            (bias, out),
+            (von, voff),
+            (ron, roff),
+        );
+        res(&mut c, "RL", out, GND, rl);
         (c, out)
     }
 
-    /// Options selecting the SMOOTH analog pass element. Both tests in this
-    /// module are about the smooth device's control-node Jacobian, and the
-    /// operating point they look for (an interior point part-way up the
-    /// transition, where the conductance's control dependence is strongest) only
-    /// exists for a device whose conductance is a continuous function of its
-    /// control. A relay has no such point: it is at `ron` or at `roff`.
     fn smooth_opts() -> SolverOptions {
         let mut opts = SolverOptions::default();
-        opts.effects.switch_model = crate::options::SwitchModel::Smooth;
+        opts.effects.switch_model = SwitchModel::Smooth;
         opts
     }
 
+    /// The smooth switch's control-node Jacobian converges the feedback loop to
+    /// a true interior root, in few iterations on a gentle loop; the default
+    /// relay on the stiff loop has NO operating point and must refuse.
     #[test]
-    fn control_jacobian_converges_to_the_true_root() {
-        let (c, out) = feedback_switch_circuit();
+    fn smooth_switch_control_jacobian_converges_where_the_relay_refuses() {
+        let (c, out) = feedback_switch(3.5, (2.0, 1.0), (1.0, 1e3), 1.0);
         let opts = smooth_opts();
         let mut ws = Workspace::new(&c);
         dc_operating_point(&mut ws, &c, &opts).expect("switch DC solve converges");
-
-        let vout = ws.layout.node(out).map(|i| ws.x[i]).unwrap();
-        // The negative-feedback loop settles on the tanh knee between the fully-on
-        // divider (2.5 V) and the fully-off divider (5/1001 ≈ 0 V). Confirm it is
-        // a real interior operating point, not pinned to either rail.
         assert!(
-            (0.2..=2.5).contains(&vout),
-            "negative-feedback switch should settle in the tanh knee, got {vout}"
+            (0.2..=2.5).contains(&node_v(&ws, out)),
+            "interior root, got {}",
+            node_v(&ws, out)
+        );
+        assert!(ws.dc_residual_inf_norm(&c, &opts) < 1e-7);
+
+        let relay = SolverOptions::default();
+        assert_eq!(relay.effects.switch_model, SwitchModel::Hysteretic);
+        assert!(
+            dc_operating_point(&mut Workspace::new(&c), &c, &relay).is_err(),
+            "a chattering relay loop has no DC point"
         );
 
-        // It must be a TRUE root: the KCL residual at the solved point is ~0.
-        let r = ws.dc_residual_inf_norm(&c, &opts);
-        assert!(
-            r < 1e-7,
-            "residual at the switch root should be ~0, got {r:e}"
-        );
-    }
-
-    // A gently-coupled negative-feedback switch (wide tanh transition, moderate
-    // impedances) on which plain undamped Newton converges. With the control-node
-    // Jacobian the conductance is Newton-linearized, so the loop closes in a
-    // handful of iterations. Without a control tangent the conductance lags
-    // the control voltage by one iteration (Picard), which on this feedback
-    // loop needs many more sweeps to settle. Bound the iteration
-    // count below what a tangent-free stamp needs.
-    fn gentle_feedback_switch_circuit() -> (Circuit, NodeId) {
-        let mut c = Circuit::new();
-        let src = c.node("src");
-        let out = c.node("out");
-        let bias = c.node("bias");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: src,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        c.add(Device::Vsource {
-            name: "VB".into(),
-            p: bias,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(4.0),
-        });
-        c.add(Device::VSwitch {
-            name: "S1".into(),
-            a: src,
-            b: out,
-            ctrl_p: bias, // vctrl = 4 - v(out): gentle negative feedback
-            ctrl_n: out,
-            von: 5.0, // wide transition (span = 5 V): smooth, non-stiff tanh
-            voff: 0.0,
-            ron: 100.0,
-            roff: 1e4,
-        });
-        c.add(Device::Resistor {
-            name: "RL".into(),
-            a: out,
-            b: NodeId::GROUND,
-            ohms: 100.0,
-            tc1: None,
-        });
-        (c, out)
-    }
-
-    #[test]
-    fn control_jacobian_converges_in_few_iterations() {
-        let (c, out) = gentle_feedback_switch_circuit();
-        let opts = smooth_opts();
+        let (c, out) = feedback_switch(4.0, (5.0, 0.0), (100.0, 1e4), 100.0);
         let mut ws = Workspace::new(&c);
         let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(c.devices.len());
-        // Cold start from zero (the default x), full sources, DC. Plain Newton,
-        // no homotopy: this is the bare per-step behaviour the tangent improves.
         let r = newton_solve(
             &mut ws, &c, &opts, 0.0, 1.0, coeffs, &empty, true, false, opts.gmin, 1.0,
         );
         assert!(
+            r.converged && r.iters <= 8,
+            "converged={} iters={}",
             r.converged,
-            "switch Newton should converge, iters={}",
             r.iters
         );
-        assert!(
-            r.iters <= 8,
-            "the control Jacobian should converge the feedback switch quickly, took {} iters",
-            r.iters
-        );
-        // And to a real interior operating point on the transition (not pinned to
-        // either rail), with a near-zero KCL residual (a true root).
-        let vout = ws.layout.node(out).map(|i| ws.x[i]).unwrap();
-        assert!(
-            (0.3..=2.5).contains(&vout),
-            "gentle feedback switch should settle on the transition, got {vout}"
-        );
-        let res = ws.dc_residual_inf_norm(&c, &opts);
-        assert!(
-            res < 1e-7,
-            "residual at the gentle-switch root should be ~0, got {res:e}"
-        );
+        assert!((0.3..=2.5).contains(&node_v(&ws, out)));
+        assert!(ws.dc_residual_inf_norm(&c, &opts) < 1e-7);
     }
 
-    /// The SAME negative-feedback loop under the DEFAULT (relay) switch model has
-    /// no operating point at all, and the solver must say so rather than invent
-    /// one.
-    ///
-    /// Trace the relay round the loop: closed, the 1 Ω switch and 1 Ω load divide
-    /// 5 V to `out` = 2.5 V, so vctrl = 3.5 - 2.5 = 1.0 V, at or below the
-    /// `voff` = 1.0 V break threshold, and it opens. Open, the 1 kΩ `roff` leaves
-    /// `out` at 5/1001 ≈ 5 mV, so vctrl = 3.495 V, well past the `von` = 2.0 V
-    /// make threshold, and it closes. Neither state is self-consistent: the
-    /// circuit is a relaxation oscillator, and a DC operating point does not
-    /// exist. Refusing is the correct answer, and it is the whole product claim --
-    /// the alternative is a plausible-looking number for a question with no
-    /// answer. (The smooth pass element DOES have a root here, the interior point
-    /// the test above pins; that is a real difference between two real devices,
-    /// not a tolerance.)
-    #[test]
-    fn hysteretic_relay_in_positive_feedback_has_no_operating_point() {
-        let (c, _out) = feedback_switch_circuit();
-        let opts = SolverOptions::default();
-        assert_eq!(
-            opts.effects.switch_model,
-            crate::options::SwitchModel::Hysteretic,
-            "the relay is the default switch model"
-        );
-        let mut ws = Workspace::new(&c);
-        let r = dc_operating_point(&mut ws, &c, &opts);
-        assert!(
-            r.is_err(),
-            "a chattering relay loop has no DC point; the solver must refuse, \
-             not report one"
-        );
-    }
-
-    /// The relay's thresholds are the ones the model card names, and its rails are
-    /// exactly `ron` and `roff`. Both were wrong before: the conductance ramped
-    /// across the whole `[voff, von]` hysteresis band centred on `VT`, and being
-    /// an unsaturated tanh it never reached either rail (measured 12.2 Ω against a
-    /// stated 10 Ω, and 819 MΩ against a stated 1 GΩ).
-    ///
-    /// Swept open-circuit-upward, so the latch starts open (ngspice's power-on
-    /// convention, measured) and must hold open right up to `von`.
+    /// Swept open-upward, the relay holds `roff` through the hysteresis band
+    /// right up to `von`, then presents EXACTLY `ron`.
     #[test]
     fn hysteretic_relay_holds_off_through_the_band_then_presents_exact_ron() {
         let opts = SolverOptions::default();
-        // 1 V through the switch into a 1 kΩ load: v(out)/(1 - v(out)) * 1k = ron.
-        let build = |vctrl: f64| {
-            let mut c = Circuit::new();
-            let inn = c.node("in");
-            let out = c.node("out");
-            let ctrl = c.node("ctrl");
-            c.add(Device::Vsource {
-                name: "V1".into(),
-                p: inn,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(1.0),
-            });
-            c.add(Device::Vsource {
-                name: "VC".into(),
-                p: ctrl,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(vctrl),
-            });
-            c.add(Device::VSwitch {
-                name: "S1".into(),
-                a: inn,
-                b: out,
-                ctrl_p: ctrl,
-                ctrl_n: NodeId::GROUND,
-                von: 2.5,
-                voff: 0.5,
-                ron: 10.0,
-                roff: 1e9,
-            });
-            c.add(Device::Resistor {
-                name: "RL".into(),
-                a: out,
-                b: NodeId::GROUND,
-                ohms: 1e3,
-                tc1: None,
-            });
-            (c, out)
-        };
         let rsw = |vctrl: f64| {
-            let (c, out) = build(vctrl);
+            let mut c = Circuit::new();
+            let (inn, out, ctrl) = (c.node("in"), c.node("out"), c.node("ctrl"));
+            vdc(&mut c, "V1", inn, 1.0);
+            vdc(&mut c, "VC", ctrl, vctrl);
+            sw(&mut c, "S1", inn, out, ctrl, (2.5, 0.5), 10.0);
+            res(&mut c, "RL", out, GND, 1e3);
             let mut ws = Workspace::new(&c);
             dc_operating_point(&mut ws, &c, &opts).expect("switch divider solves");
-            let v = ws.layout.node(out).map(|i| ws.x[i]).unwrap();
-            (1.0 / v - 1.0) * 1e3
+            (1.0 / node_v(&ws, out) - 1.0) * 1e3
         };
-        // Dead centre of the hysteresis band: an open relay stays open. ngspice
-        // reports the full ROFF here; the old band-wide ramp reported 100 kΩ, four
-        // decades out.
-        assert!(
-            rsw(1.5) > 9e8,
-            "mid-band with the latch open must still be roff, got {} Ω",
-            rsw(1.5)
-        );
-        // Just below the make threshold: still open.
-        assert!(
-            rsw(2.45) > 9e8,
-            "below von must be roff, got {} Ω",
-            rsw(2.45)
-        );
-        // Fully driven on: EXACTLY ron, not merely close to it.
-        let on = rsw(3.0);
-        assert!(
-            (on - 10.0).abs() < 1e-6,
-            "a fully driven relay presents its stated ron exactly, got {on} Ω"
-        );
+        assert!(rsw(1.5) > 9e8, "mid-band open relay: {} Ω", rsw(1.5));
+        assert!(rsw(2.45) > 9e8, "below von: {} Ω", rsw(2.45));
+        assert!((rsw(3.0) - 10.0).abs() < 1e-6, "driven on: {} Ω", rsw(3.0));
     }
-}
 
-#[cfg(test)]
-mod switch_freeze_tests {
-    use super::{
-        eval_switch_states, solve_relaxed_no_diodes, staged_event_solve, SpdtPairs, Workspace,
-    };
-    use crate::options::SolverOptions;
-    use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId, SourceKind};
-    use std::collections::HashMap;
-
-    // eval_switch_states must classify each switch on/off from its control voltage
-    // with hysteresis at the switch's own (von, voff) band.
     #[test]
     fn switch_states_track_control_with_hysteresis() {
         let mut c = Circuit::new();
-        let ctrl = c.node("ctrl");
-        let out = c.node("out");
-        let id = c.add(Device::VSwitch {
-            name: "S".into(),
-            a: ctrl,
-            b: out,
-            ctrl_p: ctrl,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 1.0,
-            roff: 1e6,
-        });
+        let (ctrl, out) = (c.node("ctrl"), c.node("out"));
+        let id = vswitch(&mut c, "S", ctrl, out, (ctrl, GND), (2.0, 1.0), (1.0, 1e6));
         let layout = crate::system::Layout::new(&c);
         let ci = layout.node(ctrl).unwrap();
         let mut x = vec![0.0; layout.size];
-
-        // Control above von -> ON regardless of prior state.
+        let eval = |x: &[f64], prev: &HashMap<DeviceId, bool>| {
+            *eval_switch_states(&c, &layout, x, prev, &SpdtPairs::empty(), 0.0)
+                .get(&id)
+                .unwrap()
+        };
         x[ci] = 3.0;
-        let s = eval_switch_states(&c, &layout, &x, &HashMap::new(), &SpdtPairs::empty(), 0.0);
-        assert_eq!(s.get(&id), Some(&true), "vctrl=3 > von=2 should be ON");
-
-        // Control inside the band holds the prior state (hysteresis).
+        assert!(eval(&x, &HashMap::new()));
         x[ci] = 1.5;
-        let mut prev = HashMap::new();
-        prev.insert(id, true);
-        let held_on = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty(), 0.0);
-        assert_eq!(
-            held_on.get(&id),
-            Some(&true),
-            "in-band should hold prior ON"
-        );
-        prev.insert(id, false);
-        let held_off = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty(), 0.0);
-        assert_eq!(
-            held_off.get(&id),
-            Some(&false),
-            "in-band should hold prior OFF"
-        );
-
-        // Control below voff -> OFF.
+        assert!(eval(&x, &HashMap::from([(id, true)])));
+        assert!(!eval(&x, &HashMap::from([(id, false)])));
         x[ci] = 0.5;
-        let s = eval_switch_states(&c, &layout, &x, &HashMap::new(), &SpdtPairs::empty(), 0.0);
-        assert_eq!(s.get(&id), Some(&false), "vctrl=0.5 < voff=1 should be OFF");
+        assert!(!eval(&x, &HashMap::new()));
     }
 
-    // The event-freeze outer loop, driven directly, on a switch + diode core with
-    // a SATURATED consistent root (the realistic Tarski case: the SN74LVC1G3157
-    // switches are driven by digital control nodes pulled hard to a rail, so at
-    // the true root every switch is fully ON or fully OFF, not mid-transition).
-    // Freezing pins each switch to ron/roff per inner solve and re-derives the
-    // state between solves; the loop reaches the consistent saturated fixed point.
-    // This exercises the switch half of the Gauss-Seidel loop end-to-end and
-    // confirms the returned vector is a self-consistent root.
-    //
-    // (The freeze is correct precisely when the root is saturated, pinning a
-    // switch to a rail cannot represent a switch whose true solution is partial
-    // conduction at its own knee; that case is handled by the smooth tanh path
-    // with the control tangent, not the freeze. The limit-cycle cure's
-    // load-bearing proof on a real switch mesh is the Tarski board.)
+    /// The event-freeze outer loop on a switch + floating-diode core with a
+    /// SATURATED consistent root: reaches it, and the returned vector is a
+    /// self-consistent fixed point of the switch states.
     #[test]
     fn staged_event_solve_settles_switch_core() {
         let mut c = Circuit::new();
         let rail = c.node("RAIL");
-        let ctrl_on = c.node("CON"); // pulled to the rail: switch saturated ON
-        let ctrl_off = c.node("COFF"); // pulled to ground: switch saturated OFF
-        let out_on = c.node("OUTON");
-        let out_off = c.node("OUTOFF");
-        let flt = c.node("FLT");
-        c.add(Device::Vsource {
-            name: "VR".into(),
-            p: rail,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        // Control nodes pulled hard to definite rails (a 595 output, saturated).
-        c.add(Device::Resistor {
-            name: "Ron".into(),
-            a: rail,
-            b: ctrl_on,
-            ohms: 100.0,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "Roff".into(),
-            a: ctrl_off,
-            b: NodeId::GROUND,
-            ohms: 100.0,
-            tc1: None,
-        });
-        // Switch driven ON: routes the rail to out_on.
-        c.add(Device::VSwitch {
-            name: "Son".into(),
-            a: rail,
-            b: out_on,
-            ctrl_p: ctrl_on,
-            ctrl_n: NodeId::GROUND,
-            von: 2.5,
-            voff: 1.5,
-            ron: 1.0,
-            roff: 1e6,
-        });
-        c.add(Device::Resistor {
-            name: "RLon".into(),
-            a: out_on,
-            b: NodeId::GROUND,
-            ohms: 1.0,
-            tc1: None,
-        });
-        // Switch driven OFF: leaves out_off near ground.
-        c.add(Device::VSwitch {
-            name: "Soff".into(),
-            a: rail,
-            b: out_off,
-            ctrl_p: ctrl_off,
-            ctrl_n: NodeId::GROUND,
-            von: 2.5,
-            voff: 1.5,
-            ron: 1.0,
-            roff: 1e6,
-        });
-        c.add(Device::Resistor {
-            name: "RLoff".into(),
-            a: out_off,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        // Floating reverse-diode cap node, so the relaxed-seed staged machinery is
-        // engaged (the diode pathology the staged path exists for).
+        let (ctrl_on, ctrl_off) = (c.node("CON"), c.node("COFF"));
+        let (out_on, out_off, flt) = (c.node("OUTON"), c.node("OUTOFF"), c.node("FLT"));
+        vdc(&mut c, "VR", rail, 5.0);
+        res(&mut c, "Ron", rail, ctrl_on, 100.0);
+        res(&mut c, "Roff", ctrl_off, GND, 100.0);
+        vswitch(
+            &mut c,
+            "Son",
+            rail,
+            out_on,
+            (ctrl_on, GND),
+            (2.5, 1.5),
+            (1.0, 1e6),
+        );
+        res(&mut c, "RLon", out_on, GND, 1.0);
+        vswitch(
+            &mut c,
+            "Soff",
+            rail,
+            out_off,
+            (ctrl_off, GND),
+            (2.5, 1.5),
+            (1.0, 1e6),
+        );
+        res(&mut c, "RLoff", out_off, GND, 1e3);
         let model = DiodeModel {
             is: 4.352e-9,
             n: 1.9,
             rs: 0.65,
             ..DiodeModel::default()
         };
-        c.add(Device::Diode {
-            name: "Dr".into(),
-            a: NodeId::GROUND,
-            k: flt,
-            model,
-        });
-        c.add(Device::Capacitor {
-            name: "Cf".into(),
-            a: flt,
-            b: NodeId::GROUND,
-            farads: 5.8e-9,
-            ic: None,
-        });
+        diode(&mut c, "Dr", GND, flt, model);
+        cap(&mut c, "Cf", flt, GND, 5.8e-9);
 
         let opts = SolverOptions::default();
         let mut ws = Workspace::new(&c);
         ws.symbolic.set_allow_dynamic(true);
         let seed = solve_relaxed_no_diodes(&c, &opts).expect("relaxed seed converges");
-
-        let root = staged_event_solve(&mut ws, &c, &opts, &seed, 1e-9, 1e-2, false)
-            .expect("event-freeze settles the saturated switch core to a consistent root");
-
+        let root =
+            staged_event_solve(&mut ws, &c, &opts, &seed, 1e-9, 1e-2, false).expect("settles");
         let v_on = root[ws.layout.node(out_on).unwrap()];
         let v_off = root[ws.layout.node(out_off).unwrap()];
-        // ON switch: 5 V divided 1:1 -> ~2.5 V. OFF switch: leaks 5 V through 1e6
-        // to a 1k load -> ~5 mV. The states are saturated and distinct.
-        assert!(
-            (2.0..=2.5).contains(&v_on),
-            "ON switch should conduct (~2.5 V), got {v_on}"
-        );
-        assert!(v_off < 0.1, "OFF switch should block (~0 V), got {v_off}");
-
-        // The returned vector is a consistent fixed point: re-deriving the switch
-        // states from it produces no flip.
+        assert!((2.0..=2.5).contains(&v_on), "ON switch conducts: {v_on}");
+        assert!(v_off < 0.1, "OFF switch blocks: {v_off}");
         let states = eval_switch_states(
             &c,
             &ws.layout,
@@ -3846,119 +3361,39 @@ mod switch_freeze_tests {
             "switch states at the root must be self-consistent"
         );
     }
-}
 
-#[cfg(test)]
-mod staged_stall_norm_tests {
-    use super::{damp_node_steps, node_step_norm, Workspace, STALL_WINDOW};
-    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
-
-    // A minimal two-node workspace (source -> divider) purely as a vehicle for
-    // the damping/stall bookkeeping; the "solver" below is scripted by hand.
-    fn two_node_ws() -> Workspace {
-        let mut c = Circuit::new();
-        let a = c.node("a");
-        let b = c.node("b");
-        c.add(Device::Vsource {
-            name: "V".into(),
-            p: a,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R".into(),
-            a,
-            b,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "Rg".into(),
-            a: b,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        Workspace::new(&c)
-    }
-
-    // The bug this guards (R4 #8): the staged-DC stall detector must measure the
-    // UNDAMPED Newton step, not the damped one. The per-node oscillation damping
-    // overwrites ws.x in place with `lin_point + alpha*full`, alpha shrinking
-    // geometrically (0.25, 0.125, ... to a ~1e-3 floor) for every consecutive
-    // oscillating iteration, so a post-damping `|x - lin_point|` KEEPS shrinking
-    // on a genuine limit cycle whose undamped amplitude is CONSTANT. A detector
-    // fed that damped norm sees phantom "progress" every iteration, resets its
-    // counter, and delays the STALL_WINDOW early bail by ~9 extra full
-    // (assemble+refactor+solve) iterations. The norm must therefore be
-    // captured by `node_step_norm` BEFORE `damp_node_steps` rewrites ws.x,
-    // the same measure-then-damp call order `newton_solve` uses (R15: the
-    // measure moved further up still, ahead of the Armijo line search, which
-    // is the OTHER globalizer that rewrites ws.x and contaminated the norm
-    // the same way).
-    //
-    // Script a perfect limit cycle at the proposal level: every iteration the
-    // (pretend) linear solve proposes a constant-amplitude, sign-flipping step on
-    // node 0. Assert (a) the returned norm is the constant undamped amplitude on
-    // every iteration even as the damped step in ws.x shrinks, (b) the stall
-    // detector arithmetic fed that norm bails right after STALL_WINDOW, and
-    // (c) the same arithmetic fed the post-damping norm (the old, broken
-    // quantity) would NOT have bailed within the same horizon; the exact
-    // failure mode being regressed against.
+    /// The staged-DC stall detector must measure the UNDAMPED Newton step:
+    /// on a scripted constant-amplitude two-cycle the norm from
+    /// `node_step_norm` is the cycle amplitude every iteration while the
+    /// damped step in `ws.x` shrinks, so the detector bails right after
+    /// STALL_WINDOW where the post-damping norm never would.
     #[test]
     fn stall_norm_is_the_undamped_step_not_the_damped_one() {
-        let mut ws = two_node_ws();
-        assert!(ws.layout.n_nodes >= 2, "divider should have two nodes");
-        const A: f64 = 0.5; // cycle amplitude (V), below the 2 V per-node cap
-        let rounds = STALL_WINDOW + 3;
-
-        // Fixed detector replica (fed the returned undamped norm) and the
-        // broken one (fed the post-damping |x - lin_point|), same arithmetic
-        // as newton_solve's stall block.
+        let (c, _, _) = divider();
+        let mut ws = Workspace::new(&c);
+        const A: f64 = 0.5;
         let (mut best_norm, mut stall, mut bailed_at) = (f64::INFINITY, 0usize, None);
         let (mut damped_best, mut damped_stall, mut damped_bailed) = (f64::INFINITY, 0usize, false);
         let mut last_damped = f64::INFINITY;
-
-        for k in 0..rounds {
-            // Mimic the solver: linearize at the current iterate, then the
-            // "solve" proposes the opposite rail, a constant-amplitude
-            // two-cycle, the textbook staged-DC limit cycle.
+        for k in 0..STALL_WINDOW + 3 {
             ws.lin_point.copy_from_slice(&ws.x);
             let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
             ws.x[0] = ws.lin_point[0] + sign * A;
-
             let (norm, argmax) = node_step_norm(&ws);
             let osc = damp_node_steps(&mut ws, true);
-
-            // (a) The reported norm is the TRUE undamped amplitude, every
-            // iteration, no matter how hard the damping has throttled ws.x.
-            assert!(
-                (norm - A).abs() < 1e-12,
-                "iter {k}: undamped step norm must be the constant cycle amplitude {A}, got {norm}"
-            );
-            assert_eq!(argmax, 0, "iter {k}: the cycling node attains the max step");
+            assert!((norm - A).abs() < 1e-12, "iter {k}: norm {norm} != {A}");
+            assert_eq!(argmax, 0);
             if k >= 1 {
-                assert_eq!(
-                    osc, 1,
-                    "iter {k}: the sign-flipping node must be classed oscillating"
-                );
+                assert_eq!(osc, 1, "iter {k}: the sign-flipping node is oscillating");
             }
-
-            // The damped step left in ws.x shrinks geometrically while the
-            // undamped amplitude does not; the regime that fooled the old
-            // detector. (alpha halves each consecutive oscillation until the
-            // shrink exponent saturates at iteration 9.)
             let damped = (ws.x[0] - ws.lin_point[0]).abs();
             if (1..=8).contains(&k) {
                 assert!(
                     damped < last_damped * 0.75,
-                    "iter {k}: damped step should keep shrinking ({last_damped} -> {damped})"
+                    "iter {k}: damped step keeps shrinking"
                 );
             }
             last_damped = damped;
-
-            // (b) Detector fed the undamped norm: a constant amplitude never
-            // improves on best_norm, so the counter accumulates.
             if norm < best_norm * 0.999 {
                 best_norm = norm;
                 stall = 0;
@@ -3968,84 +3403,33 @@ mod staged_stall_norm_tests {
                     bailed_at = Some(k + 1);
                 }
             }
-            // (c) Detector fed the damped norm: every shrink is a phantom
-            // "improvement" that resets the counter.
             if damped < damped_best * 0.999 {
                 damped_best = damped;
                 damped_stall = 0;
             } else {
                 damped_stall += 1;
-                if damped_stall >= STALL_WINDOW {
-                    damped_bailed = true;
-                }
+                damped_bailed |= damped_stall >= STALL_WINDOW;
             }
         }
-
-        assert_eq!(
-            bailed_at,
-            Some(STALL_WINDOW + 1),
-            "a constant-amplitude limit cycle must trip the stall bail right after the window"
-        );
+        assert_eq!(bailed_at, Some(STALL_WINDOW + 1));
         assert!(
             !damped_bailed,
-            "measuring the DAMPED step must not have bailed in this horizon, if it did, \
-             the scripted cycle no longer distinguishes the undamped from the damped norm"
+            "the damped norm must not have bailed in this horizon"
         );
     }
-}
 
-#[cfg(test)]
-mod line_search_convergence_tests {
-    use super::{newton_solve, Workspace};
-    use crate::options::{RobustnessLadder, SolverOptions, Strategy};
-    use crate::stamp::IntegCoeffs;
-    use crate::system::ReactiveState;
-    use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, NodeId};
-
-    // The bug this guards (R7 #3): the Armijo line search is a PATH
-    // globalization -- it shortens the step the iteration walks, not the
-    // distance to the root -- so convergence must be judged on the UNDAMPED
-    // Newton iterate. The broken ordering rewrote ws.x to lin_point +
-    // alpha*dx BEFORE the convergence test, so a floor-backtracked step
-    // (alpha = 1/64) shrank the measured lin_point -> ws.x step 64x and
-    // passed the reltol/vntol test at an iterate that is nowhere near a root
-    // -- precisely when the search backtracked hard BECAUSE the full step
-    // kept increasing the residual.
-    //
-    // Fixture: a single node whose KCL residual is a smooth V,
-    //   F(v) = 1e-3 + 0.02*(v - 0.9997)*tanh((v - 0.9997)/1e-4),
-    // built from a 50 ohm resistor to ground plus a B-source that supplies
-    // (F(v) - v/50) as an outgoing current. Key properties:
-    //
-    // * F has NO root: min |F| = 1e-3 at the V's vertex (v = 0.9997), so ANY
-    //   "converged" claim from Newton on this board is definitionally false.
-    // * |F'| <= ~0.029 everywhere, so every full Newton step |F/F'| >= ~0.03
-    //   -- always far above the ~1e-3 step tolerance at |v| ~ 1. The solver
-    //   can never legitimately converge by a small full step; the ONLY way
-    //   to read "converged" is to measure a line-search-shrunk step.
-    // * Starting at v0 = 1.0 (just right of the vertex), the full step
-    //   dx ~ -0.05 overshoots across the vertex where the residual RISES, so
-    //   every backtracking trial alpha in {1, 1/2, ..., 1/64} fails Armijo
-    //   and the search takes the alpha = 1/64 floor step of ~7.7e-4 -- which
-    //   is below the ~1.0e-3 node tolerance. Judged on that damped step the
-    //   solver reports success at iteration 1 with |F| ~ 1e-3 (the pre-fix
-    //   failure); judged on the undamped step it keeps iterating and
-    //   correctly exhausts max_newton without converging.
+    /// One node whose KCL residual is a smooth V with NO root
+    /// (min |F| = 1e-3 at v = 0.9997) and |F'| <= ~0.029 everywhere: every
+    /// full Newton step is far above the step tolerance, so the only way to
+    /// read "converged" is to measure a line-search-shrunk step.
     fn rootless_v_board() -> (Circuit, NodeId) {
         let mut c = Circuit::new();
         let v = c.node("v");
-        c.add(Device::Resistor {
-            name: "R".into(),
-            a: v,
-            b: NodeId::GROUND,
-            ohms: 50.0,
-            tc1: None,
-        });
-        // i(p->n) leaves node v: total KCL at v is v/50 + i_b(v) = F(v).
+        res(&mut c, "R", v, GND, 50.0);
         c.add(Device::Behavioral {
             name: "BV".into(),
             p: v,
-            n: NodeId::GROUND,
+            n: GND,
             output: BOutput::Current,
             expr: CompiledExpr::compile(
                 "1e-3 + 0.02*(__d0 - 0.9997)*math::tanh((__d0 - 0.9997)/1e-4) - 0.02*__d0",
@@ -4056,110 +3440,71 @@ mod line_search_convergence_tests {
         (c, v)
     }
 
+    /// Convergence is judged on the UNDAMPED iterate: a floor-backtracked
+    /// Armijo step must not read as convergence on a residual with no root.
     #[test]
     fn backtracked_line_search_step_is_not_convergence() {
         let (c, v) = rootless_v_board();
         let opts = SolverOptions {
-            // Arm the Armijo line search directly (the transient driver arms
-            // it the same way for any B-source board, transient.rs).
             ladder: RobustnessLadder::none().with(Strategy::LineSearch),
             ..SolverOptions::default()
         };
         let mut ws = Workspace::new(&c);
-        let i = ws.layout.node(v).expect("node v is an unknown");
+        let i = ws.layout.node(v).unwrap();
         ws.x[i] = 1.0;
-
-        // Fixture sanity: the starting residual is the designed ~1 mA (the
-        // V-shape is where we think it is). If this drifts the geometry
-        // below no longer exercises the floor-backtrack path.
         let f_start = ws.dc_residual_inf_norm(&c, &opts);
         assert!(
             (8e-4..2e-3).contains(&f_start),
-            "fixture drift: |F(1.0)| = {f_start:.3e}, expected ~1e-3"
+            "fixture drift: |F(1.0)| = {f_start:.3e}"
         );
         ws.x[i] = 1.0;
-
-        // Per-step transient Newton (dc = false: the only path the line
-        // search arms on). No reactive elements, so the coefficients are
-        // inert.
         let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, 1e-6, true);
         let state = ReactiveState::new(c.devices.len());
         let r = newton_solve(
             &mut ws, &c, &opts, 0.0, 1e-6, coeffs, &state, false, false, opts.gmin, 1.0,
         );
-        let f_end = ws.dc_residual_inf_norm(&c, &opts);
         assert!(
             !r.converged,
-            "Newton reported convergence on a residual that has NO root: a \
-             floor-backtracked line-search step (alpha=1/64) was measured as \
-             the convergence step. iters={}, v={:.6}, |F|={:.3e}",
-            r.iters, ws.x[i], f_end
+            "converged on a rootless residual: iters={} v={:.6}",
+            r.iters, ws.x[i]
         );
     }
 
-    // The bug this guards (R15): the stall detector and census were handed a
-    // node-step norm measured AFTER the Armijo line search had rewritten
-    // ws.x = lin_point + use_alpha*dx, i.e. use_alpha * max|dx|, the
-    // GLOBALIZED step, under a contract that promises the TRUE undamped step.
-    // On the TransientDyn path (branch_reg > 0 AND the line search armed,
-    // exactly as the transient driver arms them) a hard-backtracking limit
-    // cycle therefore fed the detector a shrunken, alpha-modulated norm,
-    // phantom "progress" of the same species the post-damping ordering
-    // invariant already guards one globalizer later. Same board as above (the
-    // rootless V forces the alpha floor on every iteration), instrumented
-    // through the test-only `stall_norm_probe`, which records per iteration
-    // the norm handed to the stall detector alongside a re-measurement of
-    // ws.x taken at the OLD (contaminated) point, post-line-search.
+    /// On the TransientDyn path the stall detector is handed the true undamped
+    /// step, never the line-searched one: the probed norm is never below the
+    /// post-line-search re-measurement, and diverges from it on a hard
+    /// backtrack.
     #[test]
     fn stall_detector_sees_the_undamped_step_not_the_line_searched_one() {
         let (c, v) = rootless_v_board();
         let opts = SolverOptions::default();
         let mut ws = Workspace::new(&c);
-        // Arm exactly what the TransientDyn transient driver arms: the staged
-        // branch regularizer (which gates the stall detector) plus the global
-        // Armijo line search.
         ws.set_staged_branch_reg(1e-2);
         ws.set_tran_line_search(true);
         ws.stall_norm_probe = Some(Vec::new());
-        let i = ws.layout.node(v).expect("node v is an unknown");
-        ws.x[i] = 1.0;
-
+        ws.x[ws.layout.node(v).unwrap()] = 1.0;
         let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, 1e-6, true);
         let state = ReactiveState::new(c.devices.len());
         let _ = newton_solve(
             &mut ws, &c, &opts, 0.0, 1e-6, coeffs, &state, false, false, opts.gmin, 1.0,
         );
-        let probe = ws.stall_norm_probe.take().expect("probe was armed");
+        let probe = ws.stall_norm_probe.take().unwrap();
         assert!(
             probe.len() >= 2,
-            "fixture drift: the solve ended after {} iteration(s); the probe \
-             needs a real iteration history",
+            "fixture drift: {} iteration(s)",
             probe.len()
         );
-
-        // (a) The stall norm is never SMALLER than the post-line-search
-        // remeasurement: the search only ever shortens the step, so a stall
-        // norm below it would mean the detector is reading something that is
-        // not the undamped step at all.
-        // (b) At least one iteration backtracked hard (this board exists to
-        // force the alpha floor), and there the two norms must genuinely
-        // diverge, under the R15 bug they are EQUAL on every iteration.
         let mut hard_backtracks = 0usize;
         for (k, &(stall_norm, post_ls_norm)) in probe.iter().enumerate() {
             assert!(
                 stall_norm >= post_ls_norm * (1.0 - 1e-12),
-                "iter {k}: stall norm {stall_norm:.6e} below the globalized \
-                 step {post_ls_norm:.6e}, not the undamped step"
+                "iter {k}: {stall_norm:.6e} < {post_ls_norm:.6e}"
             );
-            if post_ls_norm < stall_norm * 0.25 {
-                hard_backtracks += 1;
-            }
+            hard_backtracks += usize::from(post_ls_norm < stall_norm * 0.25);
         }
         assert!(
             hard_backtracks >= 1,
-            "fixture drift: no iteration backtracked below alpha = 1/4, so \
-             this run cannot distinguish the undamped norm from the \
-             line-searched one (probe: {probe:?})"
+            "fixture drift: no hard backtrack (probe: {probe:?})"
         );
     }
 }

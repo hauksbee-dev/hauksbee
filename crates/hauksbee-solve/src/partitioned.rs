@@ -1855,687 +1855,6 @@ fn sub_mos_q(
 // The graded-board fixtures (single source of truth in benches/, see the
 // header there); `#[path]` resolves against `src/`, not the nested inline
 // `tests` module, so the include lives at file level like alloc_audit's.
-#[cfg(test)]
-#[path = "../benches/fixtures.rs"]
-#[allow(dead_code)]
-mod test_fixtures;
-
-#[cfg(test)]
-mod tests {
-    use super::test_fixtures as fixtures;
-    use super::*;
-
-    /// INTERNAL TIMING PROBE (ignored; prints, asserts nothing). Breaks a torn
-    /// mirror-array step into its components so parallelization decisions are
-    /// made on measured hot spots, not guesses. Run with:
-    /// `cargo test -p hauksbee-solve --release --lib -- --ignored --nocapture probe_step`
-    #[test]
-    #[ignore]
-    fn probe_step_breakdown() {
-        use std::time::Instant;
-        // Warm-up pass (cold-binary/page-fault effects otherwise land on the
-        // first policy measured), then interleave nothing: each config is
-        // rebuilt fresh and the march is long enough to dominate.
-        for par in [
-            ParallelPolicy::Off,
-            ParallelPolicy::Off,
-            ParallelPolicy::Threads(1),
-            ParallelPolicy::Threads(2),
-            ParallelPolicy::Threads(3),
-            ParallelPolicy::Threads(4),
-            ParallelPolicy::Threads(6),
-            ParallelPolicy::Threads(8),
-            ParallelPolicy::Off,
-        ] {
-            let (c, _m) = fixtures::build_shunt_array(240);
-            let opts = SolverOptions {
-                integration: Integration::Trapezoidal,
-                reltol: 1e-9,
-                vntol: 1e-9,
-                max_newton: 200,
-                gmin: 1e-9,
-                parallel: par,
-                ..fixed_opts(1e-6)
-            };
-            let mut e = PartitionedTransient::try_build(&c, &opts).expect("tears");
-            let t0 = Instant::now();
-            e.seed(&c).expect("seed");
-            let t_seed = t0.elapsed();
-            let dt = 1e-6;
-            for li in &mut e.linear {
-                li.ensure_cache(dt);
-            }
-            let steps = 200;
-            let (mut t_src, mut t_bal, mut t_commit, mut t_gather) =
-                (0.0f64, 0.0f64, 0.0f64, 0.0f64);
-            let mut xg = vec![0.0; e.global_x_len()];
-            let mut t = 0.0;
-            for _ in 0..steps {
-                let tnext = t + dt;
-                let t0 = Instant::now();
-                e.apply_sources(&c, tnext);
-                t_src += t0.elapsed().as_secs_f64();
-                let t0 = Instant::now();
-                e.in_pool(|me| me.step_with_rail_balance(&c, dt, tnext))
-                    .expect("step");
-                t_bal += t0.elapsed().as_secs_f64();
-                let t0 = Instant::now();
-                e.commit(&c, dt);
-                t_commit += t0.elapsed().as_secs_f64();
-                let t0 = Instant::now();
-                e.gather_into(&mut xg);
-                t_gather += t0.elapsed().as_secs_f64();
-                t = tnext;
-            }
-            println!(
-                "{par:?}: seed {:.2}ms | per step: sources {:.1}us, balance {:.1}us, commit {:.1}us, gather {:.1}us",
-                t_seed.as_secs_f64() * 1e3,
-                t_src / steps as f64 * 1e6,
-                t_bal / steps as f64 * 1e6,
-                t_commit / steps as f64 * 1e6,
-                t_gather / steps as f64 * 1e6,
-            );
-        }
-    }
-
-    /// Disjoint owned sets pass, and the claim mask marks exactly the owned
-    /// slots (not the outer-written rail, not unclaimed nodes).
-    #[test]
-    fn single_writer_accepts_disjoint_ownership() {
-        let a = [NodeId(1), NodeId(2)];
-        let b = [NodeId(4)];
-        let owned: Vec<&[NodeId]> = vec![&a, &b];
-        let claimed = verify_single_writer(&owned, &[NodeId(3)], 5).expect("disjoint sets pass");
-        assert_eq!(claimed, vec![false, true, true, false, true, false]);
-    }
-
-    /// Two islands claiming the same slot is the write-aliasing hazard the
-    /// parallel scatter must never see; the check must name the node.
-    #[test]
-    fn single_writer_rejects_overlapping_ownership() {
-        let a = [NodeId(1), NodeId(2)];
-        let b = [NodeId(2), NodeId(3)];
-        let owned: Vec<&[NodeId]> = vec![&a, &b];
-        let err = verify_single_writer(&owned, &[], 4).unwrap_err();
-        assert!(
-            err.contains("node 2") && err.contains("two islands"),
-            "error must name the aliased node: {err}"
-        );
-    }
-
-    /// An island claiming a balance-torn rail would fight the scalar balance
-    /// for the slot (the outer loop writes it); refused explicitly.
-    #[test]
-    fn single_writer_rejects_island_owning_a_torn_rail() {
-        let a = [NodeId(1), NodeId(2)];
-        let owned: Vec<&[NodeId]> = vec![&a];
-        let err = verify_single_writer(&owned, &[NodeId(2)], 3).unwrap_err();
-        assert!(
-            err.contains("outer loop") && err.contains("node 2"),
-            "error must name the rail conflict: {err}"
-        );
-    }
-
-    use hauksbee_ir::{Device, SourceKind};
-
-    fn fixed_opts(dt: f64) -> SolverOptions {
-        SolverOptions {
-            step: StepControl::Fixed { dt },
-            ..SolverOptions::default()
-        }
-    }
-
-    /// END-TO-END proof the build-time single-writer check is live, not
-    /// vacuous: a hand-built partition in which two islands both claim node
-    /// `b` must be refused at construction. `Partition`'s fields are public
-    /// precisely so external decision layers can impose partitions, which is
-    /// exactly how a buggy layer could smuggle in an aliasing cut.
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "partition ownership violation")]
-    fn aliased_partition_is_refused_at_build() {
-        let mut c = Circuit::new();
-        let a = c.node("a");
-        let b = c.node("b");
-        let v1 = c.add(Device::Vsource {
-            name: "V1".into(),
-            p: a,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        let r1 = c.add(Device::Resistor {
-            name: "R1".into(),
-            a,
-            b,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let r2 = c.add(Device::Resistor {
-            name: "R2".into(),
-            a: b,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        // Both islands own `b`: island 0 (devices R1, boundary a) and island 1
-        // (devices R2, no boundary). `linear: false` routes both through the
-        // sub-circuit path; the aliasing is in the ownership, not the physics.
-        let part = Partition {
-            islands: vec![
-                Island {
-                    devices: vec![r1],
-                    nodes: vec![a, b],
-                    linear: false,
-                    boundary_in: vec![a],
-                },
-                Island {
-                    devices: vec![r2],
-                    nodes: vec![b],
-                    linear: false,
-                    boundary_in: vec![],
-                },
-            ],
-            sources: vec![v1],
-            n_nodes: c.max_node() as usize,
-            tears: Vec::new(),
-        };
-        let opts = fixed_opts(1e-6);
-        let _ = PartitionedTransient::try_build_from_partition(&c, &opts, part);
-    }
-
-    /// Build the cross-coupled comparator ring: an ODD-inversion feedback loop
-    /// split at its (current-free) sense couplings. U1 is non-inverting from x
-    /// to y; U2 is inverting from y to x, so no consistent discrete state
-    /// exists and a Jacobi relaxation between the two islands flips forever.
-    /// This is precisely the hazard the divergence guard exists for: a
-    /// FEEDBACK loop imposed on the exchange as if it were feedforward.
-    fn comparator_ring() -> (Circuit, Partition) {
-        let mut c = Circuit::new();
-        let vref = c.node("ref");
-        let x = c.node("x");
-        let y = c.node("y");
-        let vsrc = c.add(Device::Vsource {
-            name: "VREF".into(),
-            p: vref,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(0.5),
-        });
-        let u1 = c.add(Device::Comparator {
-            name: "U1".into(),
-            out: y,
-            inp: x,
-            inn: vref,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.0,
-        });
-        let u2 = c.add(Device::Comparator {
-            name: "U2".into(),
-            out: x,
-            inp: vref,
-            inn: y,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.0,
-        });
-        let part = Partition {
-            islands: vec![
-                Island {
-                    devices: vec![u1],
-                    nodes: vec![x, y, vref],
-                    linear: false,
-                    boundary_in: vec![x, vref],
-                },
-                Island {
-                    devices: vec![u2],
-                    nodes: vec![x, y, vref],
-                    linear: false,
-                    boundary_in: vec![y, vref],
-                },
-            ],
-            sources: vec![vsrc],
-            n_nodes: c.max_node() as usize,
-            tears: Vec::new(),
-        };
-        (c, part)
-    }
-
-    /// DIVERGENCE GUARD (plan §3.3): a coupling that cannot relax within the
-    /// sweep cap must FAIL the step loudly, never hang, never silently accept
-    /// a half-converged exchange. The comparator ring flips generation after
-    /// generation, so the guard must trip at the cap and name the stalled
-    /// node; the error leaves through the same channel as a per-island Newton
-    /// failure, which the staged orchestrator escalates to a fused monolithic
-    /// re-solve.
-    #[test]
-    fn unconvergent_coupling_fails_the_step_loudly() {
-        let (c, part) = comparator_ring();
-        let opts = fixed_opts(1e-6);
-        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
-            .expect("the ring partition is well-formed (disjoint owners), so the build succeeds");
-        assert!(
-            engine.coupled,
-            "the ring must register as inter-island coupled"
-        );
-        let err = engine
-            .run_streaming(&c, 10e-6, |_| {})
-            .expect_err("an odd-inversion ring can never satisfy the coupling tolerance");
-        assert!(
-            err.to_string().contains("failed to relax"),
-            "the guard must refuse, not mislabel: {err}"
-        );
-    }
-
-    /// The small-island guard (plan §3.4): `ParallelPolicy::Auto` must DECLINE
-    /// to build a pool for a board with too few nonlinear islands to amortize
-    /// dispatch (the RC-fan shape: many trivial linear islands, zero Newton
-    /// solves), must ENGAGE on the mirror array (24 nonlinear blocks), and
-    /// `Threads(n)` must force a pool regardless.
-    #[test]
-    fn auto_policy_declines_small_boards_and_engages_large_ones() {
-        // 6-leg RC fan: 6 linear islands off one pinned rail, 0 nonlinear.
-        let mut c = Circuit::new();
-        let rail = c.node("rail");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: rail,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        for k in 0..6 {
-            let mid = c.node(&format!("leg{k}"));
-            c.add(Device::Resistor {
-                name: format!("R{k}"),
-                a: rail,
-                b: mid,
-                ohms: 1e3,
-                tc1: None,
-            });
-            c.add(Device::Capacitor {
-                name: format!("C{k}"),
-                a: mid,
-                b: NodeId::GROUND,
-                farads: 1e-9,
-                ic: Some(0.0),
-            });
-        }
-        let opts = fixed_opts(1e-6);
-        let engine = PartitionedTransient::try_build(&c, &opts).expect("fan partitions");
-        assert!(
-            engine.pool.is_none(),
-            "Auto must decline a pool for a linear fan with no nonlinear islands"
-        );
-        let forced = PartitionedTransient::try_build(
-            &c,
-            &SolverOptions {
-                parallel: ParallelPolicy::Threads(2),
-                ..opts
-            },
-        )
-        .expect("fan partitions");
-        assert!(
-            forced.pool.is_some(),
-            "Threads(n) must force a pool even below the Auto threshold"
-        );
-        // The pool-size decision itself, without building boards for every
-        // case: below threshold declines, at threshold engages.
-        assert!(build_pool(ParallelPolicy::Auto, PAR_MIN_NONLINEAR_ISLANDS - 1).is_none());
-        assert!(build_pool(ParallelPolicy::Auto, PAR_MIN_NONLINEAR_ISLANDS).is_some());
-        assert!(build_pool(ParallelPolicy::Off, 1_000).is_none());
-    }
-
-    /// The positive half of the convergence gate: a genuinely coupled but
-    /// FEEDFORWARD partition (linear RC island driving a comparator island
-    /// through a current-free sense boundary) relaxes within the cap and
-    /// reproduces the monolithic solve. This exercises the relaxation loop for
-    /// real; the analyzer's own partitions never couple islands, so without
-    /// an imposed partition the loop would be dead code in the test suite.
-    #[test]
-    fn coupled_feedforward_partition_converges_and_matches_monolithic() {
-        let mut c = Circuit::new();
-        let vin = c.node("vin");
-        let m = c.node("m");
-        let vref = c.node("ref");
-        let o = c.node("o");
-        let v1 = c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        let vr = c.add(Device::Vsource {
-            name: "VREF".into(),
-            p: vref,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(0.5),
-        });
-        let r1 = c.add(Device::Resistor {
-            name: "R1".into(),
-            a: vin,
-            b: m,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let c1 = c.add(Device::Capacitor {
-            name: "C1".into(),
-            a: m,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: Some(0.0),
-        });
-        let cmp = c.add(Device::Comparator {
-            name: "CMP".into(),
-            out: o,
-            inp: m,
-            inn: vref,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.0,
-        });
-        let part = Partition {
-            islands: vec![
-                Island {
-                    devices: vec![r1, c1],
-                    nodes: vec![vin, m],
-                    linear: true,
-                    boundary_in: vec![vin],
-                },
-                Island {
-                    devices: vec![cmp],
-                    nodes: vec![o, m, vref],
-                    linear: false,
-                    boundary_in: vec![m, vref],
-                },
-            ],
-            sources: vec![v1, vr],
-            n_nodes: c.max_node() as usize,
-            tears: Vec::new(),
-        };
-        let dt = 5e-8;
-        let tstop = 10e-6; // 10 tau: m has settled at 1 V, o latched high
-        let opts = fixed_opts(dt);
-        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
-            .expect("well-formed feedforward partition builds");
-        assert!(
-            engine.coupled,
-            "the sense boundary must register as coupling"
-        );
-        let n = engine.global_x_len();
-        let mut last = vec![0.0; n];
-        engine
-            .run_streaming(&c, tstop, |s| last.copy_from_slice(s.x))
-            .expect("a feedforward coupling relaxes within the cap");
-
-        // Monolithic oracle on the same circuit.
-        let mono = crate::transient::Transient::new(SolverOptions {
-            partitioning: crate::options::Partitioning::Off,
-            ..opts
-        })
-        .run(&c, tstop)
-        .expect("monolithic oracle");
-        let m_mono = mono.final_node(&c, "m").expect("m present");
-        let o_mono = mono.final_node(&c, "o").expect("o present");
-        // The streamed x carries node k's voltage at index k-1 (gather_into).
-        let m_part = last[m.0 as usize - 1];
-        let o_part = last[o.0 as usize - 1];
-        assert!(
-            (m_mono - m_part).abs() <= 1e-6,
-            "membrane diverged: mono {m_mono} vs torn {m_part}"
-        );
-        assert!(
-            (o_mono - o_part).abs() <= 1e-6,
-            "comparator output diverged: mono {o_mono} vs torn {o_part}"
-        );
-    }
-
-    /// Bug-hunt (R8 #2): a cut source emitted with its POSITIVE terminal as
-    /// the already-resolved reference must pin the floating `n`, not clobber
-    /// `p`. Pinned-ness propagates through a Vsource in both directions, so
-    /// `V1 A→GND` pins A and then `V2 p=A n=B (2 V)` pins B, but the old
-    /// `apply_sources` hard-assumed `n` was the reference: it overwrote
-    /// `vbuf[A]` with `vbuf[B] + 2` and never wrote `vbuf[B]` at all. With
-    /// pure DC sources the whole-circuit DC seed masks this (the stale
-    /// `vbuf[B]` happens to hold the correct value forever), so V1 is a step:
-    /// after the step, `vbuf[B]` still holds the t=0 value and BOTH boundary
-    /// nodes are frozen at their seed voltages (A = 0, B = -2 instead of
-    /// A = 5, B = 3) while the monolithic MNA path tracks the step exactly.
-    #[test]
-    fn stacked_source_with_resolved_positive_terminal_pins_the_floating_negative() {
-        let mut c = Circuit::new();
-        let a = c.node("a");
-        let b = c.node("b");
-        let m = c.node("m");
-        let v1 = c.add(Device::Vsource {
-            name: "V1".into(),
-            p: a,
-            n: NodeId::GROUND,
-            // 0 -> 5 V step at 1 us: the boundary values MUST move after t=0.
-            kind: SourceKind::Pulse {
-                v1: 0.0,
-                v2: 5.0,
-                delay: 1e-6,
-                rise: 1e-9,
-                fall: 1e-9,
-                width: 1.0,
-                period: 0.0,
-            },
-        });
-        // Stacked supply hanging BELOW the pinned rail: v(A) - v(B) = 2, so
-        // order_sources sees `p` (A) resolved and must fix `n` (B) = 3 V.
-        let v2 = c.add(Device::Vsource {
-            name: "V2".into(),
-            p: a,
-            n: b,
-            kind: SourceKind::Dc(2.0),
-        });
-        // B feeds a real island so the partitioned engine has work to do and
-        // B is a genuine cut-source boundary read every step.
-        let r1 = c.add(Device::Resistor {
-            name: "R1".into(),
-            a: b,
-            b: m,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let c1 = c.add(Device::Capacitor {
-            name: "C1".into(),
-            a: m,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: None, // both engines seed from the same t=0 DC point
-        });
-        let part = Partition {
-            islands: vec![Island {
-                devices: vec![r1, c1],
-                nodes: vec![b, m],
-                linear: true,
-                boundary_in: vec![b],
-            }],
-            sources: vec![v1, v2],
-            n_nodes: c.max_node() as usize,
-            tears: Vec::new(),
-        };
-        let dt = 5e-8;
-        let tstop = 20e-6; // 19 tau past the step: m has settled at v(B) = 3 V
-        let opts = fixed_opts(dt);
-        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
-            .expect("stacked-source partition builds");
-        let n = engine.global_x_len();
-        let mut last = vec![0.0; n];
-        engine
-            .run_streaming(&c, tstop, |s| last.copy_from_slice(s.x))
-            .expect("partitioned run completes");
-
-        // Monolithic oracle: the MNA branch equations get this right for free.
-        let mono = crate::transient::Transient::new(SolverOptions {
-            partitioning: crate::options::Partitioning::Off,
-            ..opts
-        })
-        .run(&c, tstop)
-        .expect("monolithic oracle");
-        let a_mono = mono.final_node(&c, "a").expect("a present");
-        let b_mono = mono.final_node(&c, "b").expect("b present");
-        let m_mono = mono.final_node(&c, "m").expect("m present");
-        let a_part = last[a.0 as usize - 1];
-        let b_part = last[b.0 as usize - 1];
-        let m_part = last[m.0 as usize - 1];
-        // Exact values first (the physics is trivial), then the differential.
-        assert!((a_mono - 5.0).abs() <= 1e-9, "oracle sanity: a = {a_mono}");
-        assert!((b_mono - 3.0).abs() <= 1e-9, "oracle sanity: b = {b_mono}");
-        assert!(
-            (a_part - a_mono).abs() <= 1e-9,
-            "pinned rail clobbered: mono a {a_mono} vs torn {a_part}"
-        );
-        assert!(
-            (b_part - b_mono).abs() <= 1e-9,
-            "floating terminal never pinned: mono b {b_mono} vs torn {b_part}"
-        );
-        assert!(
-            (m_part - m_mono).abs() <= 1e-6,
-            "island fed a wrong boundary: mono m {m_mono} vs torn {m_part}"
-        );
-    }
-
-    /// Bug-hunt (solver r2 #4): a linear island's exact ZOH advance must see
-    /// the CURRENT boundary input on every relaxation sweep, not the seed
-    /// exchange's. Calling `li.step` on the first sweep alone leaves later
-    /// sweeps refreshing the Su·u reconstruction term while the Ad·x + Bd·u
-    /// state advance stays frozen at the first sweep's stale u, and the
-    /// committed state carries that error into every subsequent step.
-    ///
-    /// The fixture makes the defect ORDERS OF MAGNITUDE, not fractions: a
-    /// VCVS island A owns `s` (pinned to `V(vin)`, so island B's current draw
-    /// cannot move it; the partition is physically exact), and the linear
-    /// island B owns `m` (one cap state fed from `s` through R) with `s` as
-    /// its boundary input. `vin` steps 0 -> 1 V exactly at a sample boundary
-    /// (t1, riser width 1 ns << dt). On the riser step, sweep 1 runs before
-    /// A's new `s` reaches the exchange, so B's first-sweep input is the
-    /// PRE-STEP 0 V; only the second sweep sees 1 V. For a piecewise-constant
-    /// input the exact-exponential ZOH advance is EXACT, so against the
-    /// analytic waveform the fixed engine sits at ~2e-10 while the stale-input
-    /// defect loses the riser step's entire charge (~(1 - e^{-dt/tau}) ~ 1e-2
-    /// absolute, measured 9.9e-3), a 1e-4 gate separates them by two orders
-    /// each way. (An Auto-vs-Off differential can't gate this tightly: with a
-    /// smoothly varying input both the trapezoidal oracle and the end-of-step
-    /// ZOH carry O(dt) input-placement error of the same scale as the defect,
-    /// measured 3.8e-3 fixed vs 5.2e-3 broken on an RC feedback fixture,
-    /// so the analytic oracle is the honest referee.)
-    #[test]
-    fn coupled_linear_island_readvances_with_fresh_boundary_input() {
-        let mut c = Circuit::new();
-        let vin = c.node("vin");
-        let s = c.node("s");
-        let m = c.node("m");
-        let t1 = 2e-4; // riser lands exactly on sample 20 (dt = 1e-5)
-        let riser = 1e-9; // << dt, >> any float drift in the accumulated t
-        let v1 = c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pwl(vec![
-                hauksbee_ir::PwlPoint { t: 0.0, v: 0.0 },
-                hauksbee_ir::PwlPoint { t: t1, v: 0.0 },
-                hauksbee_ir::PwlPoint {
-                    t: t1 + riser,
-                    v: 1.0,
-                },
-                hauksbee_ir::PwlPoint { t: 1.0, v: 1.0 },
-            ]),
-        });
-        // V(s) = V(vin): an ideal repeater. The point of routing vin through
-        // an island-owned node instead of wiring B to the pin directly: `s`
-        // is only refreshed by island A's phase (a), so B's first sweep of
-        // the riser step genuinely reads the stale pre-step value.
-        let e1 = c.add(Device::Vcvs {
-            name: "E1".into(),
-            p: s,
-            n: NodeId::GROUND,
-            cp: vin,
-            cn: NodeId::GROUND,
-            gain: 1.0,
-        });
-        let r2 = c.add(Device::Resistor {
-            name: "R2".into(),
-            a: s,
-            b: m,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let c1 = c.add(Device::Capacitor {
-            name: "C1".into(),
-            a: m,
-            b: NodeId::GROUND,
-            farads: 1e-6,
-            ic: Some(0.0),
-        });
-        let part = Partition {
-            islands: vec![
-                // Island A: the VCVS owning `s`, flagged non-linear so it is
-                // solved as an MNA sub-block (the state-space reducer refuses
-                // E/G anyway).
-                Island {
-                    devices: vec![e1],
-                    nodes: vec![vin, s],
-                    linear: false,
-                    boundary_in: vec![vin],
-                },
-                // Island B: the linear island under test, one cap state,
-                // boundary input `s` owned by island A.
-                Island {
-                    devices: vec![r2, c1],
-                    nodes: vec![s, m],
-                    linear: true,
-                    boundary_in: vec![s],
-                },
-            ],
-            sources: vec![v1],
-            n_nodes: c.max_node() as usize,
-            tears: Vec::new(),
-        };
-        let dt = 1e-5;
-        let tstop = 1e-3; // riser at step 20, then 0.8 tau of charging
-        let tau = 1e3 * 1e-6; // R2 * C1 = 1 ms
-        let opts = fixed_opts(dt);
-        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
-            .expect("well-formed coupled partition builds");
-        assert!(
-            !engine.linear.is_empty(),
-            "island B must reach the state-space path for this test to bite"
-        );
-        assert!(engine.coupled, "B's read of `s` must register as coupling");
-        let n = engine.global_x_len();
-        let mut buf = vec![0.0; n];
-        let mut worst = 0.0f64;
-        let mut t_worst = 0.0f64;
-        engine
-            .run_streaming(&c, tstop, |st| {
-                buf.copy_from_slice(st.x);
-                // The streamed x carries node k's voltage at index k-1.
-                let mp = buf[m.0 as usize - 1];
-                // Analytic truth: m = 0 until the riser, then the RC charge
-                // 1 - e^{-(t - t1)/tau} (the 1 ns riser width contributes
-                // < 1e-6 relative, far below the gate).
-                let mr = if st.time <= t1 {
-                    0.0
-                } else {
-                    1.0 - (-(st.time - t1) / tau).exp()
-                };
-                let err = (mp - mr).abs();
-                if err > worst {
-                    worst = err;
-                    t_worst = st.time;
-                }
-            })
-            .expect("the exchange relaxes within the cap");
-        assert!(
-            worst < 1e-4,
-            "linear island advanced with a stale boundary input: worst abs err \
-             {worst:.3e} V vs the analytic waveform (at t={t_worst:.3e} s; the \
-             stale-input defect loses the riser step's charge, ~1e-2 V)"
-        );
-    }
-}
-
 fn advance_sub_reactive(
     state: &mut ReactiveState,
     sub: &Circuit,
@@ -2673,5 +1992,376 @@ fn advance_sub_reactive(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+#[path = "../benches/fixtures.rs"]
+#[allow(dead_code)]
+mod test_fixtures_bench;
+
+#[cfg(test)]
+mod tests {
+    use super::test_fixtures_bench as fixtures;
+    use super::*;
+    use crate::test_fixtures::{cap_ic, comparator, res, vdc, vdc_between, GND};
+    use hauksbee_ir::{Device, SourceKind};
+
+    fn fixed_opts(dt: f64) -> SolverOptions {
+        SolverOptions {
+            step: StepControl::Fixed { dt },
+            ..SolverOptions::default()
+        }
+    }
+
+    fn partition(c: &Circuit, islands: Vec<Island>, sources: Vec<DeviceId>) -> Partition {
+        Partition {
+            islands,
+            sources,
+            n_nodes: c.max_node() as usize,
+            tears: Vec::new(),
+        }
+    }
+
+    fn island(
+        devices: Vec<DeviceId>,
+        nodes: Vec<NodeId>,
+        linear: bool,
+        boundary_in: Vec<NodeId>,
+    ) -> Island {
+        Island {
+            devices,
+            nodes,
+            linear,
+            boundary_in,
+        }
+    }
+
+    /// Timing probe (ignored; prints, asserts nothing). Run with
+    /// `cargo test -p hauksbee-solve --release --lib -- --ignored --nocapture probe_step`.
+    #[test]
+    #[ignore]
+    fn probe_step_breakdown() {
+        use std::time::Instant;
+        for par in [
+            ParallelPolicy::Off,
+            ParallelPolicy::Threads(2),
+            ParallelPolicy::Threads(4),
+            ParallelPolicy::Threads(8),
+        ] {
+            let (c, _m) = fixtures::build_shunt_array(240);
+            let opts = SolverOptions {
+                integration: Integration::Trapezoidal,
+                reltol: 1e-9,
+                vntol: 1e-9,
+                max_newton: 200,
+                gmin: 1e-9,
+                parallel: par,
+                ..fixed_opts(1e-6)
+            };
+            let mut e = PartitionedTransient::try_build(&c, &opts).expect("tears");
+            let t0 = Instant::now();
+            e.seed(&c).expect("seed");
+            let t_seed = t0.elapsed();
+            let dt = 1e-6;
+            for li in &mut e.linear {
+                li.ensure_cache(dt);
+            }
+            let steps = 200;
+            let (mut t_src, mut t_bal, mut t_commit, mut t_gather) =
+                (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            let mut xg = vec![0.0; e.global_x_len()];
+            let mut t = 0.0;
+            for _ in 0..steps {
+                let tnext = t + dt;
+                let t0 = Instant::now();
+                e.apply_sources(&c, tnext);
+                t_src += t0.elapsed().as_secs_f64();
+                let t0 = Instant::now();
+                e.in_pool(|me| me.step_with_rail_balance(&c, dt, tnext))
+                    .expect("step");
+                t_bal += t0.elapsed().as_secs_f64();
+                let t0 = Instant::now();
+                e.commit(&c, dt);
+                t_commit += t0.elapsed().as_secs_f64();
+                let t0 = Instant::now();
+                e.gather_into(&mut xg);
+                t_gather += t0.elapsed().as_secs_f64();
+                t = tnext;
+            }
+            let per = |x: f64| x / steps as f64 * 1e6;
+            println!(
+                "{par:?}: seed {:.2}ms | per step: sources {:.1}us, balance {:.1}us, commit {:.1}us, gather {:.1}us",
+                t_seed.as_secs_f64() * 1e3,
+                per(t_src),
+                per(t_bal),
+                per(t_commit),
+                per(t_gather),
+            );
+        }
+    }
+
+    /// Disjoint owned sets pass with the claim mask marking exactly the owned
+    /// slots; overlapping sets and an island owning a torn rail are refused.
+    #[test]
+    fn single_writer_check() {
+        let a = [NodeId(1), NodeId(2)];
+        let b = [NodeId(4)];
+        let claimed = verify_single_writer(&[&a, &b], &[NodeId(3)], 5).unwrap();
+        assert_eq!(claimed, vec![false, true, true, false, true, false]);
+        let b = [NodeId(2), NodeId(3)];
+        assert!(verify_single_writer(&[&a, &b], &[], 4).is_err());
+        assert!(verify_single_writer(&[&a], &[NodeId(2)], 3).is_err());
+    }
+
+    /// A hand-built partition in which two islands both claim node `b` is
+    /// refused at construction.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "partition ownership violation")]
+    fn aliased_partition_is_refused_at_build() {
+        let mut c = Circuit::new();
+        let (a, b) = (c.node("a"), c.node("b"));
+        let v1 = vdc(&mut c, "V1", a, 1.0);
+        let r1 = res(&mut c, "R1", a, b, 1e3);
+        let r2 = res(&mut c, "R2", b, GND, 1e3);
+        let part = partition(
+            &c,
+            vec![
+                island(vec![r1], vec![a, b], false, vec![a]),
+                island(vec![r2], vec![b], false, vec![]),
+            ],
+            vec![v1],
+        );
+        let _ = PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), part);
+    }
+
+    /// An odd-inversion comparator ring split at its sense couplings can never
+    /// relax: the divergence guard must fail the step loudly.
+    #[test]
+    fn unconvergent_coupling_fails_the_step_loudly() {
+        let mut c = Circuit::new();
+        let (vref, x, y) = (c.node("ref"), c.node("x"), c.node("y"));
+        let vsrc = vdc(&mut c, "VREF", vref, 0.5);
+        let u1 = comparator(&mut c, "U1", y, x, vref, 0.0);
+        let u2 = comparator(&mut c, "U2", x, vref, y, 0.0);
+        let part = partition(
+            &c,
+            vec![
+                island(vec![u1], vec![x, y, vref], false, vec![x, vref]),
+                island(vec![u2], vec![x, y, vref], false, vec![y, vref]),
+            ],
+            vec![vsrc],
+        );
+        let mut engine =
+            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), part).unwrap();
+        assert!(engine.coupled);
+        assert!(engine.run_streaming(&c, 10e-6, |_| {}).is_err());
+    }
+
+    /// `ParallelPolicy::Auto` declines a pool for a board with too few
+    /// nonlinear islands; `Threads(n)` forces one; the threshold is exact.
+    #[test]
+    fn auto_policy_declines_small_boards_and_engages_large_ones() {
+        let mut c = Circuit::new();
+        let rail = c.node("rail");
+        vdc(&mut c, "V1", rail, 1.0);
+        for k in 0..6 {
+            let mid = c.node(&format!("leg{k}"));
+            res(&mut c, &format!("R{k}"), rail, mid, 1e3);
+            cap_ic(&mut c, &format!("C{k}"), mid, GND, 1e-9, 0.0);
+        }
+        let opts = fixed_opts(1e-6);
+        assert!(PartitionedTransient::try_build(&c, &opts)
+            .unwrap()
+            .pool
+            .is_none());
+        let forced = SolverOptions {
+            parallel: ParallelPolicy::Threads(2),
+            ..opts
+        };
+        assert!(PartitionedTransient::try_build(&c, &forced)
+            .unwrap()
+            .pool
+            .is_some());
+        assert!(build_pool(ParallelPolicy::Auto, PAR_MIN_NONLINEAR_ISLANDS - 1).is_none());
+        assert!(build_pool(ParallelPolicy::Auto, PAR_MIN_NONLINEAR_ISLANDS).is_some());
+        assert!(build_pool(ParallelPolicy::Off, 1_000).is_none());
+    }
+
+    fn run_last(engine: &mut PartitionedTransient, c: &Circuit, tstop: f64) -> Vec<f64> {
+        let mut last = vec![0.0; engine.global_x_len()];
+        engine
+            .run_streaming(c, tstop, |s| last.copy_from_slice(s.x))
+            .expect("partitioned run completes");
+        last
+    }
+
+    fn mono_final(c: &Circuit, opts: &SolverOptions, tstop: f64, node: &str) -> f64 {
+        crate::transient::Transient::new(SolverOptions {
+            partitioning: crate::options::Partitioning::Off,
+            ..*opts
+        })
+        .run(c, tstop)
+        .expect("monolithic oracle")
+        .final_node(c, node)
+        .unwrap()
+    }
+
+    /// A linear RC island driving a comparator island through a current-free
+    /// sense boundary relaxes within the cap and reproduces the monolith.
+    #[test]
+    fn coupled_feedforward_partition_converges_and_matches_monolithic() {
+        let mut c = Circuit::new();
+        let (vin, m, vref, o) = (c.node("vin"), c.node("m"), c.node("ref"), c.node("o"));
+        let v1 = vdc(&mut c, "V1", vin, 1.0);
+        let vr = vdc(&mut c, "VREF", vref, 0.5);
+        let r1 = res(&mut c, "R1", vin, m, 1e3);
+        let c1 = cap_ic(&mut c, "C1", m, GND, 1e-9, 0.0);
+        let cmp = comparator(&mut c, "CMP", o, m, vref, 0.0);
+        let part = partition(
+            &c,
+            vec![
+                island(vec![r1, c1], vec![vin, m], true, vec![vin]),
+                island(vec![cmp], vec![o, m, vref], false, vec![m, vref]),
+            ],
+            vec![v1, vr],
+        );
+        let (dt, tstop) = (5e-8, 10e-6);
+        let opts = fixed_opts(dt);
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part).unwrap();
+        assert!(engine.coupled);
+        let last = run_last(&mut engine, &c, tstop);
+        // The streamed x carries node k's voltage at index k-1.
+        for (node, name) in [(m, "m"), (o, "o")] {
+            let mono = mono_final(&c, &opts, tstop, name);
+            assert!(
+                (mono - last[node.0 as usize - 1]).abs() <= 1e-6,
+                "{name}: mono {mono} vs torn {}",
+                last[node.0 as usize - 1]
+            );
+        }
+    }
+
+    /// A cut source whose POSITIVE terminal is the resolved reference must pin
+    /// the floating `n` (A = 5 V step, B = A - 2), never clobber `p`.
+    #[test]
+    fn stacked_source_with_resolved_positive_terminal_pins_the_floating_negative() {
+        let mut c = Circuit::new();
+        let (a, b, m) = (c.node("a"), c.node("b"), c.node("m"));
+        let v1 = c.add(Device::Vsource {
+            name: "V1".into(),
+            p: a,
+            n: GND,
+            kind: SourceKind::Pulse {
+                v1: 0.0,
+                v2: 5.0,
+                delay: 1e-6,
+                rise: 1e-9,
+                fall: 1e-9,
+                width: 1.0,
+                period: 0.0,
+            },
+        });
+        let v2 = vdc_between(&mut c, "V2", a, b, 2.0);
+        let r1 = res(&mut c, "R1", b, m, 1e3);
+        let c1 = crate::test_fixtures::cap(&mut c, "C1", m, GND, 1e-9);
+        let part = partition(
+            &c,
+            vec![island(vec![r1, c1], vec![b, m], true, vec![b])],
+            vec![v1, v2],
+        );
+        let (dt, tstop) = (5e-8, 20e-6);
+        let opts = fixed_opts(dt);
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part).unwrap();
+        let last = run_last(&mut engine, &c, tstop);
+        let (a_mono, b_mono, m_mono) = (
+            mono_final(&c, &opts, tstop, "a"),
+            mono_final(&c, &opts, tstop, "b"),
+            mono_final(&c, &opts, tstop, "m"),
+        );
+        assert!(
+            (a_mono - 5.0).abs() <= 1e-9 && (b_mono - 3.0).abs() <= 1e-9,
+            "oracle sanity"
+        );
+        assert!(
+            (last[a.0 as usize - 1] - a_mono).abs() <= 1e-9,
+            "pinned rail clobbered"
+        );
+        assert!(
+            (last[b.0 as usize - 1] - b_mono).abs() <= 1e-9,
+            "floating terminal never pinned"
+        );
+        assert!(
+            (last[m.0 as usize - 1] - m_mono).abs() <= 1e-6,
+            "island fed a wrong boundary"
+        );
+    }
+
+    /// A linear island's exact ZOH advance must see the CURRENT boundary input
+    /// on every relaxation sweep: a VCVS island owns `s`, the linear island B
+    /// (one cap state) reads it, and `vin` steps at a sample boundary. Against
+    /// the analytic RC charge the fixed engine sits at ~2e-10; a stale first
+    /// sweep loses the riser step's charge (~1e-2).
+    #[test]
+    fn coupled_linear_island_readvances_with_fresh_boundary_input() {
+        let mut c = Circuit::new();
+        let (vin, s, m) = (c.node("vin"), c.node("s"), c.node("m"));
+        let (t1, riser) = (2e-4, 1e-9);
+        let pt = |t: f64, v: f64| hauksbee_ir::PwlPoint { t, v };
+        let v1 = c.add(Device::Vsource {
+            name: "V1".into(),
+            p: vin,
+            n: GND,
+            kind: SourceKind::Pwl(vec![
+                pt(0.0, 0.0),
+                pt(t1, 0.0),
+                pt(t1 + riser, 1.0),
+                pt(1.0, 1.0),
+            ]),
+        });
+        let e1 = c.add(Device::Vcvs {
+            name: "E1".into(),
+            p: s,
+            n: GND,
+            cp: vin,
+            cn: GND,
+            gain: 1.0,
+        });
+        let r2 = res(&mut c, "R2", s, m, 1e3);
+        let c1 = cap_ic(&mut c, "C1", m, GND, 1e-6, 0.0);
+        let part = partition(
+            &c,
+            vec![
+                island(vec![e1], vec![vin, s], false, vec![vin]),
+                island(vec![r2, c1], vec![s, m], true, vec![s]),
+            ],
+            vec![v1],
+        );
+        let (dt, tstop, tau) = (1e-5, 1e-3, 1e-3);
+        let mut engine =
+            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(dt), part).unwrap();
+        assert!(!engine.linear.is_empty() && engine.coupled);
+        let mut worst = (0.0f64, 0.0f64);
+        engine
+            .run_streaming(&c, tstop, |st| {
+                let mp = st.x[m.0 as usize - 1];
+                let mr = if st.time <= t1 {
+                    0.0
+                } else {
+                    1.0 - (-(st.time - t1) / tau).exp()
+                };
+                let err = (mp - mr).abs();
+                if err > worst.0 {
+                    worst = (err, st.time);
+                }
+            })
+            .expect("the exchange relaxes within the cap");
+        assert!(
+            worst.0 < 1e-4,
+            "stale boundary input: worst abs err {:.3e} V at t={:.3e}",
+            worst.0,
+            worst.1
+        );
     }
 }

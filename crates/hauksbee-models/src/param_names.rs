@@ -407,158 +407,76 @@ mod tests {
     use super::*;
     use crate::schema::ModelEntry;
 
-    fn entry(kind: &str, params: &str) -> ModelEntry {
+    fn entry(kind: &str, params: &str, extra: &str) -> ModelEntry {
         let src = format!(
-            "[[models]]\nid = \"t\"\nkind = \"{kind}\"\ndescription = \"t\"\n\
-             [models.params]\n{params}\n"
+            "[[models]]\nid = \"t\"\nkind = \"{kind}\"\ndescription = \"t\"\n[models.params]\n{params}\n{extra}\n"
         );
         let db: crate::schema::DbFile = toml::from_str(&src).expect("fixture parses");
         db.models.into_iter().next().expect("one entry")
     }
 
-    #[test]
-    fn a_clean_entry_warns_about_nothing() {
-        assert!(unknown_params(&entry("diode", "is = 1e-9\nn = 1.8\nrs = 6.0")).is_empty());
+    fn law(expr: &str) -> String {
+        format!(
+            "[[models.behavioral.laws]]\nname = \"l\"\nkind = \"current\"\na = \"vplus\"\nb = \"gnd\"\nexpr = \"{expr}\"\n"
+        )
     }
 
     #[test]
-    fn a_typo_warns_and_names_the_nearest_known_param() {
-        let found = unknown_params(&entry("diode", "cjo_typ = 4e-12"));
-        assert_eq!(found.len(), 1, "one unknown name: {found:?}");
-        assert_eq!(found[0].name, "cjo_typ");
-        assert_eq!(
-            found[0].suggestion.as_deref(),
-            Some("cjo"),
-            "must point at the nearest known name: {found:?}"
+    fn typos_are_reported_with_a_suggestion_only_when_it_is_safe() {
+        assert!(
+            unknown_params(&entry("diode", "is = 1e-9\nn = 1.8\nrs = 6.0\nm = 0.5", "")).is_empty()
         );
-    }
 
-    /// The message has to read as a suspicion. A lint that says "invalid" about
-    /// a name it cannot prove wrong gets switched off.
-    #[test]
-    fn the_message_names_the_consequence_not_a_verdict() {
-        let found = unknown_params(&entry("opamp", "gain_db = 100.0"));
-        let msg = found[0].message();
-        assert!(msg.contains("did you mean 'gain'"), "{msg}");
-        assert!(msg.contains("default applies"), "{msg}");
-    }
-
-    /// A name with no near neighbour still warns, without a misleading guess.
-    #[test]
-    fn an_unrelated_name_warns_without_a_suggestion() {
-        let found = unknown_params(&entry("analog_switch", "thermal_pad_area_mm2 = 12.0"));
+        let found = unknown_params(&entry("diode", "cjo_typ = 4e-12", ""));
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].suggestion, None, "{found:?}");
-    }
+        assert_eq!(found[0].name, "cjo_typ");
+        assert_eq!(found[0].suggestion.as_deref(), Some("cjo"));
+        assert!(found[0].message().contains("cjo"));
 
-    /// A short real param must never be "corrected" to another short real one.
-    #[test]
-    fn a_known_short_name_is_not_reported_as_a_typo_of_another() {
-        for p in ["is = 1e-9", "n = 1.0", "m = 0.5"] {
-            assert!(
-                unknown_params(&entry("diode", p)).is_empty(),
-                "'{p}' is a real diode param"
-            );
+        // No near neighbour, and a short unknown name (`vf` is one edit from `vj`,
+        // a different physical quantity): warn, but do not guess.
+        for (kind, p) in [
+            ("analog_switch", "thermal_pad_area_mm2 = 12.0"),
+            ("diode", "vf = 2.0"),
+        ] {
+            let found = unknown_params(&entry(kind, p, ""));
+            assert_eq!(found.len(), 1, "{p}");
+            assert_eq!(found[0].suggestion, None, "{found:?}");
         }
     }
 
-    /// A short UNKNOWN name warns but gets no guess. `vf` is a real datasheet
-    /// quantity that hauksbee's diode model does not take, and answering it with
-    /// "did you mean vj?" (one edit away, and a different physical quantity)
-    /// would be a coin flip dressed up as help.
     #[test]
-    fn a_short_unknown_name_warns_without_guessing() {
-        let found = unknown_params(&entry("diode", "vf = 2.0"));
-        assert_eq!(found.len(), 1, "vf is not a param the diode model reads");
-        assert_eq!(found[0].suggestion, None, "{found:?}");
-    }
+    fn law_expressions_define_their_own_params_but_not_runtime_names() {
+        let e = entry("digital", "tie_ohms = 100.0", &law("v_vplus / tie_ohms"));
+        assert!(unknown_params(&e).is_empty(), "{:?}", unknown_params(&e));
 
-    /// The exemption must not extend to names the expression runtime binds for
-    /// itself. `t` is simulation time and is set AFTER the params, so a param
-    /// called `t` is overwritten on every evaluation: worse than unused, and the
-    /// one case where staying quiet would hide a live bug. Same for a
-    /// `state_<name>` flag and for a builtin function name.
-    #[test]
-    fn a_runtime_owned_name_is_not_exempted_by_appearing_in_an_expression() {
-        let src = "[[models]]\nid = \"t\"\nkind = \"digital\"\ndescription = \"t\"\n\
-                   [models.params]\nt = 1.0\nstate_on = 2.0\nmin = 3.0\n\
-                   [[models.behavioral.laws]]\nname = \"l\"\nkind = \"current\"\n\
-                   a = \"vplus\"\nb = \"gnd\"\nexpr = \"min(t, state_on)\"\n";
-        let db: crate::schema::DbFile = toml::from_str(src).expect("fixture parses");
-        let e = db.models.into_iter().next().unwrap();
+        let e = entry(
+            "digital",
+            "t = 1.0\nstate_on = 2.0\nmin = 3.0",
+            &law("min(t, state_on)"),
+        );
         let names: Vec<String> = unknown_params(&e).into_iter().map(|u| u.name).collect();
         for expected in ["t", "state_on", "min"] {
-            assert!(
-                names.iter().any(|n| n == expected),
-                "'{expected}' is bound by the runtime, not read as a param: {names:?}"
-            );
+            assert!(names.iter().any(|n| n == expected), "{expected}: {names:?}");
         }
     }
 
-    /// The behavioral exemption: a law expression defines its own vocabulary, so
-    /// the param it reads is not a typo even though no Rust code names it.
+    /// `<stem>_from_ref` follows its stem only where the binder rewrites it: on
+    /// a behavioral entry. On a plain stamp-path entry nothing reads it.
     #[test]
-    fn a_param_referenced_by_a_law_expression_is_known() {
-        let src = "[[models]]\nid = \"t\"\nkind = \"digital\"\ndescription = \"t\"\n\
-                   [models.params]\ntie_ohms = 100.0\n\
-                   [[models.behavioral.laws]]\nname = \"leak\"\nkind = \"current\"\n\
-                   a = \"vplus\"\nb = \"gnd\"\nexpr = \"v_vplus / tie_ohms\"\n";
-        let db: crate::schema::DbFile = toml::from_str(src).expect("fixture parses");
-        let e = db.models.into_iter().next().unwrap();
-        assert!(
-            unknown_params(&e).is_empty(),
-            "a law's own param must not warn: {:?}",
-            unknown_params(&e)
-        );
+    fn the_from_ref_suffix_follows_its_stem_only_on_a_behavioral_entry() {
+        let extra = "[[models.behavioral.laws]]\nname = \"l\"\nkind = \"current\"\na = \"out\"\nb = \"gnd\"\nexpr = \"0.0\"\n";
+        assert!(unknown_params(&entry("vreg", "vout_from_ref = \"R1\"", extra)).is_empty());
+        for (params, extra) in [
+            ("voutt_from_ref = \"R1\"", extra),
+            ("vout_from_ref = \"R1\"", ""),
+        ] {
+            let found = unknown_params(&entry("vreg", params, extra));
+            assert_eq!(found.len(), 1, "{params}: {found:?}");
+            assert_eq!(found[0].suggestion.as_deref(), Some("vout"), "{found:?}");
+        }
     }
 
-    /// `<stem>_from_ref` is the board-programmable form of `<stem>`, but only on
-    /// the behavioral path, which is the only place the binder rewrites it. On a
-    /// behavioral entry it inherits the stem's known-ness both ways.
-    #[test]
-    fn the_from_ref_suffix_follows_its_stem_on_a_behavioral_entry() {
-        let mk = |params: &str| -> ModelEntry {
-            let src = format!(
-                "[[models]]\nid = \"t\"\nkind = \"vreg\"\ndescription = \"t\"\n\
-                 [models.params]\n{params}\n\
-                 [[models.behavioral.laws]]\nname = \"l\"\nkind = \"current\"\n\
-                 a = \"out\"\nb = \"gnd\"\nexpr = \"0.0\"\n"
-            );
-            let db: crate::schema::DbFile = toml::from_str(&src).expect("fixture parses");
-            db.models.into_iter().next().unwrap()
-        };
-        assert!(unknown_params(&mk("vout_from_ref = \"R1\"")).is_empty());
-        let found = unknown_params(&mk("voutt_from_ref = \"R1\""));
-        assert_eq!(found.len(), 1, "an unknown stem still warns: {found:?}");
-        assert_eq!(
-            found[0].name, "voutt_from_ref",
-            "reports the name as written"
-        );
-        assert_eq!(
-            found[0].suggestion.as_deref(),
-            Some("vout"),
-            "corrects on the stem: {found:?}"
-        );
-    }
-
-    /// The other side of that rule, and the reason it exists: the binder's
-    /// `_from_ref` rewrite sits past an early return for an entry with no
-    /// behavioral block, so on a plain stamp-path vreg the suffixed param is read
-    /// by nobody. Exempting it there would hide the exact defect this lint is for.
-    #[test]
-    fn from_ref_on_a_stamp_path_entry_is_not_exempt() {
-        let found = unknown_params(&entry("vreg", "vout_from_ref = \"R1\""));
-        assert_eq!(
-            found.len(),
-            1,
-            "no behavioral block means no rewrite, so nothing reads it: {found:?}"
-        );
-        assert_eq!(found[0].name, "vout_from_ref");
-        assert_eq!(found[0].suggestion.as_deref(), Some("vout"), "{found:?}");
-    }
-
-    /// Every parameter name hauksbee ships must be in the vocabulary, or the
-    /// lint cries wolf on the built-in database the moment anyone runs it.
     #[test]
     fn every_shipped_db_param_name_is_known() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
@@ -571,27 +489,21 @@ mod tests {
             }
             let text = std::fs::read_to_string(&path).expect("db file is readable");
             let Ok(db) = toml::from_str::<crate::schema::DbFile>(&text) else {
-                // Not every db/*.toml is a [[models]] file (pin_rules, ignore).
                 continue;
             };
             files += 1;
             for e in &db.models {
                 for u in unknown_params(e) {
                     offenders.push(format!(
-                        "{}: model '{}' ({:?}): {}",
-                        path.file_name().unwrap().to_string_lossy(),
+                        "{}: model '{}': {}",
+                        path.display(),
                         e.id,
-                        e.kind,
                         u.message()
                     ));
                 }
             }
         }
         assert!(files > 0, "no [[models]] db file was read from {dir:?}");
-        assert!(
-            offenders.is_empty(),
-            "the shipped db must lint clean, or the warning is noise:\n{}",
-            offenders.join("\n")
-        );
+        assert!(offenders.is_empty(), "{}", offenders.join("\n"));
     }
 }

@@ -41,6 +41,8 @@ mod inkplate_class_demo;
 mod mcu_descriptor_dir;
 #[path = "multiunit_keying.rs"]
 mod multiunit_keying;
+#[path = "olimex_burst_calibration.rs"]
+mod olimex_burst_calibration;
 #[path = "packaged_asset_sync.rs"]
 mod packaged_asset_sync;
 #[path = "peripherals.rs"]

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hauksbee versus ngspice benchmark result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at_utc",
+    "threshold_status",
+    "manifest_sha256",
+    "tools",
+    "launch_probes",
+    "timing_policy",
+    "machine",
+    "eligibility",
+    "cases",
+    "raw_case_table"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "generated_at_utc": {"type": "string"},
+    "threshold_status": {"type": "string", "const": "not_set_after_first_gate"},
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timing_policy": {"type": "string"},
+    "eligibility": {
+      "type": "object",
+      "required": ["eligible_count", "attempted_count", "measured_count", "invalid_count", "refusal_record_count"]
+    },
+    "cases": {"type": "array", "minItems": 1},
+    "raw_case_table": {"type": "array", "minItems": 1}
+  }
+}

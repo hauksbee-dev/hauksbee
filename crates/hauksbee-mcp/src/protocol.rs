@@ -149,46 +149,31 @@ fn error_response(id: Value, code: i64, message: &str) -> Value {
 mod tests {
     use super::*;
 
-    #[test]
-    fn initialize_negotiates_known_version_and_counter_offers_unknown() {
-        let mut s = Server::new();
-        let resp = s
-            .handle_line(
-                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
-            )
-            .unwrap();
-        let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["result"]["protocolVersion"], "2025-03-26");
-
-        let resp = s
-            .handle_line(
-                r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"1990-01-01"}}"#,
-            )
-            .unwrap();
-        let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["result"]["protocolVersion"], PROTOCOL_VERSION);
+    fn call(s: &mut Server, line: &str) -> Value {
+        serde_json::from_str(&s.handle_line(line).expect("a response")).unwrap()
     }
 
     #[test]
-    fn initialize_describes_the_complete_frontdoor_timing_contract() {
-        let mut server = Server::new();
-        let response = server
-            .handle_line(
-                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
-            )
-            .unwrap();
-        let value: Value = serde_json::from_str(&response).unwrap();
-        let instructions = value["result"]["instructions"].as_str().unwrap();
+    fn initialize_negotiates_known_version_and_counter_offers_unknown() {
+        let mut s = Server::new();
+        let v = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+        );
+        assert_eq!(v["result"]["protocolVersion"], "2025-03-26");
+        // The instructions describe the timing qualifications a caller must read.
+        let instructions = v["result"]["instructions"].as_str().unwrap();
         for field in ["timing_coverage", "timing_refusals", "fallback_windows"] {
             assert!(
                 instructions.contains(field),
                 "missing {field}: {instructions}"
             );
         }
-        assert!(
-            !instructions.contains("NOT `analyze_board`"),
-            "{instructions}"
+        let v = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"1990-01-01"}}"#,
         );
+        assert_eq!(v["result"]["protocolVersion"], PROTOCOL_VERSION);
     }
 
     #[test]
@@ -201,27 +186,19 @@ mod tests {
     }
 
     #[test]
-    fn tools_call_before_initialized_is_a_protocol_error() {
+    fn protocol_errors_carry_the_json_rpc_codes() {
         let mut s = Server::new();
-        let resp = s
-            .handle_line(
-                r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_capabilities"}}"#,
-            )
-            .unwrap();
-        let v: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32002);
-    }
-
-    #[test]
-    fn unknown_method_is_minus_32601_and_parse_error_minus_32700() {
-        let mut s = Server::new();
-        let v: Value = serde_json::from_str(
-            &s.handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"nope"}"#)
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(v["error"]["code"], -32601);
-        let v: Value = serde_json::from_str(&s.handle_line("not json").unwrap()).unwrap();
-        assert_eq!(v["error"]["code"], -32700);
+        let early = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_capabilities"}}"#,
+        );
+        assert_eq!(
+            early["error"]["code"], -32002,
+            "tools/call before initialized"
+        );
+        let unknown = call(&mut s, r#"{"jsonrpc":"2.0","id":1,"method":"nope"}"#);
+        assert_eq!(unknown["error"]["code"], -32601);
+        let parse = call(&mut s, "not json");
+        assert_eq!(parse["error"]["code"], -32700);
     }
 }

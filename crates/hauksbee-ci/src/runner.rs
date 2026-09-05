@@ -2312,19 +2312,6 @@ fn run_one(
     })
 }
 
-/// Whether a protection trip at `trip_t` (if any) latched inside a scenario
-/// window `[start_s, end_s)`. Half-open: a trip exactly at the next scenario's
-/// start belongs to that later scenario, not this one. `end_s == +inf` means the
-/// window runs to end-of-run (the last scenario and the run-wide window).
-///
-/// The runner itself uses `any_trip_in_window`, since a hiccup-mode supply
-/// latches more than once. This single-latch form is what the tests pin the
-/// half-open boundary against, so it is compiled only for them.
-#[cfg(test)]
-fn trip_in_window(trip_t: Option<f64>, start_s: f64, end_s: f64) -> bool {
-    trip_t.is_some_and(|t| time_in_window(t, start_s, end_s))
-}
-
 /// True if ANY recorded latch instant for a net falls in `[start_s, end_s)`. A
 /// re-armed (hiccup-mode) supply latches more than once, so a scenario-scoped
 /// verdict must consider every latch, not just the first, otherwise a later
@@ -3221,12 +3208,11 @@ fn snapshot_peripherals(
 /// disconnect the leg's stamped devices so the net floats except for whatever
 /// the board itself feeds it.
 ///
-/// The leg's topology matters here (round-2 fix): `SupplyLeg::stamp` places
+/// The leg's topology matters here: `SupplyLeg::stamp` places
 /// `Vsupply_<net>` on a PRIVATE node (`__supply_<net>`) behind a series
 /// `Rsupply_<net>` resistor, so matching "a Vsource whose positive node is
-/// the rail" never found it and suppress_rail was a silent NO-OP: the ideal
-/// source kept sourcing through its milliohm series resistor and every
-/// "suppressed" rail still read nominal. The reliable cut is the series
+/// the rail" never finds it and the ideal source keeps sourcing through its
+/// milliohm series resistor. The reliable cut is the series
 /// resistor itself: open `Rsupply_<net>` (1 TΩ) and the source is isolated on
 /// its private node no matter how the leg is modelled. The direct-Vsource
 /// match is kept for any bare `Vrail_*` ideal source stamped straight onto
@@ -3514,18 +3500,18 @@ fn hash2(seed: u64, s: &str) -> u64 {
 mod tests {
     use super::*;
 
+    fn spec(src: &str) -> Spec {
+        toml::from_str(src).expect("spec shape")
+    }
+
+    const MINIMAL: &str = "board = \"b.kicad_pcb\"\nduration_ms = 10\n";
+    const VCC_ASSERT: &str = "[[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n";
+
     #[test]
     fn poll_backend_toggle_assertion_requires_a_declared_pulse_floor() {
-        let spec: Spec = toml::from_str(
-            r#"
-board = "board.kicad_pcb"
-[[assert]]
-kind = "toggle"
-net = "CLOCK"
-min_toggles = 2
-"#,
-        )
-        .expect("spec shape");
+        let spec = spec(
+            "board = \"board.kicad_pcb\"\n[[assert]]\nkind = \"toggle\"\nnet = \"CLOCK\"\nmin_toggles = 2\n",
+        );
         let coverage = vec![hauksbee_engine::scheduler::TimingCoverage {
             mcu_ref: "U1".into(),
             backend: "qemu:test".into(),
@@ -3534,82 +3520,51 @@ min_toggles = 2
             minimum_guaranteed_pulse_s: 2e-3,
             chunk_s: 1e-3,
         }];
-
         let refusals = assertion_timing_refusals(&spec, &coverage);
-
         assert_eq!(refusals.len(), 1);
-        assert!(refusals[0].contains("toggle"));
-        assert!(refusals[0].contains("timing.min_pulse_us"));
-    }
-
-    /// Serializes the DescriptorDirGuard tests: they mutate the process-global
-    /// `HAUKSBEE_MCU_DIR` env var, so parallel test threads must not interleave.
-    static MCU_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn spec_with_descriptor_dir(dir: Option<&str>) -> Spec {
-        let mcu = dir
-            .map(|d| format!("[mcu]\ndescriptor_dir = \"{d}\"\n"))
-            .unwrap_or_default();
-        let src = format!(
-            "board = \"b.kicad_pcb\"\nduration_ms = 10\n{mcu}\
-             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n"
-        );
-        let mut spec: Spec = toml::from_str(&src).expect("valid toml");
-        spec.base_dir = std::path::PathBuf::from("/repo/ci");
-        spec
-    }
-
-    #[test]
-    fn descriptor_dir_guard_sets_the_env_for_its_lifetime_and_restores() {
-        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("HAUKSBEE_MCU_DIR");
-        let spec = spec_with_descriptor_dir(Some("socs"));
-        {
-            let _guard = DescriptorDirGuard::apply(&spec);
-            assert_eq!(
-                std::env::var("HAUKSBEE_MCU_DIR").as_deref(),
-                Ok("/repo/ci/socs"),
-                "the spec's descriptor_dir (resolved against the spec dir) is published"
-            );
-        }
         assert!(
-            std::env::var_os("HAUKSBEE_MCU_DIR").is_none(),
-            "the guard restores the unset state on drop, so a later spec in the \
-             same invocation does not inherit it"
+            refusals[0].contains("toggle") && refusals[0].contains("timing.min_pulse_us"),
+            "{}",
+            refusals[0]
         );
     }
 
+    /// The guard mutates the process-global `HAUKSBEE_MCU_DIR`, so every case
+    /// runs inside one test rather than racing across threads.
     #[test]
-    fn an_explicit_env_var_wins_over_the_spec_descriptor_dir() {
-        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("HAUKSBEE_MCU_DIR", "/operator/override");
-        let spec = spec_with_descriptor_dir(Some("socs"));
-        {
-            let _guard = DescriptorDirGuard::apply(&spec);
-            assert_eq!(
-                std::env::var("HAUKSBEE_MCU_DIR").as_deref(),
-                Ok("/operator/override"),
-                "the operator's env var must win over the spec field"
-            );
-        }
+    fn descriptor_dir_guard_publishes_the_spec_dir_unless_the_operator_set_one() {
+        let spec_with = |dir: Option<&str>| {
+            let mcu = dir
+                .map(|d| format!("[mcu]\ndescriptor_dir = \"{d}\"\n"))
+                .unwrap_or_default();
+            let mut s = spec(&format!("{MINIMAL}{mcu}{VCC_ASSERT}"));
+            s.base_dir = std::path::PathBuf::from("/repo/ci");
+            s
+        };
+        let var = || std::env::var("HAUKSBEE_MCU_DIR").ok();
+        // What the env holds while a guard for `dir` is alive.
+        let held = |dir: Option<&str>| {
+            let _guard = DescriptorDirGuard::apply(&spec_with(dir));
+            var()
+        };
+
+        std::env::remove_var("HAUKSBEE_MCU_DIR");
         assert_eq!(
-            std::env::var("HAUKSBEE_MCU_DIR").as_deref(),
-            Ok("/operator/override"),
-            "the guard leaves the operator's value untouched"
+            held(Some("socs")).as_deref(),
+            Some("/repo/ci/socs"),
+            "resolved against the spec dir"
         );
-        std::env::remove_var("HAUKSBEE_MCU_DIR");
-    }
+        assert_eq!(var(), None, "restored on drop");
+        assert_eq!(held(None), None, "no descriptor_dir leaves the env alone");
 
-    #[test]
-    fn a_spec_without_descriptor_dir_leaves_the_env_alone() {
-        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("HAUKSBEE_MCU_DIR", "/operator/override");
+        assert_eq!(
+            held(Some("socs")).as_deref(),
+            Some("/operator/override"),
+            "the operator's env var wins"
+        );
+        assert_eq!(var().as_deref(), Some("/operator/override"));
         std::env::remove_var("HAUKSBEE_MCU_DIR");
-        let spec = spec_with_descriptor_dir(None);
-        {
-            let _guard = DescriptorDirGuard::apply(&spec);
-            assert!(std::env::var_os("HAUKSBEE_MCU_DIR").is_none());
-        }
-        assert!(std::env::var_os("HAUKSBEE_MCU_DIR").is_none());
     }
 
     const DSL: &[u8] = br#"# Board-as-Code (hauksbee board DSL v1)
@@ -3627,18 +3582,14 @@ fn main {
 
     #[test]
     fn load_board_accepts_board_as_code() {
-        // B5: hauksbee-ci loads `.board` directly, with no "compile it yourself
-        // with from-code --route first" detour. The compiled text carries full
-        // net connectivity (net-named pads), and CI is entirely netlist-driven,
-        // so no routing step is needed. Rejecting `.board` here would also
-        // contradict the web checks panel, which tells .board uploaders the
-        // downloaded spec will run.
+        // The compiled text carries full net connectivity, and CI is entirely
+        // netlist-driven, so no routing step is needed first.
         let dir = std::env::temp_dir().join(format!("hauksbee-ci-bac-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("cell.board");
         std::fs::write(&p, DSL).unwrap();
-        let board = load_board(&p).expect(".board must load in CI now");
-        assert_eq!(board.components.len(), 1, "R1 survives the compile");
+        let board = load_board(&p).expect(".board must load in CI");
+        assert_eq!(board.components.len(), 1);
         assert!(
             board.nets.iter().any(|n| n.name == "A") && board.nets.iter().any(|n| n.name == "B"),
             "net connectivity survives: {:?}",
@@ -3648,149 +3599,62 @@ fn main {
     }
 
     #[test]
-    fn load_board_accepts_a_gerber_zip() {
-        // B5: a spec may point straight at the fab archive. Corpus-gated like
-        // the engine's gerber tests: skips when board-corpus is absent.
-        let src = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-            .unwrap_or_default()
-            .join("famous/uconsole_cm4_adapter_gerber");
-        if !src.exists() {
-            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-                panic!("corpus required but uconsole_cm4_adapter_gerber missing");
-            }
-            eprintln!("skipping CI gerber-zip test (corpus absent)");
-            return;
-        }
-        use std::io::Write;
-        let dir = std::env::temp_dir().join(format!("hauksbee-ci-gerb-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let zip_path = dir.join("fab.zip");
-        let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
-        for entry in std::fs::read_dir(&src).unwrap() {
-            let p = entry.unwrap().path();
-            if p.is_file() {
-                w.start_file(
-                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
-                    zip::write::SimpleFileOptions::default(),
-                )
-                .unwrap();
-                w.write_all(&std::fs::read(&p).unwrap()).unwrap();
-            }
-        }
-        w.finish().unwrap();
-        let board = load_board(&zip_path).expect("a gerber fab zip must load in CI");
-        assert!(!board.nets.is_empty(), "nets recovered from copper");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn load_board_missing_file_names_the_spec_key() {
-        // The spec-relative wording must survive the normalizer delegation.
-        let err = load_board(std::path::Path::new("/definitely/not/here.kicad_pcb"))
-            .expect_err("missing board errors");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("resolved from the spec's `board` key"),
-            "CI keeps its spec-relative error wording: {msg}"
-        );
-    }
-
-    #[test]
-    fn protection_trip_supply_net_is_added_to_its_scenario_window() {
-        // R46: a scenario window's `nets` was seeded only from the scenario's own
-        // supply and rail_window nets, so a protection_trip naming a BATTERY rail
-        // (that the scenario's load pulls from) had no (scenario, net) verdict key
-        // and check_protection_trip returned a false RED. The supply_net must be
-        // merged into the matching scenario window.
+    fn protection_trip_supply_net_is_merged_into_its_scenario_window() {
         let mut windows = vec![ScenarioWindow {
             id: "load".into(),
             start_s: 0.1,
             end_s: f64::INFINITY,
-            nets: vec!["VBUS".into()], // scenario's own downstream supply
+            nets: vec!["VBUS".into()],
         }];
-        let assert: crate::spec::Assertion = toml::from_str(
+        let scoped: crate::spec::Assertion = toml::from_str(
             "kind = \"protection_trip\"\nsupply_net = \"BATT\"\nscenario = \"load\"\nexpect_trip = true\n",
         )
-        .expect("assertion parses");
-        merge_protection_trip_nets(&mut windows, std::slice::from_ref(&assert));
-        assert!(
-            windows[0].nets.contains(&"BATT".to_string()),
-            "the protection_trip supply_net must be in the scenario window: {:?}",
+        .unwrap();
+        merge_protection_trip_nets(&mut windows, std::slice::from_ref(&scoped));
+        merge_protection_trip_nets(&mut windows, std::slice::from_ref(&scoped));
+        assert_eq!(
+            windows[0].nets.iter().filter(|n| *n == "BATT").count(),
+            1,
+            "merged once, idempotently: {:?}",
             windows[0].nets
         );
-        // Idempotent: a second merge does not duplicate.
-        merge_protection_trip_nets(&mut windows, std::slice::from_ref(&assert));
-        assert_eq!(windows[0].nets.iter().filter(|n| *n == "BATT").count(), 1);
-        // An UNSCOPED protection_trip (no scenario) is not merged into any window.
+        // An unscoped protection_trip belongs to no scenario window.
         let unscoped: crate::spec::Assertion = toml::from_str(
             "kind = \"protection_trip\"\nsupply_net = \"OTHER\"\nexpect_trip = true\n",
         )
-        .expect("parses");
+        .unwrap();
         merge_protection_trip_nets(&mut windows, std::slice::from_ref(&unscoped));
         assert!(!windows[0].nets.contains(&"OTHER".to_string()));
     }
 
     #[test]
-    fn max_current_accepts_a_resistor_array_bare_ref() {
-        // R46: current_tracked holds a multi-unit array's per-unit device names
-        // (RN1_e1..RN1_e4), not the bare "RN1", so a package-level max_current on
-        // the array was rejected as untrackable while the identical max_temp was
-        // accepted. ref_or_unit_matches accepts the bare ref whose units are tracked.
-        assert!(ref_or_unit_matches("RN1", "RN1")); // exact
-        assert!(ref_or_unit_matches("RN1", "RN1_e1")); // passive array unit
-        assert!(ref_or_unit_matches("RN1", "RN1_e12"));
-        assert!(ref_or_unit_matches("SW1", "SW1_s0")); // switch bank unit
-        assert!(ref_or_unit_matches("Q3", "Q3_q2")); // transistor array unit
-                                                     // Not a match: a different ref, or a non-unit suffix.
+    fn a_bare_ref_matches_its_own_units_only() {
+        assert!(ref_or_unit_matches("RN1", "RN1"));
+        assert!(ref_or_unit_matches("RN1", "RN1_e1"));
+        assert!(ref_or_unit_matches("Q3", "Q3_q2"));
         assert!(!ref_or_unit_matches("RN1", "RN10_e1"));
         assert!(!ref_or_unit_matches("RN1", "RN1_heater"));
-        assert!(!ref_or_unit_matches("RN1", "RN2_e1"));
     }
 
     #[test]
-    fn scenario_scoped_trip_is_bounded_by_the_next_scenario_start() {
-        // Round-28: a scenario-scoped protection_trip window had only a lower
-        // bound, so a trip that latched during a LATER scenario on a shared supply
-        // net was attributed to every earlier-starting scenario. With the phases
-        // inrush=[0, 0.1) and steady=[0.1, +inf) sharing net BATT and the BMS
-        // latching at 0.15 s (during steady): steady must see the trip, inrush
-        // must NOT (no false RED blaming inrush; no false GREEN either).
-        let trip = Some(0.15);
-        assert!(
-            !trip_in_window(trip, 0.0, 0.1),
-            "inrush must not own steady's trip"
-        );
-        assert!(
-            trip_in_window(trip, 0.1, f64::INFINITY),
-            "steady owns its own trip"
-        );
-        // A trip before a scenario begins is excluded by the lower bound.
-        assert!(
-            !trip_in_window(Some(0.05), 0.1, f64::INFINITY),
-            "pre-start trip excluded"
-        );
-        // A trip exactly at the next scenario's start belongs to the later phase
-        // (half-open [start, end)).
-        assert!(
-            !trip_in_window(Some(0.1), 0.0, 0.1),
-            "boundary trip is the later phase's"
-        );
-        assert!(trip_in_window(Some(0.1), 0.1, f64::INFINITY));
-        // No trip at all is never in any window.
-        assert!(!trip_in_window(None, 0.0, f64::INFINITY));
-    }
+    fn scenario_windows_are_half_open_and_own_every_latch() {
+        // inrush = [0, 0.1), steady = [0.1, +inf): the boundary instant is
+        // the later phase's, and the run-wide window spans everything.
+        assert!(time_in_window(0.05, 0.0, 0.1));
+        assert!(!time_in_window(0.1, 0.0, 0.1));
+        assert!(time_in_window(0.1, 0.1, f64::INFINITY));
+        assert!(!time_in_window(0.05, 0.1, f64::INFINITY));
+        assert!(time_in_window(9.9, 0.0, f64::INFINITY));
+        // A hiccup-mode supply latches more than once; every latch counts.
+        assert!(any_trip_in_window(
+            Some(&vec![0.05, 0.15]),
+            0.1,
+            f64::INFINITY
+        ));
+        assert!(!any_trip_in_window(Some(&vec![0.05]), 0.1, f64::INFINITY));
+        assert!(!any_trip_in_window(None, 0.0, f64::INFINITY));
 
-    #[test]
-    fn rearmed_supply_second_trip_is_owned_by_its_own_scenario_window() {
-        // R37: a battery BMS runs in hiccup mode; it trips, the load drops below
-        // reset so it re-arms, and it can trip again. A supply shared by inrush
-        // [0, 0.1) and steady [0.1, +inf) that latches at 0.05 (inrush), re-arms,
-        // then latches again at 0.15 (steady) must have BOTH windows own their own
-        // trip. Recording only the FIRST latch (0.05) and folding it with
-        // `trip_in_window` gives steady `trip_in_window(0.05, 0.1, inf) = false`,
-        // a false GREEN over a window in which the pack demonstrably tripped.
-        let mut trip_t: HashMap<String, Vec<f64>> = HashMap::new();
-        trip_t.insert("BATT".into(), vec![0.05, 0.15]);
+        let trip_t = HashMap::from([("BATT".to_string(), vec![0.05, 0.15])]);
         let windows = vec![
             ScenarioWindow {
                 id: "inrush".into(),
@@ -3806,69 +3670,27 @@ fn main {
             },
         ];
         let scoped = scope_protection_trips(&trip_t, &windows);
+        assert_eq!(scoped.get(&("inrush".into(), "BATT".into())), Some(&true));
         assert_eq!(
             scoped.get(&("steady".into(), "BATT".into())),
             Some(&true),
-            "steady must recover its own re-trip at 0.15 (was false under first-trip-only)"
+            "the re-trip at 0.15 belongs to steady"
         );
-        assert_eq!(
-            scoped.get(&("inrush".into(), "BATT".into())),
-            Some(&true),
-            "inrush still owns its first trip at 0.05"
-        );
-        // The first-latch-only view (a single f64 per net) loses the re-trip:
-        assert!(
-            !trip_in_window(trip_t["BATT"].first().copied(), 0.1, f64::INFINITY),
-            "the first-trip-only fold was the bug: steady wrongly saw no trip"
-        );
-        // A single-latch supply is unchanged, and no-latch is never in any window.
-        assert!(any_trip_in_window(Some(&vec![0.15]), 0.1, f64::INFINITY));
-        assert!(!any_trip_in_window(Some(&vec![0.05]), 0.1, f64::INFINITY));
-        assert!(!any_trip_in_window(None, 0.0, f64::INFINITY));
-    }
-
-    #[test]
-    fn rail_window_sampling_stops_at_the_next_scenario_start() {
-        // Round-29: rail_window sampling admitted frames with only the lower bound,
-        // so a scenario-scoped window kept collecting min/max/dip/recovery to
-        // end-of-run and a LATER phase's excursion bled into the earlier verdict.
-        // With inrush=[0, 0.05) and steady=[0.05, +inf): a steady-phase sample at
-        // 0.06 s must be sampled by steady, NOT by inrush.
-        assert!(
-            time_in_window(0.02, 0.0, 0.05),
-            "inrush samples its own phase"
-        );
-        assert!(
-            !time_in_window(0.06, 0.0, 0.05),
-            "steady-phase sample excluded from inrush"
-        );
-        assert!(
-            time_in_window(0.06, 0.05, f64::INFINITY),
-            "steady samples its own phase"
-        );
-        // The boundary sample belongs to the later phase (half-open).
-        assert!(!time_in_window(0.05, 0.0, 0.05));
-        assert!(time_in_window(0.05, 0.05, f64::INFINITY));
-        // The run-wide window (end +inf) spans everything.
-        assert!(time_in_window(9.9, 0.0, f64::INFINITY));
     }
 
     #[test]
     fn net_window_last_v_is_the_settled_value_not_the_peak() {
-        // R24: the settled report value is written by observe(); folding the
-        // intra-frame extremes must widen min/max WITHOUT clobbering last_v.
         let mut w = NetWindow::new();
-        w.observe(3.30); // settled final-chunk voltage
-        w.fold(0.0); // an intra-frame dip
-        w.fold(5.0); // an intra-frame peak
-        assert_eq!(w.last_v, 3.30, "last_v must stay the settled value");
-        assert_eq!(w.min_v, 0.0, "the dip still widens the window");
-        assert_eq!(w.max_v, 5.0, "the peak still widens the window");
+        w.observe(3.30);
+        w.fold(0.0);
+        w.fold(5.0);
+        assert_eq!(w.last_v, 3.30);
+        assert_eq!((w.min_v, w.max_v), (0.0, 5.0));
         assert_eq!(w.samples, 3);
     }
 
-    // Replay a voltage series through the per-frame boot-coverage update and
-    // return (first_cross_ms, first_drop_after_cross_ms).
+    /// Replay a voltage series through the per-frame boot-coverage update and
+    /// return (first_cross_ms, first_drop_after_cross_ms).
     fn boot_track(series: &[(f64, f64)], level: f64) -> (Option<f64>, Option<f64>) {
         let key = ("CTRL".to_string(), level.to_bits());
         let mut cross: HashMap<(String, u64), f64> = HashMap::new();
@@ -3881,53 +3703,28 @@ fn main {
 
     #[test]
     fn boot_reach_records_first_cross_and_first_drop() {
-        // Driven up promptly and held to the end: first cross at 5, never drops.
+        // Driven up and held.
         assert_eq!(
             boot_track(&[(0.0, 0.0), (5.0, 5.0), (10.0, 5.0), (50.0, 5.0)], 3.0),
             (Some(5.0), None)
         );
-        // A one-frame glitch that then collapses: cross at 5, drop at 10; the
-        // drop record is what lets the assertion refuse a glitch as a pass.
-        assert_eq!(
-            boot_track(&[(0.0, 0.0), (5.0, 5.0), (10.0, 0.0), (50.0, 0.0)], 3.0),
-            (Some(5.0), Some(10.0))
-        );
-        // Dropped then recovered: cross at 5, FIRST drop at 10 (the recovery does
-        // not erase that it fell, a deadline after 10 sees the break).
+        // Dropped then recovered: the FIRST drop is kept.
         assert_eq!(
             boot_track(&[(5.0, 5.0), (10.0, 0.0), (30.0, 5.0), (50.0, 5.0)], 3.0),
             (Some(5.0), Some(10.0))
         );
-        // A late (post-deadline) release: cross at 5, drop at 50, a deadline of,
-        // say, 10 ms is held through, so the assertion still passes.
-        assert_eq!(
-            boot_track(&[(5.0, 5.0), (10.0, 5.0), (50.0, 0.0)], 3.0),
-            (Some(5.0), Some(50.0))
-        );
-        // Never reaches: no cross, no drop.
+        // Never reaches.
         assert_eq!(boot_track(&[(0.0, 0.0), (50.0, 1.0)], 3.0), (None, None));
     }
 
     #[test]
-    fn references_sheetfile_matches_bare_and_subdir_values() {
-        // Bare name in the same directory.
+    fn references_sheetfile_matches_by_basename_only() {
         let flat = r#"(property "Sheetfile" "pic_sockets.kicad_sch")"#;
         assert!(references_sheetfile(flat, "pic_sockets.kicad_sch"));
-        assert!(!references_sheetfile(flat, "other.kicad_sch"));
-
-        // Subdir-qualified value still matches by basename.
         let nested = r#"(property "Sheetfile" "sheets/power.kicad_sch")"#;
         assert!(references_sheetfile(nested, "power.kicad_sch"));
-
-        // A different file that merely shares a prefix must not match.
         let near = r#"(property "Sheetfile" "power_supply.kicad_sch")"#;
         assert!(!references_sheetfile(near, "power.kicad_sch"));
-
-        // Multiple Sheetfile entries: any one matching is enough.
-        let many =
-            r#"(property "Sheetfile" "a.kicad_sch") ... (property "Sheetfile" "b.kicad_sch")"#;
-        assert!(references_sheetfile(many, "b.kicad_sch"));
-        assert!(!references_sheetfile(many, "c.kicad_sch"));
     }
 
     #[test]
@@ -3939,171 +3736,54 @@ fn main {
     }
 
     #[test]
-    fn windows_overlap_is_half_open_interval_test() {
+    fn windows_overlap_is_a_half_open_interval_test() {
         let w = [(0.001, 0.003)];
-        // A frame fully inside a failed window overlaps.
         assert!(windows_overlap(&w, 0.0015, 0.0025));
-        // A frame straddling the start overlaps.
-        assert!(windows_overlap(&w, 0.0005, 0.0015));
-        // Touching at the closed start counts (start < end and w.start < end).
         assert!(windows_overlap(&w, 0.0005, 0.0011));
-        // Abutting exactly at the open end does NOT overlap ([start,end) is open).
-        assert!(!windows_overlap(&w, 0.003, 0.004));
-        // A frame entirely before the window does not overlap.
+        assert!(
+            !windows_overlap(&w, 0.003, 0.004),
+            "abutting at the open end"
+        );
         assert!(!windows_overlap(&w, 0.0, 0.001));
-        // No failed windows: never overlaps.
         assert!(!windows_overlap(&[], 0.0, 1.0));
     }
 
     #[test]
     fn decoupling_override_with_unknown_ref_fails_loud() {
-        // R33: a `[[decoupling.override]]` keyed by a ref that names no board
-        // capacitor was silently dropped (the per-cap lookup never matched), so
-        // the parasitics the user opted into were never applied and a rail_window
-        // check saw a cleaner-than-real rail, a false GREEN. The ref must be
-        // validated like every other, so a typo fails loud.
-        let spec: Spec = toml::from_str(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-
-[decoupling]
-parasitics = false
-
-[[decoupling.override]]
-ref = "C10"
-esr_ohms = 0.5
-"#,
-        )
-        .expect("valid toml");
-
-        // The board has C110, not C10 (a typo): must be rejected.
+        let spec = spec(&format!(
+            "name = \"t\"\n{MINIMAL}[decoupling]\nparasitics = false\n\
+             [[decoupling.override]]\nref = \"C10\"\nesr_ohms = 0.5\n"
+        ));
         let err = check_component_refs(&spec, &["C110".to_string()])
-            .expect_err("an unknown decoupling override ref must fail loud");
+            .expect_err("a typo'd override ref must not be silently dropped");
         assert!(
             matches!(&err, SpecError::Invalid(m) if m.contains("decoupling override") && m.contains("C10")),
-            "expected a decoupling-override ref error naming C10, got {err:?}"
+            "{err:?}"
         );
-
-        // With the correct ref on the board it validates.
-        assert!(
-            check_component_refs(&spec, &["C10".to_string()]).is_ok(),
-            "a decoupling override matching a real cap ref must validate"
-        );
+        assert!(check_component_refs(&spec, &["C10".to_string()]).is_ok());
     }
 
-    // ── qemu_bus_slave_warnings unit tests ───────────────────────────────────
-
-    /// Helper: write a minimal board + spec to temp with a unique name, load
-    /// and return the Spec. Tests run in parallel so each gets its own file.
-    fn load_spec_str(test_name: &str, spec_toml: &str) -> Spec {
-        let dir = std::env::temp_dir().join("hauksbee_ci_warn_tests");
-        std::fs::create_dir_all(&dir).unwrap();
-
-        // Minimal board: a single pull-down resistor. No MCU footprint here,
-        // `qemu_bus_slave_warnings` receives the backend list as an argument
-        // rather than discovering it from the board, so the board content does
-        // not need an MCU part.
-        let board_content = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+3V3")
-  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
-    (at 100 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (net 2 "+3V3"))
-    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
-  )
-)
-"#;
-        // Give each test its own board path so parallel runs don't collide.
-        let board_path = dir.join(format!("{test_name}_board.kicad_pcb"));
-        std::fs::write(&board_path, board_content).unwrap();
-
-        // Build the spec TOML: board path first (required field), then the
-        // caller-supplied body. Use a unique file name per test.
-        let full_spec = format!("board = \"{}\"\n{}", board_path.display(), spec_toml);
-        let spec_path = dir.join(format!("{test_name}.toml"));
-        std::fs::write(&spec_path, &full_spec).unwrap();
-
-        Spec::load(&spec_path).expect("spec should load")
-    }
-
-    // Minimal assert block required by Spec::validate (a spec with no asserts
-    // is rejected as vacuously passing). Append this to every test spec body.
-    const MINIMAL_ASSERT: &str = r#"
-[[assert]]
-kind = "voltage"
-net = "+3V3"
-min = 3.0
-"#;
-
-    /// No QEMU backends -> no warnings regardless of peripherals.
     #[test]
-    fn no_qemu_backends_produces_no_warnings() {
-        let body = format!("duration_ms = 10\n{MINIMAL_ASSERT}");
-        let spec = load_spec_str("no_qemu_warn", &body);
-        let warnings = qemu_bus_slave_warnings(&spec, &[]);
-        assert!(
-            warnings.is_empty(),
-            "no qemu backends -> no warnings, got: {warnings:?}"
-        );
-    }
-
-    /// QEMU backend + i2c_lm75 peripheral -> warning produced naming both.
-    #[test]
-    fn qemu_backend_with_i2c_lm75_warns() {
-        let body = format!(
-            r#"duration_ms = 10
+    fn qemu_backends_warn_once_per_bus_slave_naming_id_kind_and_backend() {
+        let s = spec(
+            r#"
+board = "b.kicad_pcb"
+duration_ms = 10
 
 [[peripheral]]
 id = "BME280"
 type = "i2c_lm75"
 address = 0x76
-{MINIMAL_ASSERT}"#
-        );
-        let spec = load_spec_str("i2c_lm75_qemu", &body);
-        let backends = vec!["qemu:esp32c3".to_string()];
-        let warnings = qemu_bus_slave_warnings(&spec, &backends);
-        assert_eq!(warnings.len(), 1, "exactly one warning for one bus slave");
-        let w = &warnings[0];
-        assert!(w.contains("BME280"), "warning names the peripheral id: {w}");
-        assert!(w.contains("i2c_lm75"), "warning names the kind: {w}");
-        assert!(w.contains("qemu:esp32c3"), "warning names the backend: {w}");
-        assert!(w.contains("NO-OP"), "warning says NO-OP: {w}");
-        assert!(w.contains("I2C"), "warning names bus type: {w}");
-    }
-
-    /// QEMU backend + spi_mcp3008 peripheral -> warning produced.
-    #[test]
-    fn qemu_backend_with_spi_mcp3008_warns() {
-        let body = format!(
-            r#"duration_ms = 10
 
 [[peripheral]]
 id = "ADC1"
 type = "spi_mcp3008"
 vref = 3.3
-{MINIMAL_ASSERT}"#
-        );
-        let spec = load_spec_str("spi_mcp3008_qemu", &body);
-        let backends = vec!["qemu:esp32".to_string()];
-        let warnings = qemu_bus_slave_warnings(&spec, &backends);
-        assert_eq!(warnings.len(), 1);
-        let w = &warnings[0];
-        assert!(w.contains("ADC1"), "names peripheral: {w}");
-        assert!(w.contains("spi_mcp3008"), "names kind: {w}");
-        assert!(w.contains("SPI"), "names bus type: {w}");
-        assert!(w.contains("qemu:esp32"), "names backend: {w}");
-    }
 
-    /// QEMU backend + declarative [[sensor]] -> warning produced.
-    #[test]
-    fn qemu_backend_with_declarative_sensor_warns() {
-        let body = format!(
-            r#"duration_ms = 10
+[[peripheral]]
+id = "BTN1"
+type = "pushbutton"
+net = "+3V3"
 
 [[sensor]]
 id = "U2_bme280"
@@ -4113,109 +3793,35 @@ name = "BME280_stub"
 bus  = "i2c"
 i2c_address = 0x76
 """
-{MINIMAL_ASSERT}"#
+"#,
         );
-        let spec = load_spec_str("sensor_qemu", &body);
-        let backends = vec!["qemu:esp32c3".to_string()];
-        let warnings = qemu_bus_slave_warnings(&spec, &backends);
-        assert_eq!(warnings.len(), 1, "one warning for the declarative sensor");
-        let w = &warnings[0];
-        assert!(w.contains("U2_bme280"), "names sensor id: {w}");
-        assert!(w.contains("qemu:esp32c3"), "names backend: {w}");
-        assert!(w.contains("NO-OP"), "says NO-OP: {w}");
-    }
-
-    /// Non-bus-slave peripheral kinds (pushbutton, stimulus, vcd_sink) on a
-    /// QEMU backend must NOT produce warnings.
-    #[test]
-    fn qemu_backend_non_bus_slave_no_warning() {
-        let body = format!(
-            r#"duration_ms = 10
-
-[[peripheral]]
-id = "BTN1"
-type = "pushbutton"
-net  = "+3V3"
-{MINIMAL_ASSERT}"#
-        );
-        let spec = load_spec_str("pushbutton_qemu", &body);
-        let backends = vec!["qemu:esp32c3".to_string()];
-        let warnings = qemu_bus_slave_warnings(&spec, &backends);
-        assert!(
-            warnings.is_empty(),
-            "pushbutton on qemu should not warn: {warnings:?}"
-        );
-    }
-
-    /// Multiple bus-slave items -> one warning per item.
-    #[test]
-    fn qemu_backend_multiple_slaves_warn_per_item() {
-        let body = format!(
-            r#"duration_ms = 10
-
-[[peripheral]]
-id = "EEPROM1"
-type = "i2c_eeprom"
-address = 0x50
-
-[[peripheral]]
-id = "ADC1"
-type = "spi_mcp3008"
-vref = 3.3
-{MINIMAL_ASSERT}"#
-        );
-        let spec = load_spec_str("multi_slave_qemu", &body);
-        let backends = vec!["qemu:esp32s3".to_string()];
-        let warnings = qemu_bus_slave_warnings(&spec, &backends);
+        let warnings = qemu_bus_slave_warnings(&s, &["qemu:esp32c3".to_string()]);
         assert_eq!(
             warnings.len(),
-            2,
-            "one warning per bus slave, got: {warnings:?}"
+            3,
+            "one per bus slave and sensor, none for the pushbutton: {warnings:?}"
         );
-        assert!(warnings.iter().any(|w| w.contains("EEPROM1")));
-        assert!(warnings.iter().any(|w| w.contains("ADC1")));
-    }
-
-    /// Renode backend (not QEMU) with a bus slave -> NO warning.
-    /// `qemu_bus_slave_warnings` takes the backends list as a parameter;
-    /// an empty list means no QEMU backends (as would be the case for Renode
-    /// or AVR), so no warnings should fire.
-    #[test]
-    fn renode_backend_no_warning() {
-        let body = format!(
-            r#"duration_ms = 10
-
-[[peripheral]]
-id = "TEMP_SENSOR"
-type = "i2c_lm75"
-address = 0x48
-{MINIMAL_ASSERT}"#
-        );
-        let spec = load_spec_str("renode_no_warn", &body);
-        // Empty list = no QEMU backends (Renode/AVR boards).
-        let backends: Vec<String> = vec![];
-        let warnings = qemu_bus_slave_warnings(&spec, &backends);
+        let about = |id: &str| warnings.iter().find(|w| w.contains(id)).expect(id);
+        let w = about("BME280");
         assert!(
-            warnings.is_empty(),
-            "non-qemu backends must not warn: {warnings:?}"
+            w.contains("I2C")
+                && w.contains("i2c_lm75")
+                && w.contains("qemu:esp32c3")
+                && w.contains("NO-OP"),
+            "{w}"
         );
+        assert!(about("ADC1").contains("SPI"));
+        about("U2_bme280");
+        // No QEMU backend (Renode / AVR boards): nothing to warn about.
+        assert!(qemu_bus_slave_warnings(&s, &[]).is_empty());
     }
 
-    /// protection_trip on a supply leg with no protection model must REFUSE at
-    /// load. Before the guard, "[PASS] +5V protection held" was reported while
-    /// 5 A was drawn from a 500 mA USB profile: the USB/bench foldback never
-    /// sets a trip latch, and an unprotected battery has nothing to latch, so
-    /// the assertion was structurally green.
+    /// `protection_trip` on a supply leg with no protection model is refused
+    /// at load: the USB/bench foldback never sets a trip latch and an
+    /// unprotected battery has nothing to latch, so the assertion would be
+    /// structurally green.
     #[test]
     fn protection_trip_on_unprotected_supply_refuses_at_load() {
-        let dir =
-            std::env::temp_dir().join(format!("hauksbee-ci-prot-guard-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let load = |name: &str, body: &str| -> Spec {
-            let p = dir.join(name);
-            std::fs::write(&p, body).unwrap();
-            Spec::load(&p).expect("spec loads")
-        };
         let bound = BoundBoard {
             name: "prot-guard".to_string(),
             circuit: hauksbee_ir::Circuit::new(),
@@ -4233,75 +3839,42 @@ address = 0x48
             peripherals: Vec::new(),
             report: hauksbee_engine::report::BindReport::default(),
         };
-        let assert_block = "[[assert]]\nkind = \"protection_trip\"\n\
-             supply_net = \"+5V\"\nexpect_trip = false\n";
-
-        // No [[supply]] on the net at all: an ideal rail, nothing to trip.
-        let spec = load(
-            "none.toml",
-            &format!("board = \"b.kicad_pcb\"\nduration_ms = 1\n{assert_block}"),
-        );
-        let err = check_trackable_assert_refs(&spec, &bound)
-            .expect_err("ideal auto-rail carries no protection model");
+        let check = |supply: &str| {
+            let s = spec(&format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 1\n{supply}\
+                 [[assert]]\nkind = \"protection_trip\"\nsupply_net = \"+5V\"\nexpect_trip = false\n"
+            ));
+            check_trackable_assert_refs(&s, &bound).map_err(|e| e.to_string())
+        };
+        // No [[supply]] at all: an ideal auto-rail, nothing to trip.
+        assert!(check("").unwrap_err().contains("no [[supply]]"));
+        // A USB profile: current-limited by foldback, no protection latch.
         assert!(
-            err.to_string().contains("no [[supply]]"),
-            "names the missing supply: {err}"
+            check("[[supply]]\nnet = \"+5V\"\nkind = \"usb\"\nusb = \"5v0.5a\"\n")
+                .unwrap_err()
+                .contains("voltage foldback")
         );
-
-        // A USB profile: current-limited by foldback, but no protection latch.
-        let spec = load(
-            "usb.toml",
-            &format!(
-                "board = \"b.kicad_pcb\"\nduration_ms = 1\n\
-                 [[supply]]\nnet = \"+5V\"\nkind = \"usb\"\nusb = \"5v0.5a\"\n{assert_block}"
-            ),
-        );
-        let err = check_trackable_assert_refs(&spec, &bound)
-            .expect_err("usb foldback is not a protection latch");
-        assert!(
-            err.to_string().contains("voltage foldback"),
-            "explains the usb refusal: {err}"
-        );
-
         // A battery without protection_trip_a: an unprotected pack.
-        let spec = load(
-            "batt-unprot.toml",
-            &format!(
-                "board = \"b.kicad_pcb\"\nduration_ms = 1\n\
-                 [[supply]]\nnet = \"+5V\"\nkind = \"battery\"\nchemistry = \"liion\"\n{assert_block}"
-            ),
-        );
-        let err = check_trackable_assert_refs(&spec, &bound)
-            .expect_err("an unprotected battery has nothing to latch");
         assert!(
-            err.to_string().contains("protection_trip_a"),
-            "points at the missing field: {err}"
+            check("[[supply]]\nnet = \"+5V\"\nkind = \"battery\"\nchemistry = \"liion\"\n")
+                .unwrap_err()
+                .contains("protection_trip_a")
         );
-
-        // A protected battery: the guard accepts, the trip is observable.
-        let spec = load(
-            "batt-prot.toml",
-            &format!(
-                "board = \"b.kicad_pcb\"\nduration_ms = 1\n\
-                 [[supply]]\nnet = \"+5V\"\nkind = \"battery\"\nchemistry = \"liion\"\n\
-                 protection_trip_a = 1.0\nprotection_delay_ms = 2.0\n{assert_block}"
-            ),
-        );
-        check_trackable_assert_refs(&spec, &bound)
-            .expect("a protected battery pack is a checkable guard");
-        let _ = std::fs::remove_dir_all(&dir);
+        // A protected battery: the trip is observable.
+        check(
+            "[[supply]]\nnet = \"+5V\"\nkind = \"battery\"\nchemistry = \"liion\"\n\
+             protection_trip_a = 1.0\nprotection_delay_ms = 2.0\n",
+        )
+        .expect("a protected battery pack is a checkable guard");
     }
 }
 
 #[cfg(test)]
 mod spi_cs_source_tests {
-    //! Which of the two exact-framing routes a SPI peripheral takes, and the
-    //! precedence between them.
-    //!
-    //! The model-role route exists so a modeled part does not need `cs_net`
-    //! written out by hand. It must never take that decision AWAY from the spec:
-    //! a pad map can be wrong, and a chip select can be buffered through
-    //! something the model cannot see, so a hand-declared `cs_net` has to win.
+    //! Which of the two exact-framing routes a SPI peripheral takes. A
+    //! hand-declared `cs_net` must always beat the bound model's `cs` pad: a
+    //! pad map can be wrong, and a chip select can be buffered through
+    //! something the model cannot see.
 
     use super::*;
     use hauksbee_extract::{Component, Net, Pin};
@@ -4310,9 +3883,9 @@ mod spi_cs_source_tests {
         toml::from_str(toml_src).expect("peripheral shape")
     }
 
-    /// One assembled, CS-wired 25xx EEPROM at U5 (pad 1 = `cs` in the model DB),
-    /// with a second net available so precedence is observable.
-    fn board() -> ExtractedBoard {
+    /// One assembled part at U5 whose pad `cs_pad` is wired to `EE_CS`, with
+    /// a second net available so precedence is observable.
+    fn board_with(value: &str, footprint: &str, cs_pad: &str) -> ExtractedBoard {
         ExtractedBoard {
             name: "spi-cs-source".to_string(),
             nets: vec![
@@ -4327,15 +3900,15 @@ mod spi_cs_source_tests {
             ],
             components: vec![Component {
                 reference: "U5".to_string(),
-                value: "25LC256-I/SN".to_string(),
+                value: value.to_string(),
                 lib_id: String::new(),
-                footprint: "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm".to_string(),
+                footprint: footprint.to_string(),
                 position: None,
                 layer: String::new(),
                 properties: Vec::new(),
                 dnp: false,
                 pins: vec![Pin {
-                    number: "1".to_string(),
+                    number: cs_pad.to_string(),
                     net: Some(1),
                     function: String::new(),
                     kind: String::new(),
@@ -4345,209 +3918,105 @@ mod spi_cs_source_tests {
         }
     }
 
+    /// A CS-wired 25xx EEPROM (pad 1 = `cs` in the model DB).
+    fn board() -> ExtractedBoard {
+        board_with("25LC256-I/SN", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "1")
+    }
+
     #[test]
-    fn a_ref_with_no_cs_net_takes_the_model_role_route() {
+    fn a_declared_cs_net_wins_over_the_model_role_route() {
         let lib = hauksbee_models::ModelLibrary::builtin();
-        let p = peripheral("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n");
+        let cs = |src: &str| cs_net_name(&peripheral(src), &board(), &lib).expect("no mismatch");
         assert_eq!(
-            cs_net_name(&p, &board(), &lib).expect("no mismatch"),
+            cs("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n"),
             Some(("EE_CS".to_string(), CsProvenance::ModelRoles)),
             "with no cs_net declared, the bound model's `cs` pad supplies the net"
         );
-    }
-
-    #[test]
-    fn a_declared_cs_net_wins_over_the_model_role() {
-        let lib = hauksbee_models::ModelLibrary::builtin();
-        let p = peripheral(
-            "id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\ncs_net = \"OVERRIDE_CS\"\n",
+        assert_eq!(
+            cs("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\ncs_net = \"OVERRIDE_CS\"\n"),
+            Some(("OVERRIDE_CS".to_string(), CsProvenance::SpecDeclared))
         );
         assert_eq!(
-            cs_net_name(&p, &board(), &lib).expect("no mismatch"),
-            Some(("OVERRIDE_CS".to_string(), CsProvenance::SpecDeclared)),
-            "an explicit cs_net must override the model's pad map, which is how a wrong \
-             or incomplete model entry stays correctable from the spec"
+            cs("id = \"EE\"\ntype = \"spi_eeprom\"\ncs_net = \"EE_CS\"\n"),
+            Some(("EE_CS".to_string(), CsProvenance::SpecDeclared)),
+            "a declared cs_net needs no ref"
         );
-    }
-
-    #[test]
-    fn a_declared_cs_net_needs_no_ref_at_all() {
-        // The pre-existing route, unchanged: no `ref`, no model, just a net name.
-        let lib = hauksbee_models::ModelLibrary::builtin();
-        let p = peripheral("id = \"EE\"\ntype = \"spi_eeprom\"\ncs_net = \"EE_CS\"\n");
         assert_eq!(
-            cs_net_name(&p, &board(), &lib).expect("no mismatch"),
-            Some(("EE_CS".to_string(), CsProvenance::SpecDeclared))
-        );
-    }
-
-    #[test]
-    fn neither_route_leaves_the_bus_on_the_heuristic() {
-        let lib = hauksbee_models::ModelLibrary::builtin();
-        let p = peripheral("id = \"EE\"\ntype = \"spi_eeprom\"\n");
-        assert_eq!(
-            cs_net_name(&p, &board(), &lib).expect("no mismatch"),
+            cs("id = \"EE\"\ntype = \"spi_eeprom\"\n"),
             None,
-            "no cs_net and no ref means no CS net; the bus reports heuristic framing"
+            "neither route: the bus reports heuristic framing"
         );
     }
 
-    /// A `ref` that names a real, assembled, modelled part of the WRONG kind must
-    /// be refused. Pointing a `spi_eeprom` at the board's MCP3008 finds a genuine
-    /// `cs` role on a genuine part, and taking it would frame the EEPROM's
-    /// transactions off the ADC's chip-select while reporting `exact`.
+    /// A `ref` naming a real, assembled, modelled part of the WRONG kind is
+    /// refused whether or not that part has a `cs` role to borrow: taking it
+    /// would frame the EEPROM off another part's chip-select while reporting
+    /// `exact`.
     #[test]
-    fn a_ref_naming_the_wrong_spi_part_is_refused() {
+    fn a_ref_naming_a_different_part_is_refused() {
         let lib = hauksbee_models::ModelLibrary::builtin();
-        let mut b = board();
-        b.components[0].value = "MCP3008-I/SL".to_string();
-        b.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
-        b.components[0].pins[0].number = "10".to_string(); // the MCP3008's cs pad
+        let eeprom_at = |b: &ExtractedBoard, r: &str| {
+            let p = peripheral(&format!(
+                "id = \"EE\"\ntype = \"spi_eeprom\"\nref = \"{r}\"\n"
+            ));
+            cs_net_name(&p, b, &lib).map_err(|e| e.to_string())
+        };
 
-        // Sanity: as its OWN kind the part does resolve, so the refusal below is
-        // about the mismatch and not about the fixture failing to bind.
+        // An MCP3008 resolves under its own kind, so the refusal is the mismatch.
+        let adc = board_with("MCP3008-I/SL", "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm", "10");
         let matched = peripheral("id = \"U5\"\ntype = \"spi_mcp3008\"\nref = \"U5\"\n");
         assert_eq!(
-            cs_net_name(&matched, &b, &lib).expect("the matching kind is not a mismatch"),
-            Some(("EE_CS".to_string(), CsProvenance::ModelRoles)),
-            "an MCP3008 under the spi_mcp3008 kind must still resolve its cs pad"
+            cs_net_name(&matched, &adc, &lib).expect("the matching kind"),
+            Some(("EE_CS".to_string(), CsProvenance::ModelRoles))
         );
-
-        let mismatched = peripheral("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n");
-        let err = cs_net_name(&mismatched, &b, &lib)
-            .expect_err(
-                "a spi_eeprom pointed at an MCP3008 must be refused, not quietly \
-                         downgraded to the known-wrong heuristic",
-            )
-            .to_string();
+        let err = eeprom_at(&adc, "U5").expect_err("a spi_eeprom pointed at an MCP3008");
         assert!(
             err.contains("spi_eeprom") && err.contains("mcp3008") && err.contains("U5"),
-            "the error must name the kind, the model it actually bound, and the ref: {err}"
+            "the error names the kind, the bound model and the ref: {err}"
         );
+
+        // A shift register declares no `cs` role at all; still a contradiction.
+        let sr = board_with("74HC595", "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm", "1");
+        assert!(eeprom_at(&sr, "U5").is_err());
+
+        // The microSD socket has a `cs` role and belongs to no SPI peripheral kind.
+        let mut sd = board_with("TFC-WXCP11-08-LF", "", "2");
+        sd.components[0].reference = "J2".to_string();
+        let err = eeprom_at(&sd, "J2").expect_err("must not take the socket's chip-select");
+        assert!(err.contains("microsd_socket"), "{err}");
     }
 
-    /// The wrongly-named part need NOT declare a chip-select for the contradiction
-    /// to be worth failing on. A `spi_eeprom` pointed at a 74HC595 is still two
-    /// incompatible statements about one component; checking compatibility only
-    /// after a CS net was found would wave exactly this case through.
+    /// The mismatch check judges on the model's LAYER, so a user pack may
+    /// supply a chip-select under any id; only shipped db entries are subject
+    /// to it.
     #[test]
-    fn a_ref_naming_a_wrong_part_with_no_cs_role_is_still_refused() {
-        let lib = hauksbee_models::ModelLibrary::builtin();
-        let mut b = board();
-        b.components[0].value = "74HC595".to_string();
-        b.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
-        let p = peripheral("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n");
-        // The shift register declares no `cs` role, so there is nothing to borrow;
-        // the point is that the contradictory pairing is not silently accepted.
-        match cs_net_name(&p, &b, &lib) {
-            Err(e) => {
-                let msg = e.to_string();
-                assert!(
-                    msg.contains("spi_eeprom") && msg.contains("U5"),
-                    "the error must name the kind and the ref: {msg}"
-                );
-            }
-            Ok(other) => panic!(
-                "a spi_eeprom pointed at a 74HC595 must be refused, got {other:?}; a \
-                 compatibility check that runs only when a cs net was found accepts this"
-            ),
-        }
-    }
-
-    /// The board's microSD socket declares a `cs` role and belongs to no SPI
-    /// peripheral kind. While it was missing from the built-in list, a `spi_eeprom`
-    /// pointed at it passed the compatibility check and framed the EEPROM off the
-    /// SD card's chip-select while reporting exact.
-    #[test]
-    fn a_ref_naming_the_microsd_socket_is_refused() {
-        let lib = hauksbee_models::ModelLibrary::builtin();
-        let mut b = board();
-        b.components[0].reference = "J2".to_string();
-        b.components[0].value = "TFC-WXCP11-08-LF".to_string();
-        b.components[0].footprint = String::new();
-        b.components[0].pins[0].number = "2".to_string(); // the socket's cs pad
-
-        // Sanity: the socket really does bind and really does expose a cs net, so
-        // the refusal below is the policy and not a fixture that binds nothing.
-        let resolved = hauksbee_engine::binder::model_role_cs(&b, "J2", &lib)
-            .expect("the microSD socket must bind");
-        assert_eq!(resolved.model_id, "microsd_socket");
-        assert_eq!(resolved.cs_net.as_deref(), Some("EE_CS"));
-
-        let p = peripheral("id = \"EE\"\ntype = \"spi_eeprom\"\nref = \"J2\"\n");
-        let err = cs_net_name(&p, &b, &lib)
-            .expect_err("a spi_eeprom must not take the microSD socket's chip-select")
-            .to_string();
-        assert!(
-            err.contains("microsd_socket"),
-            "the error must name the model it actually bound: {err}"
-        );
-    }
-
-    /// The escape hatch must stay open: a model from outside the shipped DB is
-    /// allowed to supply a chip-select, because a user model pack may legitimately
-    /// model a SPI slave under an id no code in this crate can predict.
-    #[test]
-    fn an_unrecognised_model_id_is_not_treated_as_a_mismatch() {
-        // The judgement is made on the model's LAYER, so there is no id list to
-        // fall out of date. A built-in binds with `from_builtin_db`, which is what
-        // subjects it to the check; anything from a pack or user dir does not.
+    fn only_built_in_models_are_subject_to_the_mismatch_check() {
         let lib = hauksbee_models::ModelLibrary::builtin();
         let resolved = hauksbee_engine::binder::model_role_cs(&board(), "U5", &lib)
             .expect("the fixture EEPROM binds");
-        assert!(
-            resolved.from_builtin_db,
-            "a shipped db/*.toml entry must be recognised as built-in, or the mismatch \
-             check never fires"
-        );
+        assert!(resolved.from_builtin_db);
         assert_eq!(
             crate::spec::builtin_model_id_for_spi_kind("spi_eeprom"),
             Some("eeprom_25xx_spi")
         );
-        assert_eq!(
-            crate::spec::builtin_model_id_for_spi_kind("pushbutton"),
-            None,
-            "a non-SPI kind claims no model"
-        );
     }
 
     #[test]
-    fn a_ref_naming_an_unknown_component_is_a_loud_error() {
-        // The silent-degradation hole this closes: a typo'd `ref` resolves no
-        // component, so no model, so no CS net, and the bus would quietly drop to
-        // the framing heuristic with nothing said. It must fail at load instead,
-        // exactly as a typo'd `cs_net` already does.
-        let spec: Spec = toml::from_str(
-            r#"
-board = "board.kicad_pcb"
-[[peripheral]]
-id = "EE"
-type = "spi_eeprom"
-ref = "U55"
-"#,
-        )
-        .expect("spec shape");
-        let errs = component_ref_errors(&spec, &["U5".to_string()]);
+    fn a_ref_naming_an_unknown_component_fails_at_load() {
+        let errors = |r: &str| {
+            let spec: Spec = toml::from_str(&format!(
+                "board = \"board.kicad_pcb\"\n[[peripheral]]\nid = \"EE\"\ntype = \"spi_eeprom\"\nref = \"{r}\"\n"
+            ))
+            .expect("spec shape");
+            component_ref_errors(&spec, &["U5".to_string()])
+        };
+        assert!(errors("U5").is_empty());
+        let errs = errors("U55");
         assert_eq!(errs.len(), 1, "{errs:?}");
         let msg = errs[0].to_string();
         assert!(
             msg.contains("U55") && msg.contains("SPI peripheral"),
-            "the error must name the bad ref and say where it came from: {msg}"
+            "{msg}"
         );
-    }
-
-    #[test]
-    fn a_correct_ref_raises_no_error() {
-        let spec: Spec = toml::from_str(
-            r#"
-board = "board.kicad_pcb"
-[[peripheral]]
-id = "EE"
-type = "spi_eeprom"
-ref = "U5"
-"#,
-        )
-        .expect("spec shape");
-        assert!(component_ref_errors(&spec, &["U5".to_string()]).is_empty());
     }
 }

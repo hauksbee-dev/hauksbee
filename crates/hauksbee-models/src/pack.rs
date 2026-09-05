@@ -264,62 +264,6 @@ impl PackManifest {
 /// against.
 pub const HAUKSBEE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[cfg(test)]
-mod behavioral_gate_tests {
-    use super::*;
-
-    fn write_pack(dir: &Path, model_toml: &str) {
-        std::fs::create_dir_all(dir.join("models")).unwrap();
-        std::fs::write(
-            dir.join("pack.toml"),
-            "[pack]\nname = \"test-pack\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\n\
-             min_hauksbee_version = \"0.0.0\"\nprovenance = \"hand-written\"\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("models").join("m.toml"), model_toml).unwrap();
-    }
-
-    // R52: validate_behavioral was never called from Pack::load, so a converter
-    // model with vout_setpoint = nan installed clean and later panicked the solver
-    // at `v_cmd.clamp(0.0, nan)`. Pack::load must now run the behavioural gate.
-    #[test]
-    fn pack_load_rejects_nonfinite_behavioral_converter() {
-        let base = std::env::temp_dir().join(format!("hb_pack_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-
-        let bad = "[[models]]\nid = \"badconv\"\nkind = \"digital\"\n\
-            [models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
-            [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"out\"\n\
-            in_pin = \"in\"\nvout_setpoint = nan\nefficiency = 0.9\n";
-        let dir = base.join("bad");
-        write_pack(&dir, bad);
-        let err = Pack::load(&dir).expect_err("a nan vout_setpoint must be rejected");
-        match err {
-            PackError::ModelFileInvalid { message, .. } => {
-                assert!(
-                    message.contains("behavioral") && message.contains("vout_setpoint"),
-                    "error must name the behavioural field: {message}"
-                );
-            }
-            other => panic!("expected ModelFileInvalid, got {other:?}"),
-        }
-
-        // A well-formed converter loads fine.
-        let good = "[[models]]\nid = \"okconv\"\nkind = \"digital\"\n\
-            [models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
-            [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"out\"\n\
-            in_pin = \"in\"\nvout_setpoint = 3.3\nefficiency = 0.9\n";
-        let dir = base.join("good");
-        write_pack(&dir, good);
-        assert!(
-            Pack::load(&dir).is_ok(),
-            "a valid behavioural converter must load"
-        );
-
-        let _ = std::fs::remove_dir_all(&base);
-    }
-}
-
 // ── Pack ──────────────────────────────────────────────────────────────────────
 
 /// A validated pack: manifest plus the model files it ships.
@@ -601,4 +545,41 @@ fn copy_dir(src: &Path, dest: &Path) -> Result<(), PackError> {
         // Symlinks and specials are skipped: nothing in a pack needs them.
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_pack(dir: &Path, vout_setpoint: &str) {
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::write(
+            dir.join("pack.toml"),
+            "[pack]\nname = \"test-pack\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\n\
+             min_hauksbee_version = \"0.0.0\"\nprovenance = \"hand-written\"\n",
+        )
+        .unwrap();
+        let model = format!(
+            "[[models]]\nid = \"conv\"\nkind = \"digital\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
+             [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"out\"\nin_pin = \"in\"\n\
+             vout_setpoint = {vout_setpoint}\nefficiency = 0.9\n"
+        );
+        std::fs::write(dir.join("models").join("m.toml"), model).unwrap();
+    }
+
+    /// Pack::load runs the behavioural gate, so a `nan` setpoint never installs.
+    #[test]
+    fn pack_load_rejects_nonfinite_behavioral_converter() {
+        let base = std::env::temp_dir().join(format!("hb_pack_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        write_pack(&base.join("bad"), "nan");
+        let err = Pack::load(&base.join("bad")).unwrap_err();
+        assert!(
+            matches!(&err, PackError::ModelFileInvalid { message, .. } if message.contains("vout_setpoint")),
+            "{err:?}"
+        );
+        write_pack(&base.join("good"), "3.3");
+        assert!(Pack::load(&base.join("good")).is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

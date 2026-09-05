@@ -2086,9 +2086,9 @@ impl SupplySpec {
         }
 
         // No silent electrical assumptions: a supply's defining parameter must
-        // be written down. A missing `volts` used to default to 5.0, which on a
-        // 3.3 V board manufactures phantom overcurrent faults the author then
-        // debugs on a healthy design. Same class for a usb leg's profile and a
+        // be written down. Defaulting a missing `volts` to 5.0 on a 3.3 V board
+        // would manufacture phantom overcurrent faults the author then debugs
+        // on a healthy design. Same class for a usb leg's profile and a
         // battery's chemistry: both set the source's voltage/limit behaviour.
         match self.kind.as_str() {
             "ideal" | "bench" | "wall" => {
@@ -2649,135 +2649,14 @@ impl Assertion {
 }
 
 #[cfg(test)]
-mod mcu_field_tests {
+mod tests {
     use super::*;
 
-    /// A minimal top-level prelude every `[mcu]` test builds on. The `[mcu]`
-    /// table goes LAST here on purpose: TOML gives it every following line.
-    const PRELUDE: &str = "name = \"t\"\nboard = \"board.kicad_pcb\"\nduration_ms = 10\n";
-
-    fn parse_err(src: &str) -> String {
-        toml::from_str::<Spec>(src)
-            .expect_err("the spec must be rejected")
-            .to_string()
-    }
-
-    #[test]
-    fn both_legal_mcu_shapes_still_parse() {
-        let spec: Spec =
-            toml::from_str(&format!("{PRELUDE}mcu = \"atmega328p\"\n")).expect("string form");
-        assert_eq!(spec.mcu_note(), Some("atmega328p"));
-
-        let spec: Spec = toml::from_str(&format!(
-            "{PRELUDE}[mcu]\nname = \"stm32f103\"\ndescriptor_dir = \"mcu\"\n"
-        ))
-        .expect("table form");
-        assert_eq!(spec.mcu_note(), Some("stm32f103"));
-    }
-
-    #[test]
-    fn timing_requirement_parses_and_rejects_non_positive_or_non_finite_budgets() {
-        let good: Spec = toml::from_str(&format!(
-            "{PRELUDE}timing = {{ min_pulse_us = 2.0, max_edge_error_us = 0.25 }}\n\
-             [[assert]]\nkind = \"toggle\"\nnet = \"CLK\"\nmin_toggles = 1\n"
-        ))
-        .expect("timing table");
-        let timing = good.timing.expect("timing request");
-        assert_eq!(timing.min_pulse_us, Some(2.0));
-        assert_eq!(timing.max_edge_error_us, Some(0.25));
-        assert!(good.validate_all().is_empty());
-
-        for body in [
-            "min_pulse_us = 0.0",
-            "min_pulse_us = nan",
-            "max_edge_error_us = -1.0",
-            "max_edge_error_us = inf",
-        ] {
-            let spec: Spec = toml::from_str(&format!(
-                "{PRELUDE}timing = {{ {body} }}\n[[assert]]\nkind = \"toggle\"\nnet = \"CLK\"\nmin_toggles = 1\n"
-            ))
-            .expect("syntactically valid timing table");
-            let errors = spec.validate_all();
-            assert!(
-                errors
-                    .iter()
-                    .any(|e| e.to_string().contains("positive, finite")),
-                "{body}: {errors:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn an_unknown_mcu_field_is_named_in_the_error() {
-        // The regression: the untagged derive reported this as "data did not
-        // match any variant of untagged enum McuField", naming no key at all.
-        let err = parse_err(&format!("{PRELUDE}[mcu]\ndescriptor_dirr = \"mcu\"\n"));
-        assert!(
-            err.contains("unknown field `descriptor_dirr`"),
-            "the mistyped key is named: {err}"
-        );
-        assert!(
-            err.contains("descriptor_dir"),
-            "and the legal fields are offered: {err}"
-        );
-        assert!(
-            !err.contains("did not match any variant"),
-            "the untagged boilerplate must not leak: {err}"
-        );
-    }
-
-    #[test]
-    fn a_swallowed_top_level_key_gets_the_move_it_above_hint() {
-        // The real-world sting: `[mcu]` placed before a top-level scalar takes
-        // ownership of it, and the old error blamed the wrong line.
-        let err = parse_err(concat!(
-            "name = \"t\"\n",
-            "board = \"board.kicad_pcb\"\n",
-            "[mcu]\n",
-            "name = \"stm32f103\"\n",
-            "duration_ms = 10\n",
-        ));
-        assert!(
-            err.contains("`duration_ms` is a top-level key; move it above the [mcu] table"),
-            "the hint names the swallowed key and the fix: {err}"
-        );
-    }
-
-    #[test]
-    fn a_shapeless_mcu_value_says_what_shapes_are_legal() {
-        let err = parse_err(&format!("{PRELUDE}mcu = 5\n"));
-        assert!(
-            err.contains("string") && err.contains("[mcu] table"),
-            "both legal shapes are named: {err}"
-        );
-    }
-
-    #[test]
-    fn the_captured_top_level_keys_are_the_specs_renamed_fields() {
-        // The hint keys off serde's own FIELDS list; if capture ever broke the
-        // hint would silently vanish, so pin the properties that matter: renames
-        // are honoured ("supply", not "supplies") and skipped fields stay out.
-        let keys = spec_top_level_keys();
-        for expected in [
-            "name",
-            "board",
-            "duration_ms",
-            "firmware",
-            "supply",
-            "assert",
-        ] {
-            assert!(keys.contains(&expected), "{expected} missing from {keys:?}");
-        }
-        assert!(
-            !keys.contains(&"base_dir") && !keys.contains(&"supplies"),
-            "skipped/pre-rename names must not appear: {keys:?}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod validate_tests {
-    use super::*;
+    const BASE: &str = "board = \"b.kicad_pcb\"\nduration_ms = 10\n";
+    const VCC: &str = "[[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n";
+    const CLK: &str = "[[assert]]\nkind = \"toggle\"\nnet = \"CLK\"\nmin_toggles = 1\n";
+    const AC: &str = "[ac]\nfstart = 10.0\nfstop = 1e6\npoints = 10\n";
+    const EEPROM: &str = "[[peripheral]]\nid = \"EE1\"\ntype = \"i2c_eeprom\"\n";
 
     fn spec_from(src: &str) -> Spec {
         let mut spec: Spec = toml::from_str(src).expect("valid toml");
@@ -2785,792 +2664,165 @@ mod validate_tests {
         spec
     }
 
-    // `frame_ms` must sit at the top level, BEFORE the [[assert]] table, or TOML
-    // captures it as a field of the assert.
-    fn spec_src(frame_ms: &str) -> String {
-        format!(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = {frame_ms}
-
-[[assert]]
-kind = "voltage"
-net = "VCC"
-min = 3.0
-"#
-        )
-    }
-
     #[test]
-    fn tolerance_percent_must_be_below_100() {
-        // R55: percent >= 100 makes the min corner `nominal*(1-percent/100)` a
-        // zero or NEGATIVE component value, stamped and solved as a physically
-        // impossible circuit. It must be rejected up front.
-        let spec = |p: &str| {
-            spec_from(&format!(
-                "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-                 [[tolerance]]\nref = \"R1\"\npercent = {p}\n\
-                 [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n"
-            ))
-        };
-        for bad in ["100", "120", "250"] {
-            let err = spec(bad).validate().unwrap_err().to_string();
-            assert!(
-                err.contains("percent"),
-                "percent {bad} must be rejected: {err}"
-            );
+    fn well_formed_specs_validate() {
+        let bodies = [
+            format!("{BASE}frame_ms = 0.1\n{VCC}"),
+            format!("{BASE}{VCC}[[tolerance]]\nref = \"R1\"\npercent = 50\n"),
+            format!("{BASE}{VCC}[[supply]]\nnet = \"VCC\"\nkind = \"ideal\"\nvolts = -12.0\n"),
+            format!("{BASE}{VCC}[[supply]]\nnet = \"VCC\"\nkind = \"usb\"\nusb = \"5v0.5a\"\n"),
+            format!(
+                "{BASE}{VCC}[[supply]]\nnet = \"VCC\"\nkind = \"battery\"\nchemistry = \"liion\"\n\
+                 cells = 3\ncapacity_mah = 2200\nsoc = 0.8\nvolts = 11.1\n\
+                 protection_trip_a = 5.0\nprotection_delay_ms = 100\n"
+            ),
+            format!("{BASE}[[assert]]\nkind = \"toggle\"\nnet = \"LED\"\nfreq_hz = 5.0\ntolerance = 1.0\n"),
+            format!("{BASE}[[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\nmax = 3.6\n"),
+            format!(
+                "{BASE}[[assert]]\nkind = \"rail_window\"\nnet = \"VBUS\"\ndip_below = 3.1\n\
+                 recover_to = 3.3\nrecover_within_ms = 5.0\n"
+            ),
+            format!("{BASE}[[assert]]\nkind = \"rail_window\"\nnet = \"VBUS\"\ndip_below = 3.2\nfor_max_ms = 2.0\n"),
+            format!("{BASE}{VCC}[[peripheral]]\nid = \"scope\"\ntype = \"vcd_sink\"\nnets = [\"CLK\"]\nvcd_path = \"w.vcd\"\n"),
+            format!("{BASE}{EEPROM}[[assert]]\nkind = \"peripheral\"\nid = \"EE1\"\nbytes = \"48 69\"\n"),
+            format!("{BASE}{EEPROM}[[assert]]\nkind = \"peripheral\"\nid = \"EE1\"\nfield = \"writes\"\nmin = 5\n"),
+            format!("{BASE}{VCC}[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\naddress = 0x50\nsize = 256\n"),
+            format!("{BASE}{VCC}[[peripheral]]\nid = \"S1\"\ntype = \"stimulus\"\nnet = \"IN\"\nwaveform = \"sine\"\nfreq_hz = 50.0\n"),
+            format!("{BASE}{VCC}[[scenario]]\npart = \"U5\"\nprofile = \"esp32_boot_wifi\"\nstart_ms = 5.0\n"),
+            format!(
+                "{BASE}{VCC}[decoupling]\nparasitics = true\n\
+                 [[decoupling.override]]\nref = \"C1\"\nesr_ohms = 0.02\nesl_henries = 1e-9\n"
+            ),
+            format!("{BASE}timing = {{ min_pulse_us = 2.0, max_edge_error_us = 0.25 }}\n{CLK}"),
+            format!("{BASE}[mcu]\nname = \"stm32f103\"\ndescriptor_dir = \"mcu\"\n{VCC}"),
+        ];
+        for body in bodies {
+            let spec = spec_from(&body);
+            assert!(spec.validate().is_ok(), "{body}\n{:?}", spec.validate());
         }
-        // A realistic tolerance still validates.
-        assert!(spec("5").validate().is_ok(), "5% must pass");
-        assert!(spec("50").validate().is_ok(), "50% must pass");
     }
 
+    /// Every rejection names the field the author has to fix. Each case is a
+    /// value that would otherwise run as a silently wrong (or hanging, or
+    /// panicking) simulation rather than failing at load.
     #[test]
-    fn supply_fields_are_range_validated_at_load() {
-        // U2: SupplySpec::validate checked only `kind`, so every numeric field
-        // and the usb/chemistry enum tokens flowed into build_supply unchecked.
-        // A non-finite volts, a soc outside 0..1, cells = 0, or a typo'd token
-        // must fail loud at LOAD, not silently corrupt a run (or crash at run
-        // time only, after load reported the spec clean).
-        let supply = |body: &str| {
-            spec_from(&format!(
-                "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-                 [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n\
-                 [[supply]]\nnet = \"VCC\"\n{body}\n"
-            ))
-        };
-        let cases = [
-            ("kind = \"ideal\"\nvolts = nan", "volts"),
+    fn malformed_specs_are_rejected_naming_the_offending_field() {
+        let supply = |body: &str| format!("{BASE}{VCC}[[supply]]\nnet = \"VCC\"\n{body}\n");
+        let cases: Vec<(String, &[&str])> = vec![
+            // A tolerance of 100% or more makes the min corner a zero or
+            // negative component value.
+            (format!("{BASE}{VCC}[[tolerance]]\nref = \"R1\"\npercent = 100\n"), &["percent"]),
+            (supply("kind = \"ideal\"\nvolts = nan"), &["volts"]),
+            (supply("kind = \"bench\"\nvolts = 5.0\ncurrent_limit_a = -1.0"), &["current_limit_a"]),
+            (supply("kind = \"battery\"\nchemistry = \"liion\"\nsoc = 5.0"), &["soc"]),
+            (supply("kind = \"usb\"\nusb = \"5v9a\""), &["usb profile"]),
+            (supply("kind = \"battery\"\nchemistry = \"unobtainium\""), &["chemistry"]),
+            // A supply's defining parameter is written down, never defaulted.
+            (supply("kind = \"ideal\""), &["volts", "VCC"]),
+            (supply("kind = \"battery\""), &["chemistry", "VCC"]),
+            // toggle tolerance is a fraction; the percent-style slip gets the fix.
             (
-                "kind = \"bench\"\ncurrent_limit_a = -1.0",
-                "current_limit_a",
+                format!("{BASE}[[assert]]\nkind = \"toggle\"\nnet = \"LED\"\nfreq_hz = 5.0\ntolerance = 10\n"),
+                &["fraction", "did you mean 0.1"],
             ),
-            ("kind = \"bench\"\ncurrent_limit_a = 0.0", "current_limit_a"),
-            ("kind = \"wall\"\nripple_hz = inf", "ripple_hz"),
-            ("kind = \"battery\"\nsoc = 5.0", "soc"),
-            ("kind = \"battery\"\nsoc = -0.1", "soc"),
-            ("kind = \"battery\"\ncells = 0", "cells"),
-            ("kind = \"battery\"\ncapacity_mah = 0.0", "capacity_mah"),
             (
-                "kind = \"battery\"\nprotection_trip_a = 0.0",
-                "protection_trip_a",
+                format!("{BASE}[[assert]]\nkind = \"toggle\"\nnet = \"D13\"\nfreq_hz = 5\nmin_toggles = 1\n"),
+                &["both", "freq_hz"],
             ),
-            ("kind = \"usb\"\nusb = \"5v9a\"", "usb profile"),
+            // An inverted window is a spec error, not a hardware red.
+            (format!("{BASE}[[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 5.0\nmax = 3.0\n"), &["greater than max"]),
+            (format!("{BASE}{AC}[[assert]]\nkind = \"ac_gain\"\nnet = \"OUT\"\nmin = 20\nmax = 10\n"), &["greater than max"]),
             (
-                "kind = \"battery\"\nchemistry = \"unobtainium\"",
-                "chemistry",
+                format!("{BASE}{EEPROM}[[assert]]\nkind = \"peripheral\"\nid = \"EE1\"\nfield = \"writes\"\nmin = 9\nmax = 2\n"),
+                &["greater than max"],
+            ),
+            // Time fields are positive and finite, or the frame loop spins or starves.
+            (format!("{BASE}frame_ms = 0\n{VCC}"), &["frame_ms"]),
+            (format!("{BASE}frame_ms = inf\n{VCC}"), &["frame_ms"]),
+            (format!("board = \"b.kicad_pcb\"\nduration_ms = inf\n{VCC}"), &["duration_ms"]),
+            (format!("{BASE}[[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\nafter_ms = nan\n"), &["after_ms"]),
+            (format!("{BASE}timing = {{ min_pulse_us = 0.0 }}\n{CLK}"), &["positive, finite"]),
+            (format!("{BASE}[ac]\nfstart = 10.0\nfstop = inf\npoints = 20\nsweep = \"dec\"\n{VCC}"), &["finite"]),
+            // rail_window clauses that would otherwise silently never run.
+            (
+                format!("{BASE}[[assert]]\nkind = \"rail_window\"\nnet = \"VBUS\"\nmin = 3.0\ndip_below = 3.1\nrecover_to = 3.3\n"),
+                &["recover_to", "recover_within_ms"],
+            ),
+            (format!("{BASE}[[assert]]\nkind = \"rail_window\"\nnet = \"VBUS\"\nmin = 3.0\ndip_below = 3.2\n"), &["dip_below"]),
+            // Peripheral shapes.
+            (
+                format!("{BASE}{VCC}[[peripheral]]\nid = \"scope\"\ntype = \"vcd_sink\"\nnet = \"CLK\"\nvcd_path = \"w.vcd\"\n"),
+                &["nets"],
+            ),
+            (
+                format!("{BASE}{EEPROM}[[assert]]\nkind = \"peripheral\"\nid = \"EE1\"\nbytes = \"48 69\"\nfield = \"writes\"\nmin = 5\n"),
+                &["bytes", "field"],
+            ),
+            (
+                format!("{BASE}{EEPROM}[[assert]]\nkind = \"peripheral\"\nid = \"TYPO\"\nfield = \"writes\"\nmin = 1\n"),
+                &["TYPO", "EE1"],
+            ),
+            // Bounds the published editor schema documents.
+            (format!("{BASE}{VCC}[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\naddress = 200\n"), &["address"]),
+            (
+                format!("{BASE}{VCC}[[peripheral]]\nid = \"S1\"\ntype = \"stimulus\"\nnet = \"IN\"\nwaveform = \"square\"\n"),
+                &["waveform"],
+            ),
+            (format!("{BASE}{VCC}[[scenario]]\npart = \"U5\"\nprofile = \"esp32_boot_wifi\"\nstart_ms = -5.0\n"), &["start_ms"]),
+            (
+                format!("{BASE}{VCC}[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesr_ohms = -0.1\n"),
+                &["esr_ohms"],
             ),
         ];
-        for (body, needle) in cases {
-            let err = supply(body).validate().unwrap_err().to_string();
-            assert!(
-                err.contains(needle),
-                "supply spec `{body}` must be rejected naming `{needle}`, got: {err}"
-            );
-        }
-        // A fully-specified, in-range battery leg still validates.
-        assert!(
-            supply(
-                "kind = \"battery\"\nchemistry = \"liion\"\ncells = 3\n\
-                 capacity_mah = 2200\nsoc = 0.8\nvolts = 11.1\n\
-                 protection_trip_a = 5.0\nprotection_delay_ms = 100"
-            )
-            .validate()
-            .is_ok(),
-            "a realistic battery leg must pass"
-        );
-        // A negative RAIL is legal (e.g. a -12 V ideal supply); only non-finite is not.
-        assert!(
-            supply("kind = \"ideal\"\nvolts = -12.0").validate().is_ok(),
-            "a negative ideal rail must pass"
-        );
-    }
-
-    #[test]
-    fn a_supply_without_its_defining_parameter_is_rejected_at_load() {
-        // The old `volts.unwrap_or(5.0)` silently powered a 3.3 V board at 5 V,
-        // manufacturing phantom overcurrent REDs the author then debugged on a
-        // healthy design. volts (ideal/bench/wall), the usb profile, and the
-        // battery chemistry are the parameters that define what the source IS;
-        // each must be written down, spec-error (exit 2) otherwise.
-        let supply = |body: &str| {
-            spec_from(&format!(
-                "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-                 [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n\
-                 [[supply]]\nnet = \"3V3\"\n{body}\n"
-            ))
-        };
-        for (body, needle) in [
-            ("kind = \"ideal\"", "volts"),
-            ("kind = \"bench\"", "volts"),
-            ("kind = \"wall\"", "volts"),
-            ("kind = \"usb\"", "usb"),
-            ("kind = \"battery\"", "chemistry"),
-        ] {
-            let err = supply(body).validate().unwrap_err().to_string();
-            assert!(
-                err.contains(needle) && err.contains("3V3"),
-                "supply `{body}` must be rejected naming `{needle}` and the net, got: {err}"
-            );
-        }
-        // With the parameter present, each kind validates.
-        for body in [
-            "kind = \"ideal\"\nvolts = 3.3",
-            "kind = \"bench\"\nvolts = 5.0",
-            "kind = \"wall\"\nvolts = 12.0",
-            "kind = \"usb\"\nusb = \"5v0.5a\"",
-            "kind = \"battery\"\nchemistry = \"liion\"",
-        ] {
-            assert!(
-                supply(body).validate().is_ok(),
-                "explicit supply `{body}` must pass"
-            );
+        for (body, needles) in cases {
+            let err = spec_from(&body)
+                .validate()
+                .err()
+                .unwrap_or_else(|| panic!("must be rejected:\n{body}"))
+                .to_string();
+            for needle in needles {
+                assert!(
+                    err.contains(needle),
+                    "expected `{needle}` for:\n{body}\ngot: {err}"
+                );
+            }
         }
     }
 
     #[test]
-    fn toggle_tolerance_outside_zero_one_is_rejected() {
-        // tolerance is a FRACTION (0.25 = +-25%). `tolerance = 10` (thinking in
-        // percent) accepted 5 Hz +-1000%, greening a net that never toggles; a
-        // negative tolerance inverted the band. Only (0, 1] loads.
-        let toggle = |tol: &str| {
-            spec_from(&format!(
-                "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-                 [[assert]]\nkind = \"toggle\"\nnet = \"LED\"\nfreq_hz = 5.0\ntolerance = {tol}\n"
-            ))
-        };
-        for bad in ["10", "-0.5", "0", "1.5"] {
-            let err = toggle(bad).validate().unwrap_err().to_string();
-            assert!(
-                err.contains("fraction"),
-                "tolerance {bad} must be rejected naming the scale, got: {err}"
-            );
-        }
-        // The percent-style mistake gets the concrete suggestion.
-        let err = toggle("10").validate().unwrap_err().to_string();
-        assert!(
-            err.contains("did you mean 0.1"),
-            "a percent-style tolerance suggests the fraction, got: {err}"
-        );
-        for ok in ["0.1", "0.25", "1.0"] {
-            assert!(toggle(ok).validate().is_ok(), "tolerance {ok} must pass");
-        }
-    }
-
-    #[test]
-    fn min_greater_than_max_is_a_spec_error_not_a_hardware_red() {
-        // An inverted window can never hold: left to run time it reports RED
-        // (exit 1) blaming the hardware for failing an unsatisfiable bound.
-        // It must instead fail at load as a spec error, naming both values.
-        let cases = [
-            (
-                "kind = \"voltage\"\nnet = \"VCC\"\nmin = 5.0\nmax = 3.0",
-                "voltage",
-            ),
-            (
-                "kind = \"rail_window\"\nnet = \"VCC\"\nmin = 3.3\nmax = 3.0",
-                "rail_window",
-            ),
-            (
-                "kind = \"phase_margin\"\nnet = \"OUT\"\nmin = 60\nmax = 45",
-                "phase_margin",
-            ),
-            (
-                "kind = \"ac_gain\"\nnet = \"OUT\"\nmin = 20\nmax = 10",
-                "ac_gain",
-            ),
-        ];
-        for (assert_block, kind) in cases {
-            let ac = if kind == "phase_margin" || kind == "ac_gain" {
-                "[ac]\nfstart = 10.0\nfstop = 1e6\npoints = 10\n"
-            } else {
-                ""
-            };
-            let src = format!(
-                "board = \"b.kicad_pcb\"\nduration_ms = 10\n{ac}[[assert]]\n{assert_block}\n"
-            );
-            let err = spec_from(&src).validate().unwrap_err().to_string();
-            assert!(
-                err.contains("min") && err.contains("greater than max"),
-                "{kind} with min > max must fail at load, got: {err}"
-            );
-        }
-        // peripheral field windows too.
-        let src = "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-                   [[peripheral]]\nid = \"EE1\"\ntype = \"i2c_eeprom\"\n\
-                   [[assert]]\nkind = \"peripheral\"\nid = \"EE1\"\nfield = \"writes\"\nmin = 9\nmax = 2\n";
-        let err = spec_from(src).validate().unwrap_err().to_string();
-        assert!(
-            err.contains("greater than max"),
-            "peripheral field window with min > max must fail at load, got: {err}"
-        );
-        // A well-ordered window still validates.
-        let ok = "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-                  [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\nmax = 3.6\n";
-        assert!(spec_from(ok).validate().is_ok(), "min < max must pass");
+    fn timing_requirement_parses_into_its_fields() {
+        let spec = spec_from(&format!(
+            "{BASE}timing = {{ min_pulse_us = 2.0, max_edge_error_us = 0.25 }}\n{CLK}"
+        ));
+        let timing = spec.timing.expect("timing request");
+        assert_eq!(timing.min_pulse_us, Some(2.0));
+        assert_eq!(timing.max_edge_error_us, Some(0.25));
     }
 
     #[test]
     fn cs_net_is_board_validated_like_every_other_net() {
-        // R32: a peripheral's cs_net was the ONE net reference check_nets never
-        // saw, so a typo ("CS1" vs the board's "SPI_CS1") loaded clean and then
-        // silently degraded exact SPI chip-select framing to the chunk-boundary
-        // heuristic at runtime, mis-decoding multi-byte transactions with no
-        // diagnostic. It must fail loud at load like supply_net / assert nets.
-        let spec = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-
-[[peripheral]]
-id = "EE"
-type = "spi_eeprom"
-cs_net = "CS1"
-
-[[assert]]
-kind = "voltage"
-net = "VCC"
-min = 3.0
-"#,
-        );
-        // cs_net is now among the references check_nets validates.
-        assert!(
-            spec.referenced_nets().iter().any(|(n, _)| n == "CS1"),
-            "cs_net must be a validated net reference"
-        );
-        // A board missing CS1 (but carrying the real SPI_CS1 and VCC) is rejected.
-        let known = vec!["SPI_CS1".to_string(), "VCC".to_string()];
-        assert!(
-            spec.check_nets(&known).is_err(),
-            "a cs_net that is not on the board must fail loud, not silently degrade framing"
-        );
-        // With the correct net present it passes.
-        let known_ok = vec!["CS1".to_string(), "VCC".to_string()];
-        assert!(
-            spec.check_nets(&known_ok).is_ok(),
-            "the correct cs_net validates"
-        );
-    }
-
-    #[test]
-    fn toggle_with_both_freq_and_count_is_rejected() {
-        // Round-29: check_toggle evaluates min_toggles and ignores freq_hz when
-        // both are set, yet the label reports the ~N Hz frequency form, a spec
-        // that silently checks a count while claiming a frequency. The two forms
-        // are mutually exclusive; validation must reject both-at-once up front.
-        let src = r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 0.1
-
-[[assert]]
-kind = "toggle"
-net = "D13"
-freq_hz = 5
-min_toggles = 1
-"#;
-        let err = spec_from(src)
-            .validate()
-            .expect_err("toggle with both freq_hz and min_toggles must fail");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("both") && m.contains("freq_hz")),
-            "expected a both-fields validation error, got {err:?}"
-        );
-        // Each form ALONE is still accepted.
-        for one in ["freq_hz = 5", "min_toggles = 1"] {
-            let src = format!(
-                "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=0.1\n\n[[assert]]\nkind=\"toggle\"\nnet=\"D13\"\n{one}\n"
-            );
-            assert!(
-                spec_from(&src).validate().is_ok(),
-                "one field is valid: {one}"
-            );
-        }
-    }
-
-    #[test]
-    fn non_positive_frame_ms_is_rejected() {
-        // Round-26: a zero/negative frame_ms was silently clamped to 1 µs downstream,
-        // running ~1000x more frames than any real cadence and hanging the check with
-        // no explanation. Validation must name it up front rather than clamp silently.
-        for bad in ["0", "-0.5"] {
-            let src = spec_src(bad);
-            let err = spec_from(&src)
-                .validate()
-                .expect_err("non-positive frame_ms must fail validation");
-            assert!(
-                matches!(&err, SpecError::Invalid(m) if m.contains("frame_ms")),
-                "expected a frame_ms validation error, got {err:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn positive_frame_ms_passes_validation() {
-        assert!(
-            spec_from(&spec_src("0.1")).validate().is_ok(),
-            "a positive frame_ms is a valid cadence"
-        );
-    }
-
-    #[test]
-    fn non_finite_time_fields_are_rejected() {
-        // R33: TOML accepts `inf`/`nan`. `duration_ms = inf` passed the `<= 0`
-        // check and made the frame loop `t < inf` spin forever (a silent CI hang);
-        // `nan` ran zero frames so every assertion failed "never sampled". Both
-        // duration_ms and frame_ms must reject non-finite values.
-        let base = |dur: &str, frame: &str| {
-            format!(
-                r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = {dur}
-frame_ms = {frame}
-
-[[assert]]
-kind = "voltage"
-net = "VCC"
-min = 3.0
-"#
-            )
-        };
-        for (dur, frame, field) in [
-            ("inf", "1", "duration_ms"),
-            ("nan", "1", "duration_ms"),
-            ("10", "inf", "frame_ms"),
-            ("10", "nan", "frame_ms"),
-        ] {
-            let err = spec_from(&base(dur, frame))
-                .validate()
-                .expect_err("a non-finite time field must fail validation");
-            assert!(
-                matches!(&err, SpecError::Invalid(m) if m.contains(field)),
-                "expected a {field} validation error for {dur}/{frame}, got {err:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn nan_after_ms_is_rejected_not_panicked() {
-        // R33: a NaN `after_ms` made the threshold-bucket sort's `partial_cmp`
-        // return None, so `.unwrap()` PANICKED, a crash instead of the crate's
-        // fail-loud SpecError. Assertion::validate now rejects a non-finite window.
-        let spec = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-
-[[assert]]
-kind = "voltage"
-net = "VCC"
-min = 3.0
-after_ms = nan
-"#,
-        );
-        let err = spec
-            .validate()
-            .expect_err("a NaN after_ms must fail validation, not panic later");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("after_ms")),
-            "expected an after_ms validation error, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn rail_window_recover_to_without_recover_within_ms_is_rejected() {
-        // R35: check_rail_window only evaluates a recovery when all three of
-        // dip_below/recover_to/recover_within_ms are present. A spec that sets a
-        // recovery intent (dip_below + recover_to) but omits recover_within_ms
-        // must be REJECTED, even when a min/max is also present. Accepting it
-        // would let the recovery clause silently never run, a false GREEN on the
-        // recovery dimension.
-        let spec = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[[assert]]
-kind = "rail_window"
-net = "VBUS"
-min = 3.0
-dip_below = 3.1
-recover_to = 3.3
-"#,
-        );
-        let err = spec
-            .validate()
-            .expect_err("a recover_to with no recover_within_ms must fail, not silently no-op");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("recover_to") && m.contains("recover_within_ms")),
-            "expected a recover_to/recover_within_ms validation error, got {err:?}"
-        );
-
-        // The complete recovery spec still validates.
-        let ok = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[[assert]]
-kind = "rail_window"
-net = "VBUS"
-dip_below = 3.1
-recover_to = 3.3
-recover_within_ms = 5.0
-"#,
-        );
-        assert!(ok.validate().is_ok(), "a complete recovery spec must pass");
-    }
-
-    #[test]
-    fn rail_window_dip_below_without_a_partner_is_rejected() {
-        // R36: the dip_below sibling of the R35 recover_to gap. check_rail_window
-        // only reads dip_below inside guards that require for_max_ms or
-        // recover_within_ms, so a bare dip_below alongside a min/max (which
-        // satisfies has_check) silently does nothing, a rail at 3.1 V passes
-        // GREEN against a dip_below=3.2 the author wrote. Validation must reject
-        // the partnerless dip_below.
-        let spec = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[[assert]]
-kind = "rail_window"
-net = "VBUS"
-min = 3.0
-dip_below = 3.2
-"#,
-        );
-        let err = spec
-            .validate()
-            .expect_err("a dip_below with no for_max_ms/recover_within_ms must fail, not no-op");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("dip_below") && (m.contains("for_max_ms") || m.contains("recover_within_ms"))),
-            "expected a dip_below partner validation error, got {err:?}"
-        );
-
-        // dip_below WITH a for_max_ms partner still validates.
-        let ok = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[[assert]]
-kind = "rail_window"
-net = "VBUS"
-dip_below = 3.2
-for_max_ms = 2.0
-"#,
-        );
-        assert!(
-            ok.validate().is_ok(),
-            "dip_below with a for_max_ms partner must pass"
-        );
-    }
-
-    #[test]
-    fn vcd_sink_with_singular_net_is_rejected() {
-        // R42: attach_peripherals reads a vcd_sink's logged signals ONLY from
-        // `p.nets`. A singular `net = "CLK"` (the natural mistake, every other
-        // control uses `net`) validated clean and then logged an EMPTY waveform
-        // with no diagnostic. vcd_sink must require `nets`.
-        let assert_block = "\n[[assert]]\nkind=\"voltage\"\nnet=\"VCC\"\nmin=3.0\n";
-        let bad = spec_from(&format!(
-            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[peripheral]]\nid=\"scope\"\ntype=\"vcd_sink\"\nnet=\"CLK\"\nvcd_path=\"w.vcd\"\n{assert_block}"
+        let spec = spec_from(&format!(
+            "{BASE}[[peripheral]]\nid = \"EE\"\ntype = \"spi_eeprom\"\ncs_net = \"CS1\"\n{VCC}"
         ));
-        let err = bad
-            .validate()
-            .expect_err("a vcd_sink with a singular `net` must fail, not log an empty VCD");
+        assert!(spec.referenced_nets().iter().any(|(n, _)| n == "CS1"));
+        let board_without = vec!["SPI_CS1".to_string(), "VCC".to_string()];
         assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("nets")),
-            "the error must point the user at `nets`, got {err:?}"
+            spec.check_nets(&board_without).is_err(),
+            "a cs_net not on the board must fail loud, not silently degrade framing"
         );
-        // The correct plural `nets` form validates.
-        let ok = spec_from(&format!(
-            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[peripheral]]\nid=\"scope\"\ntype=\"vcd_sink\"\nnets=[\"CLK\"]\nvcd_path=\"w.vcd\"\n{assert_block}"
-        ));
-        assert!(
-            ok.validate().is_ok(),
-            "a vcd_sink with `nets = [...]` must pass: {:?}",
-            ok.validate()
-        );
-    }
-
-    #[test]
-    fn peripheral_with_both_bytes_and_field_is_rejected() {
-        // R40: check_peripheral evaluates `bytes` first and RETURNS, so a spec
-        // that sets both `bytes` and a `field`+min/max silently drops the field
-        // constraint, a false green if the field bound is violated. The dual spec
-        // must be rejected, like toggle's freq_hz+min_toggles.
-        let spec = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[[peripheral]]
-id = "EE1"
-type = "i2c_eeprom"
-
-[[assert]]
-kind = "peripheral"
-id = "EE1"
-bytes = "48 69"
-field = "writes"
-min = 5
-"#,
-        );
-        let err = spec.validate().expect_err(
-            "a peripheral with both bytes and field must fail, not silently drop field",
-        );
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("bytes") && m.contains("field")),
-            "expected a bytes/field mutual-exclusion error, got {err:?}"
-        );
-
-        // Each form alone still validates.
-        let decl = "[[peripheral]]\nid=\"EE1\"\ntype=\"i2c_eeprom\"\n\n";
-        let bytes_only = spec_from(&format!(
-            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n{decl}[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nbytes=\"48 69\"\n",
-        ));
-        assert!(
-            bytes_only.validate().is_ok(),
-            "bytes-only peripheral must pass"
-        );
-        let field_only = spec_from(&format!(
-            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n{decl}[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nfield=\"writes\"\nmin=5\n",
-        ));
-        assert!(
-            field_only.validate().is_ok(),
-            "field-only peripheral must pass"
-        );
-    }
-
-    #[test]
-    fn peripheral_assertion_with_unknown_id_is_rejected_at_load() {
-        // U2: a peripheral assertion whose `id` names no declared [[peripheral]]/
-        // [[sensor]] must be caught at load, naming the declared ids. Left to the
-        // runner it would fail only after a full co-sim, or read nothing at all.
-        let spec = spec_from(
-            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n\
-             [[peripheral]]\nid=\"EE1\"\ntype=\"i2c_eeprom\"\n\n\
-             [[assert]]\nkind=\"peripheral\"\nid=\"TYPO\"\nfield=\"writes\"\nmin=1\n",
-        );
-        let err = spec
-            .validate()
-            .expect_err("an unknown peripheral id must be rejected");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("TYPO") && m.contains("EE1")),
-            "the error must name the bad id and the declared ids: {err:?}"
-        );
-    }
-
-    #[test]
-    fn ac_sweep_with_non_finite_bounds_is_rejected() {
-        // R39: TOML parses `inf`/`nan`, and `fstop <= fstart` is false for a
-        // non-finite bound, so it slipped through validation into
-        // AcSpec::frequencies() where the step count saturates to usize::MAX (a
-        // with_capacity overflow panic in debug, a bogus inf-Hz sweep in release).
-        for (fstart, fstop) in [("10.0", "inf"), ("nan", "100000.0"), ("inf", "100000.0")] {
-            let src = format!(
-                r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[ac]
-fstart = {fstart}
-fstop = {fstop}
-points = 20
-sweep = "dec"
-
-[[assert]]
-kind = "voltage"
-net = "VCC"
-min = 3.0
-"#
-            );
-            spec_from(&src).validate().expect_err(&format!(
-                "a non-finite AC bound (fstart={fstart}, fstop={fstop}) must fail"
-            ));
-        }
-        // Concretely check the message on the inf case.
-        let err = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[ac]
-fstart = 10.0
-fstop = inf
-points = 20
-sweep = "dec"
-
-[[assert]]
-kind = "voltage"
-net = "VCC"
-min = 3.0
-"#,
-        )
-        .validate()
-        .expect_err("fstop = inf must be rejected");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("finite")),
-            "expected a finiteness error, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn validate_reports_every_independent_error_in_one_pass() {
-        // E54: a spec with several independent mistakes must surface them ALL
-        // in one invocation, not one per fix-and-retry cycle. Three unrelated
-        // errors: a typo'd supply kind, a toggle with both forms set, and an
-        // out-of-bounds tolerance percent.
-        let spec = spec_from(
-            r#"
-board = "b.kicad_pcb"
-duration_ms = 10
-
-[[supply]]
-net = "VCC"
-kind = "benchh"
-volts = 5.0
-
-[[tolerance]]
-ref = "R1"
-percent = 150
-
-[[assert]]
-kind = "toggle"
-net = "D13"
-freq_hz = 5
-min_toggles = 1
-"#,
-        );
-        let errs = spec.validate_all();
-        assert_eq!(errs.len(), 3, "three independent errors: {errs:?}");
-        let all = errs
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(all.contains("benchh"), "supply typo reported: {all}");
-        assert!(
-            all.contains("min_toggles"),
-            "toggle both-forms reported: {all}"
-        );
-        assert!(all.contains("percent"), "tolerance bound reported: {all}");
-
-        // The Result path folds them into one Many whose Display carries all.
-        let err = spec.validate().unwrap_err();
-        let msg = err.to_string();
-        assert!(matches!(&err, SpecError::Many(v) if v.len() == 3));
-        assert!(
-            msg.contains("benchh") && msg.contains("min_toggles") && msg.contains("percent"),
-            "Many must display every finding: {msg}"
-        );
-    }
-
-    #[test]
-    fn schema_documented_bounds_are_enforced_at_load() {
-        // E55 schema-vs-validate parity: the published editor schema documents
-        // these bounds (peripheral address/size, scenario start_ms, decoupling
-        // ESR/ESL, the waveform vocabulary); the runtime validate path must
-        // reject the same values so `check` catches what the editor flags.
-        let base = "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-                    [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n";
-        let cases: &[(&str, &str)] = &[
-            // peripheral.address: 7-bit I2C, 0..=127.
-            (
-                "[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\naddress = 200\n",
-                "address",
-            ),
-            // peripheral.size: at least 1 byte.
-            (
-                "[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\nsize = 0\n",
-                "size",
-            ),
-            // stimulus waveform: closed vocabulary dc|sine|pwl|noise.
-            (
-                "[[peripheral]]\nid = \"S1\"\ntype = \"stimulus\"\nnet = \"IN\"\nwaveform = \"square\"\n",
-                "waveform",
-            ),
-            // scenario.start_ms: zero or positive.
-            (
-                "[[scenario]]\npart = \"U5\"\nprofile = \"esp32_boot_wifi\"\nstart_ms = -5.0\n",
-                "start_ms",
-            ),
-            // CapOverride ESR/ESL: zero or positive.
-            (
-                "[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesr_ohms = -0.1\n",
-                "esr_ohms",
-            ),
-            (
-                "[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesl_henries = -1e-9\n",
-                "esl_henries",
-            ),
-        ];
-        for (block, needle) in cases {
-            let err = spec_from(&format!("{base}{block}"))
-                .validate()
-                .unwrap_err()
-                .to_string();
-            assert!(
-                err.contains(needle),
-                "`{block}` must be rejected naming `{needle}`, got: {err}"
-            );
-        }
-        // The in-bounds counterparts still validate.
-        for block in [
-            "[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\naddress = 0x50\nsize = 256\n",
-            "[[peripheral]]\nid = \"S1\"\ntype = \"stimulus\"\nnet = \"IN\"\nwaveform = \"sine\"\nfreq_hz = 50.0\n",
-            "[[scenario]]\npart = \"U5\"\nprofile = \"esp32_boot_wifi\"\nstart_ms = 5.0\n",
-            "[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesr_ohms = 0.02\nesl_henries = 1e-9\n",
-        ] {
-            let spec = spec_from(&format!("{base}{block}"));
-            assert!(
-                spec.validate().is_ok(),
-                "in-bounds `{block}` must pass: {:?}",
-                spec.validate()
-            );
-        }
+        let board_with = vec!["CS1".to_string(), "VCC".to_string()];
+        assert!(spec.check_nets(&board_with).is_ok());
     }
 
     #[test]
     fn mcu_accepts_both_the_note_string_and_the_config_table() {
-        // E31: `mcu = "atmega328p"` (legacy informational note) and the
-        // `[mcu]` table form must both parse; descriptor_dir resolves against
-        // the spec's directory.
-        let note = spec_from(
-            "board = \"b.kicad_pcb\"\nduration_ms = 10\nmcu = \"atmega328p\"\n\
-             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
-        );
+        let note = spec_from(&format!("{BASE}mcu = \"atmega328p\"\n{VCC}"));
         assert_eq!(note.mcu_note(), Some("atmega328p"));
         assert_eq!(note.mcu_descriptor_dir(), None);
 
-        let mut table = spec_from(
-            "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-             [mcu]\nname = \"stm32f103\"\ndescriptor_dir = \"mcu-overrides\"\n\
-             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
-        );
+        let mut table = spec_from(&format!(
+            "{BASE}[mcu]\nname = \"stm32f103\"\ndescriptor_dir = \"mcu-overrides\"\n{VCC}"
+        ));
         table.base_dir = PathBuf::from("/repo/ci");
         assert_eq!(table.mcu_note(), Some("stm32f103"));
         assert_eq!(
@@ -3578,15 +2830,33 @@ min_toggles = 1
             Some(PathBuf::from("/repo/ci/mcu-overrides")),
             "descriptor_dir resolves relative to the spec's directory"
         );
-        assert!(table.validate().is_ok());
 
-        // An absolute descriptor_dir passes through untouched.
-        let mut abs = spec_from(
-            "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-             [mcu]\ndescriptor_dir = \"/opt/socs\"\n\
-             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
-        );
+        let mut abs = spec_from(&format!(
+            "{BASE}[mcu]\ndescriptor_dir = \"/opt/socs\"\n{VCC}"
+        ));
         abs.base_dir = PathBuf::from("/repo/ci");
         assert_eq!(abs.mcu_descriptor_dir(), Some(PathBuf::from("/opt/socs")));
+    }
+
+    #[test]
+    fn mcu_table_errors_name_the_key_and_the_fix() {
+        let parse_err = |src: &str| {
+            toml::from_str::<Spec>(src)
+                .expect_err("the spec must be rejected")
+                .to_string()
+        };
+        let err = parse_err(&format!("{BASE}[mcu]\ndescriptor_dirr = \"mcu\"\n"));
+        assert!(
+            err.contains("unknown field `descriptor_dirr`") && err.contains("descriptor_dir"),
+            "the mistyped key is named and the legal ones offered: {err}"
+        );
+        // `[mcu]` placed before a top-level scalar swallows it; the hint names the fix.
+        let err = parse_err(
+            "board = \"board.kicad_pcb\"\n[mcu]\nname = \"stm32f103\"\nduration_ms = 10\n",
+        );
+        assert!(
+            err.contains("`duration_ms` is a top-level key; move it above the [mcu] table"),
+            "{err}"
+        );
     }
 }

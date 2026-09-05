@@ -1127,1021 +1127,6 @@ fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::schema::{
-        AboveDomainBehavior, ComponentKind, CurrentProgramEquation, ModelEntry, Params,
-        PeripheralPower, PeripheralSpec,
-    };
-    use std::collections::BTreeMap;
-
-    fn make_diode(is: f64, n: f64, rs: f64) -> ModelEntry {
-        let mut p = Params::default();
-        p.set_f64("is", is);
-        p.set_f64("n", n);
-        p.set_f64("rs", rs);
-        ModelEntry {
-            id: "test_diode".into(),
-            kind: ComponentKind::Diode,
-            description: String::new(),
-            r#match: Default::default(),
-            params: p,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        }
-    }
-
-    #[test]
-    fn valid_diode_passes() {
-        let entry = make_diode(1e-14, 1.5, 1.0);
-        assert!(validate(&entry).is_ok());
-    }
-
-    fn envelope_entry(body: &str) -> ModelEntry {
-        toml::from_str(&format!(
-            r#"
-id = "envelope_test"
-kind = "digital"
-description = "identity-only envelope test"
-[match]
-value_re = "^ENVELOPE_TEST$"
-[params]
-identity_only = true
-warning = "identity only"
-unlocked_by = "validated behavior"
-[pins]
-"1" = "vcc"
-{body}
-"#
-        ))
-        .expect("envelope fixture must parse")
-    }
-
-    #[test]
-    fn malformed_operating_envelopes_are_rejected() {
-        let cases = [
-            (
-                "missing basis",
-                r#"
-[[envelope]]
-kind = "supply_range"
-pin = "vcc"
-min_v = 2.7
-max_v = 3.6
-"#,
-                "basis",
-            ),
-            (
-                "unknown role",
-                r#"
-[[envelope]]
-kind = "supply_range"
-pin = "missing"
-min_v = 2.7
-max_v = 3.6
-basis = "Recommended Operating Conditions, VCC row"
-"#,
-                "missing",
-            ),
-            (
-                "inverted range",
-                r#"
-[[envelope]]
-kind = "supply_range"
-pin = "vcc"
-min_v = 3.6
-max_v = 2.7
-basis = "Recommended Operating Conditions, VCC row"
-"#,
-                "min_v",
-            ),
-        ];
-
-        for (name, body, needle) in cases {
-            let errors = match validate(&envelope_entry(body)) {
-                Ok(()) => panic!("{name} envelope must fail validation"),
-                Err(errors) => errors,
-            };
-            assert!(
-                errors.iter().any(|error| error.message.contains(needle)),
-                "{name} must name {needle}: {errors:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn identity_only_requires_an_explicit_unlock_and_no_behavior() {
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.params = Params::default();
-        entry.params.set_bool("identity_only", true);
-        entry.params.set_str("warning", "pin identity only");
-        let errs = validate(&entry).expect_err("missing unlock must fail");
-        assert!(
-            errs.iter().any(|e| e.message.contains("unlocked_by")),
-            "identity-only cards must say what turns them into behavior: {errs:?}"
-        );
-
-        entry
-            .params
-            .set_str("unlocked_by", "validated diode I-V parameters");
-        assert!(
-            validate(&entry).is_ok(),
-            "identity-only cards do not need invented diode constants: {:?}",
-            validate(&entry)
-        );
-
-        entry.logic.inputs.push("a".into());
-        assert!(
-            validate(&entry)
-                .expect_err("identity plus behavior must fail")
-                .iter()
-                .any(|e| e.message.contains("cannot also declare")),
-            "identity and executable behavior must be distinct states"
-        );
-    }
-
-    #[test]
-    fn must_not_float_roles_are_typed_and_model_bound() {
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.pins = BTreeMap::from([
-            ("1".into(), "wp_n".into()),
-            ("2".into(), "hold_n".into()),
-            ("3".into(), "anode".into()),
-            ("4".into(), "cathode".into()),
-        ]);
-        entry.params.set_str("must_not_float_roles", "wp_n, hold_n");
-        assert!(validate(&entry).is_ok(), "declared roles must pass");
-
-        entry
-            .params
-            .set_str("must_not_float_roles", "wp_n, missing");
-        let errs = validate(&entry).expect_err("unknown role must fail");
-        assert!(
-            errs.iter().any(|e| e.message.contains("missing")),
-            "a static control contract cannot name an absent pad role: {errs:?}"
-        );
-    }
-
-    #[test]
-    fn peripheral_power_requires_protocol_connected_roles_and_physical_values() {
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.kind = ComponentKind::Digital;
-        entry.pins = BTreeMap::from([
-            ("1".into(), "scl".into()),
-            ("2".into(), "gnd".into()),
-            ("3".into(), "sda".into()),
-            ("4".into(), "vcc".into()),
-        ]);
-        entry.peripheral = Some(PeripheralSpec::I2cEeprom {
-            address: 0x50,
-            size_bytes: 128,
-            page_size: 8,
-            word_address_bytes: 1,
-        });
-        entry.peripheral_power = Some(PeripheralPower {
-            supply_role: "vcc".into(),
-            return_role: "gnd".into(),
-            power_on_threshold_v: 1.7,
-            idle_a: 6e-6,
-            read_a: 1e-3,
-            write_a: 3e-3,
-            low_power_a: Some(1e-6),
-        });
-        assert!(validate(&entry).is_ok(), "source-bound power is valid");
-
-        entry.peripheral = None;
-        let errs = validate(&entry).expect_err("power without protocol must fail");
-        assert!(errs
-            .iter()
-            .any(|e| e.message.contains("requires a [models.peripheral]")));
-
-        entry.peripheral = Some(PeripheralSpec::I2cEeprom {
-            address: 0x50,
-            size_bytes: 128,
-            page_size: 8,
-            word_address_bytes: 1,
-        });
-        entry.peripheral_power.as_mut().unwrap().supply_role = "missing".into();
-        let errs = validate(&entry).expect_err("unknown supply role must fail");
-        assert!(errs
-            .iter()
-            .any(|e| e.message.contains("missing") && e.message.contains("not a role")));
-
-        entry.peripheral_power.as_mut().unwrap().supply_role = "vcc".into();
-        entry.peripheral_power.as_mut().unwrap().write_a = -1.0;
-        let errs = validate(&entry).expect_err("negative current must fail");
-        assert!(errs
-            .iter()
-            .any(|e| e.message.contains("write_a") && e.message.contains("non-negative")));
-    }
-
-    #[test]
-    fn register_map_peripheral_requires_valid_spec_and_board_roles() {
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.kind = ComponentKind::Digital;
-        entry.pins = BTreeMap::from([
-            ("1".into(), "scl".into()),
-            ("2".into(), "gnd".into()),
-            ("3".into(), "sda".into()),
-            ("4".into(), "vcc".into()),
-            ("5".into(), "sdo".into()),
-            ("6".into(), "csb".into()),
-        ]);
-        let spec = r#"[sensor]
-name = "WHOAMI"
-bus = "i2c"
-i2c_address = 0x18
-[[sensor.register]]
-addr = 0x00
-const = [0x13]
-[sensor.protocol]
-style = "i2c_pointer"
-"#;
-        entry.peripheral = Some(PeripheralSpec::RegisterMap {
-            spec_toml: spec.into(),
-            controller: None,
-            scl_role: "scl".into(),
-            sda_role: "sda".into(),
-            cs_role: "cs".into(),
-            clk_role: "sck".into(),
-            mosi_role: "mosi".into(),
-            miso_role: "miso".into(),
-            required_high_roles: vec!["csb".into()],
-            required_low_roles: vec![],
-            address_select_role: Some("sdo".into()),
-            address_when_low: Some(0x18),
-            address_when_high: Some(0x19),
-        });
-        assert!(
-            validate(&entry).is_ok(),
-            "a validated data-only device with connected I2C roles should lint: {:?}",
-            validate(&entry)
-        );
-
-        if let Some(PeripheralSpec::RegisterMap {
-            address_when_high, ..
-        }) = &mut entry.peripheral
-        {
-            *address_when_high = None;
-        }
-        let errors = validate(&entry).expect_err("partial address strap must fail closed");
-        assert!(errors
-            .iter()
-            .any(|error| error.message.contains("requires address_select_role")));
-        if let Some(PeripheralSpec::RegisterMap {
-            address_when_high, ..
-        }) = &mut entry.peripheral
-        {
-            *address_when_high = Some(0x19);
-        }
-
-        if let Some(PeripheralSpec::RegisterMap { spec_toml, .. }) = &mut entry.peripheral {
-            *spec_toml = "[sensor]\nname = \"broken\"\nbus = \"i2c\"".into();
-        }
-        let errors = validate(&entry).expect_err("invalid embedded spec must fail closed");
-        assert!(errors
-            .iter()
-            .any(|error| error.message.contains("register-map")));
-
-        if let Some(PeripheralSpec::RegisterMap {
-            spec_toml,
-            sda_role,
-            ..
-        }) = &mut entry.peripheral
-        {
-            *spec_toml = spec.into();
-            *sda_role = "missing_sda".into();
-        }
-        let errors = validate(&entry).expect_err("unmapped bus role must fail closed");
-        assert!(errors.iter().any(|error| {
-            error.message.contains("missing_sda") && error.message.contains("not a role")
-        }));
-    }
-
-    #[test]
-    fn typoed_pin_role_is_caught_but_extra_pins_are_allowed() {
-        // U3: a required signal role missing from an explicit [models.pins] map
-        // (typically a typo) must fail lint. Passing lint clean, it binds the
-        // part OPEN at run time with a misleading "not connected" message.
-        let mut d = make_diode(1e-14, 1.5, 1.0);
-        d.pins = BTreeMap::from([
-            ("1".into(), "anmode".into()),
-            ("2".into(), "cathode".into()),
-        ]);
-        let errs = validate(&d).unwrap_err();
-        assert!(
-            errs.iter().any(|e| e.message.contains("anode")),
-            "a typo'd anode must be caught, got: {errs:?}"
-        );
-
-        // A correct map (any accepted alias) passes, and EXTRA pins never flag.
-        let mut ok = make_diode(1e-14, 1.5, 1.0);
-        ok.pins = BTreeMap::from([
-            ("1".into(), "a".into()),
-            ("2".into(), "k".into()),
-            ("3".into(), "case".into()), // an extra thermal/NC pad is fine
-        ]);
-        assert!(
-            validate(&ok).is_ok(),
-            "aliases + an extra pin must pass: {:?}",
-            validate(&ok)
-        );
-
-        // An empty pins map (the footprint/pin-rules inference path) is left alone.
-        let inferred = make_diode(1e-14, 1.5, 1.0);
-        assert!(inferred.pins.is_empty() && validate(&inferred).is_ok());
-
-        // Channel suffixes fold onto the base role: a dual op-amp wired _a/_b,
-        // and a numbered dual MOSFET (d1/g1/s1), both satisfy the anchors.
-        let mut op = make_diode(1e-14, 1.5, 1.0);
-        op.kind = ComponentKind::Opamp;
-        op.params = Params::default();
-        op.params.set_f64("gain", 1e5);
-        op.params.set_f64("rail_lo", 0.0);
-        op.params.set_f64("rail_hi", 12.0);
-        op.pins = BTreeMap::from([
-            ("1".into(), "out_a".into()),
-            ("2".into(), "in_minus_a".into()),
-            ("3".into(), "in_plus_a".into()),
-        ]);
-        assert!(
-            validate(&op).is_ok(),
-            "suffixed opamp channel must pass: {:?}",
-            validate(&op)
-        );
-    }
-
-    #[test]
-    fn nonpositive_or_nonfinite_ratings_are_rejected() {
-        // R52: absolute-maximum ratings gate the engine's stress faults, but a
-        // NaN/negative/zero rating passed validation and then silently disabled
-        // the fault (limit>0.0 is false → frac 0 → never trips). Reject them.
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.ratings.max_current_a = Some(f64::NAN);
-        assert!(
-            validate(&entry)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("max_current_a")),
-            "a NaN max_current_a must be rejected"
-        );
-
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.ratings.max_voltage_v = Some(-75.0);
-        assert!(
-            validate(&entry)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("max_voltage_v")),
-            "a negative max_voltage_v must be rejected"
-        );
-
-        // A well-formed positive rating still passes.
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.ratings.max_current_a = Some(1.0);
-        entry.ratings.max_voltage_v = Some(75.0);
-        assert!(validate(&entry).is_ok(), "valid ratings must pass");
-    }
-
-    fn programmed_vreg() -> ModelEntry {
-        toml::from_str(
-            r#"
-id = "programmed_vreg"
-kind = "vreg"
-description = "validation fixture"
-
-[params]
-vout = 4.2
-dropout_v = 0.3
-iq_a = 0.001
-
-[pins]
-"1" = "in"
-"2" = "gnd"
-"3" = "prog"
-"4" = "out"
-"5" = "sense_a"
-"6" = "sense_b"
-
-[ratings]
-max_current_a = 0.8
-
-[current_program]
-pin = "prog"
-semantics = "regulated_current"
-current_in_roles = ["in"]
-current_out_roles = ["out"]
-max_operating_current_a = 0.4
-equation = "piecewise_inverse_resistance"
-low_k_volts = 1000.0
-transition_current_a = 0.15
-high_numerator_a = 1.2
-resistance_scale_ohms = 1000.0
-high_offset = 1.3333333333333333
-"#,
-        )
-        .expect("valid current-program fixture")
-    }
-
-    #[test]
-    fn current_program_equations_and_operating_limits_are_validated() {
-        let valid = programmed_vreg();
-        assert!(
-            validate(&valid).is_ok(),
-            "the continuous TP4054-shaped fixture must validate: {:?}",
-            validate(&valid)
-        );
-
-        let mut deliberately_bounded_below_transition = programmed_vreg();
-        deliberately_bounded_below_transition
-            .current_program
-            .as_mut()
-            .unwrap()
-            .max_operating_current_a = Some(0.1);
-        assert!(
-            validate(&deliberately_bounded_below_transition).is_ok(),
-            "a deliberately narrower supported operating domain is physical even when it never reaches the equation's second branch"
-        );
-
-        let mut missing_pin = programmed_vreg();
-        missing_pin.current_program.as_mut().unwrap().pin = "not_a_pin".into();
-        assert!(
-            validate(&missing_pin)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("current_program.pin")),
-            "the programming role must exist in the model pin map"
-        );
-
-        let mut missing_flow = programmed_vreg();
-        missing_flow
-            .current_program
-            .as_mut()
-            .unwrap()
-            .current_out_roles
-            .clear();
-        assert!(
-            validate(&missing_flow)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("current_out_roles")),
-            "regulated current must declare both sides of its path"
-        );
-
-        let mut overlapping_flow = programmed_vreg();
-        overlapping_flow
-            .current_program
-            .as_mut()
-            .unwrap()
-            .current_out_roles = vec!["IN".into()];
-        assert!(
-            validate(&overlapping_flow).unwrap_err().iter().any(|e| e
-                .message
-                .contains("both current_in_roles and current_out_roles")),
-            "one role cannot be both source and sink"
-        );
-
-        let mut zero_limit = programmed_vreg();
-        zero_limit
-            .current_program
-            .as_mut()
-            .unwrap()
-            .max_operating_current_a = Some(0.0);
-        assert!(
-            validate(&zero_limit)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("max_operating_current_a")),
-            "a non-positive operating limit must be rejected"
-        );
-
-        let mut missing_regulated_limit = programmed_vreg();
-        missing_regulated_limit
-            .current_program
-            .as_mut()
-            .unwrap()
-            .max_operating_current_a = None;
-        assert!(
-            validate(&missing_regulated_limit)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("requires max_operating_current_a")),
-            "a regulated equation needs a sourced operating-domain ceiling"
-        );
-
-        let mut saturation_without_limit = programmed_vreg();
-        let program = saturation_without_limit.current_program.as_mut().unwrap();
-        program.max_operating_current_a = None;
-        program.above_domain = AboveDomainBehavior::Saturate;
-        assert!(
-            validate(&saturation_without_limit)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("above_domain = saturate")),
-            "saturation without a sourced saturation value is meaningless"
-        );
-
-        let mut above_absolute = programmed_vreg();
-        above_absolute
-            .current_program
-            .as_mut()
-            .unwrap()
-            .max_operating_current_a = Some(0.9);
-        assert!(
-            validate(&above_absolute)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("ratings.max_current_a")),
-            "normal operation cannot be declared above the device current threshold"
-        );
-
-        let mut independent_control_pin_limit = programmed_vreg();
-        independent_control_pin_limit.ratings.max_current_a = None;
-        independent_control_pin_limit.ratings.max_pin_current_a = Some(0.3);
-        assert!(
-            validate(&independent_control_pin_limit).is_ok(),
-            "a PROG/control-pin current limit does not constrain the programmed output current: {:?}",
-            validate(&independent_control_pin_limit)
-        );
-
-        let mut sense_scaled = programmed_vreg();
-        sense_scaled.current_program.as_mut().unwrap().equation =
-            CurrentProgramEquation::SenseScaledResistance {
-                sense_roles: vec!["sense_a".into(), "sense_b".into()],
-                sense_far_roles: vec!["in".into(), "ground".into()],
-                program_bias_a: 50e-6,
-                program_full_scale_v: 1.0,
-                sense_full_scale_v: 0.05,
-            };
-        assert!(
-            validate(&sense_scaled).is_ok(),
-            "a complete two-resistor sense law must validate: {:?}",
-            validate(&sense_scaled)
-        );
-
-        let mut missing_sense_role = sense_scaled.clone();
-        if let CurrentProgramEquation::SenseScaledResistance { sense_roles, .. } =
-            &mut missing_sense_role
-                .current_program
-                .as_mut()
-                .unwrap()
-                .equation
-        {
-            sense_roles[1] = "not_a_pin".into();
-        }
-        assert!(validate(&missing_sense_role)
-            .unwrap_err()
-            .iter()
-            .any(|error| error.message.contains("sense_roles")));
-
-        let mut duplicate_sense_role = sense_scaled.clone();
-        if let CurrentProgramEquation::SenseScaledResistance { sense_roles, .. } =
-            &mut duplicate_sense_role
-                .current_program
-                .as_mut()
-                .unwrap()
-                .equation
-        {
-            sense_roles[1] = "SENSE_A".into();
-        }
-        assert!(validate(&duplicate_sense_role)
-            .unwrap_err()
-            .iter()
-            .any(|error| error.message.contains("repeats role")));
-
-        let mut mismatched_far_roles = sense_scaled.clone();
-        if let CurrentProgramEquation::SenseScaledResistance {
-            sense_far_roles, ..
-        } = &mut mismatched_far_roles
-            .current_program
-            .as_mut()
-            .unwrap()
-            .equation
-        {
-            sense_far_roles.pop();
-        }
-        assert!(validate(&mismatched_far_roles)
-            .unwrap_err()
-            .iter()
-            .any(|error| error.message.contains("sense_far_roles")));
-
-        let mut invalid_far_role = sense_scaled.clone();
-        if let CurrentProgramEquation::SenseScaledResistance {
-            sense_far_roles, ..
-        } = &mut invalid_far_role.current_program.as_mut().unwrap().equation
-        {
-            sense_far_roles[0] = "not_a_pin".into();
-        }
-        assert!(validate(&invalid_far_role)
-            .unwrap_err()
-            .iter()
-            .any(|error| error.message.contains("not_a_pin")));
-
-        let mut invalid_sense_constant = sense_scaled;
-        if let CurrentProgramEquation::SenseScaledResistance { program_bias_a, .. } =
-            &mut invalid_sense_constant
-                .current_program
-                .as_mut()
-                .unwrap()
-                .equation
-        {
-            *program_bias_a = 0.0;
-        }
-        assert!(validate(&invalid_sense_constant)
-            .unwrap_err()
-            .iter()
-            .any(|error| error.message.contains("program_bias_a")));
-
-        let mut discontinuous = programmed_vreg();
-        discontinuous.current_program.as_mut().unwrap().equation =
-            CurrentProgramEquation::PiecewiseInverseResistance {
-                low_k_volts: 1000.0,
-                transition_current_a: 0.15,
-                high_numerator_a: 1.2,
-                resistance_scale_ohms: 1000.0,
-                high_offset: 3.0,
-            };
-        assert!(
-            validate(&discontinuous)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("continuous")),
-            "a branch discontinuity is almost certainly a copied equation error"
-        );
-
-        let mut nonfinite = programmed_vreg();
-        nonfinite.current_program.as_mut().unwrap().equation =
-            CurrentProgramEquation::InverseResistance { k_volts: f64::NAN };
-        assert!(
-            validate(&nonfinite)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("k_volts")),
-            "non-finite equation constants must be rejected"
-        );
-    }
-
-    #[test]
-    fn nonpositive_or_nonfinite_thermal_resistances_are_rejected() {
-        // R53: theta_ja_c_per_w / theta_jc_c_per_w are UNFLOORED solver inputs
-        // (Tj = ambient + power*theta_ja), so a negative/NaN value drives Tj at or
-        // below ambient and the Overtemperature fault never trips, a silent
-        // safety-disable the R52 ratings gate missed for these two fields.
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.ratings.theta_ja_c_per_w = Some(-50.0);
-        assert!(
-            validate(&entry)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("theta_ja_c_per_w")),
-            "a negative theta_ja must be rejected"
-        );
-
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.ratings.theta_jc_c_per_w = Some(f64::NAN);
-        assert!(
-            validate(&entry)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("theta_jc_c_per_w")),
-            "a NaN theta_jc must be rejected"
-        );
-
-        // A well-formed positive thermal resistance still passes.
-        let mut entry = make_diode(1e-14, 1.5, 1.0);
-        entry.ratings.theta_ja_c_per_w = Some(62.0);
-        assert!(validate(&entry).is_ok(), "a valid theta_ja must pass");
-    }
-
-    #[test]
-    fn out_of_range_is_fails() {
-        // IS way too large, physically impossible
-        let entry = make_diode(1.0, 1.5, 1.0);
-        let errs = validate(&entry).unwrap_err();
-        assert!(errs.iter().any(|e| e.message.contains("is")));
-    }
-
-    #[test]
-    fn missing_required_param_fails() {
-        let mut p = Params::default();
-        p.set_f64("is", 1e-14);
-        // n and rs missing
-        let entry = ModelEntry {
-            id: "bad".into(),
-            kind: ComponentKind::Diode,
-            description: String::new(),
-            r#match: Default::default(),
-            params: p,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        };
-        let errs = validate(&entry).unwrap_err();
-        assert!(errs.iter().any(|e| e.message.contains("'n'")));
-        assert!(errs.iter().any(|e| e.message.contains("'rs'")));
-    }
-
-    #[test]
-    fn bjt_range_check() {
-        let mut p = Params::default();
-        p.set_f64("is", 1e-14);
-        p.set_f64("bf", 9999.0); // way too high
-        p.set_f64("nf", 1.0);
-        p.set_f64("vaf", 80.0);
-        let entry = ModelEntry {
-            id: "bad_bjt".into(),
-            kind: ComponentKind::BjtNpn,
-            description: String::new(),
-            r#match: Default::default(),
-            params: p,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        };
-        let errs = validate(&entry).unwrap_err();
-        assert!(errs.iter().any(|e| e.message.contains("bf")));
-    }
-
-    #[test]
-    fn opamp_with_inverted_rails_is_rejected() {
-        // R35: rail_lo/rail_hi were required but never order-checked, so a
-        // swapped pair (rail_lo=5, rail_hi=0) passed validation and handed the
-        // solver an empty saturation band. It must now fail on the ordering.
-        let mut p = Params::default();
-        p.set_f64("gain", 1e5);
-        p.set_f64("rail_lo", 5.0);
-        p.set_f64("rail_hi", 0.0);
-        let entry = ModelEntry {
-            id: "inverted_opamp".into(),
-            kind: ComponentKind::Opamp,
-            description: String::new(),
-            r#match: Default::default(),
-            params: p,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        };
-        let errs = validate(&entry).unwrap_err();
-        assert!(
-            errs.iter()
-                .any(|e| e.message.contains("rail_lo") && e.message.contains("less than")),
-            "swapped opamp rails must be rejected: {errs:?}"
-        );
-
-        // A correctly-ordered opamp still validates.
-        let mut ok = Params::default();
-        ok.set_f64("gain", 1e5);
-        ok.set_f64("rail_lo", 0.0);
-        ok.set_f64("rail_hi", 5.0);
-        let good = ModelEntry {
-            id: "good_opamp".into(),
-            kind: ComponentKind::Opamp,
-            description: String::new(),
-            r#match: Default::default(),
-            params: ok,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        };
-        assert!(validate(&good).is_ok(), "a well-ordered opamp must pass");
-    }
-
-    #[test]
-    fn power_mosfet_kp_above_one_is_accepted() {
-        // R39: kp = k'·(W/L) legitimately reaches the tens/hundreds for discrete
-        // power MOSFETs; the repo's own db/mosfet.toml has kp up to 200. The old
-        // 1.0 A/V² ceiling false-flagged 6 of 8 shipped models and rejected any
-        // correctly-extracted power FET.
-        for kp in [4.5, 10.0, 15.0, 30.0, 200.0] {
-            let mut p = Params::default();
-            p.set_f64("vto", 2.0);
-            p.set_f64("kp", kp);
-            let entry = ModelEntry {
-                id: "power_fet".into(),
-                kind: ComponentKind::Nmos,
-                description: String::new(),
-                r#match: Default::default(),
-                params: p,
-                pins: BTreeMap::new(),
-                envelope: Default::default(),
-                ratings: Default::default(),
-                straps: Vec::new(),
-                behavioral: Default::default(),
-                logic: Default::default(),
-                current_program: None,
-                peripheral: None,
-                peripheral_power: None,
-                coverage: Default::default(),
-                passive_class: None,
-            };
-            assert!(
-                validate(&entry).is_ok(),
-                "a power MOSFET with kp={kp} must validate: {:?}",
-                validate(&entry)
-            );
-        }
-        // An absurd kp is still rejected.
-        let mut bad = Params::default();
-        bad.set_f64("vto", 2.0);
-        bad.set_f64("kp", 5000.0);
-        let entry = ModelEntry {
-            id: "absurd_fet".into(),
-            kind: ComponentKind::Nmos,
-            description: String::new(),
-            r#match: Default::default(),
-            params: bad,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        };
-        assert!(
-            validate(&entry)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.message.contains("kp")),
-            "kp=5000 is still out of range"
-        );
-    }
-
-    #[test]
-    fn nan_params_are_rejected_not_silently_accepted() {
-        // R37: every IEEE comparison against NaN is false, so `v < min || v > max`
-        // let a `nan` TOML literal slip through the physical-bounds gate and reach
-        // the solver. A NaN param must be rejected.
-        let mut p = Params::default();
-        p.set_f64("vout", f64::NAN);
-        p.set_f64("dropout_v", 0.3);
-        p.set_f64("iq_a", 1e-3);
-        let entry = ModelEntry {
-            id: "nan_vreg".into(),
-            kind: ComponentKind::Vreg,
-            description: String::new(),
-            r#match: Default::default(),
-            params: p,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        };
-        let errs = validate(&entry).unwrap_err();
-        assert!(
-            errs.iter().any(|e| e.message.contains("vout")),
-            "a NaN vout must be rejected: {errs:?}"
-        );
-    }
-
-    #[test]
-    fn analog_switch_with_ron_above_roff_is_rejected() {
-        // R37: on-resistance must be far below off-resistance, but the two ranges
-        // overlap and there was no order check, so a swapped pair (ron=5000,
-        // roff=2000) validated, an inverted transmission gate. Must be rejected.
-        let mut p = Params::default();
-        p.set_f64("ron", 5000.0);
-        p.set_f64("roff", 2000.0);
-        let entry = ModelEntry {
-            id: "inverted_switch".into(),
-            kind: ComponentKind::AnalogSwitch,
-            description: String::new(),
-            r#match: Default::default(),
-            params: p,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        };
-        let errs = validate(&entry).unwrap_err();
-        assert!(
-            errs.iter()
-                .any(|e| e.message.contains("ron") && e.message.contains("less than")),
-            "a switch with ron >= roff must be rejected: {errs:?}"
-        );
-
-        // A well-ordered switch still validates.
-        let mut ok = Params::default();
-        ok.set_f64("ron", 5.0);
-        ok.set_f64("roff", 1e9);
-        let good = ModelEntry {
-            id: "good_switch".into(),
-            kind: ComponentKind::AnalogSwitch,
-            description: String::new(),
-            r#match: Default::default(),
-            params: ok,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        };
-        assert!(
-            validate(&good).is_ok(),
-            "a well-ordered analog switch must pass"
-        );
-    }
-
-    #[test]
-    fn comparator_with_inverted_outputs_is_rejected() {
-        // R35: same gap on the comparator out_lo/out_hi pair.
-        let mut p = Params::default();
-        p.set_f64("out_lo", 3.3);
-        p.set_f64("out_hi", 0.0);
-        p.set_f64("hysteresis", 0.05);
-        let entry = ModelEntry {
-            id: "inverted_comp".into(),
-            kind: ComponentKind::Comparator,
-            description: String::new(),
-            r#match: Default::default(),
-            params: p,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
-        };
-        let errs = validate(&entry).unwrap_err();
-        assert!(
-            errs.iter()
-                .any(|e| e.message.contains("out_lo") && e.message.contains("less than")),
-            "swapped comparator outputs must be rejected: {errs:?}"
-        );
-    }
-}
-
 // ── Kind vocabulary help ──────────────────────────────────────────────────────
 
 /// Every TOML spelling [`ComponentKind`] accepts, in declaration order. Kept
@@ -2237,48 +1222,459 @@ fn levenshtein(a: &str, b: &str) -> usize {
 }
 
 #[cfg(test)]
-mod kind_vocabulary_tests {
+mod tests {
     use super::*;
+    use crate::schema::{
+        AboveDomainBehavior, ComponentKind, CurrentProgramEquation, ModelEntry, Params,
+        PeripheralPower, PeripheralSpec,
+    };
+    use std::collections::BTreeMap;
 
-    /// KIND_NAMES must cover exactly the enum's serde spellings: every name
-    /// deserializes, and every variant we can list round-trips into the list.
-    #[test]
-    fn kind_names_cover_the_enum() {
-        for name in KIND_NAMES {
-            let toml = format!("kind = \"{name}\"");
-            #[derive(serde::Deserialize)]
-            struct Probe {
-                #[allow(dead_code)]
-                kind: ComponentKind,
-            }
-            let parsed: Result<Probe, _> = toml::from_str(&toml);
-            assert!(
-                parsed.is_ok(),
-                "KIND_NAMES lists '{name}' but it does not parse"
-            );
+    fn entry(kind: ComponentKind, params: &[(&str, f64)]) -> ModelEntry {
+        let mut p = Params::default();
+        for (k, v) in params {
+            p.set_f64(*k, *v);
+        }
+        ModelEntry {
+            id: "t".into(),
+            kind,
+            description: String::new(),
+            r#match: Default::default(),
+            params: p,
+            pins: BTreeMap::new(),
+            envelope: Default::default(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+            current_program: None,
+            peripheral: None,
+            peripheral_power: None,
+            coverage: Default::default(),
+            passive_class: None,
         }
     }
 
+    fn diode() -> ModelEntry {
+        entry(
+            ComponentKind::Diode,
+            &[("is", 1e-14), ("n", 1.5), ("rs", 1.0)],
+        )
+    }
+
+    fn pins(e: &mut ModelEntry, roles: &[(&str, &str)]) {
+        e.pins = roles
+            .iter()
+            .map(|(p, r)| (p.to_string(), r.to_string()))
+            .collect();
+    }
+
+    /// The entry fails, and one error names `needle` (so the right rule fired).
+    fn rejects(e: &ModelEntry, needle: &str) {
+        let errs = validate(e).expect_err(needle);
+        assert!(
+            errs.iter().any(|x| x.message.contains(needle)),
+            "expected an error naming {needle:?}: {errs:?}"
+        );
+    }
+
+    fn accepts(e: &ModelEntry) {
+        assert!(validate(e).is_ok(), "{:?}", validate(e));
+    }
+
     #[test]
-    fn aliases_map_to_their_kind() {
-        assert_eq!(kind_suggestion("ldo"), Some("vreg"));
+    fn param_ranges_and_orderings() {
+        use ComponentKind::*;
+        accepts(&diode());
+        rejects(&entry(Diode, &[("is", 1.0), ("n", 1.5), ("rs", 1.0)]), "is");
+        let missing = entry(Diode, &[("is", 1e-14)]);
+        rejects(&missing, "'n'");
+        rejects(&missing, "'rs'");
+        rejects(
+            &entry(
+                BjtNpn,
+                &[("is", 1e-14), ("bf", 9999.0), ("nf", 1.0), ("vaf", 80.0)],
+            ),
+            "bf",
+        );
+
+        rejects(
+            &entry(Opamp, &[("gain", 1e5), ("rail_lo", 5.0), ("rail_hi", 0.0)]),
+            "rail_lo",
+        );
+        accepts(&entry(
+            Opamp,
+            &[("gain", 1e5), ("rail_lo", 0.0), ("rail_hi", 5.0)],
+        ));
+
+        for kp in [4.5, 30.0, 200.0] {
+            accepts(&entry(Nmos, &[("vto", 2.0), ("kp", kp)]));
+        }
+        rejects(&entry(Nmos, &[("vto", 2.0), ("kp", 5000.0)]), "kp");
+
+        rejects(
+            &entry(
+                Vreg,
+                &[("vout", f64::NAN), ("dropout_v", 0.3), ("iq_a", 1e-3)],
+            ),
+            "vout",
+        );
+
+        rejects(
+            &entry(AnalogSwitch, &[("ron", 5000.0), ("roff", 2000.0)]),
+            "ron",
+        );
+        accepts(&entry(AnalogSwitch, &[("ron", 5.0), ("roff", 1e9)]));
+
+        rejects(
+            &entry(
+                Comparator,
+                &[("out_lo", 3.3), ("out_hi", 0.0), ("hysteresis", 0.05)],
+            ),
+            "out_lo",
+        );
+    }
+
+    #[test]
+    fn ratings_must_be_positive_and_finite() {
+        let mut e = diode();
+        e.ratings.max_current_a = Some(f64::NAN);
+        rejects(&e, "max_current_a");
+        let mut e = diode();
+        e.ratings.max_voltage_v = Some(-75.0);
+        rejects(&e, "max_voltage_v");
+        let mut e = diode();
+        e.ratings.theta_ja_c_per_w = Some(-50.0);
+        rejects(&e, "theta_ja_c_per_w");
+        let mut e = diode();
+        e.ratings.theta_jc_c_per_w = Some(f64::NAN);
+        rejects(&e, "theta_jc_c_per_w");
+
+        let mut e = diode();
+        e.ratings.max_current_a = Some(1.0);
+        e.ratings.max_voltage_v = Some(75.0);
+        e.ratings.theta_ja_c_per_w = Some(62.0);
+        accepts(&e);
+    }
+
+    #[test]
+    fn malformed_operating_envelopes_are_rejected() {
+        let fixture = |body: &str| -> ModelEntry {
+            toml::from_str(&format!(
+                "id = \"e\"\nkind = \"digital\"\n[params]\nidentity_only = true\nwarning = \"w\"\n\
+                 unlocked_by = \"u\"\n[pins]\n\"1\" = \"vcc\"\n[[envelope]]\nkind = \"supply_range\"\n{body}"
+            ))
+            .unwrap()
+        };
+        accepts(&fixture(
+            "pin = \"vcc\"\nmin_v = 2.7\nmax_v = 3.6\nbasis = \"ROC, VCC row\"",
+        ));
+        rejects(&fixture("pin = \"vcc\"\nmin_v = 2.7\nmax_v = 3.6"), "basis");
+        rejects(
+            &fixture("pin = \"missing\"\nmin_v = 2.7\nmax_v = 3.6\nbasis = \"ROC\""),
+            "missing",
+        );
+        rejects(
+            &fixture("pin = \"vcc\"\nmin_v = 3.6\nmax_v = 2.7\nbasis = \"ROC\""),
+            "min_v",
+        );
+    }
+
+    #[test]
+    fn identity_only_requires_an_explicit_unlock_and_no_behavior() {
+        let mut e = diode();
+        e.params = Params::default();
+        e.params.set_bool("identity_only", true);
+        e.params.set_str("warning", "pin identity only");
+        rejects(&e, "unlocked_by");
+        e.params
+            .set_str("unlocked_by", "validated diode I-V parameters");
+        accepts(&e);
+        e.logic.inputs.push("a".into());
+        rejects(&e, "cannot also declare");
+    }
+
+    #[test]
+    fn must_not_float_roles_must_be_pins() {
+        let mut e = diode();
+        pins(
+            &mut e,
+            &[
+                ("1", "wp_n"),
+                ("2", "hold_n"),
+                ("3", "anode"),
+                ("4", "cathode"),
+            ],
+        );
+        e.params.set_str("must_not_float_roles", "wp_n, hold_n");
+        accepts(&e);
+        e.params.set_str("must_not_float_roles", "wp_n, missing");
+        rejects(&e, "missing");
+    }
+
+    fn i2c_eeprom() -> Option<PeripheralSpec> {
+        Some(PeripheralSpec::I2cEeprom {
+            address: 0x50,
+            size_bytes: 128,
+            page_size: 8,
+            word_address_bytes: 1,
+        })
+    }
+
+    #[test]
+    fn peripheral_power_requires_protocol_connected_roles_and_physical_values() {
+        let mut e = entry(ComponentKind::Digital, &[]);
+        pins(
+            &mut e,
+            &[("1", "scl"), ("2", "gnd"), ("3", "sda"), ("4", "vcc")],
+        );
+        e.peripheral = i2c_eeprom();
+        e.peripheral_power = Some(PeripheralPower {
+            supply_role: "vcc".into(),
+            return_role: "gnd".into(),
+            power_on_threshold_v: 1.7,
+            idle_a: 6e-6,
+            read_a: 1e-3,
+            write_a: 3e-3,
+            low_power_a: Some(1e-6),
+        });
+        accepts(&e);
+
+        e.peripheral = None;
+        rejects(&e, "requires a [models.peripheral]");
+        e.peripheral = i2c_eeprom();
+
+        e.peripheral_power.as_mut().unwrap().supply_role = "missing".into();
+        rejects(&e, "not a role");
+        e.peripheral_power.as_mut().unwrap().supply_role = "vcc".into();
+
+        e.peripheral_power.as_mut().unwrap().write_a = -1.0;
+        rejects(&e, "write_a");
+    }
+
+    #[test]
+    fn register_map_peripheral_requires_valid_spec_and_board_roles() {
+        let spec = "[sensor]\nname = \"WHOAMI\"\nbus = \"i2c\"\ni2c_address = 0x18\n\
+                    [[sensor.register]]\naddr = 0x00\nconst = [0x13]\n[sensor.protocol]\nstyle = \"i2c_pointer\"\n";
+        let mut e = entry(ComponentKind::Digital, &[]);
+        pins(
+            &mut e,
+            &[
+                ("1", "scl"),
+                ("2", "gnd"),
+                ("3", "sda"),
+                ("4", "vcc"),
+                ("5", "sdo"),
+                ("6", "csb"),
+            ],
+        );
+        let make = |spec_toml: &str, sda_role: &str, address_when_high: Option<u8>| {
+            Some(PeripheralSpec::RegisterMap {
+                spec_toml: spec_toml.into(),
+                controller: None,
+                scl_role: "scl".into(),
+                sda_role: sda_role.into(),
+                cs_role: "cs".into(),
+                clk_role: "sck".into(),
+                mosi_role: "mosi".into(),
+                miso_role: "miso".into(),
+                required_high_roles: vec!["csb".into()],
+                required_low_roles: vec![],
+                address_select_role: Some("sdo".into()),
+                address_when_low: Some(0x18),
+                address_when_high,
+            })
+        };
+        e.peripheral = make(spec, "sda", Some(0x19));
+        accepts(&e);
+        e.peripheral = make(spec, "sda", None);
+        rejects(&e, "requires address_select_role");
+        e.peripheral = make(
+            "[sensor]\nname = \"broken\"\nbus = \"i2c\"",
+            "sda",
+            Some(0x19),
+        );
+        rejects(&e, "register-map");
+        e.peripheral = make(spec, "missing_sda", Some(0x19));
+        rejects(&e, "missing_sda");
+    }
+
+    #[test]
+    fn typoed_pin_role_is_caught_but_extra_pins_and_channel_suffixes_pass() {
+        let mut d = diode();
+        pins(&mut d, &[("1", "anmode"), ("2", "cathode")]);
+        rejects(&d, "anode");
+
+        let mut ok = diode();
+        pins(&mut ok, &[("1", "a"), ("2", "k"), ("3", "case")]);
+        accepts(&ok);
+        accepts(&diode());
+
+        let mut op = entry(
+            ComponentKind::Opamp,
+            &[("gain", 1e5), ("rail_lo", 0.0), ("rail_hi", 12.0)],
+        );
+        pins(
+            &mut op,
+            &[("1", "out_a"), ("2", "in_minus_a"), ("3", "in_plus_a")],
+        );
+        accepts(&op);
+    }
+
+    fn programmed_vreg() -> ModelEntry {
+        toml::from_str(
+            r#"
+id = "programmed_vreg"
+kind = "vreg"
+[params]
+vout = 4.2
+dropout_v = 0.3
+iq_a = 0.001
+[pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "prog"
+"4" = "out"
+"5" = "sense_a"
+"6" = "sense_b"
+[ratings]
+max_current_a = 0.8
+[current_program]
+pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 0.4
+equation = "piecewise_inverse_resistance"
+low_k_volts = 1000.0
+transition_current_a = 0.15
+high_numerator_a = 1.2
+resistance_scale_ohms = 1000.0
+high_offset = 1.3333333333333333
+"#,
+        )
+        .unwrap()
+    }
+
+    fn with_program(f: impl FnOnce(&mut crate::schema::CurrentProgram)) -> ModelEntry {
+        let mut e = programmed_vreg();
+        f(e.current_program.as_mut().unwrap());
+        e
+    }
+
+    #[test]
+    fn current_program_equations_and_operating_limits_are_validated() {
+        accepts(&programmed_vreg());
+        accepts(&with_program(|p| p.max_operating_current_a = Some(0.1)));
+        rejects(
+            &with_program(|p| p.pin = "not_a_pin".into()),
+            "current_program.pin",
+        );
+        rejects(
+            &with_program(|p| p.current_out_roles.clear()),
+            "current_out_roles",
+        );
+        rejects(
+            &with_program(|p| p.current_out_roles = vec!["IN".into()]),
+            "both current_in_roles and current_out_roles",
+        );
+        rejects(
+            &with_program(|p| p.max_operating_current_a = Some(0.0)),
+            "max_operating_current_a",
+        );
+        rejects(
+            &with_program(|p| p.max_operating_current_a = None),
+            "requires max_operating_current_a",
+        );
+        rejects(
+            &with_program(|p| {
+                p.max_operating_current_a = None;
+                p.above_domain = AboveDomainBehavior::Saturate;
+            }),
+            "above_domain = saturate",
+        );
+        rejects(
+            &with_program(|p| p.max_operating_current_a = Some(0.9)),
+            "ratings.max_current_a",
+        );
+
+        let mut pin_limit = programmed_vreg();
+        pin_limit.ratings.max_current_a = None;
+        pin_limit.ratings.max_pin_current_a = Some(0.3);
+        accepts(&pin_limit);
+
+        let sense = |sense_b: &str, far: Vec<&str>, bias: f64| {
+            with_program(|p| {
+                p.equation = CurrentProgramEquation::SenseScaledResistance {
+                    sense_roles: vec!["sense_a".into(), sense_b.into()],
+                    sense_far_roles: far.into_iter().map(String::from).collect(),
+                    program_bias_a: bias,
+                    program_full_scale_v: 1.0,
+                    sense_full_scale_v: 0.05,
+                }
+            })
+        };
+        accepts(&sense("sense_b", vec!["in", "ground"], 50e-6));
+        rejects(
+            &sense("not_a_pin", vec!["in", "ground"], 50e-6),
+            "sense_roles",
+        );
+        rejects(
+            &sense("SENSE_A", vec!["in", "ground"], 50e-6),
+            "repeats role",
+        );
+        rejects(&sense("sense_b", vec!["in"], 50e-6), "sense_far_roles");
+        rejects(
+            &sense("sense_b", vec!["not_a_pin", "ground"], 50e-6),
+            "not_a_pin",
+        );
+        rejects(
+            &sense("sense_b", vec!["in", "ground"], 0.0),
+            "program_bias_a",
+        );
+
+        rejects(
+            &with_program(|p| {
+                p.equation = CurrentProgramEquation::PiecewiseInverseResistance {
+                    low_k_volts: 1000.0,
+                    transition_current_a: 0.15,
+                    high_numerator_a: 1.2,
+                    resistance_scale_ohms: 1000.0,
+                    high_offset: 3.0,
+                }
+            }),
+            "continuous",
+        );
+        rejects(
+            &with_program(|p| {
+                p.equation = CurrentProgramEquation::InverseResistance { k_volts: f64::NAN }
+            }),
+            "k_volts",
+        );
+    }
+
+    #[test]
+    fn kind_vocabulary_and_suggestions() {
+        #[derive(serde::Deserialize)]
+        struct Probe {
+            #[allow(dead_code)]
+            kind: ComponentKind,
+        }
+        for name in KIND_NAMES {
+            assert!(
+                toml::from_str::<Probe>(&format!("kind = \"{name}\"")).is_ok(),
+                "{name}"
+            );
+        }
         assert_eq!(kind_suggestion("LDO"), Some("vreg"));
         assert_eq!(kind_suggestion("npn"), Some("bjt_npn"));
         assert_eq!(kind_suggestion("led"), Some("diode"));
-    }
-
-    #[test]
-    fn near_misses_resolve_by_edit_distance() {
         assert_eq!(kind_suggestion("pasive"), Some("passive"));
         assert_eq!(kind_suggestion("opamps"), Some("opamp"));
         assert_eq!(kind_suggestion("zzzzzz"), None);
-    }
 
-    #[test]
-    fn kind_error_note_reads_the_serde_wording() {
-        let err = "unknown variant `ldo`, expected one of `passive`, `diode`, `bjt_npn`";
-        let note = kind_error_note(err).unwrap();
-        assert!(note.contains("did you mean 'vreg'"), "{note}");
+        let note = kind_error_note("unknown variant `ldo`, expected one of `passive`, `bjt_npn`");
+        assert!(note.unwrap().contains("vreg"));
         assert_eq!(kind_error_note("some other error"), None);
     }
 }

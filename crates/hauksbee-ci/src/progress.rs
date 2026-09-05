@@ -168,19 +168,17 @@ mod tests {
     }
 
     #[test]
-    fn silent_until_a_sink_is_installed() {
+    fn silent_without_a_sink_and_for_a_quick_phase() {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         set_sink(None);
         assert!(!enabled());
-        // The point of the check: this must not panic and must not write.
+        // Must neither panic nor write.
         say("nobody should see this");
         let mut t = Ticker::new("phase");
         t.at(0.5);
         t.done();
-    }
+        drop(_guard);
 
-    #[test]
-    fn a_quick_phase_says_nothing() {
         let (lines, _guard) = capture();
         let mut t = Ticker::new("quick");
         for i in 0..=100 {
@@ -201,7 +199,6 @@ mod tests {
         let mut t = Ticker::new("slow");
         // Backdate the start so the phase counts as slow without sleeping.
         t.started = Instant::now() - Duration::from_secs(10);
-        // Ten thousand calls across the range: one line per percent, not per call.
         for i in 0..=10_000 {
             t.at(i as f64 / 10_000.0);
         }
@@ -220,19 +217,14 @@ mod tests {
     }
 
     #[test]
-    fn an_estimate_waits_until_it_means_something() {
-        // 1% done after a second would extrapolate to 100 seconds from almost no
-        // evidence. Better to say nothing than to say a number that will move.
+    fn estimates_wait_for_evidence_and_read_as_minutes_when_long() {
+        // 1% done after a second would extrapolate from almost no evidence.
         assert_eq!(remaining(Duration::from_secs(1), 0.01), "");
         let late = remaining(Duration::from_secs(10), 0.5);
         assert!(
             late.contains("10s"),
             "half done after 10s means ~10s: {late}"
         );
-    }
-
-    #[test]
-    fn long_estimates_read_as_minutes() {
         assert_eq!(human_secs(45.0), "45s");
         assert_eq!(human_secs(125.0), "2m05s");
     }

@@ -267,110 +267,56 @@ impl Default for RailWindow {
 mod tests {
     use super::*;
 
-    #[test]
-    fn window_stats_dip_and_recovery() {
+    fn window(samples: &[(f64, f64)]) -> RailWindow {
         let mut w = RailWindow::new();
-        // A rail that sits at 3.3, dips to 2.8 for 3 ms, recovers to 3.3.
-        let pts = [
+        for &(t, v) in samples {
+            w.observe(t, v);
+        }
+        w
+    }
+
+    #[test]
+    fn dip_duration_covers_every_sub_threshold_sample_including_the_trailing_one() {
+        // At 3.3, dips to 2.8 for the samples at 2, 3, 4 ms, recovers at 5 ms.
+        let w = window(&[
             (0.000, 3.30),
             (0.001, 3.30),
-            (0.002, 2.80), // dip starts
+            (0.002, 2.80),
             (0.003, 2.80),
             (0.004, 2.80),
-            (0.005, 3.30), // recovered
+            (0.005, 3.30),
             (0.006, 3.30),
-        ];
-        for (t, v) in pts {
-            w.observe(t, v);
-        }
-        assert!((w.min_v - 2.80).abs() < 1e-9);
-        assert!((w.max_v - 3.30).abs() < 1e-9);
-        // Below 3.0 V: samples at t=2,3,4 ms each cover a 1 ms forward interval.
+        ]);
+        assert!((w.min_v - 2.80).abs() < 1e-9 && (w.max_v - 3.30).abs() < 1e-9);
         let dip = w.dip_duration_s(3.0);
         assert!((dip - 0.003).abs() < 1e-9, "dip duration {dip}");
-        // Recovery: first dip at 2 ms; the rail is still below 3.2 at 4 ms and
-        // only reaches 3.3 (>= recover_to) at 5 ms => 3 ms to actually recover.
-        let rec = w.recovery_s(3.0, 3.2);
-        assert!((rec - 0.003).abs() < 1e-9, "recovery {rec}");
-    }
-
-    #[test]
-    fn recovery_of_a_late_dip_that_never_climbs_back_is_infinite() {
-        // R25 (REC-NEVER-RECOVER, HIGH): a rail that dips late in the window and
-        // never returns above recover_to must FAIL a recover_within_ms bound. The
-        // old code returned (window_end - t_dip), a small value that FALSELY
-        // passed. recovery_s must report +inf (never recovered).
-        let mut w = RailWindow::new();
-        for (t, v) in [
-            (0.000, 3.30),
-            (0.005, 3.30),
-            (0.009, 2.50), // dips at 9 ms, near the window end...
-            (0.010, 2.50), // ...and stays down through the last sample
-        ] {
-            w.observe(t, v);
-        }
-        let rec = w.recovery_s(3.0, 3.2);
-        assert!(
-            rec.is_infinite(),
-            "a rail that never climbs back to recover_to must report +inf, got {rec}"
-        );
-        // And a genuine recovery is still a finite value (regression guard).
-        let mut good = RailWindow::new();
-        for (t, v) in [(0.000, 3.30), (0.002, 2.80), (0.004, 2.80), (0.006, 3.30)] {
-            good.observe(t, v);
-        }
-        let rec_ok = good.recovery_s(3.0, 3.2);
-        // Dip at 2 ms, still below 3.2 at 4 ms, reaches 3.3 at 6 ms => 4 ms recovery.
-        assert!(
-            rec_ok.is_finite() && (rec_ok - 0.004).abs() < 1e-9,
-            "genuine recovery {rec_ok}"
-        );
-    }
-
-    #[test]
-    fn recovery_measures_to_the_recovery_instant_not_the_last_sub_recover_sample() {
-        // Round-27: recovery_s returned `last_below - t_dip`, one full frame short,
-        // because last_below is the LAST sample still BELOW recover_to; the rail
-        // does not actually reach recover_to until the next sample. That under-
-        // report is the false-pass direction for recover_within_ms. Here the rail
-        // dips at 0 ms, sits below 3.2 through 4 ms, and reaches 3.3 at 6 ms: the
-        // true recovery time is 6 ms, and a 5 ms bound must FAIL, not pass.
-        let mut w = RailWindow::new();
-        for (t, v) in [(0.000, 2.80), (0.002, 2.80), (0.004, 2.80), (0.006, 3.30)] {
-            w.observe(t, v);
-        }
-        let rec = w.recovery_s(3.0, 3.2);
-        assert!(
-            (rec - 0.006).abs() < 1e-9,
-            "recovery is the instant recover_to is reached (6 ms), got {rec}"
-        );
-        assert!(
-            rec > 0.005,
-            "a 5 ms recover_within_ms bound must FAIL, not false-pass"
-        );
-    }
-
-    #[test]
-    fn dip_duration_counts_trailing_dwell_at_window_end() {
-        // A dip that runs to the last sample must count that final frame, not be
-        // reported one frame short.
-        let mut w = RailWindow::new();
-        for (t, v) in [
+        // A dip running to the last sample owns one more frame, not one less.
+        let trailing = window(&[
             (0.000, 3.30),
             (0.001, 3.30),
-            (0.002, 2.80), // dip starts and never recovers within the window
+            (0.002, 2.80),
             (0.003, 2.80),
-            (0.004, 2.80), // last sample, still below threshold
-        ] {
-            w.observe(t, v);
-        }
-        // Samples at 2,3 ms each own a 1 ms forward interval; the trailing 4 ms
-        // sample owns one more 1 ms frame => 3 ms total below 3.0 V.
-        let dip = w.dip_duration_s(3.0);
+            (0.004, 2.80),
+        ]);
+        let dip = trailing.dip_duration_s(3.0);
         assert!(
             (dip - 0.003).abs() < 1e-9,
             "trailing-dwell dip duration {dip}"
         );
+    }
+
+    #[test]
+    fn recovery_is_measured_to_the_instant_recover_to_is_reached() {
+        // Dips at 0 ms, sits below 3.2 through 4 ms, reaches 3.3 at 6 ms: the
+        // recovery time is 6 ms (not the last sub-recover sample at 4 ms), so
+        // a 5 ms `recover_within_ms` bound fails.
+        let w = window(&[(0.000, 2.80), (0.002, 2.80), (0.004, 2.80), (0.006, 3.30)]);
+        let rec = w.recovery_s(3.0, 3.2);
+        assert!((rec - 0.006).abs() < 1e-9, "recovery {rec}");
+        // A rail that dips and never climbs back reports +inf, never a small
+        // window-end remainder that would falsely pass.
+        let never = window(&[(0.000, 3.30), (0.005, 3.30), (0.009, 2.50), (0.010, 2.50)]);
+        assert!(never.recovery_s(3.0, 3.2).is_infinite());
     }
 
     #[test]

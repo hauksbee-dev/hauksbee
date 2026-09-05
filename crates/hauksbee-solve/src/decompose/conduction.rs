@@ -218,38 +218,55 @@ mod tests {
     use super::*;
     use crate::newton::Workspace;
     use crate::options::SolverOptions;
-    use crate::stamp::{stamp_all, IntegCoeffs, StampCtx};
+    use crate::stamp::{stamp_all, IntegCoeffs};
     use crate::system::ReactiveState;
-    use hauksbee_ir::SourceKind;
+    use crate::test_fixtures::{comparator, res, stamp_ctx, vdc, vswitch, GND};
+    use hauksbee_ir::{Circuit, Device, NodeId};
+    use std::collections::HashMap;
 
-    /// THE cross-check: every declared sense node's KCL row must receive
-    /// nothing from the device's stamp, matrix entries AND RHS, at every
-    /// probed operating point. This is the property the Tarski STEP-0 proof
-    /// rests on (a select pin that drew current would re-fuse the torn
-    /// columns), asserted mechanically so [`Device::sense_nodes`] can never
-    /// silently disagree with the stamp in `stamp.rs`. If this test fails
-    /// after a device or stamp change, the fix is to move the terminal to
-    /// `conduction_nodes`, and every tear across it stops being offered.
+    /// Every entry on a sense node's row must be zero (except a pure
+    /// `-branch_reg` diagonal, which is solver regularization).
+    fn assert_sense_rows_clean(
+        name: &str,
+        ws: &Workspace,
+        sense: &[NodeId],
+        branch_reg: f64,
+        what: &str,
+    ) {
+        for sn in sense {
+            let row = ws.layout.node(*sn).expect("sense node has an unknown row");
+            for &(col, val) in ws.matrix.row(row) {
+                let reg_only = col == row && (val + branch_reg).abs() < 1e-30;
+                assert!(
+                    reg_only || val == 0.0,
+                    "{name}: sense node {sn:?} row entry ({row},{col})={val} {what}"
+                );
+            }
+            assert!(
+                ws.rhs[row] == 0.0,
+                "{name}: sense node {sn:?} row RHS {} {what}",
+                ws.rhs[row]
+            );
+        }
+    }
+
+    /// Every declared sense node's KCL row receives nothing from the device's
+    /// stamp (matrix AND RHS) at every probed operating point, for every
+    /// device kind, in DC and transient; and conduction ∪ sense partitions
+    /// the terminals exactly.
     #[test]
     fn declared_sense_rows_receive_no_current() {
-        // Operating points chosen to exercise the stamps' regions: all-zero,
-        // everything high, a mixed pattern with sense terminals driven hard
-        // (a lazy stamp that leaks current into its control row does so most
-        // visibly when the control is at a rail), and a negative pattern for
-        // the polarity folds.
         let probes: [[f64; 4]; 4] = [
             [0.0, 0.0, 0.0, 0.0],
             [5.0, 5.0, 5.0, 5.0],
             [0.3, 4.8, -0.7, 2.5],
             [-2.0, -0.5, 3.3, -4.0],
         ];
-
-        let mut c = hauksbee_ir::Circuit::new();
+        let mut c = Circuit::new();
         let n = [c.node("n1"), c.node("n2"), c.node("n3"), c.node("n4")];
-
-        for dev in hauksbee_ir::Device::examples(n) {
+        for dev in Device::examples(n) {
             let name = dev.name().to_string();
-            let mut circuit = hauksbee_ir::Circuit::new();
+            let mut circuit = Circuit::new();
             let m = [
                 circuit.node("n1"),
                 circuit.node("n2"),
@@ -257,51 +274,25 @@ mod tests {
                 circuit.node("n4"),
             ];
             let mut d = dev.clone();
-            // examples() was built against `c`'s nodes; ids are identical in
-            // the fresh circuit (same insertion order), remap for hygiene.
             d.map_nodes(&mut |old| m[(old.0 - 1) as usize]);
-            // F/H/B examples reference DeviceId(0) as their control source
-            // (the documented examples() convention): honor it by making
-            // device 0 a zero-volt ammeter from n4 to ground BEFORE adding
-            // the example. n4-to-ground ON PURPOSE: the Behavioral example
-            // declares n3 as a SENSE node whose row the zero-row assertion
-            // below must prove clean, so the ammeter's own incidence entries
-            // must stay off it (the ammeter writes only its own p row and
-            // branch, so the assertion still isolates the example device's
-            // sense claim, which for F/H is empty anyway, their control is a
-            // branch-current read declared via `controlling_sources`).
-            // The K-coupling example's convention differs: it points its
-            // WINDINGS at DeviceId(0) and DeviceId(1), which must be
-            // inductors (Layout::new builds the mutual map from them and
-            // refuses anything else). Both n4-to-ground for the same
-            // row-isolation reason as the ammeter below.
-            if matches!(d, hauksbee_ir::Device::Coupling { .. }) {
+            // examples() convention: a K coupling points its windings at
+            // DeviceId(0)/(1); F/H/B point their control source at DeviceId(0).
+            if matches!(d, Device::Coupling { .. }) {
                 for (i, nm) in ["Lw1", "Lw2"].iter().enumerate() {
-                    let lid = circuit.add(hauksbee_ir::Device::Inductor {
+                    let lid = circuit.add(Device::Inductor {
                         name: (*nm).into(),
                         a: m[3],
-                        b: hauksbee_ir::NodeId::GROUND,
+                        b: GND,
                         henries: 1e-6,
                         ic: None,
                     });
-                    assert_eq!(
-                        lid.0 as usize, i,
-                        "examples() convention: windings at indices 0 and 1"
-                    );
+                    assert_eq!(lid.0 as usize, i);
                 }
             } else if !d.controlling_sources().is_empty() {
-                let vid = circuit.add(hauksbee_ir::Device::Vsource {
-                    name: "Vctl".into(),
-                    p: m[3],
-                    n: hauksbee_ir::NodeId::GROUND,
-                    kind: hauksbee_ir::SourceKind::Dc(0.0),
-                });
-                assert_eq!(vid.0, 0, "examples() convention: control at index 0");
+                assert_eq!(vdc(&mut circuit, "Vctl", m[3], 0.0).0, 0);
             }
             let sense = d.sense_nodes();
             let conduction = d.conduction_nodes();
-
-            // Partition property: every terminal is exactly one of the two.
             let mut all: Vec<_> = d.nodes();
             all.sort_unstable();
             all.dedup();
@@ -312,18 +303,15 @@ mod tests {
                 all, both,
                 "{name}: conduction ∪ sense must cover every terminal exactly"
             );
-            for s in &sense {
-                assert!(
-                    !conduction.contains(s),
-                    "{name}: node {s:?} declared both conduction and sense"
-                );
-            }
+            assert!(
+                sense.iter().all(|s| !conduction.contains(s)),
+                "{name}: a node is both conduction and sense"
+            );
 
             circuit.add(d);
             let mut ws = Workspace::new(&circuit);
             let opts = SolverOptions::default();
             let state = ReactiveState::new(circuit.devices.len());
-
             for (dc, first) in [(true, true), (false, true), (false, false)] {
                 let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, 1e-6, first);
                 for probe in probes {
@@ -334,205 +322,87 @@ mod tests {
                     }
                     ws.matrix.clear_values();
                     ws.rhs.iter_mut().for_each(|v| *v = 0.0);
-                    let empty_siblings = std::collections::HashMap::new();
-                    let ctx = StampCtx {
-                        circuit: &circuit,
-                        layout: &ws.layout,
-                        opts: &opts,
-                        x: &ws.x,
-                        x_prev: &ws.x,
-                        time: 0.0,
-                        coeffs,
-                        state: &state,
-                        dc,
-                        use_ic: false,
-                        // gmin = 0: the diagonal shunt is solver
-                        // regularization, not device current, and would mask
-                        // a zero-row check.
-                        gmin: 0.0,
-                        src_scale: 1.0,
-                        // Baseline path: no staged-DC regularization, no
-                        // frozen event decisions. The cross-check verifies
-                        // the reference stamps; the staged variants reuse the
-                        // same row-writing helpers, so a sense leak there
-                        // would surface here too.
-                        branch_reg: 0.0,
-                        cmp_freeze: None,
-                        switch_freeze: None,
-                        switch_latch: None,
-                        spdt_sibling: &empty_siblings,
-                        junction_eval: None,
-                    };
+                    let mut ctx = stamp_ctx(&circuit, &ws.layout, &opts, &ws.x, &state, coeffs);
+                    ctx.dc = dc;
                     stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
-
-                    for sn in &sense {
-                        let row = ws.layout.node(*sn).expect("sense node has an unknown row");
-                        for &(col, val) in ws.matrix.row(row) {
-                            assert!(
-                                val == 0.0,
-                                "{name}: sense node {sn:?} row has matrix entry \
-                                 ({row},{col})={val} at probe {probe:?} (dc={dc}); \
-                                 the stamp conducts into a declared sense terminal"
-                            );
-                        }
-                        assert!(
-                            ws.rhs[row] == 0.0,
-                            "{name}: sense node {sn:?} row has RHS {} at probe \
-                             {probe:?} (dc={dc})",
-                            ws.rhs[row]
-                        );
-                    }
+                    assert_sense_rows_clean(
+                        &name,
+                        &ws,
+                        &sense,
+                        0.0,
+                        &format!("at probe {probe:?} (dc={dc})"),
+                    );
                 }
             }
         }
     }
 
-    /// Two RC blocks joined only by a comparator (out in block A, inputs
-    /// sensing block B... inverted: inputs sense A, output drives B): the
-    /// conduction graph must keep them separate islands with the coupling
-    /// visible as cross-island sense edges. Add a resistor bridge and they
-    /// must fuse. This is the tearing story in one fixture.
+    /// Two RC blocks joined only by a comparator stay separate islands with
+    /// the coupling visible as cross-island sense edges; a resistor bridge
+    /// fuses them.
     #[test]
     fn sense_only_coupling_does_not_fuse_islands() {
-        let mut c = hauksbee_ir::Circuit::new();
-        let a1 = c.node("a1");
-        let a2 = c.node("a2");
-        let b1 = c.node("b1");
-        let b2 = c.node("b2");
-        c.add(hauksbee_ir::Device::Vsource {
-            name: "VA".into(),
-            p: a1,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        c.add(hauksbee_ir::Device::Resistor {
-            name: "RA".into(),
-            a: a1,
-            b: a2,
-            ohms: 1e3,
-            tc1: None,
-        });
-        // Comparator lives electrically in block B (drives b1) while its
-        // inputs only watch block A.
-        c.add(hauksbee_ir::Device::Comparator {
-            name: "CMP".into(),
-            out: b1,
-            inp: a2,
-            inn: a1,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-        c.add(hauksbee_ir::Device::Resistor {
-            name: "RB".into(),
-            a: b1,
-            b: b2,
-            ohms: 1e3,
-            tc1: None,
-        });
-
+        let mut c = Circuit::new();
+        let (a1, a2, b1, b2) = (c.node("a1"), c.node("a2"), c.node("b1"), c.node("b2"));
+        vdc(&mut c, "VA", a1, 5.0);
+        res(&mut c, "RA", a1, a2, 1e3);
+        comparator(&mut c, "CMP", b1, a2, a1, 1e-3);
+        res(&mut c, "RB", b1, b2, 1e3);
         let g = ConductionGraph::analyze(&c);
-        assert_eq!(g.islands.len(), 2, "sense coupling must not fuse: {g:?}");
-        let crossing = g.cross_island_sense_edges();
-        assert_eq!(
-            crossing.len(),
-            2,
-            "both comparator inputs cross islands: {crossing:?}"
-        );
-
-        // A real (conducting) bridge fuses the blocks.
-        c.add(hauksbee_ir::Device::Resistor {
-            name: "RBRIDGE".into(),
-            a: a2,
-            b: b1,
-            ohms: 1e6,
-            tc1: None,
-        });
-        let g2 = ConductionGraph::analyze(&c);
-        assert_eq!(g2.islands.len(), 1, "a conducting bridge fuses the blocks");
+        assert_eq!(g.islands.len(), 2, "{g:?}");
+        assert_eq!(g.cross_island_sense_edges().len(), 2);
+        res(&mut c, "RBRIDGE", a2, b1, 1e6);
+        assert_eq!(ConductionGraph::analyze(&c).islands.len(), 1);
     }
 
-    /// The staged and BBM stamp paths must keep sense rows as clean as the
-    /// baseline. The main cross-check runs env-off with branch_reg=0; this one
-    /// exercises exactly the paths the co-sim merge added: an SPDT pair with
-    /// effects.spdt_bbm (the default) and a live sibling map (the winner-take-all margin
-    /// coupling), branch_reg > 0 (the staged smooth switch/comparator stamps),
-    /// and frozen event decisions for both device kinds. The property under
-    /// test is the same STEP-0 zero-current row: none of those variants may
-    /// leak current into a control/input row, or the free-tear exactness
-    /// argument collapses on the staged path.
-
+    /// The staged and BBM stamp paths (SPDT sibling coupling, branch_reg > 0,
+    /// frozen comparator/switch decisions) keep sense rows as clean as the
+    /// baseline.
     #[test]
     fn staged_and_bbm_paths_keep_sense_rows_clean() {
-        let mut circuit = hauksbee_ir::Circuit::new();
-        let thru = circuit.node("thru");
-        let out0 = circuit.node("out0");
-        let out1 = circuit.node("out1");
-        let cp = circuit.node("sel_p");
-        let cn = circuit.node("sel_n");
-        let ki = circuit.node("cmp_p");
-        let kn = circuit.node("cmp_n");
-        let ko = circuit.node("cmp_out");
-
-        // An SPDT pair in the binder's convention: two legs off one through
-        // node, same control pair, complementary bands.
-        let s0 = circuit.add(hauksbee_ir::Device::VSwitch {
-            name: "SW_s0".into(),
-            a: thru,
-            b: out0,
-            ctrl_p: cp,
-            ctrl_n: cn,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        let s1 = circuit.add(hauksbee_ir::Device::VSwitch {
-            name: "SW_s1".into(),
-            a: thru,
-            b: out1,
-            ctrl_p: cp,
-            ctrl_n: cn,
-            von: 1.0,
-            voff: 2.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        let cmp = circuit.add(hauksbee_ir::Device::Comparator {
-            name: "K1".into(),
-            out: ko,
-            inp: ki,
-            inn: kn,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-
-        let mut siblings = std::collections::HashMap::new();
-        siblings.insert(s0, s1);
-        siblings.insert(s1, s0);
-        let mut cmp_frozen = std::collections::HashMap::new();
-        cmp_frozen.insert(cmp, true);
-        let mut sw_frozen = std::collections::HashMap::new();
-        sw_frozen.insert(s0, true);
-        sw_frozen.insert(s1, false);
+        let mut circuit = Circuit::new();
+        let nodes = [
+            circuit.node("thru"),
+            circuit.node("out0"),
+            circuit.node("out1"),
+            circuit.node("sel_p"),
+            circuit.node("sel_n"),
+            circuit.node("cmp_p"),
+            circuit.node("cmp_n"),
+            circuit.node("cmp_out"),
+        ];
+        let [thru, out0, out1, cp, cn, ki, kn, ko] = nodes;
+        let s0 = vswitch(
+            &mut circuit,
+            "SW_s0",
+            thru,
+            out0,
+            (cp, cn),
+            (2.0, 1.0),
+            (10.0, 1e9),
+        );
+        let s1 = vswitch(
+            &mut circuit,
+            "SW_s1",
+            thru,
+            out1,
+            (cp, cn),
+            (1.0, 2.0),
+            (10.0, 1e9),
+        );
+        let cmp = comparator(&mut circuit, "K1", ko, ki, kn, 1e-3);
+        let siblings = HashMap::from([(s0, s1), (s1, s0)]);
+        let cmp_frozen = HashMap::from([(cmp, true)]);
+        let sw_frozen = HashMap::from([(s0, true), (s1, false)]);
 
         let mut ws = Workspace::new(&circuit);
         let opts = SolverOptions::default();
         let state = ReactiveState::new(circuit.devices.len());
-        let nodes = [thru, out0, out1, cp, cn, ki, kn, ko];
-        // Control voltages straddling and pinned at the band edges, where the
-        // BBM sigmoid and the smooth-switch tanh have their largest slopes
-        // (a leaky stamp shows up most where the derivatives are largest).
         let probes: [[f64; 8]; 3] = [
             [4.5, 0.1, 0.2, 1.5, 0.0, 2.0, 1.0, 5.0],
             [5.0, 0.0, 0.0, 2.0, 0.0, -1.0, 3.0, 0.0],
             [0.5, 2.0, -1.0, 1.0, 0.5, 0.0, 0.0, 2.5],
         ];
-
-        // BBM is the device-model default now (effects.spdt_bbm).
-        // Frozen decisions, sibling coupling, and staged regularization on
-        // together: the harshest combination the staged path can present.
         for (freeze_on, branch_reg) in [(false, 1e-2), (true, 1e-2), (true, 0.0)] {
             for probe in probes {
                 for (i, v) in probe.iter().enumerate() {
@@ -543,60 +413,20 @@ mod tests {
                 ws.matrix.clear_values();
                 ws.rhs.iter_mut().for_each(|v| *v = 0.0);
                 let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, 1e-6, true);
-                let ctx = StampCtx {
-                    circuit: &circuit,
-                    layout: &ws.layout,
-                    opts: &opts,
-                    x: &ws.x,
-                    x_prev: &ws.x,
-                    time: 0.0,
-                    coeffs,
-                    state: &state,
-                    dc: false,
-                    use_ic: false,
-                    gmin: 0.0,
-                    src_scale: 1.0,
-                    branch_reg,
-                    cmp_freeze: if freeze_on { Some(&cmp_frozen) } else { None },
-                    switch_freeze: if freeze_on { Some(&sw_frozen) } else { None },
-                    switch_latch: None,
-                    spdt_sibling: &siblings,
-                    junction_eval: None,
-                };
+                let mut ctx = stamp_ctx(&circuit, &ws.layout, &opts, &ws.x, &state, coeffs);
+                ctx.branch_reg = branch_reg;
+                ctx.cmp_freeze = freeze_on.then_some(&cmp_frozen);
+                ctx.switch_freeze = freeze_on.then_some(&sw_frozen);
+                ctx.spdt_sibling = &siblings;
                 stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
-
                 for dev in circuit.devices.iter() {
-                    for sn in dev.sense_nodes() {
-                        let row = ws.layout.node(sn).expect("sense node row");
-                        for &(col, val) in ws.matrix.row(row) {
-                            // branch_reg legitimately writes a -reg term on
-                            // EVERY diagonal (solver regularization, not
-                            // device current), mirroring the gmin exemption
-                            // in the baseline test.
-                            if col == row {
-                                let reg_only = (val + branch_reg).abs() < 1e-30;
-                                assert!(
-                                    reg_only || val == 0.0,
-                                    "{}: sense row {row} diagonal {val} is not \
-                                     pure regularization (branch_reg={branch_reg})",
-                                    dev.name()
-                                );
-                                continue;
-                            }
-                            assert!(
-                                val == 0.0,
-                                "{}: sense node {sn:?} row entry ({row},{col})={val} \
-                                 under BBM+staged (freeze={freeze_on}, reg={branch_reg})",
-                                dev.name()
-                            );
-                        }
-                        assert!(
-                            ws.rhs[row] == 0.0,
-                            "{}: sense row {row} RHS {} under BBM+staged",
-                            dev.name(),
-                            ws.rhs[row]
-                        );
-                    }
+                    assert_sense_rows_clean(
+                        dev.name(),
+                        &ws,
+                        &dev.sense_nodes(),
+                        branch_reg,
+                        &format!("under BBM+staged (freeze={freeze_on}, reg={branch_reg})"),
+                    );
                 }
             }
         }

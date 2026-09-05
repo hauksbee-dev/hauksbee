@@ -2121,390 +2121,146 @@ fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::options::Integration;
-    use hauksbee_ir::{BjtModel, Polarity};
+    use crate::test_fixtures::{
+        assert_matches_within_grid, bjt, cap, comparator, fixed_opts, idc, max_error, monolith,
+        pnp, pnp_blocks, res, sw, swing, up_crossings, vdc, vpulse, GND,
+    };
+    use hauksbee_ir::BjtModel;
 
-    /// A chain with two cut candidates: feed -> Rd -> X -> [block M] -> Y ->
-    /// [block R], BJT loads in both blocks, a pulsed feed so everything
-    /// moves. `r_scale` sets the chain impedances: low = genuinely stiff
-    /// boundaries, high = boundaries whose waveforms depend strongly on the
-    /// neighbours (the shape verification must refuse).
+    /// feed -> Rd -> X -> [block M] -> Y -> [block R], BJT loads in both
+    /// blocks, a pulsed feed. `r_scale` sets the chain impedances: low = stiff
+    /// boundaries, high = boundaries whose waveforms depend on the neighbours.
     fn two_cut_chain(r_scale: f64) -> (Circuit, NodeId, NodeId) {
         let mut c = Circuit::new();
         let vs = c.node("vs");
-        c.add(Device::Vsource {
-            name: "VS".into(),
-            p: vs,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pulse {
-                v1: 3.0,
-                v2: 5.0,
-                delay: 1e-6,
-                rise: 0.5e-6,
-                fall: 0.5e-6,
-                width: 1.5e-6,
-                period: 0.0,
-            },
-        });
+        vpulse(&mut c, "VS", vs, (3.0, 5.0), 1e-6, (0.5e-6, 0.5e-6), 1.5e-6);
         let x = c.node("x");
-        c.add(Device::Resistor {
-            name: "Rd".into(),
-            a: vs,
-            b: x,
-            ohms: r_scale,
-            tc1: None,
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        // Block M sits between X and Y.
-        let m = c.node("m");
-        let y = c.node("y");
-        c.add(Device::Resistor {
-            name: "Rm1".into(),
-            a: x,
-            b: m,
-            ohms: 2.0 * r_scale,
-            tc1: None,
-        });
+        res(&mut c, "Rd", vs, x, r_scale);
+        let model = pnp();
+        let (m, y, r) = (c.node("m"), c.node("y"), c.node("r"));
+        res(&mut c, "Rm1", x, m, 2.0 * r_scale);
         let mb = c.node("mb");
-        c.add(Device::Bjt {
-            name: "QM".into(),
-            c: NodeId::GROUND,
-            b: mb,
-            e: m,
-            model: model.clone(),
-        });
-        c.add(Device::Resistor {
-            name: "Rmb".into(),
-            a: mb,
-            b: NodeId::GROUND,
-            ohms: 100e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "Rm2".into(),
-            a: m,
-            b: y,
-            ohms: 2.0 * r_scale,
-            tc1: None,
-        });
-        // Block R hangs off Y.
-        let r = c.node("r");
-        c.add(Device::Resistor {
-            name: "Rr1".into(),
-            a: y,
-            b: r,
-            ohms: 2.0 * r_scale,
-            tc1: None,
-        });
+        bjt(&mut c, "QM", GND, mb, m, &model);
+        res(&mut c, "Rmb", mb, GND, 100e3);
+        res(&mut c, "Rm2", m, y, 2.0 * r_scale);
+        res(&mut c, "Rr1", y, r, 2.0 * r_scale);
         let rb = c.node("rb");
-        c.add(Device::Bjt {
-            name: "QR".into(),
-            c: NodeId::GROUND,
-            b: rb,
-            e: r,
-            model,
-        });
-        c.add(Device::Resistor {
-            name: "Rrb".into(),
-            a: rb,
-            b: NodeId::GROUND,
-            ohms: 100e3,
-            tc1: None,
-        });
+        bjt(&mut c, "QR", GND, rb, r, &model);
+        res(&mut c, "Rrb", rb, GND, 100e3);
         (c, x, y)
     }
 
-    fn fixed_opts(dt: f64) -> SolverOptions {
-        SolverOptions {
-            step: StepControl::Fixed { dt },
-            integration: Integration::Trapezoidal,
-            ..SolverOptions::default()
-        }
+    fn max_sag(outcomes: &[StiffOutcome]) -> f64 {
+        outcomes.iter().map(|o| o.sag_v).fold(0.0f64, f64::max)
     }
 
-    /// The acceptance gate: stiff boundaries (low chain impedance) must be
-    /// accepted with a small measured sag, and the assembled waveforms must
-    /// match the fused monolith within a bound tied to that measurement.
-    #[test]
-    fn stiff_boundaries_capture_verify_and_match() {
-        let (c, x, y) = two_cut_chain(50.0);
-        let dt = 100e-9;
-        let tstop = 4e-6;
-        let opts = fixed_opts(dt);
-        let mut refusals = Vec::new();
-        let exec = execute_stiff_group(&c, &[x, y], &opts, tstop, &mut refusals)
-            .expect("mechanical success")
-            .unwrap_or_else(|| panic!("stiff boundaries must be accepted: {refusals:?}"));
-        assert!(refusals.is_empty());
-        assert_eq!(exec.outcomes.len(), 2);
-        let max_sag = exec.outcomes.iter().map(|o| o.sag_v).fold(0.0f64, f64::max);
-        for o in &exec.outcomes {
-            assert!(o.accepted, "{o:?}");
-            assert!(!o.bootstrapped, "whole-group DC converges here");
-        }
-        assert!(max_sag > 0.0, "cross-coupling must be measurably nonzero");
-
-        let mut mono_opts = opts;
-        mono_opts.partitioning = Partitioning::Off;
-        let mono = Transient::new(mono_opts).run(&c, tstop).expect("monolith");
-        // First-order claim: assembled waveforms match the monolith within a
-        // small multiple of the measured sag (the certificate's own number),
-        // plus solver-tolerance floor.
-        let tol = (3.0 * max_sag).max(2e-6);
-        let mut worst = (0.0f64, 0usize);
-        for node in 1..c.node_count() {
-            for (k, &t) in exec.waveforms.time.iter().enumerate() {
-                let sv = exec.waveforms.node_voltages[node][k];
-                let mv = lerp_at(&mono.time, &mono.node_voltages[node], t);
-                if (sv - mv).abs() > worst.0 {
-                    worst = ((sv - mv).abs(), node);
-                }
-            }
-        }
+    fn assert_matches(c: &Circuit, exec: &StiffExecution, mono: &Waveforms, tol: f64, what: &str) {
+        let (err, node) = max_error(c, &exec.waveforms.time, &exec.waveforms.node_voltages, mono);
         assert!(
-            worst.0 <= tol,
-            "stiff assembly diverged beyond its own certificate: {:.3e} at {} (sag {:.3e})",
-            worst.0,
-            c.node_name(NodeId(worst.1 as u32)),
-            max_sag
+            err <= tol,
+            "{what}: diverged {err:.3e} at {} (tol {tol:.3e})",
+            c.node_name(node)
         );
     }
 
-    /// The claim that beats the bespoke concept: SOFT boundaries (high chain
-    /// impedance, strongly load-dependent waveforms) still converge, because
-    /// waveform relaxation contracts on passive coupling regardless of
-    /// stiffness, and the assembled answer matches the fused monolith. A
-    /// one-shot rest-pinned capture (stage A of the bespoke code) would be
-    /// off by whole volts here.
+    /// Stiff boundaries are accepted with a small measured sag; SOFT but
+    /// contracting boundaries still converge; both match the monolith within
+    /// the certificate's own sag.
     #[test]
-    fn soft_but_contracting_boundaries_converge_and_match() {
-        let (c, x, y) = two_cut_chain(50e3);
-        let dt = 100e-9;
-        let tstop = 4e-6;
-        let opts = fixed_opts(dt);
-        let mut refusals = Vec::new();
-        let exec = execute_stiff_group(&c, &[x, y], &opts, tstop, &mut refusals)
-            .expect("mechanical success")
-            .unwrap_or_else(|| panic!("contracting boundaries must converge: {refusals:?}"));
-        let max_sag = exec.outcomes.iter().map(|o| o.sag_v).fold(0.0f64, f64::max);
-        let mut mono_opts = opts;
-        mono_opts.partitioning = Partitioning::Off;
-        let mono = Transient::new(mono_opts).run(&c, tstop).expect("monolith");
-        let tol = (3.0 * max_sag).max(2e-6);
-        for node in 1..c.node_count() {
-            for (k, &t) in exec.waveforms.time.iter().enumerate() {
-                let sv = exec.waveforms.node_voltages[node][k];
-                let mv = lerp_at(&mono.time, &mono.node_voltages[node], t);
-                assert!(
-                    (sv - mv).abs() <= tol,
-                    "soft chain diverged at {} t={t:.3e}: {sv:.6} vs {mv:.6} (sag {max_sag:.3e})",
-                    c.node_name(NodeId(node as u32))
-                );
+    fn stiff_and_soft_contracting_boundaries_match_the_monolith() {
+        for (r_scale, what) in [(50.0, "stiff"), (50e3, "soft")] {
+            let (c, x, y) = two_cut_chain(r_scale);
+            let (dt, tstop) = (100e-9, 4e-6);
+            let opts = fixed_opts(dt);
+            let mut refusals = Vec::new();
+            let exec = execute_stiff_group(&c, &[x, y], &opts, tstop, &mut refusals)
+                .expect("mechanical success")
+                .unwrap_or_else(|| panic!("{what} boundaries must be accepted: {refusals:?}"));
+            assert!(refusals.is_empty());
+            assert_eq!(exec.outcomes.len(), 2);
+            for o in &exec.outcomes {
+                assert!(o.accepted && !o.bootstrapped, "{o:?}");
             }
+            let sag = max_sag(&exec.outcomes);
+            assert!(sag > 0.0, "cross-coupling must be measurably nonzero");
+            let mono = monolith(&c, &opts, tstop);
+            assert_matches(&c, &exec, &mono, (3.0 * sag).max(2e-6), what);
         }
     }
 
-    /// A shunt-fed rail (ANALOG_VDD behind a 1 kΩ sense shunt) feeding a small
-    /// array of PNP blocks whose bases are pulsed (so the rail's total load
-    /// genuinely varies over the window), plus a two-stage chain whose junction
-    /// `MID` is a low-impedance SIGNAL cut between two blocks. Optionally hangs a
-    /// comparator relaxation astable off the rail (via a gated switch load): the
-    /// astable has no consistent DC, so the whole-group DC solve genuinely fails
-    /// and the partitioned engine must take its decomposed seed fallback.
+    /// A shunt-fed rail feeding four PNP blocks with pulsed bases, plus a
+    /// low-impedance SIGNAL cut `MID` between blocks 0 and 1. Optionally a
+    /// comparator relaxation astable loads the rail so no whole-group DC
+    /// exists. Returns `(circuit, rail, shunt, feed, mid)`.
     fn composed_fixture(with_astable: bool) -> (Circuit, NodeId, DeviceId, NodeId, NodeId) {
         let mut c = Circuit::new();
         let p5 = c.node("+5V");
-        c.add(Device::Vsource {
-            name: "V5".into(),
-            p: p5,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
+        vdc(&mut c, "V5", p5, 5.0);
         let rail = c.node("ANALOG_VDD");
-        // A stiff sense shunt (like the flagship's ~mΩ supply legs): the rail is
-        // load-dependent but sags only modestly, so the rail<->signal coupling
-        // is weak and the composed alternation converges in a few passes.
-        let shunt = c.add(Device::Resistor {
-            name: "R_shunt".into(),
-            a: p5,
-            b: rail,
-            ohms: 100.0,
-            tc1: None,
-        });
-        // The pulsed stimulus that modulates the rail's load.
+        let shunt = res(&mut c, "R_shunt", p5, rail, 100.0);
         let vd = c.node("vd");
-        c.add(Device::Vsource {
-            name: "VD".into(),
-            p: vd,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pulse {
-                v1: 0.0,
-                v2: 2.0,
-                delay: 1e-6,
-                rise: 1e-6,
-                fall: 1e-6,
-                width: 2e-6,
-                period: 0.0,
-            },
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        // Four PNP blocks on the rail (the proven shunt-array shape), bases
-        // pulled toward the stimulus so each block's rail draw swings with the
-        // pulse: the rail's total load genuinely varies over the window. Block 0
-        // and block 1's collectors are joined through `MID`, a modest-impedance
-        // node between the two chained blocks that serves as the SIGNAL cut
-        // (pinning it fragments blocks 0 and 1, so it is a real stiff coupling).
-        let mut c0 = NodeId::GROUND;
-        let mut c1 = NodeId::GROUND;
-        for k in 0..4 {
-            let base = c.node(&format!("b{k}"));
-            let col = c.node(&format!("c{k}"));
-            if k == 0 {
-                c0 = col;
-            }
-            if k == 1 {
-                c1 = col;
-            }
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: col,
-                b: base,
-                e: rail,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("Rb{k}"),
-                a: base,
-                b: vd,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("Rc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-        }
+        vpulse(&mut c, "VD", vd, (0.0, 2.0), 1e-6, (1e-6, 1e-6), 2e-6);
+        let blocks = pnp_blocks(&mut c, "", rail, 4, vd, 100e3, 10e3);
         let mid = c.node("MID");
-        c.add(Device::Resistor {
-            name: "Rl0".into(),
-            a: c0,
-            b: mid,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "Rl1".into(),
-            a: mid,
-            b: c1,
-            ohms: 1e3,
-            tc1: None,
-        });
-
+        res(&mut c, "Rl0", blocks[0].1, mid, 1e3);
+        res(&mut c, "Rl1", mid, blocks[1].1, 1e3);
         if with_astable {
-            // A comparator relaxation astable (no DC fixed point) whose output
-            // gates a switch loading the rail, so the whole-group DC fails and
-            // the rail load oscillates.
             let vref = c.node("vref");
-            c.add(Device::Vsource {
-                name: "VREF".into(),
-                p: vref,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(2.5),
-            });
-            let osc = c.node("osc");
-            let vc = c.node("vc");
-            c.add(Device::Comparator {
-                name: "CMP_AST".into(),
-                out: osc,
-                inp: vref,
-                inn: vc,
-                out_lo: 0.0,
-                out_hi: 5.0,
-                hysteresis: 0.5,
-            });
-            c.add(Device::Resistor {
-                name: "Rosc".into(),
-                a: osc,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: "Rf".into(),
-                a: osc,
-                b: vc,
-                ohms: 10e3,
-                tc1: None,
-            });
-            // tau = Rf*Cf = 10 us: a handful of oscillation periods fit inside
-            // the test window (a 10 nF cap would take 100 us/period and never
-            // oscillate in a toy-scale run).
-            c.add(Device::Capacitor {
-                name: "Cf".into(),
-                a: vc,
-                b: NodeId::GROUND,
-                farads: 1e-9,
-                ic: None,
-            });
+            vdc(&mut c, "VREF", vref, 2.5);
+            let (osc, vc) = (c.node("osc"), c.node("vc"));
+            comparator(&mut c, "CMP_AST", osc, vref, vc, 0.5);
+            res(&mut c, "Rosc", osc, GND, 10e3);
+            res(&mut c, "Rf", osc, vc, 10e3);
+            cap(&mut c, "Cf", vc, GND, 1e-9); // tau = 10 us
             let astl = c.node("ast_load");
-            c.add(Device::VSwitch {
-                name: "SW_AST".into(),
-                a: rail,
-                b: astl,
-                ctrl_p: osc,
-                ctrl_n: NodeId::GROUND,
-                von: 2.5,
-                voff: 2.0,
-                ron: 50.0,
-                roff: 1e9,
-            });
-            c.add(Device::Resistor {
-                name: "R_ast".into(),
-                a: astl,
-                b: NodeId::GROUND,
-                ohms: 2e3,
-                tc1: None,
-            });
+            sw(&mut c, "SW_AST", rail, astl, osc, (2.5, 2.0), 50.0);
+            res(&mut c, "R_ast", astl, GND, 2e3);
         }
         (c, rail, shunt, p5, mid)
     }
 
-    /// GATE 1: composed execution (rail balanced + signal relaxed) matches the
-    /// fused monolith at toy scale, where the monolith's DC converges so the
-    /// two-sided compare has an oracle. The rail is handed the exact balance,
-    /// the signal cut is relaxed on top of it, and both surface as outcomes.
-    #[test]
-    fn composed_rail_and_signal_matches_monolith() {
-        let (c, rail, shunt, feed, mid) = composed_fixture(false);
-        let dt = 100e-9;
-        let tstop = 4e-6;
-        // Tight Newton/balance tolerances so the torn-vs-monolith acceptance
-        // band (update-based Newton stops inside reltol*|x|, present in BOTH
-        // formulations) is far below the gate's 1e-4 floor; the same setup the
-        // `rail_tear` exactness gate uses.
-        let opts = SolverOptions {
+    fn tight_opts(dt: f64) -> SolverOptions {
+        SolverOptions {
             reltol: 1e-9,
             vntol: 1e-9,
             max_newton: 200,
             ..fixed_opts(dt)
-        };
+        }
+    }
 
-        // The oracle: the toy monolith's DC must converge (gate precondition).
-        let mut mono_opts = opts;
-        mono_opts.partitioning = Partitioning::Off;
-        let mono = Transient::new(mono_opts)
-            .run(&c, tstop)
-            .expect("toy monolith DC must converge so it can be the oracle");
+    fn run_composed(
+        c: &Circuit,
+        signals: &[NodeId],
+        rails: &[RailTear],
+        policy: &ComposedPolicy,
+        opts: &SolverOptions,
+        tstop: f64,
+    ) -> StiffExecution {
+        let mut refusals = Vec::new();
+        execute_composed_group(c, signals, rails, policy, opts, tstop, &mut refusals)
+            .expect("mechanical success")
+            .unwrap_or_else(|| panic!("composed execution must succeed: {refusals:?}"))
+    }
 
+    fn assert_deterministic(c: &Circuit, a: &StiffExecution, b: &StiffExecution) {
+        for node in 0..c.node_count() {
+            assert_eq!(
+                a.waveforms.node_voltages[node],
+                b.waveforms.node_voltages[node],
+                "waveform at {} drifted between runs",
+                c.node_name(NodeId(node as u32))
+            );
+        }
+    }
+
+    /// Composed execution (rail balanced + signal relaxed) matches the fused
+    /// monolith where the monolith's DC converges.
+    #[test]
+    fn composed_rail_and_signal_matches_monolith() {
+        let (c, rail, shunt, feed, mid) = composed_fixture(false);
+        let (dt, tstop) = (100e-9, 4e-6);
+        let opts = tight_opts(dt);
+        let mono = monolith(&c, &opts, tstop);
         let rails = vec![RailTear {
             rail,
             feed,
@@ -2512,107 +2268,58 @@ mod tests {
             r_shunt: 100.0,
             extra_loads: Vec::new(),
         }];
-        let mut refusals = Vec::new();
-        let exec = execute_composed_group(
-            &c,
-            &[mid],
-            &rails,
-            &ComposedPolicy::default(),
-            &opts,
-            tstop,
-            &mut refusals,
-        )
-        .expect("mechanical success")
-        .unwrap_or_else(|| panic!("composed execution must succeed: {refusals:?}"));
-
-        // Balance + Stiff outcomes both present.
-        assert!(
-            exec.outcomes
-                .iter()
-                .any(|o| o.kind == BoundaryKind::BalancedRail
-                    && o.node == rail
-                    && o.accepted
-                    && o.sag_v == 0.0),
-            "the rail must carry a balanced-rail outcome: {:?}",
-            exec.outcomes
-        );
+        let exec = run_composed(&c, &[mid], &rails, &ComposedPolicy::default(), &opts, tstop);
+        assert!(exec
+            .outcomes
+            .iter()
+            .any(|o| o.kind == BoundaryKind::BalancedRail
+                && o.node == rail
+                && o.accepted
+                && o.sag_v == 0.0));
         let sig = exec
             .outcomes
             .iter()
             .find(|o| o.node == mid)
-            .expect("the signal cut must carry an outcome");
-        assert!(sig.accepted, "the signal must be accepted: {sig:?}");
-
-        let max_sag = exec
+            .expect("signal outcome");
+        assert!(sig.accepted, "{sig:?}");
+        let sag = exec
             .outcomes
             .iter()
             .filter(|o| o.kind == BoundaryKind::Signal)
             .map(|o| o.sag_v)
             .fold(0.0f64, f64::max);
-        let tol = (3.0 * max_sag).max(1e-4);
-
-        // Two-sided capture-grid compare (one-step window), copied from the
-        // staged-property pattern.
-        for node in 1..c.node_count() {
-            for (k, &t) in exec.waveforms.time.iter().enumerate() {
-                let sv = exec.waveforms.node_voltages[node][k];
-                let mv = lerp_at(&mono.time, &mono.node_voltages[node], t);
-                if (sv - mv).abs() <= tol {
-                    continue;
-                }
-                let edge = (0..=8).any(|j| {
-                    let tt = t - dt + (j as f64) * (dt / 4.0);
-                    (lerp_at(&mono.time, &mono.node_voltages[node], tt) - sv).abs() <= tol
-                });
-                assert!(
-                    edge,
-                    "composed diverged at {} t={t:.3e}: {sv:.6} vs {mv:.6} (max sag {max_sag:.3e}, tol {tol:.3e})",
-                    c.node_name(NodeId(node as u32))
-                );
-            }
-        }
-
-        // Non-vacuous: the rail actually sagged below its unloaded feed.
+        let tol = (3.0 * sag).max(1e-4);
+        assert_matches_within_grid(
+            &c,
+            &exec.waveforms.time,
+            &exec.waveforms.node_voltages,
+            &mono,
+            dt,
+            &|_| tol,
+            "composed",
+        );
         let vr = &exec.waveforms.node_voltages[rail.0 as usize];
         let vr_min = vr.iter().cloned().fold(f64::MAX, f64::min);
         assert!(
             vr.iter().all(|&v| v <= 5.0 + 1e-9) && vr_min < 4.999,
-            "the rail must sag under the array load (min {vr_min})"
+            "rail must sag: {vr_min}"
         );
     }
 
-    /// GATE 2: the SEED FALLBACK. With a comparator astable hung off the rail,
-    /// the whole-group DC has no solution, so the partitioned engine inside the
-    /// composed executor must take its decomposed seed (per-island DC from
-    /// boundary estimates) instead of aborting. The monolith cannot solve this
-    /// either (its DC fails the same way), so there is no oracle: the gate is on
-    /// INTERNAL CONSISTENCY. What is asserted: composed execution still RUNS and
-    /// converges; two runs are bitwise identical (determinism through the
-    /// fallback); the rail moved (the astable load is live); the astable
-    /// oscillated in the assembled result. What is NOT asserted (documented):
-    /// agreement with a monolith, because none exists for a no-DC board.
+    /// With an astable on the rail the whole-group DC has no solution, so the
+    /// engine must take its decomposed seed: runs, deterministic, rail live,
+    /// astable oscillating. No monolith exists to compare against.
     #[test]
     fn composed_seed_fallback_runs_without_whole_group_dc() {
         let (c, rail, shunt, feed, mid) = composed_fixture(true);
-        let dt = 100e-9;
-        let tstop = 60e-6; // several astable periods (tau = 10 us)
-        let opts = SolverOptions {
-            reltol: 1e-9,
-            vntol: 1e-9,
-            max_newton: 200,
-            ..fixed_opts(dt)
-        };
-
-        // Precondition: the whole-group DC genuinely fails (the astable has no
-        // fixed point), so the fallback is the ONLY way this runs.
+        let (dt, tstop) = (100e-9, 60e-6);
+        let opts = tight_opts(dt);
         let mut mono_opts = opts;
         mono_opts.partitioning = Partitioning::Off;
         assert!(
             Transient::new(mono_opts).run(&c, tstop).is_err(),
-            "the astable fixture must have no reachable whole-group DC (else this \
-             gate is not exercising the seed fallback)"
+            "fixture must have no whole-group DC"
         );
-
         let rails = vec![RailTear {
             rail,
             feed,
@@ -2620,153 +2327,46 @@ mod tests {
             r_shunt: 100.0,
             extra_loads: Vec::new(),
         }];
-        let run = || {
-            let mut refusals = Vec::new();
-            let exec = execute_composed_group(
-                &c,
-                &[mid],
-                &rails,
-                &ComposedPolicy::default(),
-                &opts,
-                tstop,
-                &mut refusals,
-            )
-            .expect("mechanical success")
-            .unwrap_or_else(|| {
-                panic!("composed execution must run via the seed fallback: {refusals:?}")
-            });
-            exec
-        };
-        let a = run();
-        let b = run();
-
-        // Determinism through the fallback: bitwise-identical assembled node
-        // voltages across two runs.
-        for node in 0..c.node_count() {
-            assert_eq!(
-                a.waveforms.node_voltages[node],
-                b.waveforms.node_voltages[node],
-                "composed waveform at {} drifted between runs (fallback not deterministic)",
-                c.node_name(NodeId(node as u32))
-            );
-        }
-
-        // Outcomes: rail balanced, signal accepted.
+        let run = || run_composed(&c, &[mid], &rails, &ComposedPolicy::default(), &opts, tstop);
+        let (a, b) = (run(), run());
+        assert_deterministic(&c, &a, &b);
         assert!(a
             .outcomes
             .iter()
             .any(|o| o.kind == BoundaryKind::BalancedRail && o.node == rail));
         assert!(a.outcomes.iter().any(|o| o.node == mid && o.accepted));
-
-        // The rail is live (the astable load moved it).
-        let vr = &a.waveforms.node_voltages[rail.0 as usize];
-        let swing = vr.iter().cloned().fold(f64::MIN, f64::max)
-            - vr.iter().cloned().fold(f64::MAX, f64::min);
         assert!(
-            swing > 1e-3,
-            "the rail never moved; the astable load is dead: {swing}"
+            swing(&a.waveforms.node_voltages[rail.0 as usize]) > 1e-3,
+            "rail never moved"
         );
-
-        // The astable actually oscillated in the assembled waveforms.
-        let osc = a
-            .waveforms
-            .node(&c, "osc")
-            .expect("osc node must be assembled");
-        let mut crossings = 0;
-        for w in osc.windows(2) {
-            if (w[0] - 2.5).signum() != (w[1] - 2.5).signum() {
-                crossings += 1;
-            }
-        }
+        let osc = a.waveforms.node(&c, "osc").unwrap();
+        let crossings = osc
+            .windows(2)
+            .filter(|w| (w[0] - 2.5).signum() != (w[1] - 2.5).signum())
+            .count();
         assert!(
             crossings >= 3,
-            "the rail astable must oscillate in the composed result (saw {crossings} crossings)"
+            "astable must oscillate (saw {crossings} crossings)"
         );
     }
 
-    /// GATE 3: the HELD (feed-hold) degradation, forced at toy scale by
-    /// lowering `max_balance_block` below the fixture's block size, on a
-    /// TWO-rail fixture (which also exercises the sorted-VRAIL determinism
-    /// fix: unsorted HashMap iteration over several held rails varied the
-    /// capture circuits run to run).
-    ///
-    /// What is asserted, and what is NOT: a held rail is PINNED at its feed
-    /// voltage, so the result is NOT the true circuit's answer (here the
-    /// 100 ohm shunts genuinely sag the rails ~1.5 V; the honest certificate
-    /// claim is Unmeasured). The truth the mechanics CAN be gated on is the
-    /// hold's own semantics: the assembly must match the monolith of the SAME
-    /// circuit with both rails pinned by ideal sources at the feed voltage,
-    /// within the relaxation's measured sag, on every node the held assembly
-    /// covers (signal, rails, signal-adjacent blocks). Blocks adjacent to no
-    /// signal are NOT read by the held assembly (they stay zero); that
-    /// coverage limit is a property of the degradation, documented here.
+    /// The HELD (feed-hold) degradation on a two-rail fixture: deterministic,
+    /// both rails HeldRail, and the assembly matches the monolith of the same
+    /// circuit with both rails pinned at their hold value.
     #[test]
     fn held_rails_run_deterministically_and_match_the_pinned_monolith() {
         let mut c = Circuit::new();
         let p5 = c.node("+5V");
-        c.add(Device::Vsource {
-            name: "V5".into(),
-            p: p5,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
+        vdc(&mut c, "V5", p5, 5.0);
         let vd = c.node("vd");
-        c.add(Device::Vsource {
-            name: "VD".into(),
-            p: vd,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pulse {
-                v1: 0.0,
-                v2: 2.0,
-                delay: 1e-6,
-                rise: 1e-6,
-                fall: 1e-6,
-                width: 2e-6,
-                period: 0.0,
-            },
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        // Two shunt-fed rails, one PNP block each; the two blocks' collectors
-        // chain through MID (the signal cut), so BOTH blocks are
-        // signal-adjacent and the held assembly covers every block node.
+        vpulse(&mut c, "VD", vd, (0.0, 2.0), 1e-6, (1e-6, 1e-6), 2e-6);
         let mut rails = Vec::new();
         let mut rail_nodes = Vec::new();
         let mut cols = Vec::new();
         for tag in ["A", "B"] {
             let rail = c.node(&format!("RAIL_{tag}"));
-            let shunt = c.add(Device::Resistor {
-                name: format!("Rsh{tag}"),
-                a: p5,
-                b: rail,
-                ohms: 100.0,
-                tc1: None,
-            });
-            let base = c.node(&format!("b{tag}"));
-            let col = c.node(&format!("c{tag}"));
-            c.add(Device::Bjt {
-                name: format!("Q{tag}"),
-                c: col,
-                b: base,
-                e: rail,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("Rb{tag}"),
-                a: base,
-                b: vd,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("Rc{tag}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
+            let shunt = res(&mut c, &format!("Rsh{tag}"), p5, rail, 100.0);
+            let blocks = pnp_blocks(&mut c, tag, rail, 1, vd, 100e3, 10e3);
             rails.push(RailTear {
                 rail,
                 feed: p5,
@@ -2775,333 +2375,137 @@ mod tests {
                 extra_loads: Vec::new(),
             });
             rail_nodes.push(rail);
-            cols.push(col);
+            cols.push(blocks[0].1);
         }
         let mid = c.node("MID");
-        c.add(Device::Resistor {
-            name: "Rl0".into(),
-            a: cols[0],
-            b: mid,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "Rl1".into(),
-            a: mid,
-            b: cols[1],
-            ohms: 1e3,
-            tc1: None,
-        });
+        res(&mut c, "Rl0", cols[0], mid, 1e3);
+        res(&mut c, "Rl1", mid, cols[1], 1e3);
 
-        let dt = 100e-9;
-        let tstop = 4e-6;
-        let opts = SolverOptions {
-            reltol: 1e-9,
-            vntol: 1e-9,
-            max_newton: 200,
-            ..fixed_opts(dt)
-        };
-        // Force the held path: the fixture's blocks are larger than 1 device.
+        let (dt, tstop) = (100e-9, 4e-6);
+        let opts = tight_opts(dt);
         let policy = ComposedPolicy {
             max_balance_block: 1,
         };
-
-        let run = || {
-            let mut refusals = Vec::new();
-            execute_composed_group(&c, &[mid], &rails, &policy, &opts, tstop, &mut refusals)
-                .expect("mechanical success")
-                .unwrap_or_else(|| panic!("held-path execution must succeed: {refusals:?}"))
-        };
-        let a = run();
-        let b = run();
-
-        // Determinism through two held rails (the sorted-VRAIL fix's gate).
-        for node in 0..c.node_count() {
-            assert_eq!(
-                a.waveforms.node_voltages[node],
-                b.waveforms.node_voltages[node],
-                "held waveform at {} drifted between runs",
-                c.node_name(NodeId(node as u32))
-            );
-        }
-
-        // Outcomes: both rails HELD (never BalancedRail), the signal measured.
+        let run = || run_composed(&c, &[mid], &rails, &policy, &opts, tstop);
+        let (a, b) = (run(), run());
+        assert_deterministic(&c, &a, &b);
         for rn in &rail_nodes {
             let o = a
                 .outcomes
                 .iter()
                 .find(|o| o.node == *rn)
-                .expect("every rail carries an outcome");
+                .expect("rail outcome");
             assert_eq!(o.kind, BoundaryKind::HeldRail, "{o:?}");
-            assert_eq!(o.note, "held rail (stiff-supply feed)", "{o:?}");
             assert!(o.accepted && o.sag_v == 0.0, "{o:?}");
         }
         let sig = a
             .outcomes
             .iter()
             .find(|o| o.node == mid)
-            .expect("the signal carries an outcome");
-        assert_eq!(sig.kind, BoundaryKind::Signal, "{sig:?}");
-        assert!(sig.accepted, "{sig:?}");
+            .expect("signal outcome");
+        assert!(sig.kind == BoundaryKind::Signal && sig.accepted, "{sig:?}");
 
-        // The hold's own semantics: match the monolith of the same circuit
-        // with both rails pinned by ideal sources at the ACTUAL hold value
-        // (the whole-group DC estimate here, since this fixture's DC
-        // converges; the feed voltage when it does not). Read the value from
-        // the result itself: a held rail's series IS its hold train.
         let mut pinned = c.clone();
         for rn in &rail_nodes {
             let hold_v = a.waveforms.node_voltages[rn.0 as usize][0];
-            pinned.add(Device::Vsource {
-                name: format!("VPIN_{}", c.node_name(*rn)),
-                p: *rn,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(hold_v),
-            });
+            vdc(
+                &mut pinned,
+                &format!("VPIN_{}", c.node_name(*rn)),
+                *rn,
+                hold_v,
+            );
         }
-        let mut mono_opts = opts;
-        mono_opts.partitioning = Partitioning::Off;
-        let mono = Transient::new(mono_opts)
-            .run(&pinned, tstop)
-            .expect("rail-pinned monolith");
-        let max_sag = a
+        let mono = monolith(&pinned, &opts, tstop);
+        let sag = a
             .outcomes
             .iter()
             .filter(|o| o.kind == BoundaryKind::Signal)
             .map(|o| o.sag_v)
             .fold(0.0f64, f64::max);
-        let tol = (3.0 * max_sag).max(1e-4);
-        for name in ["MID", "RAIL_A", "RAIL_B", "cA", "cB", "bA", "bB"] {
+        let tol = (3.0 * sag).max(1e-4);
+        for name in ["MID", "RAIL_A", "RAIL_B", "Ac0", "Bc0", "Ab0", "Bb0"] {
             let series = a.waveforms.node(&c, name).unwrap();
             let mseries = mono.node(&c, name).unwrap();
             for (k, &t) in a.waveforms.time.iter().enumerate() {
-                let sv = series[k];
                 let mv = lerp_at(&mono.time, mseries, t);
                 assert!(
-                    (sv - mv).abs() <= tol,
-                    "held assembly diverged from the rail-pinned monolith at {name} \
-                     t={t:.3e}: {sv:.6} vs {mv:.6} (tol {tol:.3e})"
+                    (series[k] - mv).abs() <= tol,
+                    "{name} t={t:.3e}: {} vs {mv}",
+                    series[k]
                 );
             }
         }
     }
 
-    /// Count up-crossings of a series through `level`: one per spike.
-    fn up_crossings(v: &[f64], level: f64) -> usize {
-        v.windows(2)
-            .filter(|w| w[0] < level && w[1] >= level)
-            .count()
-    }
-
-    /// A toy generator-capture fixture mirroring the flagship's hidden `V_out`
-    /// shape at seconds-fast scale: a current-source-driven, self-resetting
-    /// relaxation oscillator (an IDAC current into a membrane cap, a comparator
-    /// watching the membrane, a reset switch discharging it) whose spiking
-    /// output `vspk` is produced by an OUTPUT COMPARATOR that only SENSES the
-    /// membrane. `vspk` fans out through a sense-only synapse gate into a passive
-    /// load (`vsyn`), and its own passive load (`vload`) conducts it. The whole
-    /// thing is ONE conduction island: the membrane is tied into `vspk`'s island
-    /// through the held supply `VDD` (a weak bias resistor), so the membrane
-    /// block is same-island-but-NOT-adjacent to `vspk`, exactly the flagship's
-    /// shape. Under plain adjacency `vspk`'s capture is the passive load alone,
-    /// the membrane is absent (floats to 0), and `vspk` relaxes FLAT; the
-    /// generator-inclusive pre-pass pulls the membrane block in and it spikes.
+    /// A self-resetting relaxation oscillator (IDAC into a membrane cap, a
+    /// comparator-driven reset switch) whose spiking output `vspk` is produced
+    /// by an OUTPUT comparator that only SENSES the membrane, through a
+    /// passive hop. The membrane is same-island-but-not-adjacent to `vspk`
+    /// (tied in via a weak bias to VDD). Returns `(circuit, vspk, vdd, hold_v)`.
     fn generator_capture_fixture() -> (Circuit, NodeId, NodeId, f64) {
         let mut c = Circuit::new();
         let vdd = c.node("VDD");
-        let hold_v = 5.0;
-        c.add(Device::Vsource {
-            name: "V_VDD".into(),
-            p: vdd,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(hold_v),
-        });
-
-        // --- the relaxation oscillator (the generator) ---
+        vdc(&mut c, "V_VDD", vdd, 5.0);
         let vmem = c.node("vmem");
-        c.add(Device::Isource {
-            name: "IDRV".into(),
-            p: NodeId::GROUND,
-            n: vmem,
-            kind: SourceKind::Dc(2e-3),
-        });
-        c.add(Device::Capacitor {
-            name: "Cmem".into(),
-            a: vmem,
-            b: NodeId::GROUND,
-            farads: 2e-9,
-            ic: None,
-        });
-        // Weak bias tie to VDD: puts the membrane in VDD's (= vspk's) conduction
-        // island while drawing a negligible ~5 uA against the 1 mA drive, so the
-        // membrane block is same-island-but-not-adjacent to vspk.
-        c.add(Device::Resistor {
-            name: "Rbias".into(),
-            a: vdd,
-            b: vmem,
-            ohms: 1e6,
-            tc1: None,
-        });
+        idc(&mut c, "IDRV", GND, vmem, 2e-3);
+        cap(&mut c, "Cmem", vmem, GND, 2e-9);
+        res(&mut c, "Rbias", vdd, vmem, 1e6);
         let vref = c.node("vref");
-        c.add(Device::Vsource {
-            name: "Vref".into(),
-            p: vref,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
+        vdc(&mut c, "Vref", vref, 1.0);
         let vcmp = c.node("vcmp");
-        // Wide hysteresis: fires at vmem = vref + h = 1.5 and holds the reset on
-        // until vmem falls to vref - h = 0.5, well below the output stage's
-        // 0.6 V threshold, so the reset actually swings the output low each cycle
-        // (a narrow band would limit-cycle around vref and pin the output high).
-        c.add(Device::Comparator {
-            name: "Kcmp".into(),
-            out: vcmp,
-            inp: vmem,
-            inn: vref,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.5,
-        });
-        c.add(Device::VSwitch {
-            name: "SWr".into(),
-            a: vmem,
-            b: NodeId::GROUND,
-            ctrl_p: vcmp,
-            ctrl_n: NodeId::GROUND,
-            von: 2.5,
-            voff: 1.5,
-            // 200 ohm: the discharge tau (200 ohm * 2 nF = 400 ns) is several
-            // fixed steps, so the reset event is resolvable at 50 ns without an
-            // adaptive march, while I*ron = 0.4 V < the reset threshold so the
-            // membrane still resets below vref and the loop re-arms.
-            ron: 200.0,
-            roff: 1e9,
-        });
-
-        // --- output stage: senses the membrane, drives vspk THROUGH a passive
-        // hop (the board's stretcher shape). The comparator's conducted node is
-        // vko, one resistor away from vspk, so the sensing device sits in an
-        // ADJACENT BLOCK rather than among vspk's direct conductors: the walk
-        // must seed from the adjacency blocks' devices, not just conductors, to
-        // find the membrane. (The first walk seeded conductors only and this
-        // exact shape, the flagship's, grew by zero blocks.)
+        comparator(&mut c, "Kcmp", vcmp, vmem, vref, 0.5);
+        sw(&mut c, "SWr", vmem, GND, vcmp, (2.5, 1.5), 200.0);
         let vref2 = c.node("vref2");
-        c.add(Device::Vsource {
-            name: "Vref2".into(),
-            p: vref2,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(0.6),
-        });
+        vdc(&mut c, "Vref2", vref2, 0.6);
         let vko = c.node("vko");
-        c.add(Device::Comparator {
-            name: "Kout".into(),
-            out: vko,
-            inp: vmem,
-            inn: vref2,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.05,
-        });
+        comparator(&mut c, "Kout", vko, vmem, vref2, 0.05);
         let vspk = c.node("vspk");
-        c.add(Device::Resistor {
-            name: "R_str".into(),
-            a: vko,
-            b: vspk,
-            ohms: 1e3,
-            tc1: None,
-        });
-
-        // --- passive downstream load that conducts vspk (the adjacency capture);
-        // the 10k tie to VDD keeps vspk's low level (~0.4 V) well under the 2.5 V
-        // crossing threshold while fusing the load into the supply's island. ---
+        res(&mut c, "R_str", vko, vspk, 1e3);
         let vload = c.node("vload");
-        c.add(Device::Resistor {
-            name: "Rload".into(),
-            a: vspk,
-            b: vload,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "RloadG".into(),
-            a: vload,
-            b: vdd,
-            ohms: 10e3,
-            tc1: None,
-        });
-
-        // --- sense-only synapse gate into a passive load (the countable column) ---
+        res(&mut c, "Rload", vspk, vload, 1e3);
+        res(&mut c, "RloadG", vload, vdd, 10e3);
         let vref3 = c.node("vref3");
-        c.add(Device::Vsource {
-            name: "Vref3".into(),
-            p: vref3,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(2.5),
-        });
+        vdc(&mut c, "Vref3", vref3, 2.5);
         let vsyn = c.node("vsyn");
-        c.add(Device::Comparator {
-            name: "Ksyn".into(),
-            out: vsyn,
-            inp: vspk,
-            inn: vref3,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.05,
-        });
-        c.add(Device::Resistor {
-            name: "Rsyn".into(),
-            a: vsyn,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-
-        (c, vspk, vdd, hold_v)
+        comparator(&mut c, "Ksyn", vsyn, vspk, vref3, 0.05);
+        res(&mut c, "Rsyn", vsyn, GND, 1e3);
+        (c, vspk, vdd, 5.0)
     }
 
-    /// THE generator-capture gate (the fix's own acceptance test). Plain
-    /// adjacency leaves the sense-driven output FLAT; the generator-inclusive
-    /// capture makes it spike, matching the `Partitioning::Off` monolith's spike
-    /// count on both the output net and the sense-gated load. This is the
-    /// seconds-fast toy of the flagship's dead-membrane / quiet-basin hazard.
-    #[test]
-    fn generator_inclusive_capture_makes_the_output_spike() {
-        let (c, vspk, vdd, hold_v) = generator_capture_fixture();
-        let dt = 50e-9;
-        let tstop = 20e-6;
-        let opts = SolverOptions {
+    fn generator_opts(dt: f64) -> SolverOptions {
+        SolverOptions {
             reltol: 1e-7,
             vntol: 1e-7,
             max_newton: 100,
-            // The relaxation oscillator has no DC operating point (the reset loop
-            // has no fixed point), so both the oracle and the captures start from
-            // a power-on rest state instead of a DC solve.
             dc_init: crate::options::DcInit::FromZero,
             ..fixed_opts(dt)
-        };
+        }
+    }
 
-        // The oracle: the fused monolith at fixed step (VDD pinned by its own
-        // ideal source, exactly the executor's hold value).
-        let mut mono_opts = opts;
-        mono_opts.partitioning = Partitioning::Off;
-        let mono = Transient::new(mono_opts)
-            .run(&c, tstop)
-            .expect("monolith oracle");
+    fn held_vdd(vdd: NodeId, hold_v: f64, dt: f64, tstop: f64) -> HashMap<u32, Vec<f64>> {
+        [(vdd.0, vec![hold_v; uniform_grid(dt, tstop).len()])]
+            .into_iter()
+            .collect()
+    }
+
+    /// Plain adjacency leaves the sense-driven output FLAT; the
+    /// generator-inclusive capture makes it spike, matching the monolith's
+    /// spike count on the output net and the sense-gated load.
+    #[test]
+    fn generator_inclusive_capture_makes_the_output_spike() {
+        let (c, vspk, vdd, hold_v) = generator_capture_fixture();
+        let (dt, tstop) = (50e-9, 20e-6);
+        let opts = generator_opts(dt);
+        let mono = monolith(&c, &opts, tstop);
         let mono_vspk = up_crossings(mono.node(&c, "vspk").unwrap(), 2.5);
         let mono_vsyn = up_crossings(mono.node(&c, "vsyn").unwrap(), 2.5);
         assert!(
             mono_vspk >= 3,
-            "the oscillator must genuinely spike in the monolith (saw {mono_vspk})"
+            "oscillator must spike in the monolith (saw {mono_vspk})"
         );
-        assert_eq!(mono_vspk, mono_vsyn, "the sense gate must mirror vspk 1:1");
+        assert_eq!(mono_vspk, mono_vsyn);
+        let held = held_vdd(vdd, hold_v, dt, tstop);
 
-        let held: HashMap<u32, Vec<f64>> = {
-            let grid = uniform_grid(dt, tstop);
-            [(vdd.0, vec![hold_v; grid.len()])].into_iter().collect()
-        };
-
-        // --- NEGATIVE: plain adjacency (growth off) leaves vspk FLAT. ---
         let off = CapturePolicy {
             max_growth_blocks: 0,
             ..CapturePolicy::default()
@@ -3118,18 +2522,13 @@ mod tests {
         )
         .expect("mechanical success");
         if let Some(exec) = &neg {
-            let v = &exec.waveforms.node_voltages[vspk.0 as usize];
-            let ptp = v.iter().cloned().fold(f64::MIN, f64::max)
-                - v.iter().cloned().fold(f64::MAX, f64::min);
+            let ptp = swing(&exec.waveforms.node_voltages[vspk.0 as usize]);
             assert!(
                 ptp < 0.5,
-                "pre-fix vspk must relax FLAT on the load-only capture (saw ptp {ptp:.3} V); \
-                 the dead-membrane bug is not being reproduced"
+                "load-only capture must relax FLAT (saw ptp {ptp:.3} V)"
             );
         }
-        // (A refusal is an equally-valid pre-fix outcome; either way it never spikes.)
 
-        // --- POSITIVE: generator-inclusive capture makes vspk spike. ---
         let mut refusals = Vec::new();
         let exec = execute_stiff_group_held_capped(
             &c,
@@ -3142,125 +2541,47 @@ mod tests {
         )
         .expect("mechanical success")
         .unwrap_or_else(|| panic!("generator-inclusive capture must succeed: {refusals:?}"));
-
         let o = exec
             .outcomes
             .iter()
             .find(|o| o.node == vspk)
             .expect("vspk outcome");
-        assert!(
-            o.capture_growth > 0,
-            "the capture must have grown past plain adjacency to reach the generator: {o:?}"
-        );
-        assert!(o.accepted, "{o:?}");
-
+        assert!(o.capture_growth > 0 && o.accepted, "{o:?}");
         let vspk_wf = &exec.waveforms.node_voltages[vspk.0 as usize];
-        let ptp = vspk_wf.iter().cloned().fold(f64::MIN, f64::max)
-            - vspk_wf.iter().cloned().fold(f64::MAX, f64::min);
-        assert!(ptp > 1.0, "vspk peak-to-peak must exceed 1 V, saw {ptp:.3}");
-        assert!(
-            up_crossings(vspk_wf, 2.5) >= 1,
-            "vspk must have at least one up-crossing"
-        );
-
-        // Spike-count parity with the monolith, on vspk AND the sense-gated load.
-        assert_eq!(
-            up_crossings(vspk_wf, 2.5),
-            mono_vspk,
-            "vspk spike count must match the monolith"
-        );
+        assert!(swing(vspk_wf) > 1.0);
+        assert_eq!(up_crossings(vspk_wf, 2.5), mono_vspk);
         assert_eq!(
             up_crossings(exec.waveforms.node(&c, "vsyn").unwrap(), 2.5),
-            mono_vsyn,
-            "sense-gated load spike count must match the monolith"
+            mono_vsyn
         );
     }
 
-    /// The MERGED-cluster gate (the flagship's actual shape): TWO sense-driven
-    /// columns behind the SAME generator. Each candidate's capture grows into
-    /// the shared oscillator core, so the grown block sets overlap and the
-    /// executor must solve them JOINTLY as one cluster: two separately relaxed
-    /// captures would each pin a stale replay of their own generator (the
-    /// measured 137s-per-candidate-per-round cost blowout on the flagship, and
-    /// the quiet-basin hazard). Assembled spike counts must match the fused
-    /// monolith on both columns, and the joint solve must be on the record.
+    /// Two sense-driven columns behind the SAME generator: the grown block
+    /// sets overlap, so the executor must solve them jointly as one cluster.
     #[test]
     fn overlapping_grown_captures_merge_and_match() {
         let (mut c, vspk, vdd, hold_v) = generator_capture_fixture();
-        // Second column: an independent output stage sensing the same membrane,
-        // with its own stretcher hop and downstream load.
         let vmem = c.node("vmem");
         let vref4 = c.node("vref4");
-        c.add(Device::Vsource {
-            name: "Vref4".into(),
-            p: vref4,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(0.6),
-        });
+        vdc(&mut c, "Vref4", vref4, 0.6);
         let vko2 = c.node("vko2");
-        c.add(Device::Comparator {
-            name: "Kout2".into(),
-            out: vko2,
-            inp: vmem,
-            inn: vref4,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.05,
-        });
+        comparator(&mut c, "Kout2", vko2, vmem, vref4, 0.05);
         let vspk2 = c.node("vspk2");
-        c.add(Device::Resistor {
-            name: "R_str2".into(),
-            a: vko2,
-            b: vspk2,
-            ohms: 1e3,
-            tc1: None,
-        });
+        res(&mut c, "R_str2", vko2, vspk2, 1e3);
         let vload2 = c.node("vload2");
-        c.add(Device::Resistor {
-            name: "Rload2".into(),
-            a: vspk2,
-            b: vload2,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "RloadG2".into(),
-            a: vload2,
-            b: vdd,
-            ohms: 10e3,
-            tc1: None,
-        });
+        res(&mut c, "Rload2", vspk2, vload2, 1e3);
+        res(&mut c, "RloadG2", vload2, vdd, 10e3);
 
-        let dt = 50e-9;
-        let tstop = 20e-6;
-        let opts = SolverOptions {
-            reltol: 1e-7,
-            vntol: 1e-7,
-            max_newton: 100,
-            dc_init: crate::options::DcInit::FromZero,
-            ..fixed_opts(dt)
-        };
-
-        let mut mono_opts = opts;
-        mono_opts.partitioning = Partitioning::Off;
-        let mono = Transient::new(mono_opts)
-            .run(&c, tstop)
-            .expect("monolith oracle");
+        let (dt, tstop) = (50e-9, 20e-6);
+        let opts = generator_opts(dt);
+        let mono = monolith(&c, &opts, tstop);
         let mono_vspk = up_crossings(mono.node(&c, "vspk").unwrap(), 2.5);
-        let mono_vspk2 = up_crossings(mono.node(&c, "vspk2").unwrap(), 2.5);
-        assert!(
-            mono_vspk >= 3,
-            "the oscillator must genuinely spike in the monolith (saw {mono_vspk})"
-        );
+        assert!(mono_vspk >= 3);
         assert_eq!(
-            mono_vspk, mono_vspk2,
-            "the two columns mirror the same generator"
+            mono_vspk,
+            up_crossings(mono.node(&c, "vspk2").unwrap(), 2.5)
         );
-
-        let held: HashMap<u32, Vec<f64>> = {
-            let grid = uniform_grid(dt, tstop);
-            [(vdd.0, vec![hold_v; grid.len()])].into_iter().collect()
-        };
+        let held = held_vdd(vdd, hold_v, dt, tstop);
 
         let mut refusals = Vec::new();
         let exec = execute_stiff_group_held_capped(
@@ -3274,142 +2595,57 @@ mod tests {
         )
         .expect("mechanical success")
         .unwrap_or_else(|| panic!("merged generator captures must succeed: {refusals:?}"));
-
         for cand in [vspk, vspk2] {
             let o = exec
                 .outcomes
                 .iter()
                 .find(|o| o.node == cand)
                 .expect("outcome");
-            assert!(o.accepted, "{o:?}");
-            assert!(
-                o.capture_growth > 0,
-                "both captures must grow past plain adjacency: {o:?}"
-            );
-            assert!(
-                o.note.contains("merged capture"),
-                "the joint solve must be on the certificate record: {o:?}"
+            assert!(o.accepted && o.capture_growth > 0, "{o:?}");
+            assert!(o.note.contains("merged capture"), "{o:?}");
+            assert_eq!(
+                up_crossings(&exec.waveforms.node_voltages[cand.0 as usize], 2.5),
+                mono_vspk
             );
         }
-
-        assert_eq!(
-            up_crossings(&exec.waveforms.node_voltages[vspk.0 as usize], 2.5),
-            mono_vspk,
-            "column 1 spike count must match the monolith"
-        );
-        assert_eq!(
-            up_crossings(&exec.waveforms.node_voltages[vspk2.0 as usize], 2.5),
-            mono_vspk2,
-            "column 2 spike count must match the monolith"
-        );
     }
 
-    /// The refusal gate: a cut through an ACTIVE feedback loop (cross-coupled
-    /// bistable, loop gain above one) must not converge to a certified
-    /// answer; the executor must exhaust its budget and refuse with the
-    /// residual on record. This is the measured counterpart of the
-    /// feedforward pass's structural never-tear-inside-a-loop rule, which
-    /// cannot see conduction loops inside one island.
+    /// A cut through an ACTIVE feedback loop (cross-coupled bistable) must
+    /// either refuse with its residual on record, or converge to a TRUE root
+    /// (checked against a monolith nodeset at the torn answer).
     #[test]
-    fn cut_through_an_active_loop_is_refused() {
+    fn cut_through_an_active_loop_is_refused_or_true() {
         let mut c = Circuit::new();
         let vcc = c.node("vcc");
-        c.add(Device::Vsource {
-            name: "VCC".into(),
-            p: vcc,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let model = BjtModel::default(); // NPN
-        let c1 = c.node("c1");
-        let c2 = c.node("c2");
-        let b1 = c.node("b1");
-        let b2 = c.node("b2");
+        vdc(&mut c, "VCC", vcc, 5.0);
+        let model = BjtModel::default();
+        let (c1, c2, b1, b2) = (c.node("c1"), c.node("c2"), c.node("b1"), c.node("b2"));
         for (tag, col, base, xbase) in [("1", c1, b1, b2), ("2", c2, b2, b1)] {
-            c.add(Device::Resistor {
-                name: format!("Rc{tag}"),
-                a: vcc,
-                b: col,
-                ohms: 4.7e3,
-                tc1: None,
-            });
-            c.add(Device::Bjt {
-                name: format!("Q{tag}"),
-                c: col,
-                b: base,
-                e: NodeId::GROUND,
-                model: model.clone(),
-            });
-            // Cross-coupling: this collector drives the OTHER base.
-            c.add(Device::Resistor {
-                name: format!("Rx{tag}"),
-                a: col,
-                b: xbase,
-                ohms: 10e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("Rb{tag}"),
-                a: base,
-                b: NodeId::GROUND,
-                ohms: 47e3,
-                tc1: None,
-            });
+            res(&mut c, &format!("Rc{tag}"), vcc, col, 4.7e3);
+            bjt(&mut c, &format!("Q{tag}"), col, base, GND, &model);
+            res(&mut c, &format!("Rx{tag}"), col, xbase, 10e3);
+            res(&mut c, &format!("Rb{tag}"), base, GND, 47e3);
         }
-
         let opts = fixed_opts(100e-9);
         let mut refusals = Vec::new();
         let out = execute_stiff_group(&c, &[c1, c2], &opts, 2e-6, &mut refusals)
             .unwrap_or_else(|e| panic!("mechanical: {e}"));
-        if let Some(exec) = &out {
-            // If it converged, it must at least have converged to the TRUTH;
-            // a certified-but-wrong latch state is the failure this test
-            // exists to forbid. Compare against the fused monolith.
-            //
-            // A bistable's DC has MULTIPLE true roots, and the two paths pick
-            // theirs differently by construction: the fused Newton (with
-            // SPICE-canonical junction limiting) settles on the symmetric
-            // metastable point, exactly as ngspice's `.op` does on a
-            // cross-coupled latch, while the torn group's sequential boundary
-            // relaxation breaks the symmetry and latches a side. Equality
-            // against the monolith's own cold start would therefore fail on
-            // root CHOICE, not on wrongness. So the monolith is seeded with
-            // `.nodeset`s at the torn answer: a nodeset is a start-vector
-            // guess, not a pin, so the released Newton keeps the full
-            // circuit's authority. A torn answer that is a true root selects
-            // its own basin and the trajectories must then agree; a torn
-            // answer that is NOT a root gets walked away from by the released
-            // solve, the trajectories split, and the assert below catches the
-            // certified-but-wrong state exactly as before.
-            let mut mono_opts = opts;
-            mono_opts.partitioning = Partitioning::Off;
-            let mut mono_c = c.clone();
-            for node in 1..c.node_count() {
-                mono_c
-                    .nodesets
-                    .push((NodeId(node as u32), exec.waveforms.node_voltages[node][0]));
-            }
-            let mono = Transient::new(mono_opts)
-                .run(&mono_c, 2e-6)
-                .expect("monolith");
-            let max_sag = exec.outcomes.iter().map(|o| o.sag_v).fold(0.0f64, f64::max);
-            let tol = (3.0 * max_sag).max(1e-4);
-            for node in 1..c.node_count() {
-                for (k, &t) in exec.waveforms.time.iter().enumerate() {
-                    let sv = exec.waveforms.node_voltages[node][k];
-                    let mv = lerp_at(&mono.time, &mono.node_voltages[node], t);
-                    assert!(
-                        (sv - mv).abs() <= tol,
-                        "converged-but-wrong at {} t={t:.3e}: {sv:.4} vs {mv:.4}",
-                        c.node_name(NodeId(node as u32))
-                    );
+        match &out {
+            Some(exec) => {
+                let mut mono_c = c.clone();
+                for node in 1..c.node_count() {
+                    mono_c
+                        .nodesets
+                        .push((NodeId(node as u32), exec.waveforms.node_voltages[node][0]));
                 }
+                let mono = monolith(&mono_c, &opts, 2e-6);
+                let tol = (3.0 * max_sag(&exec.outcomes)).max(1e-4);
+                assert_matches(&c, exec, &mono, tol, "converged-but-wrong");
             }
-        } else {
-            assert!(
+            None => assert!(
                 refusals.iter().any(|o| !o.accepted),
-                "a refusal must carry its residual: {refusals:?}"
-            );
+                "a refusal carries its residual: {refusals:?}"
+            ),
         }
     }
 }

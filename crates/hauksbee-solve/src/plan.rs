@@ -557,75 +557,43 @@ mod tests {
     use crate::options::SolverOptions;
     use crate::stamp::{reserve_pattern, IntegCoeffs};
     use crate::system::ReactiveState;
+    use crate::test_fixtures::{
+        cap, cap_ic, comparator, diode, idc, res, stamp_ctx, sw, trapz, vdc, GND,
+    };
     use hauksbee_ir::{Device, NodeId, SourceKind};
 
-    #[test]
-    fn plan_matches_direct_stamp_for_resistors() {
-        let mut c = Circuit::new();
-        let a = c.node("a");
-        let b = c.node("b");
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a,
-            b,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: b,
-            b: NodeId::GROUND,
-            ohms: 2e3,
-            tc1: None,
-        });
-
-        let layout = Layout::new(&c);
+    fn compiled(c: &Circuit) -> (Layout, SparseMatrix, StampPlan) {
+        let layout = Layout::new(c);
         let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&c, &layout, &mut m);
-        let plan = StampPlan::compile(&c, &layout, &m);
+        reserve_pattern(c, &layout, &mut m);
+        let plan = StampPlan::compile(c, &layout, &m);
+        (layout, m, plan)
+    }
 
+    #[test]
+    fn plan_covers_the_resistor_conductance_stamp() {
+        let mut c = Circuit::new();
+        let (a, b) = (c.node("a"), c.node("b"));
+        res(&mut c, "R1", a, b, 1e3);
+        res(&mut c, "R2", b, GND, 2e3);
+        let (_, mut m, plan) = compiled(&c);
         m.clear_values();
         plan.apply_conductances(&mut m);
-
-        // Direct reference.
-        let mut m2 = SparseMatrix::new(layout.size);
-        reserve_pattern(&c, &layout, &mut m2);
-        m2.clear_values();
-        let g1 = 1e-3;
-        let g2 = 5e-4;
-        let ai = layout.node(a).unwrap();
-        let bi = layout.node(b).unwrap();
-        m2.add(ai, ai, g1);
-        m2.add(bi, bi, g1);
-        m2.add(ai, bi, -g1);
-        m2.add(bi, ai, -g1);
-        m2.add(bi, bi, g2);
-
-        // The plan should reproduce R1+R2's full conductance stamp (5 entries:
-        // two self terms for the R1 pair, two cross terms, plus R2's diagonal).
-        let _ = (g1, g2, ai, bi);
+        // R1's four entries plus R2's diagonal.
         assert!(plan.cond_op_count() >= 5);
     }
 
-    /// A mixed board exercising every device kind: the planned assembly must
-    /// reproduce the interpreted one entry-for-entry (matrix and RHS) within
-    /// accumulation rounding at a non-trivial transient iterate. This is the
-    /// per-device-kind before/after check the two-tier split hangs off: a
-    /// dropped or double-counted contribution shows up far above the bound.
+    /// Every device kind: the planned assembly reproduces the interpreted one
+    /// entry-for-entry (matrix and RHS) at a non-trivial transient iterate.
     #[test]
     fn planned_assembly_matches_interpreted_on_mixed_board() {
         let mut c = Circuit::new();
         let vin = c.node("vin");
-        let n1 = c.node("n1");
-        let n2 = c.node("n2");
-        let n3 = c.node("n3");
-        let n4 = c.node("n4");
-        let n5 = c.node("n5");
-        let n6 = c.node("n6");
+        let n: Vec<NodeId> = (1..=6).map(|k| c.node(&format!("n{k}"))).collect();
         c.add(Device::Vsource {
             name: "V1".into(),
             p: vin,
-            n: NodeId::GROUND,
+            n: GND,
             kind: SourceKind::Sin {
                 offset: 2.5,
                 amplitude: 2.0,
@@ -635,77 +603,39 @@ mod tests {
                 phase: 0.0,
             },
         });
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: vin,
-            b: n1,
-            ohms: 1e3,
-            tc1: None,
-        });
+        res(&mut c, "R1", vin, n[0], 1e3);
         c.add(Device::Resistor {
             name: "Rt".into(),
-            a: n1,
-            b: n2,
+            a: n[0],
+            b: n[1],
             ohms: 2e3,
             tc1: Some(0.001),
         });
-        c.add(Device::Capacitor {
-            name: "C1".into(),
-            a: n1,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: None,
-        });
+        cap(&mut c, "C1", n[0], GND, 1e-9);
         c.add(Device::Inductor {
             name: "L1".into(),
-            a: n2,
-            b: n3,
+            a: n[1],
+            b: n[2],
             henries: 1e-6,
             ic: None,
         });
-        c.add(Device::Isource {
-            name: "I1".into(),
-            p: n3,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1e-3),
-        });
-        c.add(Device::Diode {
-            name: "D1".into(),
-            a: n1,
-            k: n4,
-            model: Default::default(),
-        });
-        c.add(Device::Bjt {
-            name: "Q1".into(),
-            c: vin,
-            b: n4,
-            e: NodeId::GROUND,
-            model: Default::default(),
-        });
+        idc(&mut c, "I1", n[2], GND, 1e-3);
+        diode(&mut c, "D1", n[0], n[3], Default::default());
+        crate::test_fixtures::bjt(&mut c, "Q1", vin, n[3], GND, &Default::default());
         c.add(Device::Mosfet {
             name: "M1".into(),
-            d: n2,
-            g: n1,
-            s: NodeId::GROUND,
+            d: n[1],
+            g: n[0],
+            s: GND,
             b: None,
             model: Default::default(),
         });
-        c.add(Device::VSwitch {
-            name: "S1".into(),
-            a: n3,
-            b: n5,
-            ctrl_p: n1,
-            ctrl_n: NodeId::GROUND,
-            von: 3.0,
-            voff: 2.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
+        sw(&mut c, "S1", n[2], n[4], n[0], (3.0, 2.0), 10.0);
         c.add(Device::OpAmp {
             name: "U1".into(),
-            out: n5,
-            inp: n1,
-            inn: n2,
+            out: n[4],
+            inp: n[0],
+            inn: n[1],
             reference: None,
             gain: 1e5,
             pole_hz: None,
@@ -713,25 +643,11 @@ mod tests {
             rail_lo: 0.0,
             rail_hi: 5.0,
         });
-        c.add(Device::Comparator {
-            name: "K1".into(),
-            out: n6,
-            inp: n1,
-            inn: n2,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.05,
-        });
+        comparator(&mut c, "K1", n[5], n[0], n[1], 0.05);
 
-        let layout = Layout::new(&c);
-        let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&c, &layout, &mut m);
-        let plan = StampPlan::compile(&c, &layout, &m);
-
-        let n = layout.size;
-        // Non-trivial iterate with mixed signs/magnitudes, plus non-zero
-        // reactive history so the RHS-only tier carries real values.
-        let x: Vec<f64> = (0..n)
+        let (layout, mut m, plan) = compiled(&c);
+        let size = layout.size;
+        let x: Vec<f64> = (0..size)
             .map(|i| ((i as f64 * 0.7391).sin()) * 3.0 + 0.1)
             .collect();
         let mut state = ReactiveState::new(c.devices.len());
@@ -742,302 +658,71 @@ mod tests {
             *v = -0.1 * (i as f64 + 1.0);
         }
         let opts = SolverOptions::default();
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
-        let spdt = std::collections::HashMap::new();
-        let ctx = StampCtx {
-            circuit: &c,
-            layout: &layout,
-            opts: &opts,
-            x: &x,
-            x_prev: &x,
-            time: 1e-6,
-            coeffs,
-            state: &state,
-            dc: false,
-            use_ic: false,
-            gmin: 1e-12,
-            src_scale: 1.0,
-            branch_reg: 0.0,
-            cmp_freeze: None,
-            switch_freeze: None,
-            switch_latch: None,
-            spdt_sibling: &spdt,
-            junction_eval: None,
-        };
+        let mut ctx = stamp_ctx(&c, &layout, &opts, &x, &state, trapz(1e-7));
+        ctx.time = 1e-6;
+        ctx.gmin = 1e-12;
 
-        // Interpreted reference.
         let mut m_ref = m.clone();
         m_ref.clear_values();
-        let mut rhs_ref = vec![0.0f64; n];
+        let mut rhs_ref = vec![0.0f64; size];
         stamp_all(&ctx, &mut m_ref, &mut rhs_ref);
-
-        // Planned.
         m.clear_values();
-        let mut rhs = vec![0.0f64; n];
+        let mut rhs = vec![0.0f64; size];
         stamp_all_planned(&ctx, &plan, &mut m, &mut rhs);
 
-        for i in 0..n {
-            let row_ref = m_ref.row(i);
-            let row = m.row(i);
+        for i in 0..size {
+            let (row, row_ref) = (m.row(i), m_ref.row(i));
             assert_eq!(row.len(), row_ref.len(), "row {i} pattern changed");
-            for (k, (&(cc, vv), &(cr, vr))) in row.iter().zip(row_ref.iter()).enumerate() {
-                assert_eq!(cc, cr, "row {i} slot {k} column changed");
-                let err = (vv - vr).abs();
-                let bound = 1e-12 * vr.abs().max(1.0);
+            for (&(cc, vv), &(cr, vr)) in row.iter().zip(row_ref.iter()) {
+                assert_eq!(cc, cr, "row {i} column changed");
                 assert!(
-                    err <= bound,
-                    "matrix ({i},{cc}): planned {vv} vs interpreted {vr}, err {err:e}"
+                    (vv - vr).abs() <= 1e-12 * vr.abs().max(1.0),
+                    "matrix ({i},{cc}): planned {vv} vs interpreted {vr}"
                 );
             }
-            let err = (rhs[i] - rhs_ref[i]).abs();
-            let bound = 1e-12 * rhs_ref[i].abs().max(1.0);
             assert!(
-                err <= bound,
-                "rhs[{i}]: planned {} vs interpreted {}, err {err:e}",
+                (rhs[i] - rhs_ref[i]).abs() <= 1e-12 * rhs_ref[i].abs().max(1.0),
+                "rhs[{i}]: {} vs {}",
                 rhs[i],
                 rhs_ref[i]
             );
         }
     }
 
-    /// S3 measurement estate (run with `--ignored --nocapture`, release):
-    /// the cost of ONE assembly, interpreted vs planned, on the two graded
-    /// shapes the acceptance gate names, an RC-ladder-like linear board
-    /// (backbone-dominated: the planned walk skips every resistor and does
-    /// zero slot searches) and a shunt-mirror-like nonlinear board (hub rail
-    /// row, where the tier-2 slot tables replace binary searches over a long
-    /// row). Interleaved reps, medians, so a loaded machine biases both sides
-    /// equally. Numbers feed the S3 report; not a regression gate.
-    #[test]
-    #[ignore = "measurement harness, run explicitly"]
-    fn bench_planned_assembly_split() {
-        // RC ladder, 1000 stages.
-        let mut rc = Circuit::new();
-        let vin = rc.node("in");
-        rc.add(Device::Vsource {
-            name: "V".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        let mut prev = vin;
-        for k in 0..1000 {
-            let n = rc.node(&format!("n{k}"));
-            rc.add(Device::Resistor {
-                name: format!("R{k}"),
-                a: prev,
-                b: n,
-                ohms: 1e3,
-                tc1: None,
-            });
-            rc.add(Device::Capacitor {
-                name: format!("C{k}"),
-                a: n,
-                b: NodeId::GROUND,
-                farads: 1e-9,
-                ic: None,
-            });
-            prev = n;
-        }
-        // Shunt-fed mirror-ish array, 240 blocks: hub rail + BJT pairs + RC.
-        let mut ma = Circuit::new();
-        let vcc = ma.node("vcc");
-        let rail = ma.node("rail");
-        ma.add(Device::Vsource {
-            name: "V".into(),
-            p: vcc,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        ma.add(Device::Resistor {
-            name: "Rsh".into(),
-            a: vcc,
-            b: rail,
-            ohms: 1e3,
-            tc1: None,
-        });
-        for k in 0..240 {
-            let b = ma.node(&format!("b{k}"));
-            let mem = ma.node(&format!("m{k}"));
-            ma.add(Device::Resistor {
-                name: format!("Rr{k}"),
-                a: rail,
-                b,
-                ohms: 47e3,
-                tc1: None,
-            });
-            ma.add(Device::Bjt {
-                name: format!("Q1_{k}"),
-                c: b,
-                b,
-                e: NodeId::GROUND,
-                model: Default::default(),
-            });
-            ma.add(Device::Bjt {
-                name: format!("Q2_{k}"),
-                c: mem,
-                b,
-                e: NodeId::GROUND,
-                model: Default::default(),
-            });
-            ma.add(Device::Resistor {
-                name: format!("Rm{k}"),
-                a: rail,
-                b: mem,
-                ohms: 100e3,
-                tc1: None,
-            });
-            ma.add(Device::Capacitor {
-                name: format!("Cm{k}"),
-                a: mem,
-                b: NodeId::GROUND,
-                farads: 1e-9,
-                ic: None,
-            });
-        }
-
-        for (label, c) in [("rc_ladder_1k", &rc), ("mirror_240", &ma)] {
-            let layout = Layout::new(c);
-            let mut m = SparseMatrix::new(layout.size);
-            reserve_pattern(c, &layout, &mut m);
-            let plan = StampPlan::compile(c, &layout, &m);
-            let n = layout.size;
-            let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.001 * (i % 7) as f64).collect();
-            let state = ReactiveState::new(c.devices.len());
-            let opts = SolverOptions::default();
-            let coeffs =
-                IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
-            let spdt = std::collections::HashMap::new();
-            let ctx = StampCtx {
-                circuit: c,
-                layout: &layout,
-                opts: &opts,
-                x: &x,
-                x_prev: &x,
-                time: 1e-6,
-                coeffs,
-                state: &state,
-                dc: false,
-                use_ic: false,
-                gmin: 1e-12,
-                src_scale: 1.0,
-                branch_reg: 0.0,
-                cmp_freeze: None,
-                switch_freeze: None,
-                switch_latch: None,
-                spdt_sibling: &spdt,
-                junction_eval: None,
-            };
-            let mut rhs = vec![0.0f64; n];
-            const REPS: usize = 300;
-            let mut t_interp = Vec::new();
-            let mut t_planned = Vec::new();
-            for _ in 0..10 {
-                m.clear_values();
-                rhs.iter_mut().for_each(|v| *v = 0.0);
-                stamp_all(&ctx, &mut m, &mut rhs);
-                m.clear_values();
-                rhs.iter_mut().for_each(|v| *v = 0.0);
-                stamp_all_planned(&ctx, &plan, &mut m, &mut rhs);
-            }
-            for _ in 0..12 {
-                let t0 = std::time::Instant::now();
-                for _ in 0..REPS {
-                    m.clear_values();
-                    rhs.iter_mut().for_each(|v| *v = 0.0);
-                    stamp_all(&ctx, &mut m, &mut rhs);
-                }
-                t_interp.push(t0.elapsed().as_secs_f64() / REPS as f64);
-                let t0 = std::time::Instant::now();
-                for _ in 0..REPS {
-                    m.clear_values();
-                    rhs.iter_mut().for_each(|v| *v = 0.0);
-                    stamp_all_planned(&ctx, &plan, &mut m, &mut rhs);
-                }
-                t_planned.push(t0.elapsed().as_secs_f64() / REPS as f64);
-            }
-            t_interp.sort_by(f64::total_cmp);
-            t_planned.sort_by(f64::total_cmp);
-            let mi = t_interp[t_interp.len() / 2] * 1e6;
-            let mp = t_planned[t_planned.len() / 2] * 1e6;
-            println!(
-                "bench_planned_assembly_split {label}: devices={} unknowns={} interpreted={mi:.2}us planned={mp:.2}us drop={:.0}% (cond_ops={} reactive_ops={} restamp={})",
-                c.devices.len(),
-                n,
-                (1.0 - mp / mi) * 100.0,
-                plan.cond_op_count(),
-                plan.reactive_op_count(),
-                plan.restamp_count(),
-            );
-            assert!(mi > 0.0 && mp > 0.0);
-        }
-    }
-
-    /// Ineligible contexts (DC, staged regularizer, frozen states) must fall
-    /// back to the interpreted assembly and therefore match it EXACTLY.
+    /// Ineligible contexts (DC, use_ic) fall back to the interpreted assembly
+    /// and match it bit-for-bit.
     #[test]
     fn planned_assembly_falls_back_on_dc_context() {
         let mut c = Circuit::new();
         let a = c.node("a");
-        c.add(Device::Vsource {
-            name: "V".into(),
-            p: a,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Capacitor {
-            name: "C".into(),
-            a,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: Some(0.5),
-        });
-        let layout = Layout::new(&c);
-        let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&c, &layout, &mut m);
-        let plan = StampPlan::compile(&c, &layout, &m);
-        let n = layout.size;
-        let x = vec![0.0f64; n];
+        vdc(&mut c, "V", a, 1.0);
+        cap_ic(&mut c, "C", a, GND, 1e-9, 0.5);
+        let (layout, mut m, plan) = compiled(&c);
+        let size = layout.size;
+        let x = vec![0.0f64; size];
         let state = ReactiveState::new(c.devices.len());
         let opts = SolverOptions::default();
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1.0, 1.0, true);
-        let spdt = std::collections::HashMap::new();
-        let ctx = StampCtx {
-            circuit: &c,
-            layout: &layout,
-            opts: &opts,
-            x: &x,
-            x_prev: &x,
-            time: 0.0,
-            coeffs,
-            state: &state,
-            dc: true,
-            use_ic: true,
-            gmin: 1e-12,
-            src_scale: 1.0,
-            branch_reg: 0.0,
-            cmp_freeze: None,
-            switch_freeze: None,
-            switch_latch: None,
-            spdt_sibling: &spdt,
-            junction_eval: None,
-        };
+        let mut ctx = stamp_ctx(
+            &c,
+            &layout,
+            &opts,
+            &x,
+            &state,
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1.0, 1.0, true),
+        );
+        ctx.dc = true;
+        ctx.use_ic = true;
+        ctx.gmin = 1e-12;
         let mut m_ref = m.clone();
         m_ref.clear_values();
-        let mut rhs_ref = vec![0.0f64; n];
+        let mut rhs_ref = vec![0.0f64; size];
         stamp_all(&ctx, &mut m_ref, &mut rhs_ref);
         m.clear_values();
-        let mut rhs = vec![0.0f64; n];
+        let mut rhs = vec![0.0f64; size];
         stamp_all_planned(&ctx, &plan, &mut m, &mut rhs);
-        for i in 0..n {
-            assert_eq!(
-                m.row(i),
-                m_ref.row(i),
-                "dc fallback row {i} not bit-identical"
-            );
-            assert_eq!(rhs[i], rhs_ref[i], "dc fallback rhs {i} not bit-identical");
+        for i in 0..size {
+            assert_eq!(m.row(i), m_ref.row(i), "dc fallback row {i}");
+            assert_eq!(rhs[i], rhs_ref[i], "dc fallback rhs {i}");
         }
     }
 }

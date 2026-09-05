@@ -251,194 +251,85 @@ fn tarjan_sccs(n: usize, edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
 mod tests {
     use super::*;
     use crate::decompose::conduction::ConductionGraph;
-    use hauksbee_ir::{Circuit, Device, SourceKind};
+    use crate::test_fixtures::{cap, comparator, res, vdc, GND};
+    use hauksbee_ir::Circuit;
 
-    fn rc_stage(c: &mut Circuit, tag: &str) -> (NodeId, NodeId) {
+    fn rc_stage(c: &mut Circuit, tag: &str) -> NodeId {
         let inp = c.node(&format!("{tag}_in"));
         let out = c.node(&format!("{tag}_out"));
-        c.add(Device::Vsource {
-            name: format!("V{tag}"),
-            p: inp,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        c.add(Device::Resistor {
-            name: format!("R{tag}"),
-            a: inp,
-            b: out,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: format!("C{tag}"),
-            a: out,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: None,
-        });
-        (inp, out)
+        vdc(c, &format!("V{tag}"), inp, 5.0);
+        res(c, &format!("R{tag}"), inp, out, 1e3);
+        cap(c, &format!("C{tag}"), out, GND, 1e-9);
+        out
     }
 
-    /// The canonical free-tear fixture: two RC stages coupled by a comparator
-    /// select. Expect two groups, stage A before stage B, one free tear on the
-    /// sensed node.
+    /// A comparator living in the island of `home` (its output bridged in by
+    /// a resistor) that senses `watch`.
+    fn watcher(c: &mut Circuit, name: &str, watch: NodeId, home: NodeId) {
+        let o = c.node(&format!("cmp_{name}"));
+        res(c, &format!("R{name}"), o, home, 1e3);
+        comparator(c, &format!("CMP{name}"), o, watch, GND, 1e-3);
+    }
+
+    fn dag(c: &Circuit) -> StageDag {
+        StageDag::build(c, &ConductionGraph::analyze(c))
+    }
+
+    /// Two RC stages coupled by a comparator select: two groups, A before B,
+    /// one free tear on the sensed node. A reverse watcher makes the coupling
+    /// cyclic: one fused group, no tears.
     #[test]
-    fn comparator_coupling_yields_two_stages_and_a_free_tear() {
+    fn comparator_coupling_tears_unless_it_feeds_back() {
         let mut c = Circuit::new();
-        let (_, a_out) = rc_stage(&mut c, "a");
-        let (_, b_out) = rc_stage(&mut c, "b");
-        // Comparator lives in B (conducts b_out's island via its out node on a
-        // fresh node bridged into B), senses A.
-        let cmp_out = c.node("cmp_out");
-        c.add(Device::Resistor {
-            name: "Rbridge_b".into(),
-            a: cmp_out,
-            b: b_out,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Comparator {
-            name: "CMP".into(),
-            out: cmp_out,
-            inp: a_out,
-            inn: NodeId::GROUND,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
+        let a_out = rc_stage(&mut c, "a");
+        let b_out = rc_stage(&mut c, "b");
+        watcher(&mut c, "AB", a_out, b_out);
+        let d = dag(&c);
+        assert_eq!(
+            (d.groups.len(), d.stages.len(), d.free_tears.len()),
+            (2, 2, 1),
+            "{d:?}"
+        );
+        assert_eq!(d.free_tears[0].node, a_out);
+        assert!(d.self_sensing.iter().all(|s| !s));
 
-        let g = ConductionGraph::analyze(&c);
-        let dag = StageDag::build(&c, &g);
-        assert_eq!(dag.groups.len(), 2, "{dag:?}");
-        assert_eq!(dag.stages.len(), 2, "A strictly before B: {dag:?}");
-        assert_eq!(dag.free_tears.len(), 1, "{:?}", dag.free_tears);
-        assert_eq!(dag.free_tears[0].node, a_out);
-        assert!(dag.self_sensing.iter().all(|s| !s));
+        watcher(&mut c, "BA", b_out, a_out);
+        let d = dag(&c);
+        assert_eq!((d.groups.len(), d.stages.len()), (1, 1), "{d:?}");
+        assert!(d.free_tears.is_empty());
     }
 
-    /// Fixture (b): add a *sense* feedback (a comparator in A watching B).
-    /// The coupling is now cyclic: one fused group, no free tears, one stage.
-    #[test]
-    fn sense_feedback_refuses_the_tear() {
-        let mut c = Circuit::new();
-        let (_, a_out) = rc_stage(&mut c, "a");
-        let (_, b_out) = rc_stage(&mut c, "b");
-        let cmp_ab = c.node("cmp_ab");
-        c.add(Device::Resistor {
-            name: "RB1".into(),
-            a: cmp_ab,
-            b: b_out,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Comparator {
-            name: "CMP_AB".into(),
-            out: cmp_ab,
-            inp: a_out,
-            inn: NodeId::GROUND,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-        // The reverse watcher: lives in A, senses B.
-        let cmp_ba = c.node("cmp_ba");
-        c.add(Device::Resistor {
-            name: "RA1".into(),
-            a: cmp_ba,
-            b: a_out,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Comparator {
-            name: "CMP_BA".into(),
-            out: cmp_ba,
-            inp: b_out,
-            inn: NodeId::GROUND,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-
-        let g = ConductionGraph::analyze(&c);
-        let dag = StageDag::build(&c, &g);
-        assert_eq!(dag.groups.len(), 1, "cyclic sense coupling fuses: {dag:?}");
-        assert!(dag.free_tears.is_empty(), "{:?}", dag.free_tears);
-        assert_eq!(dag.stages.len(), 1);
-    }
-
-    /// Fixture (c): the relaxation-oscillator shape, an island whose
-    /// comparator senses the island's own output. One group, flagged
-    /// self-sensing, no tear offered on the self-edge.
+    /// An island whose comparator senses its own output: one group, flagged
+    /// self-sensing, no tear on the self-edge.
     #[test]
     fn self_resetting_oscillator_is_contained_and_flagged() {
         let mut c = Circuit::new();
-        let (_, out) = rc_stage(&mut c, "osc");
+        let out = rc_stage(&mut c, "osc");
         let reset = c.node("reset");
-        c.add(Device::Resistor {
-            name: "Rreset".into(),
-            a: reset,
-            b: out,
-            ohms: 10e3,
-            tc1: None,
-        });
-        c.add(Device::Comparator {
-            name: "CMPOSC".into(),
-            out: reset,
-            inp: out,
-            inn: NodeId::GROUND,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-
-        let g = ConductionGraph::analyze(&c);
-        let dag = StageDag::build(&c, &g);
-        assert_eq!(dag.groups.len(), 1, "{dag:?}");
-        assert!(dag.free_tears.is_empty());
-        assert_eq!(dag.self_sensing, vec![true]);
+        res(&mut c, "Rreset", reset, out, 10e3);
+        comparator(&mut c, "CMPOSC", reset, out, GND, 1e-3);
+        let d = dag(&c);
+        assert_eq!(d.groups.len(), 1, "{d:?}");
+        assert!(d.free_tears.is_empty());
+        assert_eq!(d.self_sensing, vec![true]);
     }
 
-    /// A three-stage chain (A drives B drives C) plus an independent island D
-    /// sensing A: staging must put A alone in stage 0, B and D together in
-    /// stage 1 (both depend only on A), C in stage 2.
+    /// A drives B drives C, and D senses A: A alone in stage 0, B and D in
+    /// stage 1, C in stage 2.
     #[test]
     fn stages_group_independent_islands() {
         let mut c = Circuit::new();
-        let (_, a_out) = rc_stage(&mut c, "a");
-        let (_, b_out) = rc_stage(&mut c, "b");
-        let (_, c_out) = rc_stage(&mut c, "c");
-        let (_, d_out) = rc_stage(&mut c, "d");
-        for (name, inp, island_out) in [
-            ("AB", a_out, b_out),
-            ("BC", b_out, c_out),
-            ("AD", a_out, d_out),
-        ] {
-            let o = c.node(&format!("cmp_{name}"));
-            c.add(Device::Resistor {
-                name: format!("R{name}"),
-                a: o,
-                b: island_out,
-                ohms: 1e3,
-                tc1: None,
-            });
-            c.add(Device::Comparator {
-                name: format!("CMP{name}"),
-                out: o,
-                inp,
-                inn: NodeId::GROUND,
-                out_lo: 0.0,
-                out_hi: 5.0,
-                hysteresis: 1e-3,
-            });
-        }
-
-        let g = ConductionGraph::analyze(&c);
-        let dag = StageDag::build(&c, &g);
-        assert_eq!(dag.groups.len(), 4);
-        assert_eq!(dag.stages.len(), 3, "{dag:?}");
-        assert_eq!(dag.stages[0].len(), 1);
-        assert_eq!(dag.stages[1].len(), 2, "B and D are independent: {dag:?}");
-        assert_eq!(dag.stages[2].len(), 1);
-        assert_eq!(dag.free_tears.len(), 3);
+        let outs: Vec<NodeId> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|t| rc_stage(&mut c, t))
+            .collect();
+        watcher(&mut c, "AB", outs[0], outs[1]);
+        watcher(&mut c, "BC", outs[1], outs[2]);
+        watcher(&mut c, "AD", outs[0], outs[3]);
+        let d = dag(&c);
+        assert_eq!(d.groups.len(), 4);
+        let sizes: Vec<usize> = d.stages.iter().map(Vec::len).collect();
+        assert_eq!(sizes, vec![1, 2, 1], "{d:?}");
+        assert_eq!(d.free_tears.len(), 3);
     }
 }

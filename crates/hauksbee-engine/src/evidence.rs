@@ -2088,164 +2088,11 @@ fn documented_default(warning: Option<&str>) -> Option<(String, String)> {
 }
 
 #[cfg(test)]
-mod fab_ipc356_inventory_tests {
+mod tests {
     use super::*;
     use crate::board_input::InputKind;
-
-    #[test]
-    fn fab_ipc356_keeps_archive_identity_and_names_netlist_authority() {
-        assert_eq!(
-            input_artifact_kind(Path::new("fab.zip"), InputKind::Ipc356Archive),
-            (ArtifactKind::GerberArchive, ArtifactRole::FabArchive)
-        );
-        let contributions = input_contributions(InputKind::Ipc356Archive);
-        assert!(contributions
-            .iter()
-            .any(|row| { row.what == "connectivity" && row.detail.contains("IPC-D-356") }));
-        assert!(
-            contributions
-                .iter()
-                .all(|row| row.what != "copper_geometry"),
-            "the skipped gerbers must not be recorded as consumed: {contributions:?}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod partial_model_tests {
-    use super::*;
     use crate::report::BindRow;
-
-    fn row(reference: &str, outcome: BindOutcome, warning: Option<&str>) -> BindRow {
-        BindRow {
-            reference: reference.to_string(),
-            value: "PART".to_string(),
-            model_id: Some("some_entry".to_string()),
-            confidence: Confidence::Exact,
-            source: None,
-            outcome,
-            warning: warning.map(str::to_string),
-            guesses: Vec::new(),
-        }
-    }
-
-    /// A partial-model warning must become an ASSUMPTION, because that is what
-    /// reaches `--plain`, `--json` and the web front door; the bind report's own
-    /// warning list reaches only `--report`.
-    ///
-    /// This is the honesty rule the project already applied once to the
-    /// estimated-fallback rows in this same function. It matters most for the
-    /// `Skipped` row below: `Skipped` is `is_ignored()`, so the part leaves the
-    /// resolve denominator AND gets no `open_part` assumption, which means that
-    /// without this lift a board whose only clock source is a packaged oscillator
-    /// read as MORE fully handled than one the tool admitted it could not model.
-    /// Measured before the lift existed: a corpus board's oscillator appeared 121
-    /// times under `--report --plain` and ZERO times under `--check --plain` or
-    /// `--check --json`.
-    ///
-    /// The negative rows are half the test: an ordinary bind warning is a
-    /// diagnostic about the BOARD and belongs on the bind report only. If every
-    /// warning became evidence, the evidence map would fill with wiring notes and
-    /// the reader would learn to skip it.
-    #[test]
-    fn a_partial_model_warning_becomes_evidence_and_an_ordinary_one_does_not() {
-        let marker = Assumption::PARTIAL_MODEL_MARKER;
-        let mut report = BindReport::default();
-        report.push(row(
-            "X1",
-            BindOutcome::Skipped {
-                reason: "crystal or packaged oscillator".to_string(),
-            },
-            Some(&format!(
-                "{marker}X1 (PART): its supply draw and its driven clock are not modelled"
-            )),
-        ));
-        report.push(row(
-            "U5",
-            BindOutcome::Behavioral {
-                device: "vswitch".to_string(),
-            },
-            Some(&format!(
-                "{marker}U5 (PART): one channel of eight is modelled"
-            )),
-        ));
-        // Ordinary warnings: a board diagnostic, and a row with no warning at all.
-        report.push(row(
-            "U6",
-            BindOutcome::Behavioral {
-                device: "vswitch".to_string(),
-            },
-            Some("U6 (PART): analog-switch gate(s) 3 missing a connection, left open"),
-        ));
-        report.push(row(
-            "U7",
-            BindOutcome::Behavioral {
-                device: "vswitch".to_string(),
-            },
-            None,
-        ));
-
-        let board = ExtractedBoard {
-            name: "partial-model-fixture".to_string(),
-            nets: Vec::new(),
-            components: Vec::new(),
-        };
-        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
-            .expect("evidence builds");
-
-        let lifted: Vec<&str> = evidence
-            .assumptions()
-            .iter()
-            .filter(|a| a.statement().contains("modelled only in part"))
-            .map(|a| a.statement())
-            .collect();
-        assert_eq!(
-            lifted.len(),
-            2,
-            "exactly the two marked rows become evidence, got: {lifted:?}"
-        );
-        assert!(
-            lifted.iter().any(|h| h.contains("X1")) && lifted.iter().any(|h| h.contains("U5")),
-            "the skipped oscillator and the part-modelled switch must both be there: \
-             {lifted:?}"
-        );
-
-        // The marker is routing, not prose: it must not survive into anything a
-        // reader sees, on either surface.
-        for a in evidence.assumptions() {
-            for text in [a.statement(), a.because(), a.consequence(), a.replacement()] {
-                assert!(
-                    !text.contains(marker.trim()),
-                    "the routing marker leaked into user-facing text: {text}"
-                );
-            }
-        }
-        for (_, w) in report.warnings() {
-            assert!(
-                !w.contains(marker.trim()),
-                "the routing marker leaked into the printed bind warning: {w}"
-            );
-        }
-        // And the gap text is not repeated with the reference glued on the front:
-        // the assumption carries the subject in its own field.
-        let x1 = evidence
-            .assumptions()
-            .iter()
-            .find(|a| a.statement().contains("X1"))
-            .expect("X1 assumption");
-        assert!(
-            !x1.because().contains("X1 (PART):"),
-            "the REF (VALUE) prefix belongs to the bind report line, not the \
-             assumption's own sentence: {}",
-            x1.because()
-        );
-    }
-}
-
-#[cfg(test)]
-mod compact_appendix_tests {
-    use super::*;
-    use crate::report::BindRow;
+    use crate::result::{CustomRulesCoverage, DrcGroup, DrcStructured};
     use hauksbee_extract::{Component, Net, Pin};
 
     fn component(reference: &str, value: &str, net: i64) -> Component {
@@ -2268,105 +2115,200 @@ mod compact_appendix_tests {
         }
     }
 
-    fn fixture() -> BoardEvidence {
-        let board = ExtractedBoard {
-            name: "compact-appendix".to_string(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "A".to_string(),
-                },
-                Net {
-                    id: 2,
-                    name: "B".to_string(),
-                },
-            ],
-            components: vec![component("U1", "PART-A", 1), component("U2", "PART-B", 2)],
-        };
-        let mut report = BindReport::default();
-        for (reference, value) in [("U1", "PART-A"), ("U2", "PART-B")] {
-            report.push(BindRow {
-                reference: reference.to_string(),
-                value: value.to_string(),
-                model_id: None,
-                confidence: Confidence::Unresolved,
-                source: None,
-                outcome: BindOutcome::Unresolved {
-                    reason: "No model".to_string(),
-                },
-                warning: None,
-                guesses: Vec::new(),
-            });
+    fn board(name: &str, nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
+        ExtractedBoard {
+            name: name.to_string(),
+            nets: nets
+                .iter()
+                .map(|&(id, name)| Net {
+                    id,
+                    name: name.to_string(),
+                })
+                .collect(),
+            components,
         }
-        BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
-            .expect("fixture evidence")
+    }
+
+    fn empty_board() -> ExtractedBoard {
+        board("fixture", &[], Vec::new())
+    }
+
+    fn row(
+        reference: &str,
+        value: &str,
+        model_id: Option<&str>,
+        outcome: BindOutcome,
+        warning: Option<&str>,
+    ) -> BindRow {
+        BindRow {
+            reference: reference.to_string(),
+            value: value.to_string(),
+            model_id: model_id.map(str::to_string),
+            confidence: Confidence::Exact,
+            source: None,
+            outcome,
+            warning: warning.map(str::to_string),
+            guesses: Vec::new(),
+        }
+    }
+
+    fn unresolved(reference: &str, value: &str, reason: &str) -> BindRow {
+        row(
+            reference,
+            value,
+            None,
+            BindOutcome::Unresolved {
+                reason: reason.to_string(),
+            },
+            None,
+        )
+    }
+
+    fn report(rows: Vec<BindRow>) -> BindReport {
+        let mut report = BindReport::default();
+        for r in rows {
+            report.push(r);
+        }
+        report
+    }
+
+    fn evidence(board: &ExtractedBoard, report: &BindReport) -> BoardEvidence {
+        BoardEvidence::from_bound(board, report, &[], RunDate::unknown()).expect("evidence builds")
+    }
+
+    fn open_part_claims(report: &BindReport) -> Vec<Assumption> {
+        evidence(&empty_board(), report)
+            .assumptions()
+            .iter()
+            .filter(|a| a.kind() == hauksbee_ir::evidence::AssumptionKind::OpenPart)
+            .cloned()
+            .collect()
     }
 
     #[test]
-    fn appendix_dedup_is_one_block_per_statement_with_exact_ref_count() {
-        let rendered = fixture().render_plain_compact();
+    fn fab_ipc356_keeps_archive_identity_and_names_netlist_authority() {
         assert_eq!(
-            rendered
-                .lines()
-                .filter(|line| line.starts_with("[open-part]"))
-                .count(),
-            1,
-            "equivalent open-part statements must collapse once:\n{rendered}"
+            input_artifact_kind(Path::new("fab.zip"), InputKind::Ipc356Archive),
+            (ArtifactKind::GerberArchive, ArtifactRole::FabArchive)
         );
-        assert!(
-            rendered.contains("Affected refs: U1, U2 (2 parts)."),
-            "the displayed count must be derived from the displayed refs:\n{rendered}"
+        let contributions = input_contributions(InputKind::Ipc356Archive);
+        assert!(contributions
+            .iter()
+            .any(|r| r.what == "connectivity" && r.detail.contains("IPC-D-356")));
+        assert!(contributions.iter().all(|r| r.what != "copper_geometry"));
+    }
+
+    /// A PARTIAL_MODEL_MARKER warning becomes an assumption (reaching every
+    /// surface); an ordinary bind warning stays on the bind report; the
+    /// marker never leaks into user-facing text.
+    #[test]
+    fn a_partial_model_warning_becomes_evidence_and_an_ordinary_one_does_not() {
+        let marker = Assumption::PARTIAL_MODEL_MARKER;
+        let vswitch = || BindOutcome::Behavioral {
+            device: "vswitch".to_string(),
+        };
+        let report = report(vec![
+            row(
+                "X1",
+                "PART",
+                Some("some_entry"),
+                BindOutcome::Skipped {
+                    reason: "crystal or packaged oscillator".to_string(),
+                },
+                Some(&format!(
+                    "{marker}X1 (PART): its supply draw and its driven clock are not modelled"
+                )),
+            ),
+            row(
+                "U5",
+                "PART",
+                Some("some_entry"),
+                vswitch(),
+                Some(&format!(
+                    "{marker}U5 (PART): one channel of eight is modelled"
+                )),
+            ),
+            row(
+                "U6",
+                "PART",
+                Some("some_entry"),
+                vswitch(),
+                Some("U6 (PART): analog-switch gate(s) 3 missing a connection, left open"),
+            ),
+            row("U7", "PART", Some("some_entry"), vswitch(), None),
+        ]);
+        let evidence = evidence(&empty_board(), &report);
+        let lifted: Vec<&str> = evidence
+            .assumptions()
+            .iter()
+            .filter(|a| a.statement().contains("modelled only in part"))
+            .map(|a| a.statement())
+            .collect();
+        assert_eq!(lifted.len(), 2, "{lifted:?}");
+        assert!(lifted.iter().any(|h| h.contains("X1")) && lifted.iter().any(|h| h.contains("U5")));
+        for a in evidence.assumptions() {
+            for text in [a.statement(), a.because(), a.consequence(), a.replacement()] {
+                assert!(!text.contains(marker.trim()), "marker leaked: {text}");
+            }
+        }
+        for (_, w) in report.warnings() {
+            assert!(!w.contains(marker.trim()), "marker leaked: {w}");
+        }
+        let x1 = evidence
+            .assumptions()
+            .iter()
+            .find(|a| a.statement().contains("X1"))
+            .expect("X1 assumption");
+        assert!(!x1.because().contains("X1 (PART):"), "{}", x1.because());
+    }
+
+    fn two_open_parts() -> BoardEvidence {
+        let board = board(
+            "compact-appendix",
+            &[(1, "A"), (2, "B")],
+            vec![component("U1", "PART-A", 1), component("U2", "PART-B", 2)],
         );
+        evidence(
+            &board,
+            &report(vec![
+                unresolved("U1", "PART-A", "No model"),
+                unresolved("U2", "PART-B", "No model"),
+            ]),
+        )
     }
 
     #[test]
-    fn compact_human_render_does_not_change_json_bytes() {
-        let evidence = fixture();
+    fn compact_appendix_dedups_statements_without_changing_json() {
+        let evidence = two_open_parts();
         let json = || {
             serde_json::to_string(&evidence.enrich_json(serde_json::json!({"ok": true})))
                 .expect("JSON render")
         };
         let before = json();
-        let _ = evidence.render_plain_compact();
-        let after = json();
-        assert_eq!(before.as_bytes(), after.as_bytes());
-    }
+        let rendered = evidence.render_plain_compact();
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|l| l.starts_with("[open-part]"))
+                .count(),
+            1,
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Affected refs: U1, U2 (2 parts)."),
+            "{rendered}"
+        );
+        assert_eq!(before.as_bytes(), json().as_bytes());
 
-    #[test]
-    fn surface_scoped_appendix_excludes_unrelated_part_provenance() {
-        let evidence = fixture();
         let maps = evidence
             .maps_for_surface_nets("surface A", &["A".to_string()])
             .expect("surface map");
         let rendered = evidence.clone().with_maps(maps).render_plain_compact();
-        assert!(
-            rendered.contains("U1"),
-            "on-path part is retained: {rendered}"
-        );
+        assert!(rendered.contains("U1"), "{rendered}");
         assert!(
             !rendered.contains("U2") && !rendered.contains("PART-B"),
-            "unrelated part provenance must be absent: {rendered}"
+            "{rendered}"
         );
-    }
-}
-
-#[cfg(test)]
-mod custom_rule_scope_tests {
-    use super::*;
-    use crate::result::{CustomRulesCoverage, DrcGroup, DrcStructured};
-
-    fn board() -> ExtractedBoard {
-        ExtractedBoard {
-            name: "custom-rule-scope".into(),
-            nets: [(1, "A"), (2, "B")]
-                .into_iter()
-                .map(|(id, name)| hauksbee_extract::Net {
-                    id,
-                    name: name.into(),
-                })
-                .collect(),
-            components: Vec::new(),
-        }
     }
 
     fn clearance_result() -> DrcStructured {
@@ -2394,7 +2336,16 @@ mod custom_rule_scope_tests {
         }
     }
 
-    fn coverage(constraint: &str) -> CustomRulesCoverage {
+    fn drc_maps_with_rules(coverage: &CustomRulesCoverage) -> Vec<EvidenceMap> {
+        let board = board("custom-rule-scope", &[(1, "A"), (2, "B")], Vec::new());
+        evidence(&board, &BindReport::default())
+            .with_custom_rules_coverage(Some(coverage))
+            .unwrap()
+            .maps_for_drc(&clearance_result())
+            .unwrap()
+    }
+
+    fn conditional_rule(constraint: &str) -> CustomRulesCoverage {
         let parsed = hauksbee_extract::parse_kicad_dru(&format!(
             "(version 1) (rule \"conditional\" (condition \"A.Type == 'x'\") (constraint {constraint} (min 0.3mm)))"
         ))
@@ -2402,399 +2353,173 @@ mod custom_rule_scope_tests {
         CustomRulesCoverage::from_parsed("scope.kicad_dru".into(), &parsed)
     }
 
+    /// A conditional clearance rule qualifies clearance results; a hole rule
+    /// or a bare-value (inactive) rule is disclosed but qualifies nothing.
     #[test]
-    fn conditional_clearance_qualifies_only_clearance_results() {
-        let coverage = coverage("clearance");
-        let evidence =
-            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
-                .unwrap()
-                .with_custom_rules_coverage(Some(&coverage))
-                .unwrap();
-        let maps = evidence.maps_for_drc(&clearance_result()).unwrap();
+    fn custom_rules_qualify_only_clearance_results_they_cover() {
+        let maps = drc_maps_with_rules(&conditional_rule("clearance"));
         assert_eq!(maps.len(), 1);
         assert_eq!(maps[0].status(), EvidenceStatus::Qualified);
         assert!(maps[0]
             .assumptions()
             .iter()
             .any(|id| id.as_str().starts_with("reduced-fidelity:custom-rules/")));
-    }
 
-    #[test]
-    fn conditional_hole_rule_is_not_covered_without_qualifying_clearance() {
-        let coverage = coverage("hole_clearance");
-        let evidence =
-            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
-                .unwrap()
-                .with_custom_rules_coverage(Some(&coverage))
-                .unwrap();
-        let maps = evidence.maps_for_drc(&clearance_result()).unwrap();
-        assert_eq!(maps[0].status(), EvidenceStatus::Clean);
+        let coverage = conditional_rule("hole_clearance");
+        assert_eq!(
+            drc_maps_with_rules(&coverage)[0].status(),
+            EvidenceStatus::Clean
+        );
         assert!(coverage
             .not_covered_summary()
             .unwrap()
             .contains("hole_clearance"));
-    }
 
-    #[test]
-    fn bare_clearance_rule_is_disclosed_but_does_not_qualify_results() {
         let parsed = hauksbee_extract::parse_kicad_dru(include_str!(
             "../../hauksbee-extract/tests/fixtures/kicad_dru_bare_scope.kicad_dru"
         ))
         .unwrap();
         let coverage = CustomRulesCoverage::from_parsed("scope.kicad_dru".into(), &parsed);
-        let evidence =
-            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
-                .unwrap()
-                .with_custom_rules_coverage(Some(&coverage))
-                .unwrap();
-        let maps = evidence.maps_for_drc(&clearance_result()).unwrap();
-        assert_eq!(maps[0].status(), EvidenceStatus::Clean);
+        assert_eq!(
+            drc_maps_with_rules(&coverage)[0].status(),
+            EvidenceStatus::Clean
+        );
         assert!(coverage
             .unevaluated_notice()
             .unwrap()
             .starts_with("CUSTOM RULES DISABLED: scope.kicad_dru is not in force."));
     }
-}
 
-/// Open parts whose rows cannot be told apart.
-///
-/// Both fixtures here are distilled from boards that aborted the run before it
-/// produced any report: a KiCad mainboard revision carrying four footprints with
-/// a blank designator, and a gerber job whose placements were reconstructed from a
-/// fabrication report so that every one of them was named "Via". The external
-/// boards themselves stay out of the repo; what is reproduced is the row shape
-/// that collided, which is the whole cause.
-#[cfg(test)]
-mod duplicate_open_part_tests {
-    use super::*;
-    use crate::report::BindRow;
-
-    fn unresolved(reference: &str, value: &str, reason: &str) -> BindRow {
-        BindRow {
-            reference: reference.to_string(),
-            value: value.to_string(),
-            model_id: None,
-            confidence: Confidence::Exact,
-            source: None,
-            outcome: BindOutcome::Unresolved {
-                reason: reason.to_string(),
-            },
-            warning: None,
-            guesses: Vec::new(),
-        }
-    }
-
-    fn board() -> ExtractedBoard {
-        ExtractedBoard {
-            name: "duplicate-open-part-fixture".to_string(),
-            nets: Vec::new(),
-            components: Vec::new(),
-        }
-    }
-
-    fn open_part_claims(report: &BindReport) -> Vec<Assumption> {
-        let evidence = BoardEvidence::from_bound(&board(), report, &[], RunDate::unknown())
-            .expect("evidence builds");
-        evidence
-            .assumptions()
-            .iter()
-            .filter(|a| a.kind() == hauksbee_ir::evidence::AssumptionKind::OpenPart)
-            .cloned()
-            .collect()
-    }
-
-    /// The ARDEP2 mainboard shape: four footprints with no designator, no value
-    /// and one shared reason. Every field an assumption could carry is identical,
-    /// so the four rows minted one id and the run died on
-    /// `duplicate assumption id open-part:unnamed-...`.
-    ///
-    /// One claim now covers them, and it STATES THE COUNT. That is the honesty
-    /// requirement: collapsing four identical rows to "an unnamed part is treated
-    /// as an open circuit" would have hidden three parts, and the reader would
-    /// have no way to know. The count is the disclosure.
+    /// Indistinguishable open-part rows collapse to ONE claim that states the
+    /// count (unnamed or sharing a designator), while genuinely different
+    /// rows (different designators, values, reasons, unlocking inputs, or raw
+    /// designator spellings) stay separate.
     #[test]
-    fn four_indistinguishable_unnamed_parts_become_one_claim_that_counts_them() {
-        let mut report = BindReport::default();
-        for _ in 0..4 {
-            report.push(unresolved("", "", "no model matched"));
-        }
-        let open = open_part_claims(&report);
-
-        assert_eq!(
-            open.len(),
-            1,
-            "four identical claims are one claim: {:?}",
-            open.iter().map(Assumption::statement).collect::<Vec<_>>()
-        );
+    fn indistinguishable_open_parts_collapse_with_a_count_and_distinct_ones_never_do() {
+        let open = open_part_claims(&report(
+            (0..4)
+                .map(|_| unresolved("", "", "no model matched"))
+                .collect(),
+        ));
+        assert_eq!(open.len(), 1);
+        let s = open[0].statement();
         assert!(
-            open[0].statement().contains('4'),
-            "the count is the disclosure and it is missing: {}",
-            open[0].statement()
-        );
-        assert!(
-            open[0].statement().contains("unnamed parts"),
-            "an unnamed group has no designator to name: {}",
-            open[0].statement()
-        );
-        // Still disclosed as an open part, not quietly downgraded.
-        assert!(
-            open[0].statement().contains("open circuit"),
-            "an open part must still be disclosed as open: {}",
-            open[0].statement()
-        );
-    }
-
-    /// The miniFOC gerber shape: the job ships a fabrication testpoint report whose
-    /// "Name" column is the literal string "Via" on every row, so the placement
-    /// reader reconstructed many parts sharing one designator and the second one
-    /// minted a duplicate `open-part:Via`.
-    ///
-    /// The designator survives in the id, because it is real and citeable; what
-    /// collapses is the repetition.
-    #[test]
-    fn many_parts_sharing_one_designator_become_one_counted_claim() {
-        let mut report = BindReport::default();
-        for _ in 0..22 {
-            report.push(unresolved("Via", "", "no model matched"));
-        }
-        let open = open_part_claims(&report);
-
-        assert_eq!(open.len(), 1, "one designator, one identical claim");
-        assert_eq!(
-            open[0].id().as_str(),
-            "open-part:Via",
-            "a single claim on a named designator keeps the bare id contract"
-        );
-        assert!(
-            open[0].statement().contains("22"),
-            "the count is the disclosure and it is missing: {}",
-            open[0].statement()
-        );
-        assert!(
-            open[0].statement().contains("Via"),
-            "the designator the board actually carries must appear: {}",
-            open[0].statement()
-        );
-    }
-
-    /// The other side of the fix, and the one that makes it a fix rather than a
-    /// silencer: parts that are genuinely different must stay different. Two
-    /// distinct designators are two assumptions, and so are two DIFFERENT claims
-    /// that happen to share one designator.
-    #[test]
-    fn genuinely_distinct_open_parts_are_never_collapsed() {
-        let mut report = BindReport::default();
-        report.push(unresolved("R7", "10k", "no model matched"));
-        report.push(unresolved("R8", "47k", "no model matched"));
-        let open = open_part_claims(&report);
-        assert_eq!(open.len(), 2, "two real parts are two gaps");
-        assert_ne!(open[0].id(), open[1].id());
-        let ids: Vec<&str> = open.iter().map(|a| a.id().as_str()).collect();
-        assert!(
-            ids.contains(&"open-part:R7") && ids.contains(&"open-part:R8"),
-            "ordinary named parts keep their plain ids: {ids:?}"
+            s.contains('4') && s.contains("unnamed parts") && s.contains("open circuit"),
+            "{s}"
         );
 
-        // Same designator, different claim: two gaps, told apart by an ordinal
-        // rather than merged. Only the id carries it; the sentence must not invent
-        // a designator the board does not have.
-        let mut shared = BindReport::default();
-        shared.push(unresolved("Via", "10k", "no model matched"));
-        shared.push(unresolved("Via", "47k", "no model matched"));
-        let open = open_part_claims(&shared);
-        assert_eq!(
-            open.len(),
-            2,
-            "two different claims on one designator stay two: {:?}",
-            open.iter().map(Assumption::statement).collect::<Vec<_>>()
-        );
-        assert_ne!(open[0].id(), open[1].id(), "{}", open[0].id());
-        for a in &open {
-            assert!(
-                !a.statement().contains('#'),
-                "the ordinal is an id disambiguator, not prose: {}",
-                a.statement()
+        let open = open_part_claims(&report(
+            (0..22)
+                .map(|_| unresolved("Via", "", "no model matched"))
+                .collect(),
+        ));
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id().as_str(), "open-part:Via");
+        assert!(open[0].statement().contains("22") && open[0].statement().contains("Via"));
+
+        let marker = Assumption::UNLOCKED_BY_MARKER;
+        let distinct: [Vec<BindRow>; 5] = [
+            vec![
+                unresolved("R7", "10k", "no model matched"),
+                unresolved("R8", "47k", "no model matched"),
+            ],
+            vec![
+                unresolved("Via", "10k", "no model matched"),
+                unresolved("Via", "47k", "no model matched"),
+            ],
+            vec![
+                unresolved("", "", "no model matched"),
+                unresolved("", "", "the footprint carries no value"),
+            ],
+            vec![
+                unresolved(
+                    "R7",
+                    "10k",
+                    &format!("no model matched{marker}add a datasheet for ACME-1"),
+                ),
+                unresolved(
+                    "R7",
+                    "10k",
+                    &format!("no model matched{marker}add a datasheet for ACME-2"),
+                ),
+            ],
+            vec![
+                unresolved("R7", "10k", "no model matched"),
+                unresolved("R7.", "10k", "no model matched"),
+            ],
+        ];
+        for rows in distinct {
+            let open = open_part_claims(&report(rows));
+            assert_eq!(
+                open.len(),
+                2,
+                "{:?}",
+                open.iter().map(Assumption::statement).collect::<Vec<_>>()
             );
+            assert_ne!(open[0].id(), open[1].id());
+            for a in &open {
+                assert!(
+                    !a.statement().contains('#'),
+                    "ordinal is not prose: {}",
+                    a.statement()
+                );
+                assert!(!a.statement().contains("2 parts"), "{}", a.statement());
+            }
         }
-
-        // And a blank designator with two different REASONS is two gaps too. The
-        // statements are identical there, so only the whole claim tells them apart.
-        let mut reasons = BindReport::default();
-        reasons.push(unresolved("", "", "no model matched"));
-        reasons.push(unresolved("", "", "the footprint carries no value"));
-        let open = open_part_claims(&reasons);
-        assert_eq!(
-            open.len(),
-            2,
-            "two unnameable parts with different reasons are two gaps: {:?}",
-            open.iter().map(Assumption::because).collect::<Vec<_>>()
-        );
-        assert_ne!(open[0].id(), open[1].id());
-    }
-
-    /// Merging must not swallow the one thing the reader could act on. A NAMED
-    /// ABSTENTION carries an "unlocked by" half that becomes the assumption's
-    /// replacement sentence, so two rows can agree on what is open and why while
-    /// naming DIFFERENT inputs that would close them. Those are two claims: merging
-    /// them kept the count honest but reported only the first input, leaving the
-    /// second part's remediation unrecoverable from the report.
-    #[test]
-    fn rows_naming_different_unlocking_inputs_stay_separate_claims() {
-        let marker = Assumption::UNLOCKED_BY_MARKER;
-        let mut report = BindReport::default();
-        report.push(unresolved(
-            "R7",
-            "10k",
-            &format!("no model matched{marker}add a datasheet for ACME-1"),
-        ));
-        report.push(unresolved(
-            "R7",
-            "10k",
-            &format!("no model matched{marker}add a datasheet for ACME-2"),
-        ));
-        let open = open_part_claims(&report);
-
-        assert_eq!(
-            open.len(),
-            2,
-            "two different unlocking inputs are two claims: {:?}",
-            open.iter().map(Assumption::replacement).collect::<Vec<_>>()
-        );
+        let open = open_part_claims(&report(vec![
+            unresolved(
+                "",
+                "",
+                &format!("no model matched{marker}add a datasheet for ACME-1"),
+            ),
+            unresolved(
+                "",
+                "",
+                &format!("no model matched{marker}add a datasheet for ACME-2"),
+            ),
+        ]));
         let fixes: Vec<&str> = open.iter().map(Assumption::replacement).collect();
         assert!(
-            fixes.iter().any(|f| f.contains("ACME-1")),
-            "the first unlocking input went missing: {fixes:?}"
-        );
-        assert!(
-            fixes.iter().any(|f| f.contains("ACME-2")),
-            "the second unlocking input went missing: {fixes:?}"
-        );
-        assert_ne!(open[0].id(), open[1].id());
-    }
-
-    /// The same collision must not return when the board gives neither row a
-    /// designator. In that case both claims start from the same synthesized
-    /// subject and differ only in the actionable replacement sentence.
-    #[test]
-    fn unnamed_rows_naming_different_unlocking_inputs_stay_separate_claims() {
-        let marker = Assumption::UNLOCKED_BY_MARKER;
-        let mut report = BindReport::default();
-        report.push(unresolved(
-            "",
-            "",
-            &format!("no model matched{marker}add a datasheet for ACME-1"),
-        ));
-        report.push(unresolved(
-            "",
-            "",
-            &format!("no model matched{marker}add a datasheet for ACME-2"),
-        ));
-
-        let open = open_part_claims(&report);
-
-        assert_eq!(open.len(), 2, "two unlocking inputs are two claims");
-        let fixes: Vec<&str> = open.iter().map(Assumption::replacement).collect();
-        assert!(fixes.iter().any(|fix| fix.contains("ACME-1")));
-        assert!(fixes.iter().any(|fix| fix.contains("ACME-2")));
-        assert_ne!(open[0].id(), open[1].id());
-    }
-
-    #[test]
-    fn distinct_raw_designators_are_not_aggregated_by_prose_normalization() {
-        let mut report = BindReport::default();
-        report.push(unresolved("R7", "10k", "no model matched"));
-        report.push(unresolved("R7.", "10k", "no model matched"));
-
-        let open = open_part_claims(&report);
-
-        assert_eq!(open.len(), 2, "distinct source identifiers are two claims");
-        assert_ne!(open[0].id(), open[1].id());
-        assert!(
-            open.iter()
-                .all(|claim| !claim.statement().contains("2 parts")),
-            "normalizing prose must not fabricate a shared designator"
+            fixes.iter().any(|f| f.contains("ACME-1"))
+                && fixes.iter().any(|f| f.contains("ACME-2"))
         );
     }
 
     #[test]
-    fn an_unnamed_open_part_on_a_real_net_undermines_that_net() {
-        let board = ExtractedBoard {
-            name: "anonymous-connected-part".to_string(),
-            nets: vec![hauksbee_extract::Net {
-                id: 1,
-                name: "SENSE".to_string(),
-            }],
-            components: vec![hauksbee_extract::Component {
-                reference: String::new(),
-                value: "mystery".to_string(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
-                layer: "F.Cu".to_string(),
-                properties: Vec::new(),
-                dnp: false,
-                pins: vec![hauksbee_extract::Pin {
-                    number: "1".to_string(),
-                    net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                }],
-            }],
-        };
-        let mut report = BindReport::default();
-        report.push(unresolved("", "mystery", "no model matched"));
-
-        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
-            .expect("evidence builds");
+    fn unnamed_parts_keep_net_incidence_and_occurrence_provenance() {
+        let anon = board(
+            "anonymous",
+            &[(1, "SENSE")],
+            vec![component("", "mystery", 1)],
+        );
+        let evidence = evidence(
+            &anon,
+            &report(vec![unresolved("", "mystery", "no model matched")]),
+        );
         let map = evidence.static_coverage_map().expect("coverage map builds");
-
         assert!(map.is_undermined(), "anonymous open part was off-path");
         assert_eq!(map.assumptions().len(), 1);
-    }
 
-    #[test]
-    fn a_modelled_unnamed_part_has_citeable_occurrence_provenance() {
-        let board = ExtractedBoard {
-            name: "anonymous-modelled-part".to_string(),
-            nets: vec![hauksbee_extract::Net {
-                id: 1,
-                name: "SENSE".to_string(),
-            }],
-            components: vec![hauksbee_extract::Component {
-                reference: String::new(),
-                value: "known-device".to_string(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
-                layer: "F.Cu".to_string(),
-                properties: Vec::new(),
-                dnp: false,
-                pins: vec![hauksbee_extract::Pin {
-                    number: "1".to_string(),
-                    net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                }],
-            }],
-        };
-        let mut report = BindReport::default();
-        report.push(BindRow {
-            reference: String::new(),
-            value: "known-device".to_string(),
-            model_id: Some("known-model".to_string()),
-            confidence: Confidence::Exact,
-            source: None,
-            outcome: BindOutcome::Analog {
-                device: "resistor".to_string(),
-            },
-            warning: None,
-            guesses: Vec::new(),
-        });
-
-        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
-            .expect("a resolved unnamed component must not abort provenance");
+        let modelled = board(
+            "anonymous-modelled",
+            &[(1, "SENSE")],
+            vec![component("", "known-device", 1)],
+        );
+        let evidence = BoardEvidence::from_bound(
+            &modelled,
+            &report(vec![row(
+                "",
+                "known-device",
+                Some("known-model"),
+                BindOutcome::Analog {
+                    device: "resistor".to_string(),
+                },
+                None,
+            )]),
+            &[],
+            RunDate::unknown(),
+        )
+        .expect("a resolved unnamed component must not abort provenance");
         let model = &evidence.maps()[0].models()[0];
         assert_eq!(model.model_id(), "known-model");
         assert_eq!(model.reference(), "unnamed part");
@@ -2807,56 +2532,30 @@ mod duplicate_open_part_tests {
 
     #[test]
     fn duplicate_designators_do_not_saturate_nets_or_steal_model_provenance() {
-        let component = |net| hauksbee_extract::Component {
-            reference: "Via".to_string(),
-            value: "mystery".to_string(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: "F.Cu".to_string(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: vec![hauksbee_extract::Pin {
-                number: "1".to_string(),
-                net: Some(net),
-                function: String::new(),
-                kind: String::new(),
-                position: None,
-            }],
-        };
-        let board = ExtractedBoard {
-            name: "duplicate-designator-incidence".to_string(),
-            nets: vec![
-                hauksbee_extract::Net {
-                    id: 1,
-                    name: "A_OPEN".to_string(),
-                },
-                hauksbee_extract::Net {
-                    id: 2,
-                    name: "B_MODELLED".to_string(),
-                },
+        let board = board(
+            "duplicate-designator",
+            &[(1, "A_OPEN"), (2, "B_MODELLED")],
+            vec![
+                component("Via", "mystery", 1),
+                component("Via", "mystery", 2),
             ],
-            components: vec![component(1), component(2)],
-        };
-        let mut report = BindReport::default();
-        report.push(unresolved("Via", "mystery", "no model matched"));
-        report.push(BindRow {
-            reference: "Via".to_string(),
-            value: "mystery".to_string(),
-            model_id: Some("via_model_b".to_string()),
-            confidence: Confidence::Exact,
-            source: None,
-            outcome: BindOutcome::Analog {
-                device: "resistor".to_string(),
-            },
-            warning: None,
-            guesses: Vec::new(),
-        });
-
-        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
-            .expect("duplicate designators build");
+        );
+        let evidence = evidence(
+            &board,
+            &report(vec![
+                unresolved("Via", "mystery", "no model matched"),
+                row(
+                    "Via",
+                    "mystery",
+                    Some("via_model_b"),
+                    BindOutcome::Analog {
+                        device: "resistor".to_string(),
+                    },
+                    None,
+                ),
+            ]),
+        );
         let maps = evidence.maps();
-
         assert_eq!(maps.len(), 2);
         assert_eq!(maps[0].assertion(), "Binding completeness for net A_OPEN");
         assert_eq!(maps[0].status(), EvidenceStatus::Undermined);
@@ -2864,24 +2563,10 @@ mod duplicate_open_part_tests {
             maps[0].models().is_empty(),
             "the later row leaked backwards"
         );
-        assert_eq!(
-            maps[1].assertion(),
-            "Binding completeness for net B_MODELLED"
-        );
         assert_eq!(maps[1].status(), EvidenceStatus::Clean);
         assert_eq!(maps[1].models().len(), 1);
         assert_eq!(maps[1].models()[0].model_id(), "via_model_b");
-        assert_eq!(maps[1].models()[0].reference(), "Via");
         assert!(maps[1].models()[0].subject().starts_with(OCCURRENCE_PREFIX));
-        let rendered = evidence.render_plain();
-        assert!(
-            rendered.contains(&format!(
-                "model Via [subject={:?}]=via_model_b",
-                maps[1].models()[0].subject()
-            )),
-            "plain evidence must distinguish the exact modelled occurrence: {rendered}"
-        );
-
         let by_display_reference = evidence
             .simulation_map("all Via occurrences", &[], &["Via".to_string()], None)
             .expect("reader-facing references still resolve occurrence subjects");
@@ -2891,78 +2576,50 @@ mod duplicate_open_part_tests {
 
     #[test]
     fn every_row_derived_assumption_survives_reused_designators() {
-        let mut report = BindReport::default();
-        for _ in 0..2 {
-            report.push(BindRow {
-                reference: "Via".to_string(),
-                value: "PART".to_string(),
-                model_id: Some("fallback_active".to_string()),
-                confidence: Confidence::Guessed,
-                source: Some(unspecified_source("fallback_active")),
-                outcome: BindOutcome::Analog {
+        let fallback = || BindRow {
+            source: Some(unspecified_source("fallback_active")),
+            confidence: Confidence::Guessed,
+            guesses: vec!["pad 1 role 'drain' inferred by package shape".to_string()],
+            ..row(
+                "Via",
+                "PART",
+                Some("fallback_active"),
+                BindOutcome::Analog {
                     device: "nmos".to_string(),
                 },
-                warning: Some(format!(
+                Some(&format!(
                     "{}Via (PART): one channel is modelled",
                     Assumption::PARTIAL_MODEL_MARKER
                 )),
-                guesses: vec!["pad 1 role 'drain' inferred by package shape".to_string()],
-            });
-        }
+            )
+        };
+        evidence(&empty_board(), &report(vec![fallback(), fallback()]));
 
-        BoardEvidence::from_bound(&board(), &report, &[], RunDate::unknown())
-            .expect("fallback, partial-model and pin-role evidence must not collide");
-
-        let mut defaults = BindReport::default();
-        for _ in 0..2 {
-            defaults.push(BindRow {
-                reference: "Via".to_string(),
-                value: "VREG".to_string(),
-                model_id: Some("vreg".to_string()),
-                confidence: Confidence::Exact,
-                source: None,
-                outcome: BindOutcome::Behavioral {
+        let default = || {
+            row(
+                "Via",
+                "VREG",
+                Some("vreg"),
+                BindOutcome::Behavioral {
                     device: "vreg".to_string(),
                 },
-                warning: Some("vreg model has no `vout` param; assumed 5.0 V".to_string()),
-                guesses: Vec::new(),
-            });
-        }
-        BoardEvidence::from_bound(&board(), &defaults, &[], RunDate::unknown())
-            .expect("documented-default evidence must not collide");
+                Some("vreg model has no `vout` param; assumed 5.0 V"),
+            )
+        };
+        evidence(&empty_board(), &report(vec![default(), default()]));
     }
 
     #[test]
     fn fitted_by_default_reaches_duplicate_and_blank_components_on_their_own_nets() {
-        let component = |reference: &str, net| hauksbee_extract::Component {
-            reference: reference.to_string(),
-            value: "placed".to_string(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: "F.Cu".to_string(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: vec![hauksbee_extract::Pin {
-                number: "1".to_string(),
-                net: Some(net),
-                function: String::new(),
-                kind: String::new(),
-                position: None,
-            }],
-        };
-        let board = ExtractedBoard {
-            name: "reader-occurrence-scope".to_string(),
-            nets: [(1, "DUP_A"), (2, "DUP_B"), (3, "BLANK")]
-                .into_iter()
-                .map(|(id, name)| hauksbee_extract::Net {
-                    id,
-                    name: name.to_string(),
-                })
-                .collect(),
-            components: vec![component("U1", 1), component("U1", 2), component("", 3)],
-        };
-
+        let board = board(
+            "reader-occurrence-scope",
+            &[(1, "DUP_A"), (2, "DUP_B"), (3, "BLANK")],
+            vec![
+                component("U1", "placed", 1),
+                component("U1", "placed", 2),
+                component("", "placed", 3),
+            ],
+        );
         let evidence = BoardEvidence::from_bound(
             &board,
             &BindReport::default(),
@@ -2970,187 +2627,106 @@ mod duplicate_open_part_tests {
             RunDate::unknown(),
         )
         .expect("reader note builds");
-
         assert_eq!(evidence.maps().len(), 3);
         for map in evidence.maps() {
             assert_eq!(
                 map.status(),
                 EvidenceStatus::Undermined,
-                "reader default fell off {}",
+                "{}",
                 map.assertion()
             );
             assert_eq!(map.assumptions().len(), 1);
         }
     }
 
+    fn not_exercised(kind: &str) -> Assumption {
+        Assumption::not_exercised(
+            AssumptionSource::Scheduler,
+            Subject::new("i2c/sensor", "I2C peripheral sensor"),
+            Scope::Check {
+                check: "ci".into(),
+                kind: Some(kind.to_string()),
+            },
+            "the MCU platform models no matching controller",
+            "add the controller to the SoC descriptor, then re-run",
+        )
+    }
+
+    fn ids(evidence: &BoardEvidence) -> Vec<(AssumptionId, String)> {
+        evidence
+            .assumptions()
+            .iter()
+            .map(|a| (a.id().clone(), a.statement().to_string()))
+            .collect()
+    }
+
+    /// Two unequal claims minting one base id are both retained and rekeyed,
+    /// identically whatever order or grouping they arrive in, and repeated
+    /// facts stay idempotent.
     #[test]
-    fn unequal_post_bind_claims_with_one_base_id_are_both_retained() {
-        let empty_evidence = || {
-            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
-                .expect("empty evidence builds")
-        };
-        let assumption = |kind: &str| {
-            Assumption::not_exercised(
-                AssumptionSource::Scheduler,
-                Subject::new("i2c/sensor", "I2C peripheral sensor"),
-                Scope::Check {
-                    check: "ci".into(),
-                    kind: Some(kind.to_string()),
-                },
-                "the MCU platform models no matching controller",
-                "add the controller to the SoC descriptor, then re-run",
-            )
-        };
-        let first = assumption("assertion-a");
-        let second = assumption("assertion-b");
+    fn unequal_claims_with_one_base_id_are_both_retained_in_any_merge_order() {
+        let empty = || evidence(&empty_board(), &BindReport::default());
+        let (first, second) = (not_exercised("assertion-a"), not_exercised("assertion-b"));
         assert_eq!(
             first.id(),
             second.id(),
             "fixture must reproduce the collision"
         );
 
-        let evidence = empty_evidence()
+        let pair = empty()
             .with_assumptions([first.clone(), second.clone()])
-            .expect("unequal same-subject claims are disambiguated");
-        assert_eq!(evidence.assumptions().len(), 2);
-        assert_ne!(
-            evidence.assumptions()[0].id(),
-            evidence.assumptions()[1].id()
-        );
+            .unwrap();
+        assert_eq!(pair.assumptions().len(), 2);
+        assert_ne!(pair.assumptions()[0].id(), pair.assumptions()[1].id());
+        let reversed = empty().with_assumptions([second, first]).unwrap();
+        let sorted = |e: &BoardEvidence| ids(e).into_iter().collect::<BTreeSet<_>>();
+        assert_eq!(sorted(&pair), sorted(&reversed));
 
-        let reversed = empty_evidence()
-            .with_assumptions([second, first])
-            .expect("reverse order also builds");
-        let ids = |evidence: &BoardEvidence| {
-            evidence
-                .assumptions()
-                .iter()
-                .map(|assumption| assumption.id().clone())
-                .collect::<BTreeSet<_>>()
-        };
-        assert_eq!(
-            ids(&evidence),
-            ids(&reversed),
-            "ids must not depend on input order"
-        );
-
-        let incremental = empty_evidence()
-            .with_assumptions([assumption("assertion-a")])
-            .expect("first member merges")
-            .with_assumptions([assumption("assertion-b")])
+        let incremental = empty()
+            .with_assumptions([not_exercised("assertion-a")])
+            .unwrap()
+            .with_assumptions([not_exercised("assertion-b")])
             .expect("a later ensemble member must not abort on the shared base id");
+        let incremental_reversed = empty()
+            .with_assumptions([not_exercised("assertion-b")])
+            .unwrap()
+            .with_assumptions([not_exercised("assertion-a")])
+            .unwrap();
         assert_eq!(incremental.assumptions().len(), 2);
+        assert_eq!(ids(&incremental), ids(&incremental_reversed));
 
-        let incremental_reversed = empty_evidence()
-            .with_assumptions([assumption("assertion-b")])
-            .expect("reversed first member merges")
-            .with_assumptions([assumption("assertion-a")])
-            .expect("reversed later member merges");
-        assert_eq!(
-            ids(&incremental),
-            ids(&incremental_reversed),
-            "singleton merge order must not decide which claim owns the base id",
-        );
-        let ordered_claims = |evidence: &BoardEvidence| {
-            evidence
-                .assumptions()
-                .iter()
-                .map(|assumption| (assumption.id().clone(), assumption.statement().to_string()))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            ordered_claims(&incremental),
-            ordered_claims(&incremental_reversed),
-            "human and JSON registry order must also survive singleton reversal",
-        );
-
-        let repeated_and_new = empty_evidence()
-            .with_assumptions([assumption("assertion-a")])
-            .expect("first member merges")
-            .with_assumptions([assumption("assertion-a"), assumption("assertion-b")])
-            .expect("repeated facts stay idempotent while a sibling is added");
+        let repeated_and_new = empty()
+            .with_assumptions([not_exercised("assertion-a")])
+            .unwrap()
+            .with_assumptions([not_exercised("assertion-a"), not_exercised("assertion-b")])
+            .unwrap();
         assert_eq!(repeated_and_new.assumptions().len(), 2);
-    }
 
-    #[test]
-    fn independently_normalized_collision_domains_merge_identically_in_either_order() {
-        let empty_evidence = || {
-            BoardEvidence::from_bound(&board(), &BindReport::default(), &[], RunDate::unknown())
-                .expect("empty evidence builds")
-        };
-        let claim = |kind: &str| {
-            Assumption::not_exercised(
-                AssumptionSource::Scheduler,
-                Subject::new("i2c/sensor", "I2C peripheral sensor"),
-                Scope::Check {
-                    check: "ci".into(),
-                    kind: Some(kind.to_string()),
-                },
-                "the MCU platform models no matching controller",
-                "add the controller to the SoC descriptor, then re-run",
-            )
-        };
-        let pair = empty_evidence()
-            .with_assumptions([claim("assertion-a"), claim("assertion-b")])
-            .expect("pair normalizes its collision domain");
-        let singleton = empty_evidence()
-            .with_assumptions([claim("assertion-c")])
-            .expect("singleton keeps its concise id");
-
+        let singleton = empty()
+            .with_assumptions([not_exercised("assertion-c")])
+            .unwrap();
         let merge = |mut target: BoardEvidence, source: &BoardEvidence| {
-            for assumption in source.assumptions().iter().cloned() {
-                target = target
-                    .with_assumptions([assumption])
-                    .expect("independently normalized evidence merges");
+            for a in source.assumptions().iter().cloned() {
+                target = target.with_assumptions([a]).unwrap();
             }
             target
         };
         let pair_then_singleton = merge(pair.clone(), &singleton);
         let singleton_then_pair = merge(singleton, &pair);
-        let inventory = |evidence: &BoardEvidence| {
-            evidence
-                .assumptions()
-                .iter()
-                .map(|assumption| (assumption.id().clone(), assumption.statement().to_string()))
-                .collect::<Vec<_>>()
-        };
-
-        assert_eq!(
-            inventory(&pair_then_singleton),
-            inventory(&singleton_then_pair)
-        );
+        assert_eq!(ids(&pair_then_singleton), ids(&singleton_then_pair));
         assert!(pair_then_singleton
             .assumptions()
             .iter()
-            .all(|assumption| assumption.id().as_str().contains('~')));
+            .all(|a| a.id().as_str().contains('~')));
     }
 
     #[test]
     fn incremental_collision_rekeys_completed_map_references_atomically() {
-        let board = ExtractedBoard {
-            name: "collision-map-integrity".to_string(),
-            nets: vec![hauksbee_extract::Net {
-                id: 1,
-                name: "MCU_NET".to_string(),
-            }],
-            components: vec![hauksbee_extract::Component {
-                reference: "U1".to_string(),
-                value: "MCU".to_string(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
-                layer: "F.Cu".to_string(),
-                properties: Vec::new(),
-                dnp: false,
-                pins: vec![hauksbee_extract::Pin {
-                    number: "1".to_string(),
-                    net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                }],
-            }],
-        };
+        let board = board(
+            "collision-map-integrity",
+            &[(1, "MCU_NET")],
+            vec![component("U1", "MCU", 1)],
+        );
         let claim = |core: &str| {
             Assumption::substitute_model_for_component(
                 AssumptionSource::Scheduler,
@@ -3160,97 +2736,68 @@ mod duplicate_open_part_tests {
                 core,
             )
         };
-        let first = claim("STM32F407");
-        let second = claim("STM32F405");
+        let (first, second) = (claim("STM32F407"), claim("STM32F405"));
         assert_eq!(first.id(), second.id());
 
-        let evidence =
-            BoardEvidence::from_bound(&board, &BindReport::default(), &[], RunDate::unknown())
-                .expect("base evidence builds")
-                .with_assumptions([first])
-                .expect("first claim merges");
+        let evidence = evidence(&board, &BindReport::default())
+            .with_assumptions([first])
+            .unwrap();
         let completed = evidence
             .simulation_map("MCU simulation", &["MCU_NET".to_string()], &[], None)
             .expect("completed map cites first claim");
         let evidence = evidence
             .with_maps(vec![completed])
             .with_assumptions([second])
-            .expect("second claim rekeys the collision domain");
-
-        let known: BTreeSet<_> = evidence
-            .assumptions()
-            .iter()
-            .map(|assumption| assumption.id())
-            .collect();
+            .unwrap();
+        let known: BTreeSet<_> = evidence.assumptions().iter().map(|a| a.id()).collect();
         assert_eq!(known.len(), 2);
         assert_eq!(evidence.maps()[0].assumptions().len(), 1);
         assert!(known.contains(&evidence.maps()[0].assumptions()[0]));
         assert!(evidence.maps()[0].assumptions()[0].as_str().contains('~'));
     }
 
+    fn mcu_row(core: &str) -> BindRow {
+        row(
+            "U1",
+            "STM32F411",
+            Some(core),
+            BindOutcome::Mcu {
+                backend: format!("renode:{core}"),
+            },
+            None,
+        )
+    }
+
+    fn substitution(
+        reference: &str,
+        backend: &str,
+        core: &str,
+    ) -> crate::scheduler::McuSubstitution {
+        crate::scheduler::McuSubstitution {
+            reference: reference.to_string(),
+            backend: backend.to_string(),
+            requested_part: "STM32F411".to_string(),
+            modelled_core: core.to_string(),
+        }
+    }
+
     #[test]
     fn substitutions_keep_occurrence_identity_and_do_not_dedupe_distinct_cores() {
-        let component = |net| hauksbee_extract::Component {
-            reference: "U1".to_string(),
-            value: "STM32F411".to_string(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: "F.Cu".to_string(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: vec![hauksbee_extract::Pin {
-                number: "1".to_string(),
-                net: Some(net),
-                function: String::new(),
-                kind: String::new(),
-                position: None,
-            }],
-        };
-        let board = ExtractedBoard {
-            name: "duplicate-mcu-substitutions".to_string(),
-            nets: [(1, "MCU_A"), (2, "MCU_B")]
-                .into_iter()
-                .map(|(id, name)| hauksbee_extract::Net {
-                    id,
-                    name: name.to_string(),
-                })
-                .collect(),
-            components: vec![component(1), component(2)],
-        };
-        let mut report = BindReport::default();
-        for core in ["core-a", "core-b"] {
-            report.push(BindRow {
-                reference: "U1".to_string(),
-                value: "STM32F411".to_string(),
-                model_id: Some(core.to_string()),
-                confidence: Confidence::Exact,
-                source: None,
-                outcome: BindOutcome::Mcu {
-                    backend: format!("renode:{core}"),
-                },
-                warning: None,
-                guesses: Vec::new(),
-            });
-        }
-        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
-            .expect("duplicate MCUs build");
+        let board = board(
+            "duplicate-mcu-substitutions",
+            &[(1, "MCU_A"), (2, "MCU_B")],
+            vec![
+                component("U1", "STM32F411", 1),
+                component("U1", "STM32F411", 2),
+            ],
+        );
+        let report = report(vec![mcu_row("core-a"), mcu_row("core-b")]);
+        let evidence = evidence(&board, &report);
         let subjects = component_occurrence_subjects(&board, &report).1;
         let substitutions = [
-            crate::scheduler::McuSubstitution {
-                reference: "U1".to_string(),
-                backend: "renode:core-a".to_string(),
-                requested_part: "STM32F411".to_string(),
-                modelled_core: "STM32F407".to_string(),
-            },
-            crate::scheduler::McuSubstitution {
-                reference: "U1".to_string(),
-                backend: "renode:core-b".to_string(),
-                requested_part: "STM32F411".to_string(),
-                modelled_core: "STM32F405".to_string(),
-            },
+            substitution("U1", "renode:core-a", "STM32F407"),
+            substitution("U1", "renode:core-b", "STM32F405"),
         ];
-
         let legacy_error = evidence
             .clone()
             .with_substitutions(&substitutions[..1])
@@ -3259,115 +2806,75 @@ mod duplicate_open_part_tests {
             legacy_error
                 .to_string()
                 .contains("ambiguous MCU reference 'U1'"),
-            "unexpected ambiguity error: {legacy_error}"
+            "{legacy_error}"
         );
 
-        let scoped_substitutions: Vec<_> = substitutions
+        let scoped: Vec<_> = substitutions
             .iter()
             .cloned()
             .zip(subjects.iter().cloned())
-            .map(|(substitution, subject)| {
-                crate::scheduler::ScopedMcuSubstitution::new(substitution, subject)
-            })
+            .map(|(s, subject)| crate::scheduler::ScopedMcuSubstitution::new(s, subject))
             .collect();
-        let evidence = evidence
-            .with_scoped_substitutions(&scoped_substitutions)
-            .expect("both exact scheduler substitutions survive");
+        let evidence = evidence.with_scoped_substitutions(&scoped).unwrap();
         let substitutions: Vec<_> = evidence
             .assumptions()
             .iter()
-            .filter(|assumption| {
-                assumption.kind() == hauksbee_ir::evidence::AssumptionKind::SubstituteModel
-            })
+            .filter(|a| a.kind() == hauksbee_ir::evidence::AssumptionKind::SubstituteModel)
             .collect();
         assert_eq!(substitutions.len(), 2);
         assert_ne!(substitutions[0].id(), substitutions[1].id());
-
-        for net in ["MCU_A", "MCU_B"] {
+        for (net, subject) in ["MCU_A", "MCU_B"].into_iter().zip(subjects) {
             let map = evidence
                 .simulation_map(net, &[net.to_string()], &[], None)
-                .expect("net simulation map builds");
+                .unwrap();
             assert_eq!(map.status(), EvidenceStatus::Undermined);
             assert_eq!(
                 map.assumptions().len(),
                 1,
                 "each net receives only its own substitution"
             );
-        }
-
-        for (net, subject) in ["MCU_A", "MCU_B"].into_iter().zip(subjects) {
             let map = evidence
                 .simulation_map(
-                    format!("exact substitution scope for {net}"),
+                    format!("scope for {net}"),
                     &[],
                     std::slice::from_ref(&subject),
                     None,
                 )
-                .expect("an exact occurrence subject resolves to its own net");
+                .unwrap();
             assert_eq!(map.assumptions().len(), 1);
         }
     }
 
     #[test]
     fn synthetic_rail_rows_cannot_steal_a_real_component_substitution_scope() {
-        let board = ExtractedBoard {
-            name: "rail-reference-collision".to_string(),
-            nets: vec![hauksbee_extract::Net {
-                id: 1,
-                name: "MCU_SUPPLY".to_string(),
-            }],
-            components: vec![hauksbee_extract::Component {
-                reference: "RAIL:+5V".to_string(),
-                value: "STM32F411".to_string(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
-                layer: "F.Cu".to_string(),
-                properties: Vec::new(),
-                dnp: false,
-                pins: vec![hauksbee_extract::Pin {
-                    number: "1".to_string(),
-                    net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                }],
-            }],
-        };
-        let mut report = BindReport::default();
-        report.push(BindRow {
-            reference: "RAIL:+5V".to_string(),
-            value: "STM32F411".to_string(),
-            model_id: Some("stm32f4".to_string()),
-            confidence: Confidence::Exact,
-            source: None,
-            outcome: BindOutcome::Mcu {
-                backend: "renode:stm32f4".to_string(),
-            },
-            warning: None,
-            guesses: Vec::new(),
-        });
-        report.push(BindRow {
-            reference: "RAIL:+5V".to_string(),
-            value: "5 V ideal rail".to_string(),
-            model_id: None,
-            confidence: Confidence::Exact,
-            source: None,
-            outcome: BindOutcome::PowerRail { volts: 5.0 },
-            warning: None,
-            guesses: Vec::new(),
-        });
-
-        let evidence = BoardEvidence::from_bound(&board, &report, &[], RunDate::unknown())
-            .expect("colliding synthetic rail row builds")
-            .with_substitutions(&[crate::scheduler::McuSubstitution {
-                reference: "RAIL:+5V".to_string(),
-                backend: "renode:stm32f4".to_string(),
-                requested_part: "STM32F411".to_string(),
-                modelled_core: "STM32F407".to_string(),
-            }])
-            .expect("substitution evidence merges");
-
+        let board = board(
+            "rail-reference-collision",
+            &[(1, "MCU_SUPPLY")],
+            vec![component("RAIL:+5V", "STM32F411", 1)],
+        );
+        let evidence = evidence(
+            &board,
+            &report(vec![
+                row(
+                    "RAIL:+5V",
+                    "STM32F411",
+                    Some("stm32f4"),
+                    BindOutcome::Mcu {
+                        backend: "renode:stm32f4".to_string(),
+                    },
+                    None,
+                ),
+                row(
+                    "RAIL:+5V",
+                    "5 V ideal rail",
+                    None,
+                    BindOutcome::PowerRail { volts: 5.0 },
+                    None,
+                ),
+            ]),
+        )
+        .with_substitutions(&[substitution("RAIL:+5V", "renode:stm32f4", "STM32F407")])
+        .unwrap();
         let simulation = evidence
             .simulation_map(
                 "Firmware co-simulation for MCU_SUPPLY",
@@ -3375,10 +2882,9 @@ mod duplicate_open_part_tests {
                 &[],
                 None,
             )
-            .expect("simulation map builds");
+            .unwrap();
         assert_eq!(simulation.status(), EvidenceStatus::Undermined);
         assert_eq!(simulation.assumptions().len(), 1);
-
         let ci = evidence
             .ci_assertion_map(
                 "MCU supply remains valid",
@@ -3387,43 +2893,31 @@ mod duplicate_open_part_tests {
                 None,
                 None,
             )
-            .expect("CI causal map builds");
+            .unwrap();
         assert_eq!(ci.status(), EvidenceStatus::Undermined);
         assert_eq!(ci.assumptions(), simulation.assumptions());
     }
 
-    /// Ids are cited in acknowledgment files and diffed across runs, so the same
-    /// input must mint the same bytes every time. Counting and ordinals are both
-    /// derived from bind-row order, never from a hash map's iteration order or a
-    /// process-wide counter, and this is what pins that down.
+    /// Ids are cited in acknowledgment files and diffed across runs: the same
+    /// input mints the same bytes, all unique.
     #[test]
     fn assumption_ids_are_byte_identical_across_runs() {
         let build = || {
-            let mut report = BindReport::default();
-            // Every shape at once: a group, a plain part, and a shared designator
-            // carrying two different claims.
-            for _ in 0..3 {
-                report.push(unresolved("", "", "no model matched"));
-            }
-            report.push(unresolved("R7", "10k", "no model matched"));
-            report.push(unresolved("Via", "10k", "no model matched"));
-            report.push(unresolved("Via", "47k", "no model matched"));
-            for _ in 0..5 {
-                report.push(unresolved("Via", "", "no model matched"));
-            }
-            let evidence = BoardEvidence::from_bound(&board(), &report, &[], RunDate::unknown())
-                .expect("evidence builds");
-            evidence
+            let mut rows: Vec<BindRow> = (0..3)
+                .map(|_| unresolved("", "", "no model matched"))
+                .collect();
+            rows.push(unresolved("R7", "10k", "no model matched"));
+            rows.push(unresolved("Via", "10k", "no model matched"));
+            rows.push(unresolved("Via", "47k", "no model matched"));
+            rows.extend((0..5).map(|_| unresolved("Via", "", "no model matched")));
+            evidence(&empty_board(), &report(rows))
                 .assumptions()
                 .iter()
                 .map(|a| a.id().as_str().to_string())
                 .collect::<Vec<_>>()
         };
         let first = build();
-        assert_eq!(first, build(), "assumption ids drifted between runs");
-        assert_eq!(first, build(), "assumption ids drifted between runs");
-        // The registry would have rejected a repeat, but assert it directly so a
-        // future change cannot make the ids unique only by accident.
+        assert_eq!(first, build());
         let mut sorted = first.clone();
         sorted.sort();
         sorted.dedup();

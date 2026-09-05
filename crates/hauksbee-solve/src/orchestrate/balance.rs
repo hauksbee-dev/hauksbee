@@ -279,30 +279,31 @@ fn balance_one<L: RailLoads>(
 mod tests {
     use super::*;
 
-    /// An analytic stand-in for the block solves: each block on each rail is
-    /// a linear conductance to ground, plus (to model what real sub-circuit
-    /// blocks do) a per-block gmin shunt stamped on its local rail copy.
-    /// The exact monolithic answer is closed-form, so the loop's output can
-    /// be checked against truth rather than against itself.
+    const GMIN: f64 = 1e-9;
+    const VNTOL: f64 = 1e-6;
+    const ABSTOL: f64 = 1e-12;
+
+    /// Linear block conductances to ground per rail, each block stamping its
+    /// own gmin on its local rail copy (as real sub-circuit blocks do), so the
+    /// monolithic answer is closed-form.
     struct LinearLoads {
-        /// Per rail: feed voltage.
         feeds: Vec<f64>,
-        /// Per rail: block conductances to ground (one entry per block).
         blocks: Vec<Vec<f64>>,
-        /// Per rail: current trial voltage.
         v: Vec<f64>,
-        /// The gmin each block stamps on its local rail copy.
-        gmin: f64,
-        /// Count of resolve() calls, to verify only-touched-blocks costing.
         resolves: usize,
     }
 
     impl LinearLoads {
-        /// The monolithic rail voltage: one shared node with ONE gmin shunt,
-        /// fed through r_shunt, loaded by the blocks in parallel.
+        fn new(feeds: Vec<f64>, blocks: Vec<Vec<f64>>, v: Vec<f64>) -> LinearLoads {
+            LinearLoads {
+                feeds,
+                blocks,
+                v,
+                resolves: 0,
+            }
+        }
         fn monolithic_v(&self, i: usize, r_shunt: f64) -> f64 {
-            let g_blocks: f64 = self.blocks[i].iter().sum();
-            let g_total = 1.0 / r_shunt + g_blocks + self.gmin;
+            let g_total = 1.0 / r_shunt + self.blocks[i].iter().sum::<f64>() + GMIN;
             (self.feeds[i] / r_shunt) / g_total
         }
     }
@@ -320,21 +321,12 @@ mod tests {
             self.feeds[i]
         }
         fn current_drawn(&self, i: usize) -> f64 {
-            // Every block draws its conductive current PLUS its own local
-            // gmin draw, exactly like a sub-circuit with a stamped shunt.
-            self.blocks[i]
-                .iter()
-                .map(|g| (g + self.gmin) * self.v[i])
-                .sum()
+            self.blocks[i].iter().map(|g| (g + GMIN) * self.v[i]).sum()
         }
         fn n_loads(&self, i: usize) -> usize {
             self.blocks[i].len()
         }
     }
-
-    const GMIN: f64 = 1e-9;
-    const VNTOL: f64 = 1e-6;
-    const ABSTOL: f64 = 1e-12;
 
     fn channels(n: usize, r: f64) -> Vec<RailChannel> {
         (0..n)
@@ -346,138 +338,77 @@ mod tests {
             .collect()
     }
 
-    /// The loop must land on the monolithic answer, and for a LINEAR system
-    /// the secant slope is exact, so one outer pass suffices.
-    #[test]
-    fn linear_system_settles_to_the_monolithic_answer_in_one_pass() {
-        let r_shunt = 1e3;
-        let mut loads = LinearLoads {
-            feeds: vec![5.0],
-            blocks: vec![vec![1e-4, 2e-4, 5e-4]],
-            v: vec![5.0], // deliberately bad start: the unloaded feed value
-            gmin: GMIN,
-            resolves: 0,
-        };
-        let ch = channels(1, r_shunt);
-        let rep = settle_rails(
-            &mut loads,
-            &ch,
-            GMIN,
-            VNTOL,
-            ABSTOL,
-            &BalancePolicy::default(),
-        )
-        .unwrap();
-        assert!(rep.converged, "{rep:?}");
-        let expect = loads.monolithic_v(0, r_shunt);
-        let err = (loads.v[0] - expect).abs();
-        assert!(err < 1e-9, "settled {} vs monolithic {expect}", loads.v[0]);
-        // Pass 1 does the Newton update; pass 2 only measures the residual
-        // and declares convergence.
-        assert!(rep.outer_passes <= 2, "{rep:?}");
-        // Exactly one probe + one commit: the converged re-measure must
-        // early-return without re-solving anything.
-        assert_eq!(loads.resolves, 2, "{rep:?}");
+    fn settle(
+        loads: &mut impl RailLoads,
+        ch: &[RailChannel],
+        policy: &BalancePolicy,
+    ) -> BalanceReport {
+        settle_rails(loads, ch, GMIN, VNTOL, ABSTOL, policy).unwrap()
     }
 
-    /// The regression this file exists to hold: WITHOUT the surplus
-    /// correction, per-block gmin stamps drag the settled voltage below the
-    /// monolithic answer by ~(n_loads-1)*gmin*R_shunt*v. With 40 blocks the
-    /// uncorrected error is measurable at the gate tolerance; the corrected
-    /// loop must not show it.
+    /// A linear system settles to the monolithic answer in one Newton pass
+    /// (one probe + one commit), and the per-block gmin surplus is corrected:
+    /// with 40 blocks the uncorrected bias would be ~8e-6 V.
     #[test]
-    fn gmin_double_count_is_corrected() {
+    fn linear_rails_settle_to_the_monolithic_answer() {
         let r_shunt = 1e3;
-        let n_blocks = 40;
-        let mut loads = LinearLoads {
-            feeds: vec![5.0],
-            blocks: vec![vec![1e-4; n_blocks]],
-            v: vec![0.0],
-            gmin: GMIN,
-            resolves: 0,
-        };
-        let ch = channels(1, r_shunt);
-        let rep = settle_rails(
-            &mut loads,
-            &ch,
-            GMIN,
-            VNTOL,
-            ABSTOL,
-            &BalancePolicy::default(),
-        )
-        .unwrap();
+        let mut loads = LinearLoads::new(vec![5.0], vec![vec![1e-4, 2e-4, 5e-4]], vec![5.0]);
+        let rep = settle(&mut loads, &channels(1, r_shunt), &BalancePolicy::default());
+        assert!(rep.converged && rep.outer_passes <= 2, "{rep:?}");
+        assert!((loads.v[0] - loads.monolithic_v(0, r_shunt)).abs() < 1e-9);
+        assert_eq!(loads.resolves, 2, "{rep:?}");
+
+        let mut loads = LinearLoads::new(vec![5.0], vec![vec![1e-4; 40]], vec![0.0]);
+        let rep = settle(&mut loads, &channels(1, r_shunt), &BalancePolicy::default());
         assert!(rep.converged);
-        let expect = loads.monolithic_v(0, r_shunt);
-        let err = (loads.v[0] - expect).abs();
-        // The uncorrected bias for this fixture is (n-1)*gmin*v/g_total:
-        // 39e-9 * 1V / 5e-3 S, about 8e-6 V, three decades above this bar.
+        let err = (loads.v[0] - loads.monolithic_v(0, r_shunt)).abs();
         assert!(
             err < 1e-8,
-            "gmin surplus leaked into the balance: err {err:.3e} vs expected {expect}"
+            "gmin surplus leaked into the balance: {err:.3e}"
         );
-    }
 
-    /// Multiple rails settle round-robin, each to its own answer.
-    #[test]
-    fn independent_rails_settle_together() {
         let r_shunt = 2.2e3;
-        let mut loads = LinearLoads {
-            feeds: vec![5.0, 3.3],
-            blocks: vec![vec![1e-3, 1e-4], vec![4e-4]],
-            v: vec![0.0, 0.0],
-            gmin: GMIN,
-            resolves: 0,
-        };
-        let ch = channels(2, r_shunt);
-        let rep = settle_rails(
-            &mut loads,
-            &ch,
-            GMIN,
-            VNTOL,
-            ABSTOL,
-            &BalancePolicy::default(),
-        )
-        .unwrap();
+        let mut loads = LinearLoads::new(
+            vec![5.0, 3.3],
+            vec![vec![1e-3, 1e-4], vec![4e-4]],
+            vec![0.0, 0.0],
+        );
+        let rep = settle(&mut loads, &channels(2, r_shunt), &BalancePolicy::default());
         assert!(rep.converged, "{rep:?}");
         for i in 0..2 {
-            let expect = loads.monolithic_v(i, r_shunt);
             assert!(
-                (loads.v[i] - expect).abs() < 1e-9,
-                "rail {i}: {} vs {expect}",
-                loads.v[i]
+                (loads.v[i] - loads.monolithic_v(i, r_shunt)).abs() < 1e-9,
+                "rail {i}"
             );
         }
     }
 
-    /// A two-rail CASCADE, the stacked-feed shape: SRC -> R1 -> MID -> R2 ->
-    /// INNER, both rails torn, linear block loads (plus per-block gmin) on
-    /// each. INNER's feed is MID's LIVE rail voltage and the shunt R2 between
-    /// the two torn rails belongs to no block, so MID's KCL depends on the
-    /// analytic child-draw term. The closed-form monolithic 2x2 solution is
-    /// truth, so this proves the child term (and that the gmin correction is
-    /// still exact once per rail) rather than checking the loop against itself.
+    /// SRC -> R1 -> MID -> R2 -> INNER, both rails torn: INNER's feed is MID's
+    /// live rail voltage and the shunt R2 belongs to no block, so MID's KCL
+    /// depends on the analytic child-draw term.
     struct CascadeLoads {
         vsrc: f64,
         r1: f64,
         r2: f64,
         g_mid: Vec<f64>,
         g_inner: Vec<f64>,
-        v: Vec<f64>, // [v_mid, v_inner]
-        gmin: f64,
+        v: Vec<f64>,
     }
 
     impl CascadeLoads {
-        /// The monolithic node solution: one gmin per rail, R2 carrying its
-        /// current between the two shared rail nodes exactly once.
         fn monolithic(&self) -> (f64, f64) {
-            let g1 = 1.0 / self.r1;
-            let g2 = 1.0 / self.r2;
-            let gm: f64 = self.g_mid.iter().sum::<f64>() + self.gmin;
-            let gi: f64 = self.g_inner.iter().sum::<f64>() + self.gmin;
-            // INNER: v_inner = G2 v_mid / (G2 + Gi); MID row substituted.
+            let (g1, g2) = (1.0 / self.r1, 1.0 / self.r2);
+            let gm: f64 = self.g_mid.iter().sum::<f64>() + GMIN;
+            let gi: f64 = self.g_inner.iter().sum::<f64>() + GMIN;
             let v_mid = g1 * self.vsrc / ((g1 + gm + g2) - g2 * g2 / (g2 + gi));
-            let v_inner = g2 * v_mid / (g2 + gi);
-            (v_mid, v_inner)
+            (v_mid, g2 * v_mid / (g2 + gi))
+        }
+        fn blocks(&self, i: usize) -> &[f64] {
+            if i == 0 {
+                &self.g_mid
+            } else {
+                &self.g_inner
+            }
         }
     }
 
@@ -490,7 +421,6 @@ mod tests {
             self.v[i]
         }
         fn feed_voltage(&self, i: usize) -> f64 {
-            // MID is fed by the pinned source; INNER is fed by MID's live rail.
             if i == 0 {
                 self.vsrc
             } else {
@@ -498,15 +428,10 @@ mod tests {
             }
         }
         fn current_drawn(&self, i: usize) -> f64 {
-            let blocks = if i == 0 { &self.g_mid } else { &self.g_inner };
-            blocks.iter().map(|g| (g + self.gmin) * self.v[i]).sum()
+            self.blocks(i).iter().map(|g| (g + GMIN) * self.v[i]).sum()
         }
         fn n_loads(&self, i: usize) -> usize {
-            if i == 0 {
-                self.g_mid.len()
-            } else {
-                self.g_inner.len()
-            }
+            self.blocks(i).len()
         }
     }
 
@@ -520,10 +445,12 @@ mod tests {
             g_mid: vec![1e-4, 2e-4],
             g_inner: vec![1e-4; 24],
             v: vec![0.0, 0.0],
-            gmin: GMIN,
         };
-        // MID (channel 0) feeds INNER (channel 1) through R2; that is the
-        // child link the parent's KCL would otherwise miss.
+        let (mv, iv) = loads.monolithic();
+        assert!(
+            ((mv - iv) / r2).abs() > 1e-6,
+            "the child draw must be a real term"
+        );
         let channels = vec![
             RailChannel {
                 rail: NodeId(1),
@@ -536,69 +463,19 @@ mod tests {
                 children: Vec::new(),
             },
         ];
-        let rep = settle_rails(
-            &mut loads,
-            &channels,
-            GMIN,
-            VNTOL,
-            ABSTOL,
-            &BalancePolicy::default(),
-        )
-        .unwrap();
+        let rep = settle(&mut loads, &channels, &BalancePolicy::default());
         assert!(rep.converged, "{rep:?}");
-        let (mv, iv) = loads.monolithic();
-        // The two rails couple, so this is block Gauss-Seidel and the outer
-        // loop stops at its voltage-referred target (v_target_frac * vntol =
-        // 1e-7), not at machine zero the way an uncoupled single rail does.
-        // Observed error is ~1e-9, two decades inside that target; a MISSING
-        // child term would bias MID by ~0.7 V (the ~2.3 mA of (v_mid -
-        // v_inner)/R2 divided by MID's ~3.3 mS total conductance), which the
-        // sibling test pins.
-        assert!(
-            (loads.v[0] - mv).abs() < 1e-8,
-            "MID {} vs monolithic {mv} (child draw missing?)",
-            loads.v[0]
-        );
+        assert!((loads.v[0] - mv).abs() < 1e-8, "MID {} vs {mv}", loads.v[0]);
         assert!(
             (loads.v[1] - iv).abs() < 1e-8,
-            "INNER {} vs monolithic {iv}",
+            "INNER {} vs {iv}",
             loads.v[1]
         );
     }
 
-    /// Without the child-draw term, the parent's KCL is short by the shunt
-    /// current leaving toward the child, biasing MID high. This pins that the
-    /// term is load-bearing: a cascade where dropping it is measurable at the
-    /// gate tolerance, mirroring `gmin_double_count_is_corrected`.
-    #[test]
-    fn cascade_fixture_missed_current_is_nonvacuous() {
-        let (r1, r2) = (500.0, 1e3);
-        let loads = CascadeLoads {
-            vsrc: 5.0,
-            r1,
-            r2,
-            g_mid: vec![1e-4, 2e-4],
-            g_inner: vec![1e-4; 24],
-            v: vec![0.0, 0.0],
-            gmin: GMIN,
-        };
-        let (mv, _) = loads.monolithic();
-        // The missed current at the true solution is (v_mid - v_inner)/R2,
-        // which referred back through MID's conductance is far above 1e-9. We
-        // assert the fixture is non-degenerate (the child current is a real
-        // term), so the settled-match test above is not vacuous.
-        let (_, iv) = loads.monolithic();
-        let missed = (mv - iv) / r2;
-        assert!(
-            missed.abs() > 1e-6,
-            "child draw is negligible on this fixture; the match test is vacuous: {missed:e}"
-        );
-    }
-
-    /// A flat residual (blocks whose draw ignores the rail voltage entirely,
-    /// slope exactly zero after the shunt term cancels... impossible
-    /// physically, easy to mock) must exhaust the pass budget and REPORT
-    /// non-convergence instead of erroring or spinning forever.
+    /// A flat residual (blocks whose draw ignores the rail voltage) exhausts
+    /// the pass budget and REPORTS non-convergence, which `ensure_balanced`
+    /// then refuses; a converged report passes.
     struct FlatLoads;
     impl RailLoads for FlatLoads {
         fn resolve(&mut self, _i: usize, _v: f64) -> SolveResult<()> {
@@ -608,8 +485,6 @@ mod tests {
             1.0
         }
         fn feed_voltage(&self, _i: usize) -> f64 {
-            // Chosen so the residual is a constant 1 mA that Newton cannot
-            // move: resolve() ignores the update entirely.
             2.0
         }
         fn current_drawn(&self, _i: usize) -> f64 {
@@ -621,45 +496,16 @@ mod tests {
     }
 
     #[test]
-    fn non_convergence_is_reported_not_hidden() {
-        let ch = channels(1, 1e3);
+    fn non_convergence_is_reported_and_refused() {
         let policy = BalancePolicy {
             max_outer: 5,
             ..BalancePolicy::default()
         };
-        let rep = settle_rails(&mut FlatLoads, &ch, GMIN, VNTOL, ABSTOL, &policy).unwrap();
+        let rep = settle(&mut FlatLoads, &channels(1, 1e3), &policy);
         assert!(!rep.converged);
         assert_eq!(rep.outer_passes, 5);
         assert!(rep.final_residuals[0].abs() > 1e-6, "{rep:?}");
-    }
-
-    #[test]
-    fn ensure_balanced_refuses_a_nonconverged_report() {
-        // Bug-hunt #1: the caller contract. A non-converged BalanceReport (the
-        // Ok-but-unconverged path above) must become an Err naming the residual,
-        // so the torn engine escalates instead of streaming an unbalanced rail.
-        // The producer and the enforcer are tested together here so a future
-        // refactor that discards the report again fails this test.
-        let ch = channels(1, 1e3);
-        let policy = BalancePolicy {
-            max_outer: 5,
-            ..BalancePolicy::default()
-        };
-        let rep = settle_rails(&mut FlatLoads, &ch, GMIN, VNTOL, ABSTOL, &policy).unwrap();
-        assert!(
-            !rep.converged,
-            "scaffold must produce a non-converged report"
-        );
-        let err = ensure_balanced(&rep)
-            .expect_err("a non-converged balance must be refused, not accepted");
-        assert!(
-            err.to_string().contains("rail balance did not converge"),
-            "unexpected refusal message: {err}"
-        );
-    }
-
-    #[test]
-    fn ensure_balanced_accepts_a_converged_report() {
+        assert!(ensure_balanced(&rep).is_err());
         let ok = BalanceReport {
             outer_passes: 3,
             final_residuals: vec![1e-15, 2e-16],

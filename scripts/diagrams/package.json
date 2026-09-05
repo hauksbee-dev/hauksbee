@@ -1,0 +1,12 @@
+{
+  "name": "hauksbee-diagrams",
+  "private": true,
+  "type": "module",
+  "description": "Headless draw.io diagram generator for the docs. Specs in specs/, ELK-laid-out .drawio sources plus SVG exports land in ../../docs/assets/diagrams/, gated by scripts/lint-diagrams.py. Regenerate with: bun run generate",
+  "scripts": {
+    "generate": "bun render.ts"
+  },
+  "dependencies": {
+    "elkjs": "0.11.0"
+  }
+}

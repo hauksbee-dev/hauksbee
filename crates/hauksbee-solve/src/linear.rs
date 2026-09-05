@@ -945,209 +945,83 @@ fn matmul(a: &[f64], b: &[f64], n: usize) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+    use crate::test_fixtures::{cap_ic, ind, res, vdc, GND};
+    use hauksbee_ir::Circuit;
 
     #[test]
-    fn expm_identity_of_zero() {
+    fn expm_matches_closed_forms() {
         let e = expm(&vec![0.0; 4], 2);
-        assert!((e[0] - 1.0).abs() < 1e-12);
-        assert!((e[3] - 1.0).abs() < 1e-12);
-        assert!(e[1].abs() < 1e-12);
-    }
-
-    #[test]
-    fn expm_scalar_decay() {
-        let e = expm(&[-1.0], 1);
-        assert!((e[0] - (-1.0f64).exp()).abs() < 1e-9, "{}", e[0]);
-    }
-
-    #[test]
-    fn expm_2x2_rotation() {
+        assert!((e[0] - 1.0).abs() < 1e-12 && (e[3] - 1.0).abs() < 1e-12 && e[1].abs() < 1e-12);
+        assert!((expm(&[-1.0], 1)[0] - (-1.0f64).exp()).abs() < 1e-9);
+        assert!(
+            (expm(&[-10.0], 1)[0] - (-10.0f64).exp()).abs() < 1e-9,
+            "scaling-and-squaring"
+        );
         let e = expm(&[0.0, -1.0, 1.0, 0.0], 2);
         let (c1, s1) = (1.0f64.cos(), 1.0f64.sin());
-        assert!((e[0] - c1).abs() < 1e-8, "{e:?}");
-        assert!((e[1] + s1).abs() < 1e-8, "{e:?}");
-        assert!((e[2] - s1).abs() < 1e-8, "{e:?}");
-        assert!((e[3] - c1).abs() < 1e-8, "{e:?}");
+        assert!(
+            (e[0] - c1).abs() < 1e-8
+                && (e[1] + s1).abs() < 1e-8
+                && (e[2] - s1).abs() < 1e-8
+                && (e[3] - c1).abs() < 1e-8,
+            "{e:?}"
+        );
     }
 
-    #[test]
-    fn expm_large_norm_scaled() {
-        // A = -1000 ; exp(-10) over dt to stress scaling-and-squaring.
-        let e = expm(&[-10.0], 1);
-        assert!((e[0] - (-10.0f64).exp()).abs() < 1e-9, "{}", e[0]);
-    }
-
-    fn rc() -> Circuit {
+    /// V - R - L - C - gnd with the given L and C values.
+    fn rlc(henries: Option<f64>, farads: f64) -> Circuit {
         let mut c = Circuit::new();
-        let vin = c.node("in");
-        let out = c.node("out");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R".into(),
-            a: vin,
-            b: out,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: "C".into(),
-            a: out,
-            b: NodeId::GROUND,
-            farads: 1e-6,
-            ic: Some(0.0),
-        });
+        let (vin, mid, out) = (c.node("in"), c.node("mid"), c.node("out"));
+        vdc(&mut c, "V1", vin, 1.0);
+        match henries {
+            Some(h) => {
+                res(&mut c, "R", vin, mid, 50.0);
+                ind(&mut c, "L", mid, out, h);
+            }
+            None => {
+                res(&mut c, "R", vin, out, 1e3);
+            }
+        }
+        cap_ic(&mut c, "C", out, GND, farads, 0.0);
         c
     }
 
-    #[test]
-    fn single_rc_state_space() {
-        let c = rc();
-        let part = crate::partition::Partition::analyze(&c);
-        let li = LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).expect("compile");
-        assert_eq!(li.n_states(), 1);
-        assert!((li.a[0] + 1000.0).abs() < 1e-6, "A={}", li.a[0]);
-        assert!((li.b[0] - 1000.0).abs() < 1e-6, "B={}", li.b[0]);
+    fn compile(c: &Circuit) -> Option<LinearIsland> {
+        let part = crate::partition::Partition::analyze(c);
+        LinearIsland::compile(c, &part.islands[0], 0.0, 27.0)
     }
 
+    /// A single RC compiles to one state with A = -1/RC, B = 1/RC, and the
+    /// exact ZOH step tracks the analytic charge; an RLC has two states.
     #[test]
-    fn rc_step_matches_analytic() {
-        let c = rc();
-        let part = crate::partition::Partition::analyze(&c);
-        let mut li = LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).unwrap();
+    fn rc_state_space_step_matches_analytic() {
+        let c = rlc(None, 1e-6);
+        let mut li = compile(&c).expect("compile");
+        assert_eq!(li.n_states(), 1);
+        assert!((li.a[0] + 1000.0).abs() < 1e-6 && (li.b[0] - 1000.0).abs() < 1e-6);
         let dt = 1e-5;
         li.ensure_cache(dt);
         let mut x = vec![0.0];
-        let u = vec![1.0];
-        let tau = 1e-3;
         for step in 1..=100 {
-            li.step(&mut x, &u);
-            let t = step as f64 * dt;
-            let want = 1.0 - (-t / tau).exp();
-            assert!((x[0] - want).abs() < 1e-4, "t={t} got {} want {want}", x[0]);
+            li.step(&mut x, &[1.0]);
+            let want = 1.0 - (-(step as f64 * dt) / 1e-3).exp();
+            assert!(
+                (x[0] - want).abs() < 1e-4,
+                "step {step}: {} vs {want}",
+                x[0]
+            );
         }
-    }
-
-    #[test]
-    fn zero_farad_cap_refuses_linearization() {
-        // Bug-hunt #3: a capacitor with farads == 0 would divide the A/B state
-        // rows by zero (`w[..] / *c`), poisoning the matrix-exponential fast
-        // path with Inf/NaN with no Newton finite-check to catch it. compile
-        // must REFUSE (return None) so the island falls back to the MNA path,
-        // which stamps a 0 F cap as an open exactly.
-        let mut c = Circuit::new();
-        let vin = c.node("in");
-        let out = c.node("out");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R".into(),
-            a: vin,
-            b: out,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: "C".into(),
-            a: out,
-            b: NodeId::GROUND,
-            farads: 0.0,
-            ic: Some(0.0),
-        });
-        let part = crate::partition::Partition::analyze(&c);
-        assert!(
-            LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).is_none(),
-            "compile must refuse a zero-farad cap island rather than divide by zero"
+        assert_eq!(
+            compile(&rlc(Some(1e-3), 1e-7)).expect("compile").n_states(),
+            2
         );
     }
 
+    /// A 0 F cap or 0 H inductor would divide the state rows by zero: compile
+    /// must refuse so the island falls back to the MNA path.
     #[test]
-    fn zero_henry_inductor_refuses_linearization() {
-        // Bug-hunt #3, symmetric: a 0 H inductor would divide the `vl / *l`
-        // rows by zero. Refuse so the MNA path (ideal-short stamp) handles it.
-        let mut c = Circuit::new();
-        let vin = c.node("in");
-        let mid = c.node("mid");
-        let out = c.node("out");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R".into(),
-            a: vin,
-            b: mid,
-            ohms: 50.0,
-            tc1: None,
-        });
-        c.add(Device::Inductor {
-            name: "L".into(),
-            a: mid,
-            b: out,
-            henries: 0.0,
-            ic: Some(0.0),
-        });
-        c.add(Device::Capacitor {
-            name: "C".into(),
-            a: out,
-            b: NodeId::GROUND,
-            farads: 1e-7,
-            ic: Some(0.0),
-        });
-        let part = crate::partition::Partition::analyze(&c);
-        assert!(
-            LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).is_none(),
-            "compile must refuse a zero-henry inductor island rather than divide by zero"
-        );
-    }
-
-    #[test]
-    fn rlc_state_space_has_two_states() {
-        // V - R - L - C - gnd. Two states (C voltage, L current).
-        let mut c = Circuit::new();
-        let vin = c.node("in");
-        let mid = c.node("mid");
-        let out = c.node("out");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R".into(),
-            a: vin,
-            b: mid,
-            ohms: 50.0,
-            tc1: None,
-        });
-        c.add(Device::Inductor {
-            name: "L".into(),
-            a: mid,
-            b: out,
-            henries: 1e-3,
-            ic: Some(0.0),
-        });
-        c.add(Device::Capacitor {
-            name: "C".into(),
-            a: out,
-            b: NodeId::GROUND,
-            farads: 1e-7,
-            ic: Some(0.0),
-        });
-        let part = crate::partition::Partition::analyze(&c);
-        let li = LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).expect("compile");
-        assert_eq!(li.n_states(), 2);
+    fn zero_valued_reactives_refuse_linearization() {
+        assert!(compile(&rlc(None, 0.0)).is_none());
+        assert!(compile(&rlc(Some(0.0), 1e-7)).is_none());
     }
 }

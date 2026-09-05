@@ -63,6 +63,10 @@ mod cli_round3_fixes;
 mod cli_sim_help_honesty;
 #[path = "cli_strict_plain.rs"]
 mod cli_strict_plain;
+#[path = "cli_watch.rs"]
+mod cli_watch;
+#[path = "contention_lint_corpus.rs"]
+mod contention_lint_corpus;
 #[path = "cosim_failed_chunk.rs"]
 mod cosim_failed_chunk;
 #[path = "cosim_fallback_chunk.rs"]
@@ -81,6 +85,8 @@ mod dnp_processor;
 mod drive_override_is_loud;
 #[path = "eagle_web_report.rs"]
 mod eagle_web_report;
+#[path = "esp32_qemu_cosim.rs"]
+mod esp32_qemu_cosim;
 #[path = "evidence_spine_end_to_end.rs"]
 mod evidence_spine_end_to_end;
 #[path = "extract_consent.rs"]
@@ -89,12 +95,18 @@ mod extract_consent;
 mod failed_chunk_reason;
 #[path = "faults.rs"]
 mod faults;
+#[path = "gerber_determinism.rs"]
+mod gerber_determinism;
 #[path = "hardware_history.rs"]
 mod hardware_history;
 #[path = "host_serial_cosim.rs"]
 mod host_serial_cosim;
 #[path = "i2c_sensor_cosim.rs"]
 mod i2c_sensor_cosim;
+#[path = "i2c_sensor_cosim_qemu.rs"]
+mod i2c_sensor_cosim_qemu;
+#[path = "i2c_sensor_cosim_renode.rs"]
+mod i2c_sensor_cosim_renode;
 #[path = "inhibitory_miswire.rs"]
 mod inhibitory_miswire;
 #[path = "interactive_coverage_parity.rs"]
@@ -133,6 +145,10 @@ mod power_supply;
 mod rail_suppression_and_cc_floor;
 #[path = "refusal_contract.rs"]
 mod refusal_contract;
+#[path = "renode_cosim_coverage_honesty.rs"]
+mod renode_cosim_coverage_honesty;
+#[path = "renode_riscv_arm_cosim.rs"]
+mod renode_riscv_arm_cosim;
 #[path = "run_report_schema_drift.rs"]
 mod run_report_schema_drift;
 #[path = "sample_boards.rs"]
@@ -145,12 +161,22 @@ mod shorts;
 mod si_ampacity_ripple;
 #[path = "soft_i2c_cosim.rs"]
 mod soft_i2c_cosim;
+#[path = "spi_sensor_cosim_qemu.rs"]
+mod spi_sensor_cosim_qemu;
+#[path = "spi_sensor_cosim_renode.rs"]
+mod spi_sensor_cosim_renode;
 #[path = "static_pass_says_its_limits.rs"]
 mod static_pass_says_its_limits;
 #[path = "stm32_bind_check.rs"]
 mod stm32_bind_check;
+#[path = "stm32_clock_readiness_cosim.rs"]
+mod stm32_clock_readiness_cosim;
+#[path = "stm32_renode_cosim.rs"]
+mod stm32_renode_cosim;
 #[path = "stormduino_bind.rs"]
 mod stormduino_bind;
+#[path = "strap_lint_corpus.rs"]
+mod strap_lint_corpus;
 #[path = "synthetic_cosim.rs"]
 mod synthetic_cosim;
 #[path = "thermal.rs"]

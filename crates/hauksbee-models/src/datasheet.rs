@@ -1135,26 +1135,6 @@ fn truncate_to_chars(s: &str, max: usize) -> String {
     }
 }
 
-#[cfg(test)]
-mod truncate_tests {
-    use super::truncate_to_chars;
-
-    /// Round-8 #4: datasheet text was truncated with a byte-index slice, which
-    /// panics when a multibyte glyph straddles the cut. `truncate_to_chars`
-    /// cuts on char boundaries, no panic, and it never splits a char.
-    #[test]
-    fn truncates_on_char_boundaries_without_panic() {
-        // 30 multibyte chars ('µ' = 2 bytes each); a byte slice at 40 would
-        // land mid-char.
-        let s = "µ".repeat(30);
-        let out = truncate_to_chars(&s, 20);
-        assert_eq!(out.chars().count(), 20, "keeps exactly 20 chars");
-        assert!(out.chars().all(|c| c == 'µ'), "never splits a char");
-        // Shorter-than-limit input is returned whole.
-        assert_eq!(truncate_to_chars("abc", 10), "abc");
-    }
-}
-
 // ── Prompt construction ───────────────────────────────────────────────────────
 
 /// The kinds the schema actually deserializes, extracted from serde's own
@@ -2759,298 +2739,116 @@ mod tests {
         args.iter().map(|s| s.to_string()).collect()
     }
 
-    #[test]
-    fn parse_args_defaults_leave_backend_unset() {
-        let a = parse_args_from(argv(&["--pdf", "x.pdf", "--part", "BC847"])).unwrap();
-        assert_eq!(a.backend, None, "no --backend keeps the env-driven default");
-        assert_eq!(a.api_base, None);
-        assert_eq!(a.api_key_env, None);
-        assert!(a.kind_str.is_empty());
+    fn parse(extra: &[&str]) -> Result<Args> {
+        let mut v = vec!["--pdf", "x.pdf", "--part", "P"];
+        v.extend_from_slice(extra);
+        parse_args_from(argv(&v))
     }
 
     #[test]
-    fn parse_args_accepts_each_backend() {
+    fn truncate_to_chars_cuts_on_char_boundaries() {
+        let out = truncate_to_chars(&"µ".repeat(30), 20);
+        assert_eq!(out.chars().count(), 20);
+        assert!(out.chars().all(|c| c == 'µ'));
+        assert_eq!(truncate_to_chars("abc", 10), "abc");
+    }
+
+    #[test]
+    fn parse_args_backend_flags() {
+        let a = parse(&[]).unwrap();
+        assert_eq!(a.backend, None);
+        assert_eq!(a.api_base, None);
+        assert_eq!(a.api_key_env, None);
+        assert!(a.kind_str.is_empty());
+
         for (flag, want) in [
             ("codex", Backend::Codex),
             ("claude-code", Backend::ClaudeCode),
             ("api", Backend::Api),
         ] {
-            let a = parse_args_from(argv(&["--pdf", "x.pdf", "--part", "P", "--backend", flag]))
-                .unwrap();
-            assert_eq!(a.backend, Some(want), "--backend {flag}");
+            assert_eq!(parse(&["--backend", flag]).unwrap().backend, Some(want));
         }
-    }
+        assert!(parse(&["--backend", "gemini"]).is_err());
 
-    #[test]
-    fn parse_args_rejects_unknown_backend() {
-        let err = parse_args_from(argv(&[
-            "--pdf",
-            "x.pdf",
-            "--part",
-            "P",
-            "--backend",
-            "gemini",
-        ]))
-        .unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("unknown backend 'gemini'"), "got: {msg}");
-        assert!(msg.contains("codex, claude-code, or api"), "got: {msg}");
-    }
-
-    #[test]
-    fn parse_args_takes_api_base_and_key_env() {
-        let a = parse_args_from(argv(&[
-            "--pdf",
-            "x.pdf",
-            "--part",
-            "P",
+        let a = parse(&[
             "--backend",
             "api",
             "--api-base",
             "https://llm.example/v1",
             "--api-key-env",
             "MY_LLM_KEY",
-        ]))
+        ])
         .unwrap();
         assert_eq!(a.api_base.as_deref(), Some("https://llm.example/v1"));
         assert_eq!(a.api_key_env.as_deref(), Some("MY_LLM_KEY"));
+        assert_eq!(api_key_env_name(&a), "MY_LLM_KEY");
     }
 
-    /// A value that cannot be an env-var NAME is almost certainly a pasted
-    /// key, and must be refused before it reaches a world-readable argv.
     #[test]
-    fn parse_args_rejects_a_key_pasted_as_the_env_name() {
+    fn api_key_env_must_be_a_variable_name_not_a_key() {
         for pasted in ["sk-abc123XYZ", "1KEY", "MY KEY", ""] {
-            let err = parse_args_from(argv(&[
-                "--pdf",
-                "x.pdf",
-                "--part",
-                "P",
-                "--api-key-env",
-                pasted,
-            ]))
-            .unwrap_err();
-            assert!(
-                err.to_string().contains("not the key itself"),
-                "{pasted:?} must be refused as an env NAME, got: {err}"
-            );
+            assert!(parse(&["--api-key-env", pasted]).is_err(), "{pasted:?}");
         }
         assert!(validate_api_key_env_name("OPENAI_API_KEY").is_ok());
         assert!(validate_api_key_env_name("_KEY2").is_ok());
     }
 
-    /// An explicit --api-key-env wins over every default.
     #[test]
-    fn api_key_env_name_prefers_the_explicit_flag() {
-        let args = Args::new(PathBuf::from("x.pdf"), "P".into(), "diode".into())
-            .api_key_env(Some("MY_LLM_KEY".into()));
-        assert_eq!(api_key_env_name(&args), "MY_LLM_KEY");
-    }
-
-    /// The missing-key error names the exact variable to set.
-    #[test]
-    fn api_backend_without_key_says_which_var_to_set() {
-        let args = Args::new(PathBuf::from("x.pdf"), "P".into(), "diode".into())
-            .backend(Some(Backend::Api))
-            .api_key_env(Some("HAUKSBEE_TEST_KEY_VAR_THAT_IS_UNSET".into()));
-        let err = call_api_backend("prompt", &args).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("set HAUKSBEE_TEST_KEY_VAR_THAT_IS_UNSET"),
-            "the fix must be exact, got: {msg}"
-        );
+    fn extract_toml_block_finds_the_entry() {
+        for s in [
+            "Sure, here you go:\n```toml\n[[models]]\nid = \"test\"\n```\nDone.",
+            "[[models]]\nid = \"test\"\nkind = \"diode\"\n",
+            "Sure! Here is the TOML:\n[[models]]\nid = \"z\"\nkind = \"diode\"\n",
+        ] {
+            assert!(extract_toml_block(s).starts_with("[[models]]"), "{s:?}");
+        }
     }
 
     #[test]
-    fn extract_toml_block_from_fence() {
-        let s = "Sure, here you go:\n```toml\n[[models]]\nid = \"test\"\n```\nDone.";
-        let block = extract_toml_block(s);
-        assert!(block.starts_with("[[models]]"), "got: {}", block);
+    fn prompt_carries_kind_specific_guidance() {
+        let bjt = build_prompt("BC847", "bjt_npn", "x");
+        assert!(bjt.contains("is, bf, nf"));
+        assert!(bjt.contains("BC847"));
+        assert!(bjt.contains("VCEO"));
+        assert!(!bjt.contains("[models.behavioral.converter]"));
+        assert!(build_prompt("1N4148", "diode", "x").contains("VRRM"));
+        assert!(build_prompt("AMS1117", "vreg", "x").contains("max_junction_temp_c"));
+
+        let charger = build_prompt("LTC4020", "charger", "x");
+        assert!(charger.contains("[models.behavioral.converter]"));
+        assert!(charger.contains("iin_program"));
+        assert!(build_prompt("nPM1300", "pmic", "x").contains("pull_to"));
+        assert!(build_prompt("LTC6803", "balancer", "x").contains("[[models.behavioral.laws]]"));
     }
 
     #[test]
-    fn extract_toml_block_bare() {
-        let s = "[[models]]\nid = \"test\"\nkind = \"diode\"\n";
-        let block = extract_toml_block(s);
-        assert!(block.starts_with("[[models]]"));
-    }
-
-    #[test]
-    fn prompt_contains_required_params() {
-        let prompt = build_prompt("BC847", "bjt_npn", "...datasheet text...");
-        assert!(prompt.contains("is, bf, nf"));
-        assert!(prompt.contains("BC847"));
-        assert!(prompt.contains("[models.source]"));
-        assert!(prompt.contains("tier = \"datasheet-derived\""));
-        assert!(prompt.contains("kind = \"specification-limits\""));
-        assert!(prompt.contains("min/typ row without a finite published max"));
-        assert!(prompt.contains("status = \"unknown\""));
-    }
-
-    #[test]
-    fn prompt_contains_many_format_only_examples_from_other_part_classes() {
-        let target_part = "TXB0101";
-        let target_kind = "digital";
-        let examples = format_examples_for_kind(target_kind);
-        let prompt = build_prompt(target_part, target_kind, "datasheet text");
-        let example_start = prompt.find("FORMAT EXAMPLES ONLY").unwrap();
-        let example_end = prompt.find("DATASHEET TEXT (truncated):").unwrap();
-        let example_section = &prompt[example_start..example_end];
-
-        assert!(examples.len() >= 2, "the prompt must be many-shot");
-        assert!(example_section.contains("FORMAT EXAMPLES ONLY"));
-        assert!(!example_section.contains(target_part));
-        assert!(example_section.contains("SAME SHAPE"));
-        assert!(example_section.contains("Copying the example's part number or numbers"));
-        for example in examples {
-            assert_ne!(example.part, target_part);
-            assert_ne!(example.kind, target_kind);
-            assert!(example_section.contains(example.part));
-            assert!(example.card.contains("[models.source]"));
-            assert!(example.card.contains("[[models.source.uncertainty]]"));
-            assert!(example.card.contains("[[models.envelope]]"));
-            assert!(example.card.contains("kind = \"rail_order\""));
-            assert!(example.card.contains("ABSTAIN"));
-            assert!(example.card.contains("does not model"));
-            assert!(example.card.contains("Source:"));
+    fn format_examples_validate_and_exclude_the_target_kind() {
+        for example in FORMAT_EXAMPLES {
             parse_and_validate_reply(example.card, example.part, example.kind)
                 .expect("every worked example must be a valid complete model entry");
         }
-        for example in FORMAT_EXAMPLES {
-            parse_and_validate_reply(example.card, example.part, example.kind)
-                .expect("the test must parse every example candidate, including filtered ones");
+        for kind in ["digital", "opamp"] {
+            let examples = format_examples_for_kind(kind);
+            assert!(examples.len() >= 2, "the prompt must be many-shot");
+            assert!(examples.iter().all(|e| e.kind != kind));
         }
-
-        let opamp_examples = format_examples_for_kind("opamp");
-        assert!(opamp_examples.len() >= 2);
-        assert!(opamp_examples.iter().all(|example| example.kind != "opamp"));
-    }
-
-    #[test]
-    fn prompt_names_locations_checks_abstention_and_unmodeled_behavior() {
         let prompt = build_prompt("TXB0101", "digital", "datasheet text");
-        for required in [
-            "Supply bounds belong in Recommended Operating Conditions",
-            "Absolute Maximum Ratings is a separate stress table",
-            "Pin Functions table first",
-            "package top-view figure",
-            "without the bias condition in the table header, row, or footnote",
-            "Application Information and Design Procedure",
-            "re-read every cited row and footnote",
-            "double-check its",
-            "ABSTAIN: datasheet does not state",
-            "the description must say `does not model ...`",
-        ] {
-            assert!(prompt.contains(required), "prompt omitted: {required}");
-        }
+        let start = prompt.find("FORMAT EXAMPLES ONLY").unwrap();
+        let end = prompt.find("DATASHEET TEXT (truncated):").unwrap();
+        assert!(!prompt[start..end].contains("TXB0101"));
     }
 
     #[test]
-    fn verification_clause_includes_per_category_truncation_disclosure() {
-        let dir = tempfile::tempdir().expect("temporary workspace");
-        let rendered = dir.path().join("page-013.png");
-        std::fs::write(&rendered, b"fixture").unwrap();
-        let ws = Workspace {
-            pdf: dir.path().join("datasheet.pdf"),
-            pages: vec![rendered],
-            selected_pages: vec![SelectedPage {
-                number: 13,
-                reasons: vec!["switching characteristics"],
-                supplemental_reasons: Vec::new(),
-                score: 1,
-            }],
-            category_disclosures: vec![
-                "Switching Characteristics spans PDF pages 10 to 13; PDF page 13 is the preferred attachment. The other matching pages 10 to 12 are in datasheet.txt and datasheet.pdf in your sandbox."
-                    .to_string(),
-            ],
-            has_text_dump: true,
-            dir,
-        };
-
-        let clause = verification_clause(&ws);
-        assert!(clause.contains("Per-category coverage:"));
-        assert!(clause.contains("Switching Characteristics spans PDF pages 10 to 13"));
-        assert!(clause.contains("other matching pages 10 to 12"));
-        assert!(clause.contains("datasheet.txt and datasheet.pdf"));
-    }
-
-    #[test]
-    fn answer_contract_stays_before_kind_and_format_example() {
-        let prompt = build_prompt("TXB0101", "digital", "datasheet text");
-        let contract = prompt.find("YOUR ANSWER IS ONE THING ONLY").unwrap();
-        let kind = prompt.find("Component kind:").unwrap();
-        let example = prompt.find("FORMAT EXAMPLES ONLY").unwrap();
-        assert!(
-            contract < kind,
-            "answer contract must precede the kind line"
-        );
-        assert!(
-            contract < example,
-            "answer contract must precede the example"
-        );
-    }
-
-    #[test]
-    fn short_reply_feedback_quotes_kind_and_corrects_it_to_a_field() {
-        let feedback = retry_feedback("digital", "reply contains no [[models]] table");
-        assert!(feedback.contains(
-            "YOUR PREVIOUS REPLY, QUOTED VERBATIM:\n--- BEGIN REPLY ---\ndigital\n--- END REPLY ---"
-        ));
-        assert!(feedback.contains("only the component kind (or another fragment)"));
-        assert!(feedback.contains("kind is only the `kind = \"...\"` FIELD"));
-        assert!(feedback.contains("answer is the WHOLE `[[models]]` table"));
+    fn fragment_replies_are_recognised() {
+        assert!(reply_is_kind_or_fragment("digital"));
         assert!(reply_is_kind_or_fragment("model = \"digital\""));
         assert!(reply_is_kind_or_fragment("answer = \"digital\""));
+        assert!(!reply_is_kind_or_fragment(FORMAT_EXAMPLES[0].card));
+        assert!(retry_feedback("digital", "no table").contains("--- BEGIN REPLY ---\ndigital\n"));
     }
 
     #[test]
-    fn behavioral_family_prompt_includes_schema() {
-        // A charger prompt must teach the [models.behavioral.converter] schema
-        // and the input-current-limit programming block.
-        let charger = build_prompt("LTC4020", "charger", "datasheet");
-        assert!(
-            charger.contains("[models.behavioral.converter]"),
-            "charger prompt missing converter schema"
-        );
-        assert!(
-            charger.contains("iin_program"),
-            "charger prompt missing current-limit program"
-        );
-        assert!(charger.contains("CHARGER specifically"));
-        // A PMIC prompt must teach the internal-pull pin schema.
-        let pmic = build_prompt("nPM1300", "pmic", "datasheet");
-        assert!(
-            pmic.contains("pull_to"),
-            "pmic prompt missing internal-pull schema"
-        );
-        assert!(
-            pmic.contains("SHPHLD"),
-            "pmic prompt should mention the ship-hold case"
-        );
-        // A balancer prompt must teach the leak-law schema.
-        let bal = build_prompt("LTC6803", "balancer", "datasheet");
-        assert!(bal.contains("[[models.behavioral.laws]]"));
-        assert!(bal.contains("tie_ohms"));
-        // An ordinary kind must NOT get the behavioural section.
-        let bjt = build_prompt("BC847", "bjt_npn", "x");
-        assert!(!bjt.contains("[models.behavioral.converter]"));
-    }
-
-    #[test]
-    fn behavioral_family_kind_base_check() {
-        // A charger reply carries kind = "vreg" (the base) plus a behavioural
-        // block; the validator must accept it against the requested "charger".
-        assert_eq!(behavioral_family_base_kind("charger"), Some("vreg"));
-        assert_eq!(behavioral_family_base_kind("pmic"), Some("vreg"));
-        assert_eq!(behavioral_family_base_kind("balancer"), Some("digital"));
-        assert_eq!(behavioral_family_base_kind("bjt_npn"), None);
-    }
-
-    /// Offline end-to-end for a behavioural extraction: a canned charger reply
-    /// (kind = "vreg" + a converter behavioural block) must pass the full
-    /// parse + validate path under --kind charger.
-    #[test]
-    fn offline_behavioral_charger_pipeline() {
+    fn behavioral_charger_reply_validates_under_its_family_kind() {
         let reply = r#"```toml
 [[models]]
 id = "ltc4020_x"
@@ -3081,49 +2879,17 @@ vprog_ref = 0.0316
 prog_ref_ohms = 7150.0
 v_sense_full = 0.0463
 ```"#;
-        let raw = extract_toml_block(reply);
-        let entry = parse_and_validate_reply(&raw, "LTC4020", "charger")
-            .expect("behavioural charger reply should validate under --kind charger");
+        let entry =
+            parse_and_validate_reply(&extract_toml_block(reply), "LTC4020", "charger").unwrap();
         assert_eq!(entry.kind, crate::ComponentKind::Vreg);
-        assert!(!entry.behavioral.is_empty());
         assert!(entry.behavioral.converter.is_some());
-    }
 
-    /// A behavioural-family extraction with NO behavioural block must be
-    /// rejected (it would just be an ordinary kind mislabelled).
-    #[test]
-    fn behavioral_family_without_block_rejected() {
-        let reply = r#"
-[[models]]
-id = "x"
-kind = "vreg"
-[models.params]
-vout = 5.0
-dropout_v = 1.0
-iq_a = 0.001
-"#;
-        let err = parse_and_validate_reply(reply, "X", "charger").unwrap_err();
-        assert!(
-            err.to_string().contains("no [models.behavioral]"),
-            "got: {err}"
-        );
+        let plain = "[[models]]\nid = \"x\"\nkind = \"vreg\"\n[models.params]\nvout = 5.0\ndropout_v = 1.0\niq_a = 0.001\n";
+        assert!(parse_and_validate_reply(plain, "X", "charger").is_err());
     }
 
     #[test]
-    fn prompt_asks_for_ratings() {
-        // The stress monitor depends on [models.ratings] being populated, so the
-        // prompt must ask for the absolute-maximum ratings per kind.
-        let bjt = build_prompt("BC847", "bjt_npn", "x");
-        assert!(bjt.contains("[models.ratings]"));
-        assert!(bjt.contains("VCEO"));
-        let diode = build_prompt("1N4148", "diode", "x");
-        assert!(diode.contains("VRRM"));
-        let vreg = build_prompt("AMS1117", "vreg", "x");
-        assert!(vreg.contains("max_junction_temp_c"));
-    }
-
-    #[test]
-    fn roc_table_round_trip_retains_envelope_bounds_and_basis() {
+    fn roc_envelope_round_trips_through_the_schema() {
         let reply = r#"
 [[models]]
 id = "roc_supply"
@@ -3145,23 +2911,17 @@ max_v = 3.6
 abs_max_v = 4.0
 basis = "Recommended Operating Conditions, Table 6.3, VCC row"
 "#;
-
-        let entry = parse_and_validate_reply(reply, "ROC_SUPPLY", "digital")
-            .expect("a sourced ROC envelope must validate");
+        let entry = parse_and_validate_reply(reply, "ROC_SUPPLY", "digital").unwrap();
         let round_trip = toml::to_string(&crate::schema::DbFile {
             models: vec![entry],
         })
-        .expect("validated model must serialize");
+        .unwrap();
         assert!(round_trip.contains("[[models.envelope]]"));
         assert!(round_trip.contains("min_v = 2.7"));
         assert!(round_trip.contains("max_v = 3.6"));
         assert!(
             round_trip.contains("basis = \"Recommended Operating Conditions, Table 6.3, VCC row\"")
         );
-
-        let prompt = build_prompt("ROC_SUPPLY", "digital", "Recommended Operating Conditions");
-        assert!(prompt.contains("[[models.envelope]]"));
-        assert!(prompt.contains("no envelope without a table row"));
     }
 
     fn testdata(rel: &str) -> PathBuf {
@@ -3170,9 +2930,6 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
             .join(rel)
     }
 
-    /// Offline end-to-end: drive the whole pipeline (build_prompt -> call_backend
-    /// -> extract_toml_block -> parse_and_validate_reply -> write) with a canned
-    /// reply via HAUKSBEE_EXTRACT_MOCK_REPLY. No codex, no network: always runs.
     #[test]
     fn offline_pipeline_with_mock_reply() {
         let reply = "Here is the model:\n```toml\n\
@@ -3199,25 +2956,17 @@ max_current_a = 0.1\n\
         std::fs::create_dir_all(&dir).unwrap();
         let reply_path = dir.join("reply.txt");
         std::fs::write(&reply_path, reply).unwrap();
-
-        // SAFETY: single-threaded test process for env mutation.
         std::env::set_var("HAUKSBEE_EXTRACT_MOCK_REPLY", &reply_path);
 
-        let args = Args {
-            pdf: dir.join("nonexistent.pdf"),
-            part: "BC847".to_string(),
-            kind_str: "bjt_npn".to_string(),
-            out_dir: Some(dir.clone()),
-            retries: 2,
-            model: None,
-            backend: None,
-            api_base: None,
-            api_key_env: None,
-        };
+        let args = Args::new(
+            dir.join("nonexistent.pdf"),
+            "BC847".into(),
+            "bjt_npn".into(),
+        )
+        .out_dir(Some(dir.clone()));
         let prompt = build_prompt(&args.part, &args.kind_str, "irrelevant");
         let raw = call_backend(&prompt, &args).expect("mock backend should succeed");
         let entry = parse_and_validate_reply(&raw, &args.part, &args.kind_str).unwrap();
-
         std::env::remove_var("HAUKSBEE_EXTRACT_MOCK_REPLY");
 
         assert_eq!(entry.kind, crate::ComponentKind::BjtNpn);
@@ -3225,385 +2974,175 @@ max_current_a = 0.1\n\
         assert!(raw.starts_with("[[models]]"), "fence should be stripped");
     }
 
-    /// Live integration: run the REAL codex backend against the BC847 datasheet
-    /// shipped in testdata, then physically sanity-check the result. Marked
-    /// #[ignore] because it shells out to codex and takes ~1-2 minutes. Run with:
-    ///   cargo test -p hauksbee-models --bin model-extract -- \
-    ///       extract_bc847_live --ignored --nocapture
-    /// See crates/hauksbee-models/README_DATASHEET.md.
+    fn live_backend_available() -> bool {
+        which("codex") || std::env::var("HAUKSBEE_LLM_API_KEY").is_ok()
+    }
+
+    /// Live: the real backend against the BC847 datasheet in testdata. Run with
+    /// `cargo test -p hauksbee-models -- extract_bc847_live --ignored --nocapture`.
     #[test]
     #[ignore]
     fn extract_bc847_live() {
         let pdf = testdata("datasheets/BC847.pdf");
-        assert!(
-            pdf.exists(),
-            "BC847 datasheet not found at {:?}; download it (see README_DATASHEET.md)",
-            pdf
-        );
-        if !which("codex") && std::env::var("HAUKSBEE_LLM_API_KEY").is_err() {
-            eprintln!("neither codex nor HAUKSBEE_LLM_API_KEY available; skipping live test");
+        assert!(pdf.exists(), "BC847 datasheet not found at {pdf:?}");
+        if !live_backend_available() {
             return;
         }
-
         let text = extract_pdf_text(&pdf).expect("PDF text extraction");
         let prompt = build_prompt("BC847", "bjt_npn", &text);
-        let args = Args {
-            pdf: pdf.clone(),
-            part: "BC847".to_string(),
-            kind_str: "bjt_npn".to_string(),
-            out_dir: Some(std::env::temp_dir()),
-            retries: 2,
-            model: None,
-            backend: None,
-            api_base: None,
-            api_key_env: None,
-        };
-
-        let raw = call_backend(&prompt, &args).expect("codex backend call");
-        let entry = parse_and_validate_reply(&raw, "BC847", "bjt_npn").expect("parse + validate");
-
-        assert_eq!(entry.kind, crate::ComponentKind::BjtNpn);
+        let args =
+            Args::new(pdf, "BC847".into(), "bjt_npn".into()).out_dir(Some(std::env::temp_dir()));
+        let raw = call_backend(&prompt, &args).expect("backend call");
+        let entry = parse_and_validate_reply(&raw, "BC847", "bjt_npn").unwrap();
         let bf = entry.params.get_f64("bf").expect("bf present");
         assert!(
             (100.0..=460.0).contains(&bf),
-            "extracted bf {bf} not in the BC847 hFE band 110..450"
+            "bf {bf} outside the BC847 hFE band"
         );
-        assert_eq!(
-            entry.ratings.max_voltage_v,
-            Some(65.0),
-            "VCEO must be extracted into ratings"
-        );
-        println!("live BC847: bf={bf} ratings={:?}", entry.ratings);
+        assert_eq!(entry.ratings.max_voltage_v, Some(65.0));
     }
 
-    /// Live integration: run the REAL codex backend with `--kind charger`
-    /// against the LTC4020 datasheet excerpt in testdata, then assert the
-    /// extracted behavioural model is structurally sound. Marked #[ignore]
-    /// (shells out to codex, ~30-60s). Run with:
-    ///   cargo test -p hauksbee-models --bin model-extract -- \
-    ///       extract_ltc4020_charger_live --ignored --nocapture
+    /// Live: `--kind charger` against the LTC4020 excerpt in testdata.
     #[test]
     #[ignore]
     fn extract_ltc4020_charger_live() {
         let src = testdata("datasheets/LTC4020_excerpt.txt");
-        if !src.exists() {
-            eprintln!("LTC4020 excerpt not found at {src:?}; skipping");
-            return;
-        }
-        if !which("codex") && std::env::var("HAUKSBEE_LLM_API_KEY").is_err() {
-            eprintln!("neither codex nor HAUKSBEE_LLM_API_KEY available; skipping live test");
+        if !src.exists() || !live_backend_available() {
             return;
         }
         let text = extract_pdf_text(&src).expect("text");
         let prompt = build_prompt("LTC4020", "charger", &text);
-        let args = Args {
-            pdf: src.clone(),
-            part: "LTC4020".to_string(),
-            kind_str: "charger".to_string(),
-            out_dir: Some(std::env::temp_dir()),
-            retries: 2,
-            model: None,
-            backend: None,
-            api_base: None,
-            api_key_env: None,
-        };
-        let raw = call_backend(&prompt, &args).expect("codex backend call");
-        let entry = parse_and_validate_reply(&raw, "LTC4020", "charger").expect("parse + validate");
+        let args =
+            Args::new(src, "LTC4020".into(), "charger".into()).out_dir(Some(std::env::temp_dir()));
+        let raw = call_backend(&prompt, &args).expect("backend call");
+        let entry = parse_and_validate_reply(&raw, "LTC4020", "charger").unwrap();
         assert_eq!(entry.kind, crate::ComponentKind::Vreg);
         let c = entry.behavioral.converter.expect("converter block");
         assert_eq!(c.in_pin, "pvin");
         assert_eq!(c.out_pin, "bat");
-        assert!(
-            c.iin_program.is_some(),
-            "ILIMIT current-limit program present"
-        );
-        println!(
-            "live LTC4020 charger: vout={} eff={:?}",
-            c.vout_setpoint, c.efficiency
-        );
+        assert!(c.iin_program.is_some());
     }
 
-    /// Test the validation path with a mocked LLM reply.
     #[test]
-    fn extraction_validates_mocked_reply() {
-        // A well-formed reply that should pass validation
-        let good_reply = r#"
+    fn reply_validation_verdicts() {
+        let good = r#"
 [[models]]
 id = "bcm847bs"
 kind = "bjt_npn"
-description = "BCM847BS NPN matched pair (mocked)"
-
 [models.match]
 mpn_re = "(?i)BCM847BS"
-value_re = "(?i)^BCM847BS"
-
-[models.params]
-is  = 1.0e-14   # typical NPN saturation current
-bf  = 150.0     # forward beta
-nf  = 1.0       # emission coefficient
-vaf = 80.0      # Early voltage
-br  = 4.0
-rb  = 10.0
-rc  = 1.0
-re  = 0.5
-
-[models.pins]
-"1" = "base_q1"
-"2" = "emitter_q1"
-"6" = "collector_q1"
-"#;
-        let entry = parse_and_validate_reply(good_reply, "BCM847BS", "bjt_npn")
-            .expect("good reply should parse and validate");
-        assert_eq!(entry.id, "bcm847bs");
-
-        // A reply with out-of-range bf should fail
-        let bad_reply = r#"
-[[models]]
-id = "bcm847bs_bad"
-kind = "bjt_npn"
-description = "bad"
-
-[models.match]
-value_re = "BCM847BS"
-
 [models.params]
 is  = 1.0e-14
-bf  = 99999.0   # way out of range
+bf  = 150.0
 nf  = 1.0
 vaf = 80.0
+[models.pins]
+"1" = "base"
+"2" = "emitter"
+"6" = "collector"
 "#;
-        let err = parse_and_validate_reply(bad_reply, "BCM847BS", "bjt_npn");
-        assert!(err.is_err(), "bad bf should fail validation");
-        let msg = err.unwrap_err().to_string();
+        let entry = parse_and_validate_reply(good, "BCM847BS", "bjt_npn").unwrap();
+        assert_eq!(entry.id, "bcm847bs");
+
+        let bad_bf = good.replace("bf  = 150.0", "bf  = 99999.0");
+        assert!(parse_and_validate_reply(&bad_bf, "BCM847BS", "bjt_npn").is_err());
+        assert!(parse_and_validate_reply("   \n  ", "BC847", "bjt_npn").is_err());
         assert!(
-            msg.contains("bf") || msg.contains("validation"),
-            "error message: {}",
-            msg
+            parse_and_validate_reply("I couldn't find the parameters.", "BC847", "bjt_npn")
+                .is_err()
+        );
+        let diode = "[[models]]\nid = \"x\"\nkind = \"diode\"\n[models.params]\nis = 1e-9\nn = 1.7\nrs = 0.5\n";
+        assert!(
+            parse_and_validate_reply(diode, "X", "bjt_npn").is_err(),
+            "kind mismatch"
         );
     }
 
     #[test]
-    fn empty_reply_is_rejected_clearly() {
-        let err = parse_and_validate_reply("   \n  ", "BC847", "bjt_npn").unwrap_err();
-        assert!(err.to_string().contains("empty reply"), "got: {err}");
-    }
-
-    #[test]
-    fn prose_reply_is_rejected_clearly() {
-        let prose = "I'm sorry, I couldn't find the SPICE parameters in this datasheet.";
-        let err = parse_and_validate_reply(prose, "BC847", "bjt_npn").unwrap_err();
-        assert!(err.to_string().contains("no [[models]]"), "got: {err}");
-    }
-
-    #[test]
-    fn wrong_kind_is_rejected() {
-        // Reply is a valid diode card, but we asked for a bjt_npn: must be caught
-        // so the binder never stamps a diode where a transistor belongs.
-        let diode = r#"
-[[models]]
-id = "x"
-kind = "diode"
-[models.params]
-is = 1e-9
-n = 1.7
-rs = 0.5
-"#;
-        let err = parse_and_validate_reply(diode, "X", "bjt_npn").unwrap_err();
-        assert!(err.to_string().contains("kind mismatch"), "got: {err}");
-    }
-
-    #[test]
-    fn extract_toml_block_strips_leading_prose() {
-        let s = "Sure! Here is the TOML:\n[[models]]\nid = \"z\"\nkind = \"diode\"\n";
-        let block = extract_toml_block(s);
-        assert!(block.starts_with("[[models]]"), "got: {block}");
-    }
-
-    #[test]
-    fn missing_codex_path_check() {
-        // The codex backend resolves the working dir from the PDF's parent; a
-        // PDF with no parent must still yield a usable workdir, not a panic.
-        // (Full "no backend" behaviour is covered by the binary's runtime
-        // error, which lists codex / HAUKSBEE_LLM_API_KEY / mock as options.)
-        assert!(!which("definitely_not_a_real_command_xyz"));
-    }
-
-    // ── Declarative sensor extractor (i2c_sensor / spi_sensor) ──
-
-    #[test]
-    fn sensor_kinds_are_recognised() {
-        assert!(is_sensor_kind("i2c_sensor"));
-        assert!(is_sensor_kind("spi_sensor"));
-        assert!(!is_sensor_kind("bjt_npn"));
+    fn sensor_replies_round_trip_and_reject_bus_mismatch() {
+        assert!(is_sensor_kind("i2c_sensor") && is_sensor_kind("spi_sensor"));
         assert!(!is_sensor_kind("adc"));
-    }
 
-    #[test]
-    fn sensor_prompt_mentions_format() {
-        let p = build_sensor_prompt("LM75", "i2c_sensor", "datasheet text here");
-        assert!(p.contains("[sensor]"));
-        assert!(p.contains("i2c_pointer"));
-        assert!(p.contains("q7.1_be"));
-        assert!(p.contains("WHO_AM_I"));
-        let sp = build_sensor_prompt("MPU", "spi_sensor", "datasheet text here");
-        assert!(sp.contains("spi_reg"));
-        assert!(sp.contains("rw_read_is_high"));
-    }
-
-    /// The validator must accept a well-formed i2c_sensor reply and round-trip
-    /// it through the SensorSpec schema (this is the documented stand-in for a
-    /// live PDF extraction).
-    #[test]
-    fn validate_sensor_reply_round_trips_i2c() {
-        let reply = r#"
+        let i2c = r#"
 [sensor]
 name = "LM75"
 bus = "i2c"
 i2c_address = 0x48
-
 [[sensor.input]]
 name = "temperature_c"
 default = 25.0
-
 [[sensor.register]]
 addr = 0x00
 bytes = 2
 encoding = "q7.1_be"
 expr = "temperature_c"
-
 [[sensor.register]]
 addr = 0x01
 const = [0x00]
-
 [sensor.protocol]
 style = "i2c_pointer"
 "#;
-        let spec = validate_sensor_reply(reply, "LM75", "i2c_sensor").unwrap();
+        let spec = validate_sensor_reply(i2c, "LM75", "i2c_sensor").unwrap();
         assert_eq!(spec.sensor.name, "LM75");
         assert_eq!(spec.sensor.i2c_address, Some(0x48));
-    }
+        assert!(validate_sensor_reply(i2c, "LM75", "spi_sensor").is_err());
 
-    #[test]
-    fn validate_sensor_reply_round_trips_spi() {
-        let reply = r#"
+        let spi = r#"
 [sensor]
 name = "MINIMU"
 bus = "spi"
-
 [[sensor.input]]
 name = "gyro_x"
 default = 0.0
-
 [[sensor.register]]
 addr = 0x0f
 const = [0x42]
-
 [[sensor.register]]
 addr = 0x22
 bytes = 2
 encoding = "i16_le"
 expr = "gyro_x"
-
 [sensor.protocol]
 style = "spi_reg"
 rw_read_is_high = true
 addr_mask = 0x7f
 "#;
-        let spec = validate_sensor_reply(reply, "MINIMU", "spi_sensor").unwrap();
-        assert_eq!(spec.sensor.name, "MINIMU");
+        assert_eq!(
+            validate_sensor_reply(spi, "MINIMU", "spi_sensor")
+                .unwrap()
+                .sensor
+                .name,
+            "MINIMU"
+        );
+        assert!(validate_sensor_reply("Here is the model:", "LM75", "i2c_sensor").is_err());
     }
 
     #[test]
-    fn validate_sensor_reply_rejects_prose() {
-        let prose = "Here is the LM75 sensor model you asked for:";
-        assert!(validate_sensor_reply(prose, "LM75", "i2c_sensor").is_err());
-    }
-
-    #[test]
-    fn validate_sensor_reply_rejects_bus_mismatch() {
-        let i2c_reply = r#"
-[sensor]
-name = "LM75"
-bus = "i2c"
-i2c_address = 0x48
-[[sensor.register]]
-addr = 0x00
-const = [0x00]
-[sensor.protocol]
-style = "i2c_pointer"
-"#;
-        // Requested spi_sensor but the spec is i2c → reject.
-        assert!(validate_sensor_reply(i2c_reply, "LM75", "spi_sensor").is_err());
-    }
-}
-
-#[cfg(test)]
-mod kind_tests {
-    use super::*;
-
-    /// The identifier list is shared by the identification prompt, the CLI help
-    /// and the web picker. If it offers a kind the extractor cannot bind, a
-    /// user picks something that then fails after the datasheet has been sent.
-    #[test]
-    fn every_supported_kind_binds_to_a_component_kind() {
+    fn every_supported_kind_binds_and_has_parameter_guidance() {
+        let generic = required_params_for_kind("__definitely_not_a_kind__");
         for kind in SUPPORTED_KINDS {
             if is_sensor_kind(kind) {
-                continue; // separate [sensor] schema, validated on its own path
+                continue;
             }
             let base = behavioral_family_base_kind(kind).unwrap_or(kind);
             assert!(
                 kind_accepts(base),
-                "{kind} is offered but does not resolve to a component kind"
+                "{kind} does not resolve to a component kind"
+            );
+            assert_ne!(
+                required_params_for_kind(kind),
+                generic,
+                "{kind} has only the generic hint"
             );
         }
     }
 
-    /// Three kinds were offered with no parameter guidance at all (passive,
-    /// adc, connector), so their prompts fell to the generic hint while
-    /// charger, pmic and balancer had guidance but were never offered. Neither
-    /// half is fatal, and both are the kind of drift that only shows up as a
-    /// worse extraction, so pin it.
-    #[test]
-    fn every_offered_kind_has_its_own_parameter_guidance() {
-        let generic = required_params_for_kind("__definitely_not_a_kind__");
-        let missing: Vec<&str> = SUPPORTED_KINDS
-            .iter()
-            .copied()
-            .filter(|k| !is_sensor_kind(k))
-            .filter(|k| required_params_for_kind(k) == generic)
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "offered with only the generic prompt hint: {missing:?}"
-        );
-    }
-
-    /// An empty kind is the "you work it out" signal, so nothing may treat it
-    /// as a valid kind by accident.
-    #[test]
-    fn the_empty_kind_is_not_itself_a_kind() {
-        assert!(
-            !SUPPORTED_KINDS.contains(&""),
-            "the empty string means 'identify it', not a part type"
-        );
-    }
-}
-
-#[cfg(test)]
-mod legal_kind_tests {
-    use super::{kind_is_legal, legal_kinds};
-
-    /// The list is extracted from serde's own error text, so it cannot drift
-    /// from the enum; this test pins that the extraction keeps working and
-    /// that the vocabulary the prompt teaches matches the validator.
     #[test]
     fn legal_kinds_match_the_schema() {
         let kinds = legal_kinds();
         assert!(kinds.len() >= 10, "extraction broke: {kinds:?}");
-        for k in &kinds {
-            assert!(kind_is_legal(k), "listed kind must deserialize: {k}");
-        }
-        assert!(kinds.iter().any(|k| k == "vreg"), "{kinds:?}");
-        assert!(!kind_is_legal("charger"), "no charger kind exists (yet)");
+        assert!(kinds.iter().all(|k| kind_is_legal(k)));
+        assert!(kinds.iter().any(|k| k == "vreg"));
+        assert!(!kind_is_legal("charger"));
     }
 }

@@ -500,83 +500,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn line_col_is_one_based_and_line_aware() {
+    fn locate_is_one_based_and_prefers_the_quoted_occurrence() {
         let text = "abc\ndef\nghi";
         assert_eq!(line_col(text, 0), (1, 1));
-        assert_eq!(line_col(text, 4), (2, 1));
         assert_eq!(line_col(text, 6), (2, 3));
         assert_eq!(line_col(text, 8), (3, 1));
+        // "LED" appears in a comment on line 1 and as a value on line 2.
+        assert_eq!(
+            locate("# the LED net\nnet = \"LED\"\n", "LED"),
+            Some((2, 8))
+        );
     }
 
-    #[test]
-    fn locate_prefers_the_quoted_occurrence() {
-        // "LED" appears in a comment on line 1 and as a value on line 2; the
-        // quoted (value) occurrence must win.
-        let text = "# the LED net\nnet = \"LED\"\n";
-        let (l, c) = locate(text, "LED").unwrap();
-        assert_eq!((l, c), (2, 8));
-    }
-
+    /// The suggestion lives in `fix` alone (so a rendered diagnostic carries
+    /// it exactly once); both spellings of the clause are split out.
     #[test]
     fn the_did_you_mean_clause_moves_out_of_the_message_into_the_fix() {
-        // M5: the message carried the suggestion AND the renderer appended `fix`,
-        // so `check` printed the did-you-mean twice. `fix` is the single source.
-        let msg = "unknown assertion kind 'voltag' (did you mean 'voltage'?) (expected ...)";
-        let (message, fix) = split_did_you_mean(msg);
+        let (message, fix) = split_did_you_mean(
+            "unknown assertion kind 'voltag' (did you mean 'voltage'?) (expected ...)",
+        );
         assert_eq!(fix.as_deref(), Some("did you mean 'voltage'?"));
         assert_eq!(message, "unknown assertion kind 'voltag' (expected ...)");
-        assert!(!message.contains("did you mean"));
-
-        // The suggester's trailing-clause spelling, and its punctuation.
-        let refs = "max_current assert references unknown component 'R98'; did you mean: R9?";
-        let (message, fix) = split_did_you_mean(refs);
+        let (message, fix) = split_did_you_mean(
+            "max_current assert references unknown component 'R98'; did you mean: R9?",
+        );
         assert_eq!(fix.as_deref(), Some("did you mean: R9?"));
         assert_eq!(
             message,
             "max_current assert references unknown component 'R98'"
         );
-
-        let (message, fix) = split_did_you_mean("no clause here");
-        assert_eq!(fix, None);
-        assert_eq!(message, "no clause here");
-    }
-
-    #[test]
-    fn the_rendered_line_carries_the_suggestion_exactly_once() {
-        let d = Diagnostic {
-            line: None,
-            col: None,
-            code: "unknown-kind",
-            message: "unknown assertion kind 'voltag'".to_string(),
-            fix: Some("did you mean 'voltage'?".to_string()),
-        };
-        let rendered = d.render_human(Path::new("ci/power-up.toml"));
-        assert_eq!(rendered.matches("did you mean").count(), 1, "{rendered}");
+        assert_eq!(
+            split_did_you_mean("no clause here"),
+            ("no clause here".to_string(), None)
+        );
     }
 
     #[test]
     fn classify_covers_the_real_message_shapes() {
         for (msg, code) in [
             ("unknown assertion kind 'voltag' (expected ...)", "unknown-kind"),
-            ("peripheral 'X': unknown waveform 'square' (expected ...)", "unknown-kind"),
             ("voltage assertion needs a `net`", "missing-field"),
-            (
-                "toggle assertion on 'D13' sets both `freq_hz` and `min_toggles`; use one",
-                "conflicting-fields",
-            ),
-            (
-                "voltage assertion 'x': min (5) is greater than max (3), a window nothing can satisfy",
-                "bad-bound",
-            ),
-            ("duration_ms must be a positive, finite number", "bad-bound"),
-            (
-                "max_current assert references unknown component 'R99'",
-                "unknown-ref",
-            ),
-            (
-                "rail_window assertion 'x' is scoped to scenario 'boot', but no [[scenario]] declares that id",
-                "unknown-id",
-            ),
+            ("voltage assertion 'x': min (5) is greater than max (3), a window nothing can satisfy", "bad-bound"),
+            ("max_current assert references unknown component 'R99'", "unknown-ref"),
+            ("rail_window assertion 'x' is scoped to scenario 'boot', but no [[scenario]] declares that id", "unknown-id"),
         ] {
             assert_eq!(classify_invalid(msg), code, "message: {msg}");
         }

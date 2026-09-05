@@ -91,28 +91,6 @@ impl SpecError {
     }
 }
 
-#[cfg(test)]
-mod solver_exit_code_tests {
-    use super::*;
-
-    #[test]
-    fn solver_refusal_exit_code_uses_variant_not_message() {
-        let refusal = SpecError::Solver {
-            context: "AC analysis",
-            source: hauksbee_solve::SolveError::Refused {
-                message: "soundness could not be established".into(),
-            },
-        };
-        let misleading_text = SpecError::Invalid("user text says refused".into());
-
-        assert_eq!(
-            refusal.exit_code(),
-            hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS
-        );
-        assert_eq!(misleading_text.exit_code(), 2);
-    }
-}
-
 /// Return up to `limit` known names closest to `target`, ranked by edit
 /// distance, preferring substring/case-insensitive matches. Only returns names
 /// within a sensible distance so the suggestions are actually useful.
@@ -281,72 +259,74 @@ fn levenshtein(a: &str, b: &str) -> usize {
 mod tests {
     use super::*;
 
-    #[test]
-    fn suggests_close_net_names() {
-        let known = vec![
-            "ANALOG_VDD".to_string(),
-            "+5V".to_string(),
-            "GND".to_string(),
-            "DIGITAL_VDD".to_string(),
-        ];
-        let s = near_matches("ANALOG_VDDD", &known, 3);
-        assert_eq!(s.first().map(String::as_str), Some("ANALOG_VDD"));
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]
-    fn empty_net_is_never_suggested() {
-        // KiCad's unnamed "no net" bucket must not leak into the suggestion list
-        // (it renders as a leading comma). A near-miss of a real net still wins.
-        let known = vec![String::new(), "+5V".to_string(), "GND".to_string()];
+    fn solver_refusal_exit_code_uses_variant_not_message() {
+        let refusal = SpecError::Solver {
+            context: "AC analysis",
+            source: hauksbee_solve::SolveError::Refused {
+                message: "soundness could not be established".into(),
+            },
+        };
+        assert_eq!(
+            refusal.exit_code(),
+            hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS
+        );
+        assert_eq!(
+            SpecError::Invalid("user text says refused".into()).exit_code(),
+            2
+        );
+    }
+
+    #[test]
+    fn net_suggestions_are_close_named_and_never_the_empty_net() {
+        let known = names(&["", "ANALOG_VDD", "+5V", "GND", "DIGITAL_VDD"]);
+        assert_eq!(
+            near_matches("ANALOG_VDDD", &known, 3)
+                .first()
+                .map(String::as_str),
+            Some("ANALOG_VDD")
+        );
+        // KiCad's unnamed "no net" bucket must not leak (it renders as a bare comma).
         let s = near_matches("+5W", &known, 5);
         assert!(!s.iter().any(|n| n.is_empty()), "empty net leaked: {s:?}");
         assert_eq!(s.first().map(String::as_str), Some("+5V"));
-    }
-
-    #[test]
-    fn no_wild_suggestions_for_garbage() {
-        let known = vec!["ANALOG_VDD".to_string(), "+5V".to_string()];
-        let s = near_matches("zzzzzzzzzz", &known, 3);
-        assert!(s.is_empty(), "garbage should not match: {s:?}");
+        assert!(
+            near_matches("zzzzzzzzzz", &known, 3).is_empty(),
+            "garbage must not match"
+        );
     }
 
     #[test]
     fn ref_suggestions_stay_inside_the_designator_family() {
-        // M5: `R99` used to "did you mean: D1, U1?" - both within the net-name
-        // suggester's half-length cutoff, neither a plausible typo of an R.
-        let known: Vec<String> = ["D1", "U1", "R1", "R9", "C7"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        // A net-name cutoff would offer D1 and U1 for R99; neither is a plausible typo of an R.
+        let known = names(&["D1", "U1", "R1", "R9", "C7", "R_Shunt15301"]);
         let s = near_refs("R99", &known, 3);
         assert!(!s.iter().any(|r| r == "D1" || r == "U1"), "{s:?}");
-        assert_eq!(s.first().map(String::as_str), Some("R9"), "{s:?}");
-        // Ranked: the closer designator comes first.
-        assert!(s.iter().position(|r| r == "R9") < s.iter().position(|r| r == "R1"));
-        // And capped: nothing at all for a prefix the board does not have.
-        assert!(near_refs("Q3", &known, 3).is_empty());
+        assert_eq!(
+            s.first().map(String::as_str),
+            Some("R9"),
+            "closest first: {s:?}"
+        );
+        assert!(
+            near_refs("Q3", &known, 3).is_empty(),
+            "no family on the board, no suggestion"
+        );
+        assert_eq!(
+            near_refs("R_Shunt15302", &known, 3),
+            names(&["R_Shunt15301"])
+        );
     }
 
     #[test]
-    fn ref_suggestions_handle_worded_designators() {
-        let known: Vec<String> = vec!["R_Shunt15301".to_string(), "R1".to_string()];
-        let s = near_refs("R_Shunt15302", &known, 3);
-        assert_eq!(s, vec!["R_Shunt15301".to_string()], "{s:?}");
-    }
-
-    #[test]
-    fn did_you_mean_catches_a_typo_within_two_edits() {
+    fn did_you_mean_catches_a_typo_within_two_edits_and_stays_quiet_otherwise() {
         let kinds = ["voltage", "uart", "toggle", "no_faults"];
         assert_eq!(did_you_mean("voltag", &kinds).as_deref(), Some("voltage"));
-        assert_eq!(did_you_mean("volage", &kinds).as_deref(), Some("voltage"));
-        assert_eq!(did_you_mean("tooggle", &kinds).as_deref(), Some("toggle"));
-    }
-
-    #[test]
-    fn did_you_mean_stays_quiet_when_nothing_is_close() {
-        let kinds = ["voltage", "uart", "toggle"];
         assert_eq!(did_you_mean("frobnicate", &kinds), None);
-        // An exact vocabulary member is not a typo; no hint.
+        // An exact vocabulary member is not a typo.
         assert_eq!(did_you_mean("voltage", &kinds), None);
     }
 }

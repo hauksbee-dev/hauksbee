@@ -163,61 +163,52 @@ mod tests {
     use super::*;
 
     /// Drive the meter as a loop would: each tick advances `tick_s` of wall
-    /// time, the engine produces `sim_dt` sim seconds at `cost` wall seconds
-    /// per sim second.
-    fn drive(meter: &mut RateMeter, ticks: usize, tick_s: f64, sim_dt: f64, cost: f64) -> f64 {
-        let mut wall = 0.0;
-        let mut sim_t = 0.0;
+    /// time from `wall0`, the engine produces `sim_dt` sim seconds at `cost`
+    /// wall seconds per sim second.
+    fn drive(meter: &mut RateMeter, wall0: f64, ticks: usize, tick_s: f64, sim_dt: f64, cost: f64) {
+        let (mut wall, mut sim_t) = (wall0, 0.0);
         for _ in 0..ticks {
             wall += tick_s;
             sim_t += sim_dt;
             meter.record(wall, sim_t, sim_dt * cost, sim_dt);
         }
-        sim_t
     }
 
     #[test]
-    fn empty_meter_claims_no_rate() {
-        let meter = RateMeter::new();
-        assert!(meter.achieved().is_none());
-        // With nothing measured, the request passes through uncapped.
-        assert_eq!(meter.paced_factor(1.0), (1.0, false));
-    }
-
-    #[test]
-    fn achieved_tracks_a_known_slow_loop_within_tolerance() {
-        // Engine costs 5 wall seconds per sim second; the loop ends up
-        // delivering 0.2 sim seconds per wall second at full duty. Ticks of
-        // 100 ms wall each advance 20 ms of sim time.
+    fn empty_meter_claims_no_rate_and_a_cheap_engine_is_not_capped() {
         let mut meter = RateMeter::new();
-        drive(&mut meter, 50, 0.1, 0.02, 5.0);
+        assert!(meter.achieved().is_none());
+        assert_eq!(
+            meter.paced_factor(1.0),
+            (1.0, false),
+            "nothing measured: uncapped"
+        );
+        // Cost 0.1 wall s per sim s => ceiling 9x; a 2x request passes.
+        drive(&mut meter, 0.0, 40, 0.1, 0.2, 0.1);
+        assert_eq!(meter.paced_factor(2.0), (2.0, false));
+    }
+
+    #[test]
+    fn achieved_tracks_a_slow_loop_and_the_cap_engages_at_the_measured_ceiling() {
+        // Cost 5 wall s per sim s at full duty: 0.2 sim s per wall s.
+        let mut meter = RateMeter::new();
+        drive(&mut meter, 0.0, 50, 0.1, 0.02, 5.0);
         let achieved = meter.achieved().expect("measured");
         assert!(
             (achieved - 0.2).abs() < 0.02,
             "achieved {achieved} should be ~0.2"
         );
-    }
 
-    #[test]
-    fn achieved_is_below_requested_when_the_engine_cannot_keep_up() {
-        // Requested 1.0x but the engine only advances 10 sim ms per 100 ms of
-        // wall time: achieved must report ~0.1, never the requested 1.0.
+        // Requested 1.0x but only 10 sim ms per 100 ms of wall: achieved must
+        // report ~0.1, never the request, and the paced factor lands at the
+        // ceiling less headroom, flagged as limited.
         let mut meter = RateMeter::new();
-        drive(&mut meter, 40, 0.1, 0.01, 10.0);
+        drive(&mut meter, 0.0, 40, 0.1, 0.01, 10.0);
         let achieved = meter.achieved().expect("measured");
         assert!(
-            achieved < 0.15,
-            "achieved {achieved} must be well under 1.0"
+            (0.05..0.15).contains(&achieved),
+            "achieved {achieved} should be ~0.1"
         );
-        assert!(achieved > 0.05, "achieved {achieved} should be ~0.1");
-    }
-
-    #[test]
-    fn cap_engages_at_the_measured_ceiling() {
-        // Cost 10 wall s per sim s => sustainable 0.1x; with headroom the
-        // paced factor lands at 0.09, flagged as limited.
-        let mut meter = RateMeter::new();
-        drive(&mut meter, 40, 0.1, 0.01, 10.0);
         let (paced, limited) = meter.paced_factor(1.0);
         assert!(limited);
         assert!(
@@ -228,30 +219,13 @@ mod tests {
     }
 
     #[test]
-    fn cheap_engine_is_not_capped() {
-        // Cost 0.1 wall s per sim s => ceiling 9x; a 2x request passes.
-        let mut meter = RateMeter::new();
-        drive(&mut meter, 40, 0.1, 0.2, 0.1);
-        let (paced, limited) = meter.paced_factor(2.0);
-        assert!(!limited);
-        assert_eq!(paced, 2.0);
-    }
-
-    #[test]
     fn window_recovers_after_a_transient_stall() {
         let mut meter = RateMeter::new();
-        // 3 seconds of slow stepping...
-        drive(&mut meter, 30, 0.1, 0.01, 10.0);
-        // ...then the meter is cleared (pause) and fast stepping resumes on a
-        // fresh wall axis; the old samples must not drag the estimate down.
+        drive(&mut meter, 0.0, 30, 0.1, 0.01, 10.0);
+        // Cleared (a pause), then fast stepping resumes on a fresh wall axis:
+        // the old samples must not drag the estimate down.
         meter.clear();
-        let mut wall = 100.0;
-        let mut sim_t = 0.0;
-        for _ in 0..30 {
-            wall += 0.1;
-            sim_t += 0.1;
-            meter.record(wall, sim_t, 0.01, 0.1);
-        }
+        drive(&mut meter, 100.0, 30, 0.1, 0.1, 0.1);
         let achieved = meter.achieved().expect("measured");
         assert!(
             (achieved - 1.0).abs() < 0.05,

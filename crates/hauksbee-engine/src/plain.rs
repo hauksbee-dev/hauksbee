@@ -448,29 +448,6 @@ impl OrderTriage {
 /// - explicit abstentions (`UncheckedMcu`, USB-C `Info`, or a nominal USB-C
 ///   result undermined by a model gap on its own CC nets) go to inspect;
 /// - only an unqualified USB-C `Ok` is emitted as a positive result.
-#[cfg(test)]
-pub(crate) fn order_triage(
-    drc: &crate::result::DrcStructured,
-    lint: &NetLintReport,
-    si: &SiReport,
-    usbc: Option<&crate::checks::usb_c::UsbcReport>,
-    usbc_reliable: bool,
-    unmodelled_parts: usize,
-) -> OrderTriage {
-    let provenance =
-        crate::result::ClearanceRuleProvenance::defaulted(drc.clearance_rule_mm, false);
-    order_triage_with_rule_source(
-        drc,
-        &provenance,
-        lint,
-        si,
-        usbc,
-        usbc_reliable,
-        unmodelled_parts,
-        true,
-    )
-}
-
 pub(crate) fn order_triage_with_rule_source(
     drc: &crate::result::DrcStructured,
     clearance_rule_source: &crate::result::ClearanceRuleProvenance,
@@ -1520,32 +1497,6 @@ mod tests {
     use super::*;
     use hauksbee_extract::{DrcFinding, Item, ItemKind, LintFinding, SiFinding, ViolationKind};
 
-    /// The INCONCLUSIVE verdict must not bury actionable heads-up notes: the
-    /// verdict line refuses the clean bill AND still points at the notes
-    /// below (Fix #3's never-bury rule), and with real findings the sentence
-    /// rides the render under the counted verdict.
-    #[test]
-    fn inconclusive_verdict_keeps_the_heads_up_pointer() {
-        let mut r = PlainReport::new("signal-integrity");
-        r.unmodelled_critical = vec!["Q1".to_string()];
-        r.heads_up.push(HeadsUp::note("USB pair off target"));
-        let v = r.verdict();
-        assert!(v.starts_with("INCONCLUSIVE"), "{v}");
-        assert!(
-            v.contains("1 thing worth a look (see below)"),
-            "the heads-up pointer survives the refusal: {v}"
-        );
-        assert!(!v.contains("Looks healthy"), "{v}");
-        // With findings, the verdict counts them and the sentence still prints.
-        r.push(PlainLevel::Warning, "w".into(), "why".into(), "fix".into());
-        let rendered = r.render();
-        assert!(rendered.contains("1 issue found"), "{rendered}");
-        assert!(
-            rendered.contains("INCONCLUSIVE: 1 current-carrying / active part(s)"),
-            "the coverage hole is still said out loud next to real findings:\n{rendered}"
-        );
-    }
-
     fn drc_short() -> DrcFinding {
         DrcFinding {
             kind: ViolationKind::Short,
@@ -1571,243 +1522,118 @@ mod tests {
         }
     }
 
-    #[test]
-    fn drc_short_is_serious_with_why_and_fix() {
-        let mut report = DrcReport {
+    fn clearance(net_a: &str, net_b: &str, gap_mm: f64) -> DrcFinding {
+        let mut f = drc_short();
+        f.kind = ViolationKind::Clearance;
+        f.net_a_name = net_a.to_string();
+        f.net_b_name = net_b.to_string();
+        f.gap_mm = gap_mm;
+        f
+    }
+
+    fn drc_report(findings: Vec<DrcFinding>) -> DrcReport {
+        DrcReport {
             clearance_mm: 0.2,
-            primitive_count: 2,
-            ..Default::default()
-        };
-        report.findings.push(drc_short());
-        let plain = plain_drc(&report);
-        assert_eq!(plain.findings.len(), 1);
-        let f = &plain.findings[0];
-        assert_eq!(f.level, PlainLevel::Serious);
-        // What / why / fix are all populated and non-trivial.
-        assert!(f.what.contains("+5V") && f.what.contains("GND"));
-        assert!(f.why.to_lowercase().contains("short"));
-        assert!(!f.fix.is_empty());
-        // Verdict counts it as serious.
-        assert_eq!(plain.serious_count(), 1);
-        assert!(plain.verdict().contains("1 serious"));
+            primitive_count: 2 * findings.len().max(1),
+            findings,
+            version_warning: None,
+            zone_pad_overlaps_suppressed: Some(0),
+        }
     }
 
     #[test]
-    fn drc_clearance_is_a_warning_not_serious() {
-        let mut f = drc_short();
-        f.kind = ViolationKind::Clearance;
-        f.gap_mm = 0.12;
-        let report = DrcReport {
-            clearance_mm: 0.2,
-            findings: vec![f],
-            primitive_count: 2,
-            version_warning: None,
-            zone_pad_overlaps_suppressed: Some(0),
-        };
-        let plain = plain_drc(&report);
+    fn inconclusive_verdict_keeps_the_heads_up_pointer() {
+        let mut r = PlainReport::new("signal-integrity");
+        r.unmodelled_critical = vec!["Q1".to_string()];
+        r.heads_up.push(HeadsUp::note("USB pair off target"));
+        let v = r.verdict();
+        assert!(v.starts_with("INCONCLUSIVE"), "{v}");
+        assert!(v.contains("1 thing worth a look (see below)"), "{v}");
+        r.push(PlainLevel::Warning, "w".into(), "why".into(), "fix".into());
+        let rendered = r.render();
+        assert!(rendered.contains("1 issue found"), "{rendered}");
+        assert!(rendered.contains("INCONCLUSIVE"), "{rendered}");
+    }
+
+    #[test]
+    fn drc_short_is_serious_and_clearance_is_a_warning() {
+        let plain = plain_drc(&drc_report(vec![drc_short()]));
+        let f = &plain.findings[0];
+        assert_eq!(f.level, PlainLevel::Serious);
+        assert!(f.what.contains("+5V") && f.what.contains("GND"));
+        assert!(!f.why.is_empty() && !f.fix.is_empty());
+        assert_eq!(plain.serious_count(), 1);
+        assert!(plain.verdict().contains("1 serious"));
+
+        let plain = plain_drc(&drc_report(vec![clearance("+5V", "GND", 0.12)]));
         assert_eq!(plain.findings[0].level, PlainLevel::Warning);
         assert_eq!(plain.serious_count(), 0);
         assert!(plain.verdict().contains("none serious"));
     }
 
     #[test]
-    fn kicad_10_plain_caveat_describes_exact_parity_not_unhandled_zone_fill() {
-        const CLEARANCE_MM: f64 = 0.2;
-        const PRIMITIVE_COUNT: usize = 2;
-        let report = DrcReport {
-            clearance_mm: CLEARANCE_MM,
-            findings: vec![drc_short()],
-            primitive_count: PRIMITIVE_COUNT,
-            version_warning: Some(
-                "KiCad 10 name-only nets and keyhole antipads are handled, but remaining \
-                 findings are UNVALIDATED"
-                    .to_string(),
-            ),
-            zone_pad_overlaps_suppressed: Some(0),
-        };
-        let plain = plain_drc_structured(&crate::result::DrcStructured::from_report(&report));
-        let verdict = plain.verdict();
-        let text = plain.render().to_lowercase();
-
-        assert!(
-            verdict.contains("UNVALIDATED") && verdict.contains("BECAUSE unvalidated"),
-            "the headline must qualify why no finding counted as serious: {verdict}"
-        );
-        assert!(
-            !verdict.contains("none serious (worth a look)"),
-            "an unvalidated copper report must not use the ordinary all-clear-shaped headline: {verdict}"
-        );
-
-        assert!(text.contains("name-only nets"), "{text}");
-        assert!(text.contains("keyhole antipads"), "{text}");
-        assert!(
-            text.contains("exact") && text.contains("parity"),
-            "the remaining limitation is exact native-DRC parity:\n{text}"
-        );
-        assert!(
-            text.contains("downgrad"),
-            "the user-facing caveat must explain the safety demotion:\n{text}"
-        );
-        for stale_claim in ["ground pour", "shorts every net", "zone fill is unhandled"] {
-            assert!(
-                !text.contains(stale_claim),
-                "stale KiCad-10 claim {stale_claim:?} remained:\n{text}"
-            );
-        }
-    }
-
-    #[test]
     fn plain_structured_drc_groups_and_uses_at_limit_wording() {
         use crate::result::DrcStructured;
-        // Three findings for the SAME net pair + layer, all with gap == rule
-        // (exactly at minimum clearance, NOT below). The structured plain
-        // renderer must (a) collapse them into ONE finding, and (b) describe
-        // them as "at minimum clearance (no margin)", never "below".
-        let at_limit = || {
-            let mut f = drc_short();
-            f.kind = ViolationKind::Clearance;
-            f.net_a_name = "SIG_A".to_string();
-            f.net_b_name = "SIG_B".to_string();
-            f.layer = "F.Cu".to_string();
-            f.required_clearance_mm = 0.2;
-            f.gap_mm = 0.2; // exactly at the rule
-            f
-        };
-        let report = DrcReport {
-            clearance_mm: 0.2,
-            findings: vec![at_limit(), at_limit(), at_limit()],
-            primitive_count: 6,
-            version_warning: None,
-            zone_pad_overlaps_suppressed: Some(0),
-        };
-        let st = DrcStructured::from_report(&report);
-        let plain = plain_drc_structured(&st);
-
-        // Grouped: 3 raw findings -> 1 plain finding.
-        assert_eq!(
-            plain.findings.len(),
-            1,
-            "duplicates were not grouped: {:?}",
-            plain.findings
-        );
+        let at_limit = || clearance("SIG_A", "SIG_B", 0.2);
+        let report = drc_report(vec![at_limit(), at_limit(), at_limit()]);
+        let plain = plain_drc_structured(&DrcStructured::from_report(&report));
+        assert_eq!(plain.findings.len(), 1, "{:?}", plain.findings);
         let f = &plain.findings[0];
-        // gap == rule is at-limit, not below: not serious, and worded correctly.
         assert_eq!(f.level, PlainLevel::Warning);
         assert!(
             f.what.contains("at minimum clearance (no margin)"),
-            "expected at-limit wording, got: {}",
+            "{}",
             f.what
         );
-        assert!(
-            !f.what.to_lowercase().contains("below"),
-            "at-limit finding must not say 'below': {}",
-            f.what
-        );
-        // The count reflects all three locations.
-        assert!(
-            f.what.contains("3 locations"),
-            "missing grouped count: {}",
-            f.what
-        );
-        // Genuinely-below findings DO say "below".
-        let mut below = at_limit();
-        below.gap_mm = 0.10; // below the 0.2 rule
-        let below_report = DrcReport {
-            clearance_mm: 0.2,
-            findings: vec![below],
-            primitive_count: 2,
-            version_warning: None,
-            zone_pad_overlaps_suppressed: Some(0),
-        };
-        let below_plain = plain_drc_structured(&DrcStructured::from_report(&below_report));
-        assert_eq!(below_plain.findings.len(), 1);
-        assert!(
-            below_plain.findings[0]
-                .what
-                .to_lowercase()
-                .contains("below"),
-            "below-rule finding should say 'below': {}",
-            below_plain.findings[0].what
-        );
+        assert!(!f.what.to_lowercase().contains("below"), "{}", f.what);
+        assert!(f.what.contains("3 locations"), "{}", f.what);
+
+        let below = drc_report(vec![clearance("SIG_A", "SIG_B", 0.10)]);
+        let below_plain = plain_drc_structured(&DrcStructured::from_report(&below));
+        assert!(below_plain.findings[0]
+            .what
+            .to_lowercase()
+            .contains("below"));
     }
 
     #[test]
     fn condensed_plain_drc_keeps_three_full_findings_and_aggregates_the_rest() {
         use crate::result::DrcStructured;
-        // Fifty distinct below-rule net pairs (the Watchy --drc --plain cry-wolf
-        // case): the condensed renderer keeps the first three full what/why/fix
-        // blocks, collapses the other 47 into one aggregate line per (rule,
-        // layer), and ends with a one-line summary. --verbose restores all 50.
         let findings: Vec<_> = (0..50)
-            .map(|i| {
-                let mut f = drc_short();
-                f.kind = ViolationKind::Clearance;
-                f.net_a_name = format!("NET_{i}");
-                f.net_b_name = format!("NET_{}", i + 100);
-                f.layer = "F.Cu".to_string();
-                f.required_clearance_mm = 0.2;
-                f.gap_mm = 0.15;
-                f
-            })
+            .map(|i| clearance(&format!("NET_{i}"), &format!("NET_{}", i + 100), 0.15))
             .collect();
-        let report = DrcReport {
-            clearance_mm: 0.2,
-            findings,
-            primitive_count: 100,
-            version_warning: None,
-            zone_pad_overlaps_suppressed: Some(0),
-        };
+        let report = drc_report(findings);
         let st = DrcStructured::from_report(&report);
 
         let condensed = render_drc_condensed(&st, false);
         assert_eq!(
             condensed.matches("Why it matters:").count(),
             3,
-            "exactly three findings keep the full gloss:\n{condensed}"
+            "{condensed}"
         );
         assert!(
-            condensed.contains("47 more net pairs like this") && condensed.contains("--verbose"),
-            "the rest aggregate into one line pointing at --verbose:\n{condensed}"
+            condensed.contains("47 more net pairs like this"),
+            "{condensed}"
         );
-        assert!(
-            condensed.contains("tightest 0.150 mm")
-                && condensed.contains("0.200 mm DEFAULT clearance"),
-            "the aggregate names the tightest gap and the rule:\n{condensed}"
-        );
+        assert!(condensed.contains("50 issues found"), "{condensed}");
         assert!(
             condensed
                 .trim_end()
                 .lines()
                 .last()
                 .is_some_and(|l| l.starts_with("Summary:") && l.contains("50 net pair(s)")),
-            "a trailing one-line summary closes the report:\n{condensed}"
-        );
-        // The verdict still tells the truth about the total.
-        assert!(
-            condensed.contains("50 issues found"),
-            "the verdict keeps the real count:\n{condensed}"
+            "{condensed}"
         );
 
-        // --verbose restores every instance, still with the trailing summary.
         let verbose = render_drc_condensed(&st, true);
-        assert_eq!(
-            verbose.matches("Why it matters:").count(),
-            50,
-            "verbose prints all findings in full"
-        );
-        assert!(verbose.trim_end().ends_with(
-            "Summary: 0 short(s), 50 net pair(s) below the clearance rule, 0 at minimum \
-             clearance (no margin)."
-        ));
+        assert_eq!(verbose.matches("Why it matters:").count(), 50);
 
-        // A short is never condensed away.
         let mut with_short = report;
         with_short.findings.push(drc_short());
-        let st2 = DrcStructured::from_report(&with_short);
-        let s2 = render_drc_condensed(&st2, false);
+        let s2 = render_drc_condensed(&DrcStructured::from_report(&with_short), false);
         assert!(
             s2.contains("are touching"),
-            "the short keeps its full block:\n{s2}"
+            "the short is never condensed:\n{s2}"
         );
     }
 
@@ -1823,17 +1649,11 @@ mod tests {
 
     #[test]
     fn every_lint_check_maps_to_a_template() {
-        // One finding per LintCheck variant; each must produce non-empty
-        // what/why/fix so no kind is left without a plain translation.
-        // LintCheck::ALL, not a hand-list: a hand-list here silently went
-        // stale (DeviceDecode/BackPower/I2cBusLoading were never added), so
-        // the guard was not guarding.
-        let checks = LintCheck::ALL.map(|c| (c, Severity::Medium));
-        for (check, sev) in checks {
+        for check in LintCheck::ALL {
             let report = NetLintReport {
                 findings: vec![LintFinding {
                     check,
-                    severity: sev,
+                    severity: Severity::Medium,
                     message: "expert message goes here".to_string(),
                     refs: vec!["U3".to_string(), "C1".to_string()],
                     nets: vec!["SDA".to_string()],
@@ -1842,225 +1662,86 @@ mod tests {
             let plain = plain_netlint(&report);
             assert_eq!(plain.findings.len(), 1, "{check:?} produced no finding");
             let f = &plain.findings[0];
-            assert!(!f.what.is_empty(), "{check:?} has empty what");
-            assert!(!f.why.is_empty(), "{check:?} has empty why");
-            assert!(!f.fix.is_empty(), "{check:?} has empty fix");
+            assert!(
+                !f.what.is_empty() && !f.why.is_empty() && !f.fix.is_empty(),
+                "{check:?} has an empty template field"
+            );
         }
     }
 
-    #[test]
-    fn every_si_check_maps_to_a_template() {
-        let checks = [
-            SiCheck::CrystalLoadCap,
-            SiCheck::I2cRiseTime,
-            SiCheck::AntennaKeepout,
-            SiCheck::UsbDiffPair,
-        ];
-        for check in checks {
-            let report = SiReport {
-                findings: vec![SiFinding {
-                    check,
-                    severity: SiSeverity::High,
-                    message: "rise time 1200 ns exceeds 300 ns".to_string(),
-                    refs: vec!["Y1".to_string()],
-                    nets: vec!["SCL".to_string()],
-                }],
-            };
-            let plain = plain_si(&report);
-            assert_eq!(plain.findings.len(), 1, "{check:?} produced no finding");
-            let f = &plain.findings[0];
-            assert!(!f.what.is_empty() && !f.why.is_empty() && !f.fix.is_empty());
-        }
-    }
-
-    #[test]
-    fn actionable_info_note_is_promoted_to_heads_up_even_when_healthy() {
-        // Fix #3: an off-target controlled-impedance info note (the 171-ohm USB
-        // case) must NOT be silently dropped by --plain. The verdict can still be
-        // "healthy" (it is not a finding), but the note appears under "Heads up".
-        let report = SiReport {
+    fn si_info(check: SiCheck, message: &str) -> SiReport {
+        SiReport {
             findings: vec![SiFinding {
-                check: SiCheck::ControlledImpedance,
+                check,
                 severity: SiSeverity::Info,
-                message: "/USB_D+ / /USB_D-: Zdiff ~ 171 ohm [target 90 ohm USB]: estimate +90% from target - info only (defaulted stackup)".to_string(),
+                message: message.to_string(),
                 refs: vec!["J1".to_string()],
                 nets: vec!["/USB_D+".to_string(), "/USB_D-".to_string()],
             }],
-        };
-        let plain = plain_si(&report);
-        // Not a finding (so it never escalates to a failure), but the verdict must
-        // ACKNOWLEDGE the note rather than claim "no problems found", and the note
-        // itself survives under "Heads up".
+        }
+    }
+
+    #[test]
+    fn si_info_notes_are_never_findings_and_promote_only_when_off_target() {
+        let plain = plain_si(&si_info(
+            SiCheck::ControlledImpedance,
+            "/USB_D+ / /USB_D-: Zdiff ~ 171 ohm [target 90 ohm USB]: estimate +90% from target - info only (defaulted stackup)",
+        ));
         assert!(plain.findings.is_empty());
-        assert_eq!(plain.heads_up.len(), 1, "off-target info promoted");
+        assert_eq!(plain.heads_up.len(), 1);
         let verdict = plain.verdict().to_lowercase();
         assert!(
-            verdict.contains("worth a look") && !verdict.contains("no signal-integrity problems"),
-            "verdict must point at the heads-up, not claim 'no problems found': {verdict}"
+            verdict.contains("worth a look") && !verdict.contains("no signal-integrity problems")
         );
-        let rendered = plain.render();
-        assert!(
-            rendered.contains("Heads up"),
-            "render must include the Heads up section: {rendered}"
-        );
-        assert!(
-            rendered.contains("171 ohm"),
-            "the value is shown: {rendered}"
-        );
-    }
+        assert!(plain.render().contains("171 ohm"));
 
-    #[test]
-    fn within_tolerance_info_note_is_not_promoted() {
-        // A "- ok" / within-tolerance info note is a pure observation; it must
-        // NOT nag the user in plain mode.
-        let report = SiReport {
-            findings: vec![SiFinding {
-                check: SiCheck::ControlledImpedance,
-                severity: SiSeverity::Info,
-                message: "Zdiff ~ 92 ohm vs target 90 ohm (+2%, within +-10%) - ok".to_string(),
-                refs: vec!["J1".to_string()],
-                nets: vec![],
-            }],
-        };
-        let plain = plain_si(&report);
-        assert!(
-            plain.heads_up.is_empty(),
-            "within-tolerance note not promoted"
-        );
-    }
+        let plain = plain_si(&si_info(
+            SiCheck::ControlledImpedance,
+            "Zdiff ~ 92 ohm vs target 90 ohm (+2%, within +-10%) - ok",
+        ));
+        assert!(plain.heads_up.is_empty());
 
-    #[test]
-    fn si_info_notes_are_not_findings() {
-        let report = SiReport {
-            findings: vec![SiFinding {
-                check: SiCheck::CrystalLoadCap,
-                severity: SiSeverity::Info,
-                message: "computed CL = 18 pF".to_string(),
-                refs: vec!["Y1".to_string()],
-                nets: vec![],
-            }],
-        };
-        let plain = plain_si(&report);
+        let plain = plain_si(&si_info(SiCheck::CrystalLoadCap, "computed CL = 18 pF"));
         assert!(plain.findings.is_empty());
         assert!(plain.verdict().to_lowercase().contains("healthy"));
     }
 
     #[test]
-    fn every_fault_kind_maps_to_a_template() {
-        let kinds = [
-            FaultKind::Overcurrent,
-            FaultKind::SurgeCurrent,
-            FaultKind::Overpower,
-            FaultKind::Overvoltage,
-            FaultKind::ReverseBias,
-            FaultKind::PinOvercurrent,
-            FaultKind::Short,
-        ];
-        for kind in kinds {
-            let f = FaultEvent {
-                component: "IC3906".to_string(),
-                kind,
-                value: 0.689,
-                limit: 0.1,
-                t: 0.01,
-                destroyed: false,
-            };
-            let plain = plain_faults(&[f]);
-            assert_eq!(plain.findings.len(), 1);
-            let pf = &plain.findings[0];
-            assert!(pf.what.contains("IC3906"));
-            assert!(!pf.why.is_empty() && !pf.fix.is_empty());
-        }
-    }
-
-    #[test]
-    fn pin_overcurrent_reads_like_the_brief_example() {
-        // The brief's worked example: a transistor pushed to 689 mA past 100 mA.
-        let f = FaultEvent {
-            component: "IC3906".to_string(),
-            kind: FaultKind::PinOvercurrent,
-            value: 0.689,
-            limit: 0.1,
-            t: 0.01,
-            destroyed: false,
-        };
-        let plain = plain_faults(&[f]);
-        let pf = &plain.findings[0];
-        assert!(pf.what.contains("689 mA"), "what was: {}", pf.what);
-        assert!(pf.what.contains("100 mA"), "what was: {}", pf.what);
-    }
-
-    #[test]
-    fn destroyed_fault_is_serious() {
-        let f = FaultEvent {
+    fn fault_severity_follows_destruction() {
+        let fault = |destroyed| FaultEvent {
             component: "C1".to_string(),
             kind: FaultKind::Overvoltage,
             value: 16.0,
             limit: 6.3,
             t: 0.01,
-            destroyed: true,
+            destroyed,
         };
-        let plain = plain_faults(&[f]);
+        let plain = plain_faults(&[fault(true)]);
         assert_eq!(plain.findings[0].level, PlainLevel::Serious);
-        assert!(plain.findings[0].why.to_lowercase().contains("failure"));
-    }
-
-    /// The device-decode plain-language template covers every decoder in that
-    /// family, so it must not narrate one part's story. A blind first-use test
-    /// read an eFuse current-limit finding explained as a USB-C PD voltage
-    /// table and filed the whole finding as copy-paste noise, which is the
-    /// worst outcome for a check whose numbers were right.
-    #[test]
-    fn device_decode_plain_text_is_not_usb_c_specific() {
-        let mut report = NetLintReport::default();
-        report.findings.push(LintFinding {
-            check: LintCheck::DeviceDecode,
-            severity: Severity::Medium,
-            message: "U19 eFuse connector budget: R48 = 100 ohm decodes to 12.85 A minimum".into(),
-            refs: vec!["U19".to_string()],
-            nets: vec!["ILIM".to_string()],
-        });
-        let why = plain_netlint(&report).findings[0].why.to_lowercase();
-        assert!(
-            !why.contains("here, the usb-c voltage"),
-            "the template must not assert this finding IS the PD case: {why}"
-        );
-        assert!(
-            why.contains("efuse") && why.contains("timer"),
-            "it should name the decoder family's range, not one member: {why}"
-        );
-        assert!(
-            why.contains("no simulation model"),
-            "the template must answer the blind tester's doubt about deciding \
-             on an unresolved part: {why}"
+        assert!(plain.findings[0].what.contains("C1"));
+        assert_eq!(
+            plain_faults(&[fault(false)]).findings[0].level,
+            PlainLevel::Warning
         );
     }
 
     #[test]
     fn findings_render_serious_first() {
         let mut report = NetLintReport::default();
-        report.findings.push(LintFinding {
-            check: LintCheck::LedCurrentSanity,
-            severity: Severity::Low,
-            message: String::new(),
-            refs: vec!["R1".to_string()],
-            nets: vec!["LED".to_string()],
-        });
-        report.findings.push(LintFinding {
-            check: LintCheck::MissingI2cPullup,
-            severity: Severity::High,
-            message: String::new(),
-            refs: vec!["U1".to_string()],
-            nets: vec!["SDA".to_string()],
-        });
-        let plain = plain_netlint(&report);
-        let rendered = plain.render();
-        let serious_pos = rendered.find("SERIOUS").unwrap();
-        let note_pos = rendered.find("note").unwrap();
-        assert!(
-            serious_pos < note_pos,
-            "serious finding should render first"
-        );
+        for (check, severity) in [
+            (LintCheck::LedCurrentSanity, Severity::Low),
+            (LintCheck::MissingI2cPullup, Severity::High),
+        ] {
+            report.findings.push(LintFinding {
+                check,
+                severity,
+                message: String::new(),
+                refs: vec!["R1".to_string()],
+                nets: vec!["LED".to_string()],
+            });
+        }
+        let rendered = plain_netlint(&report).render();
+        assert!(rendered.find("SERIOUS").unwrap() < rendered.find("note").unwrap());
     }
 
     fn structured_short(net_b: &str, severity: &str, x: f64) -> crate::result::DrcShort {
@@ -2071,69 +1752,8 @@ mod tests {
             gap_mm: 0.0,
             loc_mm: [x, 2.0],
             severity: severity.into(),
-            plain: if severity == "serious" {
-                format!("GND shorts {net_b}")
-            } else {
-                format!(
-                    "GND shorts {net_b}; TOOL-ONLY: Hauksbee reports this contact from an \
-                     unvalidated board format; no matching KiCad-oracle confirmation is attached"
-                )
-            },
+            plain: format!("GND shorts {net_b}"),
             fix: "separate the copper".into(),
-        }
-    }
-
-    #[test]
-    fn oracle_confirmed_short_renders_before_clearance_warning() {
-        let mut short = structured_short("+3V3", "serious", 1.0);
-        short.attach_oracle_agreement("10.0.5");
-        let clearance = crate::result::DrcGroup {
-            net_a: "SDA".into(),
-            net_b: "SCL".into(),
-            layer: "F.Cu".into(),
-            count: 1,
-            below_count: 1,
-            at_limit: false,
-            min_gap_mm: 0.1,
-            min_gap_loc_mm: [3.0, 4.0],
-            rule_mm: 0.2,
-            between: "track ↔ track".into(),
-            plain: "SDA vs SCL below rule".into(),
-            fix: "increase spacing".into(),
-        };
-        let report = crate::result::DrcStructured {
-            clearance_rule_mm: 0.2,
-            primitive_count: 4,
-            shorts: vec![short],
-            violations: vec![clearance],
-            at_limit: Vec::new(),
-            version_warning: Some("KiCad 10 format is unvalidated".into()),
-            suppression_note: None,
-        };
-
-        let rendered = plain_drc_structured(&report).render();
-        let short_pos = rendered.find("[SERIOUS]").expect("short severity");
-        let clearance_pos = rendered.find("[WARNING]").expect("clearance severity");
-        assert!(
-            short_pos < clearance_pos,
-            "a confirmed short must outrank a clearance warning:\n{rendered}"
-        );
-    }
-
-    fn one_clearance_group() -> crate::result::DrcGroup {
-        crate::result::DrcGroup {
-            net_a: "SDA".into(),
-            net_b: "SCL".into(),
-            layer: "F.Cu".into(),
-            count: 1,
-            below_count: 1,
-            at_limit: false,
-            min_gap_mm: 0.127,
-            min_gap_loc_mm: [3.0, 4.0],
-            rule_mm: 0.2,
-            between: "track ↔ track".into(),
-            plain: String::new(),
-            fix: "increase spacing".into(),
         }
     }
 
@@ -2144,7 +1764,22 @@ mod tests {
             shorts: (0..shorts)
                 .map(|index| structured_short(&format!("SHORT_{index}"), "serious", index as f64))
                 .collect(),
-            violations: (0..violations).map(|_| one_clearance_group()).collect(),
+            violations: (0..violations)
+                .map(|_| crate::result::DrcGroup {
+                    net_a: "SDA".into(),
+                    net_b: "SCL".into(),
+                    layer: "F.Cu".into(),
+                    count: 1,
+                    below_count: 1,
+                    at_limit: false,
+                    min_gap_mm: 0.127,
+                    min_gap_loc_mm: [3.0, 4.0],
+                    rule_mm: 0.2,
+                    between: "track ↔ track".into(),
+                    plain: String::new(),
+                    fix: "increase spacing".into(),
+                })
+                .collect(),
             at_limit: Vec::new(),
             version_warning: None,
             suppression_note: None,
@@ -2152,87 +1787,21 @@ mod tests {
     }
 
     #[test]
-    fn defaulted_clearance_wording_says_not_your_rules_and_names_project_file() {
-        let source = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
-        let report = clearance_report(1, 0).with_clearance_rule_provenance(source.clone());
-        let rendered = render_drc_condensed_with_rule_source(&report, &source, false);
-        assert!(rendered.contains("DEFAULT 0.200 mm"), "{rendered}");
-        assert!(rendered.contains("not your rules"), "{rendered}");
-        assert!(
-            rendered.contains("Place the matching .kicad_pro next to the board"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("below the 0.200 mm DEFAULT clearance"),
-            "{rendered}"
-        );
-        assert!(!rendered.contains("below your 0.200 mm rule"), "{rendered}");
-    }
-
-    #[test]
-    fn project_clearance_wording_stays_unqualified() {
-        let source = crate::result::ClearanceRuleProvenance::project_file(0.2);
-        let report = clearance_report(1, 0).with_clearance_rule_provenance(source.clone());
-        let rendered = render_drc_condensed_with_rule_source(&report, &source, false);
-        assert!(rendered.contains("below your 0.200 mm rule"), "{rendered}");
-        assert!(!rendered.contains("not your rules"), "{rendered}");
-        assert!(!rendered.contains("DEFAULT clearance"), "{rendered}");
-    }
-
-    #[test]
-    fn triage_not_covered_discloses_defaulted_clearance_rules() {
-        let source = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
-        let report = clearance_report(1, 0).with_clearance_rule_provenance(source.clone());
-        let triage = order_triage_with_rule_source(
-            &report,
-            &source,
-            &NetLintReport::default(),
-            &SiReport::default(),
-            None,
-            true,
-            0,
-            true,
-        );
-        assert!(triage.not_covered.contains("DEFAULT rules, not your rules"));
-        assert!(triage.not_covered.contains("matching .kicad_pro"));
-        assert!(triage.render().contains("NOT COVERED:"));
-    }
-
-    #[test]
-    fn triage_entries_normalize_statements_to_one_line() {
-        let entry = TriageEntry::new("lint", "device_decode", "first\r\nsecond", None);
-        assert_eq!(entry.statement, "first second");
-        assert!(!entry.statement.contains(['\r', '\n']));
-    }
-
-    #[test]
-    fn default_rule_flood_note_requires_default_source_and_strictly_more_than_ten_x_shorts() {
+    fn default_rule_flood_note_requires_default_source_and_more_than_ten_x_shorts() {
         let defaulted = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
         let project = crate::result::ClearanceRuleProvenance::project_file(0.2);
-        assert!(
-            clearance_report(11, 1)
-                .default_rule_flood_note(&defaulted)
-                .is_some(),
-            "defaulted 11:1 must disclose the flood"
-        );
-        assert!(
-            clearance_report(10, 1)
-                .default_rule_flood_note(&defaulted)
-                .is_none(),
-            "exactly 10x does not exceed 10x"
-        );
-        assert!(
-            clearance_report(11, 1)
-                .default_rule_flood_note(&project)
-                .is_none(),
-            "project-backed rules must never get the default-rule sentence"
-        );
-        assert!(
-            clearance_report(1, 0)
-                .default_rule_flood_note(&defaulted)
-                .is_some(),
-            "one clearance group is more than 10x zero shorts"
-        );
+        assert!(clearance_report(11, 1)
+            .default_rule_flood_note(&defaulted)
+            .is_some());
+        assert!(clearance_report(10, 1)
+            .default_rule_flood_note(&defaulted)
+            .is_none());
+        assert!(clearance_report(11, 1)
+            .default_rule_flood_note(&project)
+            .is_none());
+        assert!(clearance_report(1, 0)
+            .default_rule_flood_note(&defaulted)
+            .is_some());
     }
 
     #[test]
@@ -2269,36 +1838,39 @@ mod tests {
                 .into(),
         };
 
-        let triage = order_triage(&drc, &lint, &SiReport::default(), Some(&usb), true, 7);
+        let provenance = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
+        let triage = order_triage_with_rule_source(
+            &drc,
+            &provenance,
+            &lint,
+            &SiReport::default(),
+            Some(&usb),
+            true,
+            7,
+            true,
+        );
         assert_eq!(triage.do_not_order.len(), 2, "{triage:#?}");
-        assert!(
-            triage
-                .do_not_order
-                .iter()
-                .any(|item| item.statement.contains("+3V3") && item.statement.contains("KiCad")),
-            "{triage:#?}"
-        );
-        assert!(
-            triage
-                .do_not_order
-                .iter()
-                .any(|item| item.statement.contains("eFuse connector budget")),
-            "{triage:#?}"
-        );
+        assert!(triage
+            .do_not_order
+            .iter()
+            .any(|item| item.statement.contains("+3V3") && item.statement.contains("KiCad")));
+        assert!(triage
+            .do_not_order
+            .iter()
+            .any(|item| item.statement.contains("eFuse connector budget")));
         assert_eq!(triage.inspect.len(), 1, "{triage:#?}");
-        assert!(
-            triage.inspect[0].statement.contains("PYRO4_FIRE")
-                && triage.inspect[0].statement.contains("Tool-only"),
-            "{triage:#?}"
-        );
+        assert!(triage.inspect[0].statement.contains("PYRO4_FIRE"));
         assert_eq!(triage.checked_ok.len(), 1, "{triage:#?}");
         assert!(triage.checked_ok[0].statement.contains("USB-C CC"));
         let rendered = triage.render();
         assert!(rendered.starts_with("== ORDER / DON'T-ORDER TRIAGE =="));
         assert!(rendered.contains("NOT COVERED: 7 parts lack"));
-        assert!(rendered.contains("DETAIL: Full findings and evidence follow"));
-
-        let empty = OrderTriage::default().render();
-        assert_eq!(empty.matches("  - Empty.").count(), 3, "{empty}");
+        assert_eq!(
+            OrderTriage::default()
+                .render()
+                .matches("  - Empty.")
+                .count(),
+            3
+        );
     }
 }

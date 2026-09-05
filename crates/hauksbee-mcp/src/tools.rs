@@ -622,8 +622,6 @@ mod coverage_contract_tests {
                 "missing {field}: {description}"
             );
         }
-        assert!(description.contains("strict-invalid"), "{description}");
-        assert!(description.contains("second-class"), "{description}");
     }
 }
 

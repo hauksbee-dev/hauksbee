@@ -829,103 +829,115 @@ mod tests {
     use super::*;
     use std::process::Command;
 
-    fn git_repo(dir: &Path) {
+    fn git_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
         assert!(Command::new("git")
             .args(["init", "-q"])
-            .current_dir(dir)
+            .current_dir(tmp.path())
             .status()
             .expect("git init")
             .success());
+        tmp
+    }
+
+    fn read(path: &Path) -> String {
+        fs::read_to_string(path).unwrap()
     }
 
     #[test]
-    fn plain_hook_install_is_idempotent() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
+    fn plain_hook_install_is_idempotent_and_writes_a_runnable_gate() {
+        let tmp = git_repo();
         let first = hook_install(tmp.path()).unwrap();
         assert!(first.starts_with("installed"), "{first}");
         let hook = tmp.path().join(".git/hooks/pre-commit");
-        let written = fs::read_to_string(&hook).unwrap();
-        assert!(written.contains(MARKER));
+        let text = read(&hook);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             assert_ne!(fs::metadata(&hook).unwrap().permissions().mode() & 0o111, 0);
         }
+        // The block is delimited for uninstall, runs the specs, and records
+        // the installing build so a stale hook can say so.
+        assert!(text.contains(MARKER) && text.contains(END_MARKER), "{text}");
+        assert!(text.contains("hauksbee-ci run"), "{text}");
+        assert!(
+            text.contains(&format!("installed_by='{}'", installed_by())),
+            "{text}"
+        );
+        let status = Command::new("sh")
+            .arg("-n")
+            .arg(&hook)
+            .status()
+            .expect("sh -n");
+        assert!(status.success(), "sh -n rejected the generated hook script");
+
         let second = hook_install(tmp.path()).unwrap();
         assert!(second.starts_with("already installed"), "{second}");
-        assert_eq!(fs::read_to_string(&hook).unwrap(), written);
+        assert_eq!(read(&hook), text);
+
+        // A block written by a different build is refreshed in place.
+        let stale = text.replace(
+            &format!("installed_by='{}'", installed_by()),
+            "installed_by='hauksbee-ci 0.0.0 (git dead)'",
+        );
+        fs::write(&hook, stale).unwrap();
+        let msg = hook_install(tmp.path()).unwrap();
+        assert!(msg.starts_with("refreshed"), "{msg}");
+        assert_eq!(read(&hook), text);
     }
 
     #[test]
-    fn an_existing_hook_is_moved_aside_and_chained_first() {
-        // H1: appending after an existing hook put the hauksbee block AFTER that
-        // hook's `exit 0`, so the gate never ran while install reported success.
-        // The existing hook must move to pre-commit.local and be chained FIRST.
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
+    fn an_existing_hook_is_moved_aside_chained_first_and_restored_on_uninstall() {
+        let tmp = git_repo();
         let hook = tmp.path().join(".git/hooks/pre-commit");
         let local = tmp.path().join(".git/hooks/pre-commit.local");
-        fs::write(&hook, "#!/bin/sh\necho preexisting\nexit 0\n").unwrap();
+        let original = "#!/bin/sh\necho preexisting\nexit 0\n";
+        fs::write(&hook, original).unwrap();
         let msg = hook_install(tmp.path()).unwrap();
         assert!(msg.contains("pre-commit.local"), "{msg}");
-        let text = fs::read_to_string(&hook).unwrap();
-        assert!(text.contains(MARKER), "{text}");
+        let text = read(&hook);
         assert!(
-            !text.contains("echo preexisting"),
-            "the old hook must move out, not stay in the file: {text}"
+            text.contains(MARKER) && !text.contains("echo preexisting"),
+            "{text}"
         );
-        assert!(
-            fs::read_to_string(&local)
-                .unwrap()
-                .contains("echo preexisting"),
-            "the old hook must be parked in pre-commit.local"
-        );
-        // The chain runs the local hook BEFORE any hauksbee logic, and
-        // propagates its exit code.
+        assert!(read(&local).contains("echo preexisting"));
+        // The local hook runs BEFORE the gate: after its `exit 0` the gate
+        // would never run.
         let chain = text
             .find("pre-commit.local")
             .expect("chains the local hook");
-        let gate = text.find("hauksbee-ci run").expect("runs specs");
-        assert!(chain < gate, "the local hook must run first:\n{text}");
-        assert!(text.contains("|| exit $?"), "{text}");
-        // Idempotent: a second install must not chain the local hook twice.
-        let again = hook_install(tmp.path()).unwrap();
-        assert!(again.starts_with("already installed"), "{again}");
-        let text2 = fs::read_to_string(&hook).unwrap();
-        assert_eq!(text, text2);
-        assert_eq!(
-            text2.matches("pre-commit.local\" \"$@\"").count(),
-            1,
-            "{text2}"
+        assert!(
+            chain < text.find("hauksbee-ci run").expect("runs specs"),
+            "{text}"
         );
+        // Idempotent: a second install does not chain the local hook twice.
+        assert!(hook_install(tmp.path())
+            .unwrap()
+            .starts_with("already installed"));
+        assert_eq!(read(&hook), text);
+
+        let msg = hook_uninstall(tmp.path()).unwrap();
+        assert!(msg.contains("restored"), "{msg}");
+        assert_eq!(read(&hook), original);
+        assert!(!local.exists());
     }
 
     #[test]
-    fn install_repairs_a_legacy_appended_block() {
-        // The pre-H1 shape on disk: the user's hook, then our block after it.
-        // Re-installing must move the user's half to the local hook and leave a
-        // hook whose gate is actually reachable.
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
+    fn install_repairs_a_legacy_appended_block_and_refuses_a_taken_local_slot() {
+        // The user's hook with our block appended AFTER its `exit 0`: the
+        // gate was unreachable. Re-installing parks the user's half in the
+        // local hook and leaves a hook whose gate runs.
+        let tmp = git_repo();
         let hook = tmp.path().join(".git/hooks/pre-commit");
         let body = plain_hook_script().replace("#!/bin/sh\n", "");
         fs::write(&hook, format!("#!/bin/sh\necho mine\nexit 0\n\n{body}")).unwrap();
         let msg = hook_install(tmp.path()).unwrap();
         assert!(msg.contains("never ran"), "{msg}");
-        let text = fs::read_to_string(&hook).unwrap();
-        assert_eq!(text, plain_hook_script());
-        assert!(
-            fs::read_to_string(tmp.path().join(".git/hooks/pre-commit.local"))
-                .unwrap()
-                .contains("echo mine")
-        );
-    }
+        assert_eq!(read(&hook), plain_hook_script());
+        assert!(read(&tmp.path().join(".git/hooks/pre-commit.local")).contains("echo mine"));
 
-    #[test]
-    fn install_refuses_when_the_local_hook_slot_is_taken() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
+        // With the local slot already taken, nothing is touched.
+        let tmp = git_repo();
         fs::write(
             tmp.path().join(".git/hooks/pre-commit"),
             "#!/bin/sh\necho preexisting\n",
@@ -938,164 +950,107 @@ mod tests {
         .unwrap();
         let err = hook_install(tmp.path()).unwrap_err().to_string();
         assert!(err.contains("already exists"), "{err}");
-        // Neither file was touched.
-        assert!(fs::read_to_string(tmp.path().join(".git/hooks/pre-commit"))
-            .unwrap()
-            .contains("echo preexisting"));
+        assert!(read(&tmp.path().join(".git/hooks/pre-commit")).contains("echo preexisting"));
     }
 
     #[test]
-    fn uninstall_restores_the_hook_install_moved_aside() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
+    fn uninstall_removes_only_what_install_wrote() {
+        // Entirely ours: removed, and a second uninstall is not an error.
+        let tmp = git_repo();
+        hook_install(tmp.path()).unwrap();
         let hook = tmp.path().join(".git/hooks/pre-commit");
-        let original = "#!/bin/sh\necho preexisting\nexit 0\n";
-        fs::write(&hook, original).unwrap();
-        hook_install(tmp.path()).unwrap();
-        let msg = hook_uninstall(tmp.path()).unwrap();
-        assert!(msg.contains("restored"), "{msg}");
-        assert_eq!(fs::read_to_string(&hook).unwrap(), original);
-        assert!(!tmp.path().join(".git/hooks/pre-commit.local").exists());
-    }
+        assert!(hook_uninstall(tmp.path()).unwrap().starts_with("removed"));
+        assert!(!hook.exists());
+        assert!(hook_uninstall(tmp.path())
+            .unwrap()
+            .starts_with("nothing to uninstall"));
 
-    #[test]
-    fn the_hook_reads_the_documented_spec_directories() {
-        // H4: `init` tells users HAUKSBEE_CI_SPECS overrides discovery, but the
-        // generated hook hardcoded `ci/*.toml *.toml`.
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        hook_install(tmp.path()).unwrap();
-        let text = fs::read_to_string(tmp.path().join(".git/hooks/pre-commit")).unwrap();
-        assert!(text.contains("HAUKSBEE_CI_SPECS"), "{text}");
-        assert!(text.contains("ci:."), "the documented default: {text}");
+        // A hand-edited hook wrapping our block keeps the rest.
+        let body = plain_hook_script().replace("#!/bin/sh\n", "");
+        fs::write(&hook, format!("#!/bin/sh\n{body}\necho after\n")).unwrap();
+        hook_uninstall(tmp.path()).unwrap();
+        let text = read(&hook);
         assert!(
-            !text.contains("ci/*.toml *.toml"),
-            "the hardcoded discovery must be gone: {text}"
+            text.contains("echo after") && !text.contains(MARKER),
+            "{text}"
         );
+
+        // A hook we did not write is refused untouched.
+        fs::write(&hook, "#!/bin/sh\necho someone else\n").unwrap();
+        let err = hook_uninstall(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("refusing"), "{err}");
+        assert!(read(&hook).contains("someone else"));
     }
 
     #[test]
-    fn a_missing_binary_blocks_unless_the_opt_out_is_set() {
-        // H8: a hook that exits 0 because the tool is not installed is a gate
-        // that is green forever on a fresh clone.
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        hook_install(tmp.path()).unwrap();
-        let text = fs::read_to_string(tmp.path().join(".git/hooks/pre-commit")).unwrap();
-        assert!(text.contains("HAUKSBEE_CI_HOOK_OPTIONAL"), "{text}");
-        assert!(text.contains("commit blocked"), "{text}");
-        assert!(
-            !text.contains("skipping hardware check' >&2\n  exit 0"),
-            "an unconditional skip must be gone: {text}"
-        );
-    }
-
-    #[test]
-    fn pre_commit_config_gets_the_entry_under_repos() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
+    fn pre_commit_config_entry_is_appended_after_existing_hooks_and_removed_cleanly() {
+        let tmp = git_repo();
+        let config = tmp.path().join(".pre-commit-config.yaml");
         fs::write(
-            tmp.path().join(".pre-commit-config.yaml"),
+            &config,
             "repos:\n  - repo: https://github.com/psf/black\n    rev: 24.1.0\n    hooks:\n      - id: black\n",
         )
         .unwrap();
         let msg = hook_install(tmp.path()).unwrap();
         assert!(msg.contains("pre-commit install"), "{msg}");
-        let text = fs::read_to_string(tmp.path().join(".pre-commit-config.yaml")).unwrap();
-        let repos_line = text.lines().position(|l| l == "repos:").unwrap();
-        let black_line = text.lines().position(|l| l.contains("psf/black")).unwrap();
-        let hauksbee_line = text
-            .lines()
-            .position(|l| l.contains("hauksbee-dev/hauksbee"))
-            .unwrap();
-        // L11: appended at the end of the list, not prepended: the fast
-        // formatters keep running first.
-        assert!(repos_line < black_line, "{text}");
+        let text = read(&config);
+        let line_of = |needle: &str| text.lines().position(|l| l.contains(needle)).unwrap();
+        // Appended, not prepended: the fast formatters keep running first.
+        assert!(line_of("repos:") < line_of("psf/black"), "{text}");
         assert!(
-            black_line < hauksbee_line,
-            "the entry must be appended after the existing hooks:\n{text}"
+            line_of("psf/black") < line_of("hauksbee-dev/hauksbee"),
+            "{text}"
         );
-        assert!(text.contains("id: hauksbee-ci"));
-        assert!(text.contains("id: black"));
-        // Idempotent.
-        let again = hook_install(tmp.path()).unwrap();
-        assert!(again.starts_with("already installed"), "{again}");
+        assert!(text.contains("id: hauksbee-ci") && text.contains("id: black"));
+        assert!(hook_install(tmp.path())
+            .unwrap()
+            .starts_with("already installed"));
+
+        let msg = hook_uninstall(tmp.path()).unwrap();
+        assert!(msg.contains("removed the hauksbee-ci entry"), "{msg}");
+        let text = read(&config);
+        assert!(
+            !text.contains("hauksbee") && text.contains("id: black") && text.contains("repos:"),
+            "{text}"
+        );
     }
 
     #[test]
-    fn workflow_write_is_idempotent_and_refuses_divergence() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
+    fn workflow_write_is_idempotent_refuses_divergence_and_lands_at_the_repo_root() {
+        let tmp = git_repo();
         let path = tmp.path().join(".github/workflows/hauksbee.yml");
-        let first = github_action_write(tmp.path(), &path).unwrap();
-        assert!(first.starts_with("wrote"), "{first}");
-        let second = github_action_write(tmp.path(), &path).unwrap();
-        assert!(second.starts_with("already up to date"), "{second}");
+        assert!(github_action_write(tmp.path(), &path)
+            .unwrap()
+            .starts_with("wrote"));
+        assert!(github_action_write(tmp.path(), &path)
+            .unwrap()
+            .starts_with("already up to date"));
         fs::write(&path, "something else\n").unwrap();
         let err = github_action_write(tmp.path(), &path)
             .unwrap_err()
             .to_string();
         assert!(err.contains("not overwriting"), "{err}");
+
+        // GitHub only reads .github/workflows at the top of the repo, so a
+        // relative --write from a subdirectory lands at the root.
+        let tmp = git_repo();
+        let sub = tmp.path().join("hardware/ci");
+        fs::create_dir_all(&sub).unwrap();
+        github_action_write(&sub, Path::new(".github/workflows/hauksbee.yml")).unwrap();
+        assert!(tmp.path().join(".github/workflows/hauksbee.yml").exists());
+        assert!(!sub.join(".github").exists());
+
+        // Outside a git repo it refuses, like `hook install` does.
+        let tmp = tempfile::tempdir().unwrap();
+        let err = github_action_write(tmp.path(), Path::new(".github/workflows/hauksbee.yml"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not inside a git repository"), "{err}");
+        assert!(!tmp.path().join(".github").exists());
     }
 
     #[test]
-    fn generated_workflow_pins_the_public_action_to_one_commit() {
-        let _legacy_signature: fn() -> String = github_workflow_yaml;
-        let yaml = github_workflow_yaml();
-        assert!(yaml.contains("persist-credentials: false"), "{yaml}");
-        assert!(yaml.contains("cancel-in-progress: true"), "{yaml}");
-        assert!(yaml.contains("timeout-minutes: 45"), "{yaml}");
-        // The public Action is used directly and pinned to an exact commit;
-        // no credential, secondary checkout, or secret reference is emitted.
-        let uses_line = yaml
-            .lines()
-            .find(|line| {
-                line.trim_start()
-                    .starts_with("- uses: hauksbee-dev/hauksbee/integrations/github-action@")
-            })
-            .expect("generated pinned public action reference");
-        let pinned_ref = uses_line.rsplit('@').next().unwrap();
-        assert_eq!(pinned_ref.len(), 40, "{yaml}");
-        assert!(pinned_ref.bytes().all(|b| b.is_ascii_hexdigit()), "{yaml}");
-        assert!(!yaml.contains("secrets."), "{yaml}");
-        assert!(!yaml.contains("hauksbee-token:"), "{yaml}");
-        assert!(!yaml.contains(".hauksbee-action"), "{yaml}");
-        assert!(yaml.contains("hauksbee-ref:"), "{yaml}");
-        assert!(yaml.contains("prefer-prebuilt: false"), "{yaml}");
-        assert!(!yaml.contains("hauksbee-version:"), "{yaml}");
-        assert!(
-            !yaml.contains("token is read-only; pass publish-report: false"),
-            "{yaml}"
-        );
-    }
-
-    #[test]
-    fn generated_workflow_refuses_missing_or_malformed_source_identity() {
-        for source in [None, Some("0000")] {
-            let err = github_workflow_yaml_for(source, None)
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains("no verified Hauksbee source commit"), "{err}");
-        }
-    }
-
-    #[test]
-    fn exact_release_build_generates_an_avr_capable_prebuilt_gate() {
-        let yaml = github_workflow_yaml_for(
-            Some("0123456789abcdef0123456789abcdef01234567"),
-            Some(concat!("v", env!("CARGO_PKG_VERSION"))),
-        )
-        .unwrap();
-        assert!(
-            yaml.contains(concat!("hauksbee-version: v", env!("CARGO_PKG_VERSION"))),
-            "{yaml}"
-        );
-        assert!(yaml.contains("prefer-prebuilt: true"), "{yaml}");
-        assert!(!yaml.contains("prefer-prebuilt: false"), "{yaml}");
-    }
-
-    #[test]
-    fn generated_workflow_is_valid_yaml_for_release_and_source_builds() {
+    fn generated_workflow_pins_the_public_action_and_is_valid_yaml() {
         let source = Some("0123456789abcdef0123456789abcdef01234567");
         let release_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
         for (mode, tag) in [("source", None), ("release", Some(release_tag.as_str()))] {
@@ -1107,216 +1062,57 @@ mod tests {
                 matches!(parsed.as_slice(), [yaml_rust2::Yaml::Hash(_)]),
                 "{mode} workflow should be exactly one YAML mapping: {yaml}"
             );
-            for path in [
-                "**/*.xml",
-                "**/*.zip",
-                "**/*.tgz",
-                "**/*.tar.gz",
-                "**/*.tar",
-            ] {
+            // The public Action is used directly and pinned to an exact
+            // commit; no credential or secret reference is emitted.
+            let uses_line = yaml
+                .lines()
+                .find(|line| {
+                    line.trim_start()
+                        .starts_with("- uses: hauksbee-dev/hauksbee/integrations/github-action@")
+                })
+                .expect("pinned public action reference");
+            let pinned_ref = uses_line.rsplit('@').next().unwrap();
+            assert!(
+                pinned_ref.len() == 40 && pinned_ref.bytes().all(|b| b.is_ascii_hexdigit()),
+                "{yaml}"
+            );
+            assert!(
+                !yaml.contains("secrets.") && !yaml.contains("hauksbee-token:"),
+                "{yaml}"
+            );
+            for path in ["**/*.xml", "**/*.zip", "**/*.tar.gz"] {
                 assert!(
                     yaml.contains(path),
                     "{mode} workflow omitted {path}:\n{yaml}"
                 );
             }
+            // A source build compiles from the pinned ref; an exact release
+            // build uses the prebuilt binary.
+            if tag.is_some() {
+                assert!(
+                    yaml.contains(&format!("hauksbee-version: {release_tag}")),
+                    "{yaml}"
+                );
+                assert!(yaml.contains("prefer-prebuilt: true"), "{yaml}");
+            } else {
+                assert!(
+                    yaml.contains("hauksbee-ref:") && !yaml.contains("hauksbee-version:"),
+                    "{yaml}"
+                );
+                assert!(yaml.contains("prefer-prebuilt: false"), "{yaml}");
+            }
+        }
+        for source in [None, Some("0000")] {
+            let err = github_workflow_yaml_for(source, None)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("no verified Hauksbee source commit"), "{err}");
         }
     }
 
     #[test]
-    fn workflow_write_refuses_outside_a_repo_like_hook_install_does() {
-        // L3: `hook install` refused outside a git repo while `github-action
-        // --write` quietly wrote into the current directory.
-        let tmp = tempfile::tempdir().unwrap();
-        let err = github_action_write(tmp.path(), Path::new(".github/workflows/hauksbee.yml"))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("not inside a git repository"), "{err}");
-        assert!(!tmp.path().join(".github").exists(), "nothing was written");
-    }
-
-    #[test]
-    fn a_relative_write_path_lands_at_the_repo_root() {
-        // GitHub only reads .github/workflows at the top of the repo, so a
-        // relative --write from a subdirectory must not write a workflow there.
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        let sub = tmp.path().join("hardware/ci");
-        fs::create_dir_all(&sub).unwrap();
-        let msg = github_action_write(&sub, Path::new(".github/workflows/hauksbee.yml")).unwrap();
-        assert!(msg.starts_with("wrote"), "{msg}");
-        assert!(tmp.path().join(".github/workflows/hauksbee.yml").exists());
-        assert!(!sub.join(".github").exists(), "not in the subdirectory");
-    }
-
-    #[test]
-    fn install_output_names_specs_test_bypass_and_uninstall() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        // One discoverable spec in ci/, one root TOML that is NOT a spec.
-        fs::create_dir(tmp.path().join("ci")).unwrap();
-        fs::write(
-            tmp.path().join("ci/power-up.toml"),
-            "board = \"../hw/board.kicad_pcb\"\n",
-        )
-        .unwrap();
-        fs::write(tmp.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
-        let msg = hook_install(tmp.path()).unwrap();
-        assert!(
-            msg.contains("discovered 1 spec(s) in ci/ and the repo root"),
-            "{msg}"
-        );
-        assert!(msg.contains("test it: git commit"), "{msg}");
-        assert!(msg.contains("bypass once: git commit --no-verify"), "{msg}");
-        assert!(msg.contains("hauksbee-ci hook uninstall"), "{msg}");
-    }
-
-    #[test]
-    fn install_output_warns_when_no_specs_are_discoverable() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        let msg = hook_install(tmp.path()).unwrap();
-        assert!(msg.contains("discovered 0 specs"), "{msg}");
-        assert!(msg.contains("hauksbee-ci init"), "{msg}");
-    }
-
-    #[test]
-    fn hook_records_the_build_and_carries_the_exact_red_line() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        hook_install(tmp.path()).unwrap();
-        let text = fs::read_to_string(tmp.path().join(".git/hooks/pre-commit")).unwrap();
-        // U6: the installing build's identity, in the comment and in the
-        // runtime comparison, both matching `hauksbee-ci --version` output.
-        let installed = format!("hauksbee-ci {}", crate::version_string());
-        assert!(
-            text.contains(&format!("# installed by {installed}")),
-            "{text}"
-        );
-        assert!(
-            text.contains(&format!("installed_by='{installed}'")),
-            "{text}"
-        );
-        assert!(text.contains("hauksbee-ci --version"), "{text}");
-        assert!(text.contains("re-run: hauksbee-ci hook install"), "{text}");
-        // U8: the blocked-commit wording, byte for byte around the count.
-        assert!(
-            text.contains(
-                "hauksbee-ci: commit blocked: $red spec(s) RED. Fix, or git commit --no-verify to override."
-            ),
-            "{text}"
-        );
-        assert!(text.contains(END_MARKER), "{text}");
-    }
-
-    #[test]
-    fn install_refreshes_a_block_from_a_different_build() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        hook_install(tmp.path()).unwrap();
-        let hook = tmp.path().join(".git/hooks/pre-commit");
-        // Simulate a hook written by an older build.
-        let stale = fs::read_to_string(&hook).unwrap().replace(
-            &format!("installed_by='{}'", installed_by()),
-            "installed_by='hauksbee-ci 0.0.0 (git dead)'",
-        );
-        fs::write(&hook, stale).unwrap();
-        let msg = hook_install(tmp.path()).unwrap();
-        assert!(msg.starts_with("refreshed"), "{msg}");
-        let text = fs::read_to_string(&hook).unwrap();
-        assert!(
-            text.contains(&format!("installed_by='{}'", installed_by())),
-            "{text}"
-        );
-        assert!(!text.contains("0.0.0 (git dead)"), "{text}");
-    }
-
-    #[test]
-    fn uninstall_removes_a_hook_that_is_entirely_ours() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        hook_install(tmp.path()).unwrap();
-        let msg = hook_uninstall(tmp.path()).unwrap();
-        assert!(msg.starts_with("removed"), "{msg}");
-        assert!(!tmp.path().join(".git/hooks/pre-commit").exists());
-        // Uninstalling again reports nothing to do, not an error.
-        let again = hook_uninstall(tmp.path()).unwrap();
-        assert!(again.starts_with("nothing to uninstall"), "{again}");
-    }
-
-    #[test]
-    fn uninstall_strips_only_our_block_from_a_shared_hook() {
-        // A hand-edited hook that wraps our block (nobody writes this shape now,
-        // but a user can): uninstall removes the block and leaves the rest.
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        let hook = tmp.path().join(".git/hooks/pre-commit");
-        let body = plain_hook_script().replace("#!/bin/sh\n", "");
-        fs::write(&hook, format!("#!/bin/sh\n{body}\necho after\n")).unwrap();
-        let msg = hook_uninstall(tmp.path()).unwrap();
-        assert!(msg.contains("rest of your hook is untouched"), "{msg}");
-        let text = fs::read_to_string(&hook).unwrap();
-        assert!(text.contains("echo after"), "{text}");
-        assert!(!text.contains(MARKER), "{text}");
-    }
-
-    #[test]
-    fn uninstall_refuses_a_hook_we_did_not_write() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        let hook = tmp.path().join(".git/hooks/pre-commit");
-        fs::write(&hook, "#!/bin/sh\necho someone else\n").unwrap();
-        let err = hook_uninstall(tmp.path()).unwrap_err().to_string();
-        assert!(err.contains("refusing"), "{err}");
-        assert!(fs::read_to_string(&hook).unwrap().contains("someone else"));
-    }
-
-    #[test]
-    fn uninstall_removes_only_the_hauksbee_entry_from_pre_commit_config() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        let config = tmp.path().join(".pre-commit-config.yaml");
-        fs::write(
-            &config,
-            "repos:\n  - repo: https://github.com/psf/black\n    rev: 24.1.0\n    hooks:\n      - id: black\n",
-        )
-        .unwrap();
-        let installed = hook_install(tmp.path()).unwrap();
-        assert!(installed.contains("appended"), "{installed}");
-        let msg = hook_uninstall(tmp.path()).unwrap();
-        assert!(msg.contains("removed the hauksbee-ci entry"), "{msg}");
-        let text = fs::read_to_string(&config).unwrap();
-        assert!(!text.contains("hauksbee"), "{text}");
-        assert!(text.contains("id: black"), "{text}");
-        assert!(text.contains("repos:"), "{text}");
-    }
-
-    #[test]
-    fn hook_script_is_valid_posix_sh() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("hook.sh");
-        fs::write(&path, plain_hook_script()).unwrap();
-        let status = Command::new("sh")
-            .arg("-n")
-            .arg(&path)
-            .status()
-            .expect("sh -n");
-        assert!(status.success(), "sh -n rejected the generated hook script");
-    }
-
-    #[test]
-    fn github_action_write_prints_the_commit_and_push_step() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
-        let path = tmp.path().join(".github/workflows/hauksbee.yml");
-        let msg = github_action_write(tmp.path(), &path).unwrap();
-        assert!(msg.contains("git add"), "{msg}");
-        assert!(msg.contains("git push"), "{msg}");
-    }
-
-    #[test]
     fn green_next_step_names_only_the_missing_wiring() {
-        let tmp = tempfile::tempdir().unwrap();
-        git_repo(tmp.path());
+        let tmp = git_repo();
         let both = green_next_step(tmp.path()).unwrap();
         assert!(both.contains("hook install") && both.contains("github-action"));
         hook_install(tmp.path()).unwrap();

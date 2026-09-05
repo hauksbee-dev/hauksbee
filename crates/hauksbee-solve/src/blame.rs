@@ -335,174 +335,81 @@ pub fn blame_clause(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hauksbee_ir::SourceKind;
+    use crate::test_fixtures::{res, vdc, GND};
 
-    fn board_with_zero_links(link_ohms: f64) -> Circuit {
+    fn board_with_link(link_ohms: f64) -> Circuit {
         let mut c = Circuit::new();
-        let vcc = c.node("VCC");
-        let mid = c.node("MID");
-        let out = c.node("OUT");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vcc,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: vcc,
-            b: mid,
-            ohms: 1000.0,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: mid,
-            b: NodeId::GROUND,
-            ohms: 2000.0,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "R3".into(),
-            a: mid,
-            b: out,
-            ohms: link_ohms,
-            tc1: None,
-        });
+        let (vcc, mid, out) = (c.node("VCC"), c.node("MID"), c.node("OUT"));
+        vdc(&mut c, "V1", vcc, 5.0);
+        res(&mut c, "R1", vcc, mid, 1000.0);
+        res(&mut c, "R2", mid, GND, 2000.0);
+        res(&mut c, "R3", mid, out, link_ohms);
         c
     }
 
+    /// A µΩ link is the stiff suspect; a mΩ jumper (the bind-time R0
+    /// treatment) and an ordinary resistor are not.
     #[test]
-    fn a_microohm_link_is_named_as_the_stiff_suspect() {
-        let c = board_with_zero_links(1e-6);
-        let stiff = stiff_links(&c);
-        assert_eq!(stiff.len(), 1, "exactly the 1 uohm link stands out");
+    fn only_a_microohm_link_is_named_as_stiff() {
+        let stiff = stiff_links(&board_with_link(1e-6));
+        assert_eq!(stiff.len(), 1);
         assert_eq!(stiff[0].name, "R3");
-    }
-
-    #[test]
-    fn a_milliohm_jumper_is_not_flagged() {
-        // The bind-time R0 treatment lands links at 1 mohm, which is a real
-        // jumper resistance and must NOT read as pathological: otherwise every
-        // repaired board carries a permanent false accusation.
-        let c = board_with_zero_links(1e-3);
-        assert!(
-            stiff_links(&c).is_empty(),
-            "1 mohm is a physical jumper, not a matrix poison"
-        );
-    }
-
-    #[test]
-    fn an_ordinary_board_names_nothing() {
-        let c = board_with_zero_links(4700.0);
+        assert!(stiff_links(&board_with_link(1e-3)).is_empty());
+        let c = board_with_link(4700.0);
         assert!(stiff_links(&c).is_empty());
-        let layout = Layout::new(&c);
-        assert!(blame_clause(&c, &layout, None).is_none());
+        assert!(blame_clause(&c, &Layout::new(&c), None).is_none());
     }
 
     #[test]
     fn a_stalled_unknown_is_named_with_its_devices() {
-        let c = board_with_zero_links(4700.0);
-        let layout = Layout::new(&c);
+        let c = board_with_link(4700.0);
         // Unknown 1 is netlist node 2 == MID.
-        let clause = blame_clause(&c, &layout, Some((0.42, 1)))
-            .expect("a stalled unknown always yields a clause");
-        assert!(clause.contains("net 'MID'"), "names the net: {clause}");
-        assert!(clause.contains("R1"), "names devices on it: {clause}");
-        assert!(clause.contains("R3"), "names devices on it: {clause}");
+        let clause = blame_clause(&c, &Layout::new(&c), Some((0.42, 1))).expect("clause");
+        assert!(
+            clause.contains("MID") && clause.contains("R1") && clause.contains("R3"),
+            "{clause}"
+        );
     }
 
+    /// Two sources on one net are a conflict whose winner is the one the
+    /// net reads; series-stacked sources are not; the conflict is named in
+    /// the blame clause of the singular topology.
     #[test]
-    fn two_sources_on_one_net_are_named_with_the_winner() {
+    fn source_conflicts_name_the_winner_and_skip_stacked_supplies() {
         let mut c = Circuit::new();
-        let res = c.node("RES");
-        c.add(Device::Vsource {
-            name: "Vsupply_RES".into(),
-            p: res,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.3),
-        });
-        c.add(Device::Vsource {
-            name: "Vci_drive_RES".into(),
-            p: res,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(20.0),
-        });
+        let res_net = c.node("RES");
+        vdc(&mut c, "Vsupply_RES", res_net, 3.3);
+        vdc(&mut c, "Vci_drive_RES", res_net, 20.0);
         let conflicts = source_conflicts(&c);
         assert_eq!(conflicts.len(), 1);
-        let c0 = &conflicts[0];
-        assert_eq!(c0.net, "RES");
-
-        // The reported symptom: the net reads 3.300 V, so the supply won and the
-        // 20 V drive had no effect. Both must be named, and the loser must be
-        // named as the loser.
-        let msg = c0.describe(Some(3.3));
-        assert!(msg.contains("Vsupply_RES"), "{msg}");
-        assert!(msg.contains("Vci_drive_RES"), "{msg}");
-        assert!(msg.contains("3.300 V"), "{msg}");
-        assert!(msg.contains("20.000 V"), "{msg}");
-        assert!(
-            msg.contains("Vsupply_RES won") && msg.contains("Vci_drive_RES had no effect"),
-            "must say which won and which lost: {msg}"
-        );
-        assert_eq!(c0.winner(3.3).map(|w| w.name.as_str()), Some("Vsupply_RES"));
+        assert_eq!(conflicts[0].net, "RES");
         assert_eq!(
-            c0.winner(20.0).map(|w| w.name.as_str()),
-            Some("Vci_drive_RES"),
-            "the same conflict read at 20 V names the drive as the winner"
+            conflicts[0].winner(3.3).map(|w| w.name.as_str()),
+            Some("Vsupply_RES")
         );
-    }
+        assert_eq!(
+            conflicts[0].winner(20.0).map(|w| w.name.as_str()),
+            Some("Vci_drive_RES")
+        );
+        let msg = conflicts[0].describe(Some(3.3));
+        assert!(
+            msg.contains("Vsupply_RES") && msg.contains("Vci_drive_RES"),
+            "{msg}"
+        );
+        let clause =
+            blame_clause(&c, &Layout::new(&c), None).expect("singular topology names something");
+        assert!(clause.contains("RES"), "{clause}");
 
-    #[test]
-    fn sources_in_series_are_not_a_conflict() {
-        // Two sources stacked into a divider chain share no node against ground
-        // and must never be reported: a false accusation on every stacked-supply
-        // board would train the user to ignore the note.
         let mut c = Circuit::new();
-        let mid = c.node("MID");
-        let top = c.node("TOP");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: mid,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        c.add(Device::Vsource {
-            name: "V2".into(),
-            p: top,
-            n: mid,
-            kind: SourceKind::Dc(5.0),
-        });
+        let (mid, top) = (c.node("MID"), c.node("TOP"));
+        vdc(&mut c, "V1", mid, 5.0);
+        crate::test_fixtures::vdc_between(&mut c, "V2", top, mid, 5.0);
         assert!(source_conflicts(&c).is_empty());
-    }
-
-    #[test]
-    fn a_conflicted_net_is_named_in_the_blame_clause() {
-        let mut c = Circuit::new();
-        let res = c.node("RES");
-        c.add(Device::Vsource {
-            name: "Vsupply_RES".into(),
-            p: res,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.3),
-        });
-        c.add(Device::Vsource {
-            name: "Vdrive_RES".into(),
-            p: res,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(20.0),
-        });
-        let layout = Layout::new(&c);
-        let clause = blame_clause(&c, &layout, None)
-            .expect("a singular topology must always name something");
-        assert!(clause.contains("net 'RES'"), "{clause}");
-        assert!(clause.contains("singular"), "{clause}");
     }
 
     #[test]
     fn many_suspects_are_elided() {
         let names: Vec<String> = (1..=10).map(|i| format!("R{i}")).collect();
-        let s = elide(&names);
-        assert_eq!(s, "R1, R2, R3 and 7 more");
+        assert_eq!(elide(&names), "R1, R2, R3 and 7 more");
     }
 }

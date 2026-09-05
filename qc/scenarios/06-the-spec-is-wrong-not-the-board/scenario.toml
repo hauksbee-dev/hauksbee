@@ -1,0 +1,154 @@
+title = "The spec is wrong, not the board"
+persona = "Someone writing their third spec by hand, making the ordinary typos."
+goal = """
+Make four different mistakes in a spec and, every time, be told the spec is
+wrong rather than the board, with enough detail to fix it without opening the
+reference.
+"""
+success = """
+Every one of these exits 2, never 1 and never 0. A window nothing can satisfy, a
+supply missing its voltage, a misspelled assertion kind, and a net that is not on
+the board each get a message naming the offending value, and the two that have a
+near neighbour get a did-you-mean. Nothing reports as a failing assertion,
+because no assertion ran.
+"""
+
+[[step]]
+name = "a board to point the specs at"
+do = "copy"
+src = "crates/hauksbee-ci/examples/boards/watchy.kicad_pcb"
+dst = "watchy.kicad_pcb"
+
+[[step]]
+name = "min above max: a window nothing can satisfy"
+do = "write"
+file = "bad-window.toml"
+text = """
+name = "bad window"
+board = "watchy.kicad_pcb"
+duration_ms = 10
+
+[[assert]]
+kind = "voltage"
+net = "+3V3"
+min = 3.6
+max = 3.0
+"""
+
+[[step]]
+name = "it refuses to run rather than reporting a red board"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "bad-window.toml"]
+exit = 2
+max_seconds = 30
+contains = [
+  "invalid spec:",
+  "min (3.6) is greater than max (3)",
+  "a window nothing can satisfy",
+  "swap the bounds or fix the typo",
+]
+not_contains = ["[FAIL]", "RED", "assertions passed"]
+
+[[step]]
+name = "an ideal supply with no voltage"
+do = "write"
+file = "no-volts.toml"
+text = """
+name = "supply with no volts"
+board = "watchy.kicad_pcb"
+duration_ms = 10
+
+[[supply]]
+net = "VBUS"
+kind = "ideal"
+
+[[assert]]
+kind = "no_faults"
+"""
+
+[[step]]
+name = "nothing is guessed, and the refusal says why guessing would be worse"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "no-volts.toml"]
+exit = 2
+max_seconds = 30
+contains = [
+  "supply on 'VBUS': `ideal` needs an explicit `volts`",
+  "Nothing is assumed",
+  "a wrong guess here would fabricate faults on a healthy board",
+]
+not_contains = ["[FAIL]", "RED", "assertions passed"]
+
+[[step]]
+name = "a misspelled assertion kind"
+do = "write"
+file = "typo-kind.toml"
+text = """
+name = "typo kind"
+board = "watchy.kicad_pcb"
+duration_ms = 10
+
+[[assert]]
+kind = "voltag"
+net = "+3V3"
+min = 3.0
+"""
+
+[[step]]
+name = "did-you-mean, plus the full list of kinds that exist"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "typo-kind.toml"]
+exit = 2
+max_seconds = 30
+contains = [
+  "unknown assertion kind 'voltag' (did you mean 'voltage'?)",
+  "expected voltage|uart|toggle|no_faults",
+]
+not_contains = ["[FAIL]", "RED", "assertions passed"]
+
+[[step]]
+name = "a net that is not on this board"
+do = "write"
+file = "typo-net.toml"
+text = """
+name = "typo net"
+board = "watchy.kicad_pcb"
+duration_ms = 10
+
+[[assert]]
+kind = "voltage"
+net = "+3V4"
+min = 3.0
+"""
+
+[[step]]
+name = "the nearest real net names, and which section named the missing one"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "typo-net.toml"]
+exit = 2
+max_seconds = 30
+contains = [
+  "spec references net(s) not found on the board:",
+  "'+3V4' (in assert)",
+  "did you mean: +3V3",
+]
+not_contains = ["[FAIL]", "RED", "assertions passed"]
+
+[[step]]
+name = "TOML that does not parse at all"
+do = "write"
+file = "broken-toml.toml"
+text = """
+name = "unterminated
+board = "watchy.kicad_pcb"
+"""
+
+[[step]]
+name = "the parse error is line-numbered, not a panic"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "broken-toml.toml"]
+exit = 2
+max_seconds = 30
+contains = ["could not parse spec"]
+matches = ["line [0-9]+"]
+not_matches = ["panicked at", "RUST_BACKTRACE", "\\bunwrap\\b"]
